@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000202",
+      "Name": "第二集",
+      "Type": "Episode",
+      "IndexNumber": 2,
+      "ParentIndexNumber": 1,
+      "SeasonId": "00000000-0000-0000-0000-000000000210",
+      "SeasonName": "第 1 季",
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集",
+      "RunTimeTicks": 30000000000,
+      "Overview": "第二集的简介。",
+      "ImageTags": { "Primary": "TAG-EPISODE-2" },
+      "UserData": { "PlaybackPositionTicks": 15000000000, "Played": false }
+    }
+  ],
+  "TotalRecordCount": 1
+}

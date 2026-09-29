@@ -1,0 +1,9 @@
+{
+  "MediaSources": [
+    {
+      "Container": "mkv",
+      "SupportsDirectStream": true
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-BROKEN-1"
+}

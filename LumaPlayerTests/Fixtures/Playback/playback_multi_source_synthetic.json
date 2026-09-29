@@ -1,0 +1,27 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-A-Remux",
+      "Container": "mkv",
+      "SupportsDirectStream": false,
+      "SupportsTranscoding": true,
+      "TranscodingUrl": "/emby/videos/ITEM-MULTI/master.m3u8",
+      "TranscodingSubProtocol": "hls"
+    },
+    {
+      "Id": "MEDIASOURCE-B-Original",
+      "Container": "mp4",
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": true,
+      "MediaStreams": [
+        {
+          "Index": 0,
+          "Type": "Video",
+          "Codec": "h264",
+          "IsDefault": true
+        }
+      ]
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-MULTI-1"
+}

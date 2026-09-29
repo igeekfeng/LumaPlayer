@@ -1,0 +1,22 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000210",
+      "Name": "第 1 季",
+      "Type": "Season",
+      "IndexNumber": 1,
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集",
+      "ImageTags": { "Primary": "TAG-SEASON-1" }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000211",
+      "Name": "第 2 季",
+      "Type": "Season",
+      "IndexNumber": 2,
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集"
+    }
+  ],
+  "TotalRecordCount": 2
+}

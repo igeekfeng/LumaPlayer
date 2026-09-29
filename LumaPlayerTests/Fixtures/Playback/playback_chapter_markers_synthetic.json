@@ -1,0 +1,19 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-MARKERS-1",
+      "Container": "mkv",
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": true,
+      "RunTimeTicks": 14400000000,
+      "Chapters": [
+        { "StartPositionTicks": 0, "Name": "Chapter 1", "MarkerType": "Chapter", "ChapterIndex": 0 },
+        { "StartPositionTicks": 300000000, "Name": "Intro", "MarkerType": "IntroStart", "ChapterIndex": 1 },
+        { "StartPositionTicks": 1200000000, "Name": "Intro End", "MarkerType": "IntroEnd", "ChapterIndex": 2 },
+        { "StartPositionTicks": 13200000000, "Name": "Credits", "MarkerType": "CreditsStart", "ChapterIndex": 3 },
+        { "StartPositionTicks": 13800000000, "Name": "Post Credits", "MarkerType": "SomeFutureMarker", "ChapterIndex": 4 }
+      ]
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-MARKERS-1"
+}

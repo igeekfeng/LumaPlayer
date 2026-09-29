@@ -1,0 +1,11 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-NO-PATH",
+      "Container": "iso",
+      "SupportsDirectStream": false,
+      "SupportsTranscoding": false
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-NO-PATH-1"
+}

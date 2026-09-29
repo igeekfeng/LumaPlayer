@@ -1,0 +1,41 @@
+# ── 内部文档：保留在本地，不发布 ──
+# 代码注释里的「API_CONTRACT.md 4.4」这类章节引用指向这些文件，公开仓库里会悬空，属已知取舍。
+docs/
+CLAUDE.md
+
+# ── 密钥与真实环境（不得放宽）──
+*.real.json
+*.local.xcconfig
+.env
+secrets/
+
+# ── macOS ──
+.DS_Store
+
+# ── Xcode ──
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ── SwiftPM ──
+.build/
+.swiftpm/
+Package.resolved
+.*
+
+# ── 本地开发用 Emby 实例（Tools/emby-dev/）──
+# config 含自建实例的库配置与用户库，media 是生成的测试素材，都不入库。
+# .labels 是烧进素材的画面标签 PNG（放 media 之外，免得被 Emby 当海报收走）。
+# compose 脚本本身是开发资产，要提交。
+Tools/emby-dev/config/
+Tools/emby-dev/media/
+Tools/emby-dev/.labels/

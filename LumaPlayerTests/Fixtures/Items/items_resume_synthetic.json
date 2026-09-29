@@ -1,0 +1,28 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000101",
+      "Name": "测试电影一",
+      "Type": "Movie",
+      "ProductionYear": 2019,
+      "RunTimeTicks": 54000000000,
+      "ImageTags": { "Primary": "TAG-PRIMARY-1" },
+      "UserData": { "PlaybackPositionTicks": 13500000000, "Played": false }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000201",
+      "Name": "测试剧集 S1E2",
+      "Type": "Episode",
+      "IndexNumber": 2,
+      "ParentIndexNumber": 1,
+      "SeasonId": "00000000-0000-0000-0000-000000000210",
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集",
+      "SeasonName": "第 1 季",
+      "RunTimeTicks": 30000000000,
+      "ImageTags": { "Primary": "TAG-EPISODE-1" },
+      "UserData": { "PlaybackPositionTicks": 15000000000, "Played": false }
+    }
+  ],
+  "TotalRecordCount": 2
+}

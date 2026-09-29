@@ -1,0 +1,24 @@
+[
+  {
+    "Id": "00000000-0000-0000-0000-000000000200",
+    "Name": "测试剧集",
+    "Type": "Series",
+    "ProductionYear": 2020,
+    "Overview": "一部用于 fixture 的剧集。",
+    "ImageTags": {
+      "Primary": "TAG-SERIES-1"
+    },
+    "BackdropImageTags": [
+      "TAG-SERIES-BACKDROP-1"
+    ]
+  },
+  {
+    "Id": "00000000-0000-0000-0000-000000000103",
+    "Name": "测试电影三",
+    "Type": "Movie",
+    "ProductionYear": 2022,
+    "ImageTags": {
+      "Primary": "TAG-PRIMARY-3"
+    }
+  }
+]

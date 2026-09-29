@@ -1,0 +1,10 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-NO-SESSION",
+      "Container": "mp4",
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": true
+    }
+  ]
+}

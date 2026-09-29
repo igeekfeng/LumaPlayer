@@ -1,0 +1,28 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-TRANSCODE-1",
+      "Container": "mkv",
+      "SupportsDirectStream": false,
+      "SupportsTranscoding": true,
+      "TranscodingUrl": "/emby/videos/ITEM-TRANSCODE/master.m3u8?VideoCodec=h264&AudioCodec=aac",
+      "TranscodingSubProtocol": "hls",
+      "MediaStreams": [
+        {
+          "Index": 0,
+          "Type": "Video",
+          "Codec": "h264",
+          "IsDefault": true
+        },
+        {
+          "Index": 1,
+          "Type": "Audio",
+          "Codec": "aac",
+          "Language": "eng",
+          "IsDefault": true
+        }
+      ]
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-TRANSCODE-1"
+}

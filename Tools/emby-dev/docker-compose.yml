@@ -1,0 +1,45 @@
+# 本地 Emby 开发实例
+#
+# 用途:日常开发与手工验收时代替「别人的真实服务器」。
+# 它是一台**真实的 Emby**,只是跑在你自己的机器上 —— 因此:
+#   - 可以随意压测、循环刷列表、构造异常请求(真实服务器全被禁止的那些)
+#   - 关转码、配反代子路径、造多台实例都随你
+#   - 仍然**不能**用它声称「已兼容真实服务器」:版本、部署形态、库结构都不同
+#
+# 启动:  docker compose up -d
+# 停止:  docker compose down          (config/ 与 media/ 保留)
+# 重置:  docker compose down && rm -rf config/ && ./gen-media.sh && docker compose up -d
+#
+# ⚠️ 两个 macOS 特有的坑:
+#   1. Docker Desktop for macOS **不支持 `--net=host`**,必须用 ports 映射。
+#      Emby 官方文档给的 compose 示例带 `network_mode: host`,照抄会起不来。
+#   2. 本机 shell 里 `docker` 可能不在 PATH。Docker Desktop 的 CLI 在
+#      /Applications/Docker.app/Contents/Resources/bin/ ,临时加一下即可。
+
+services:
+  emby-dev:
+    # 固定到 4.9.5.0 而不是 latest(4.10.x):对齐本机原先假设的「三台都是 4.9」,
+    # 让本地回归结论能对应到尽量接近真实服务器的版本。
+    # 想同时观察跨版本行为时,复制本文件为 docker-compose.b.yml,改
+    # container_name、ports(8097)与 volumes,即得到第二台。
+    image: emby/embyserver:4.9.5.0-arm64v8
+    container_name: emby-dev
+    restart: unless-stopped
+
+    ports:
+      # 只绑回环。开发实例没有对外暴露的理由;要让局域网其他设备连,
+      # 改成 "8096:8096" 并自行确认没有敏感内容。
+      - "127.0.0.1:8096:8096"
+
+    volumes:
+      # 配置与元数据。含自建实例的用户库与库配置,**不入库**(见根 .gitignore)。
+      - ./config:/config
+      # 测试媒体。由 gen-media.sh 生成,**不入库**。
+      - ./media:/mnt/media
+
+    environment:
+      # UID/GID 要让容器内 Emby 能读写挂载进来的 media 与 config。
+      # macOS 上首个用户通常是 501:20,若你的不是,改成 `id -u` / `id -g` 的输出。
+      - UID=501
+      - GID=20
+      - TZ=Asia/Shanghai

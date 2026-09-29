@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000004",
+      "Name": "电影",
+      "CollectionType": "movies"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000005",
+      "Name": "电视剧",
+      "CollectionType": "tvshows"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000006",
+      "Name": "混合媒体库",
+      "CollectionType": null
+    }
+  ],
+  "TotalRecordCount": 3
+}

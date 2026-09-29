@@ -1,0 +1,31 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000101",
+      "Name": "测试电影一",
+      "Type": "Movie",
+      "ProductionYear": 2019,
+      "RunTimeTicks": 54000000000,
+      "OfficialRating": "PG-13",
+      "Genres": ["剧情", "科幻"],
+      "ImageTags": { "Primary": "TAG-PRIMARY-1" },
+      "BackdropImageTags": ["TAG-BACKDROP-1"],
+      "UserData": {
+        "PlaybackPositionTicks": 13500000000,
+        "Played": false,
+        "PlayedPercentage": 25,
+        "PlayCount": 1
+      }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000102",
+      "Name": "测试电影二",
+      "Type": "Movie",
+      "ProductionYear": 2021,
+      "RunTimeTicks": 72000000000,
+      "ImageTags": { "Primary": "TAG-PRIMARY-2" },
+      "UserData": { "PlaybackPositionTicks": 0, "Played": true, "PlayCount": 2 }
+    }
+  ],
+  "TotalRecordCount": 4
+}

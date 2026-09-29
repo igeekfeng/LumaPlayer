@@ -1,0 +1,19 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000101",
+      "Name": "测试电影一",
+      "Type": "Movie",
+      "ProductionYear": 2019,
+      "ImageTags": { "Primary": "TAG-PRIMARY-1" }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000200",
+      "Name": "测试剧集",
+      "Type": "Series",
+      "ProductionYear": 2020,
+      "ImageTags": { "Primary": "TAG-SERIES-1" }
+    }
+  ],
+  "TotalRecordCount": 2
+}

@@ -1,0 +1,20 @@
+{
+  "Id": "00000000-0000-0000-0000-000000000101",
+  "Name": "测试电影一",
+  "Type": "Movie",
+  "Overview": "这是一段用于 fixture 的简介文本,用来验证单项详情接口会返回列表接口没有的字段。",
+  "ProductionYear": 2019,
+  "RunTimeTicks": 54000000000,
+  "OfficialRating": "PG-13",
+  "CommunityRating": 7.8,
+  "Genres": ["剧情", "科幻"],
+  "ImageTags": { "Primary": "TAG-PRIMARY-1" },
+  "BackdropImageTags": ["TAG-BACKDROP-1"],
+  "UserData": {
+    "PlaybackPositionTicks": 13500000000,
+    "Played": false,
+    "PlayedPercentage": 25,
+    "PlayCount": 1,
+    "IsFavorite": false
+  }
+}

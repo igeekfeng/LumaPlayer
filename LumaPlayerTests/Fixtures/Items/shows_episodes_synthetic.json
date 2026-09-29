@@ -1,0 +1,42 @@
+{
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000201",
+      "Name": "第一集",
+      "Type": "Episode",
+      "IndexNumber": 1,
+      "ParentIndexNumber": 1,
+      "SeasonId": "00000000-0000-0000-0000-000000000210",
+      "SeasonName": "第 1 季",
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集",
+      "RunTimeTicks": 30000000000,
+      "Overview": "第一集的简介。",
+      "ImageTags": { "Primary": "TAG-EPISODE-1" },
+      "UserData": { "PlaybackPositionTicks": 30000000000, "Played": true }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000202",
+      "Name": "第二集",
+      "Type": "Episode",
+      "IndexNumber": 2,
+      "ParentIndexNumber": 1,
+      "SeasonId": "00000000-0000-0000-0000-000000000210",
+      "SeasonName": "第 1 季",
+      "SeriesId": "00000000-0000-0000-0000-000000000200",
+      "SeriesName": "测试剧集",
+      "RunTimeTicks": 30000000000,
+      "ImageTags": { "Primary": "TAG-EPISODE-2" },
+      "UserData": { "PlaybackPositionTicks": 15000000000, "Played": false }
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000203",
+      "Name": "第三集(没有集号)",
+      "Type": "Episode",
+      "ParentIndexNumber": 1,
+      "SeasonId": "00000000-0000-0000-0000-000000000210",
+      "SeriesId": "00000000-0000-0000-0000-000000000200"
+    }
+  ],
+  "TotalRecordCount": 3
+}

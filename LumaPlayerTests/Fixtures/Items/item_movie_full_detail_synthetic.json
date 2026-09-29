@@ -1,0 +1,22 @@
+{
+  "Id": "00000000-0000-0000-0000-000000000102",
+  "Name": "测试电影二",
+  "Type": "Movie",
+  "ProductionYear": 2021,
+  "PremiereDate": "2021-06-18T00:00:00.0000000Z",
+  "RunTimeTicks": 61200000000,
+  "CommunityRating": 8.1,
+  "CriticRating": 92,
+  "Taglines": ["一句用于 fixture 的宣传语"],
+  "People": [
+    { "Name": "演员甲", "Id": "PERSON-1", "Role": "角色甲", "Type": "Actor", "PrimaryImageTag": "TAG-PERSON-1" },
+    { "Name": "导演乙", "Id": "PERSON-2", "Type": "Director" }
+  ],
+  "Studios": [ { "Name": "测试制片厂", "Id": 1234567890123 } ],
+  "MediaStreams": [
+    { "Index": 0, "Type": "Video", "Codec": "h264", "DisplayTitle": "1080p H264", "Width": 1920, "Height": 1080 },
+    { "Index": 1, "Type": "Audio", "Codec": "aac", "DisplayTitle": "AAC stereo (默认)", "Channels": 2, "IsDefault": true },
+    { "Index": 2, "Type": "Subtitle", "Codec": "srt", "DisplayTitle": "Chinese (SRT)", "IsTextSubtitleStream": true }
+  ],
+  "UserData": { "PlaybackPositionTicks": 0, "Played": false, "PlayCount": 0, "IsFavorite": false }
+}

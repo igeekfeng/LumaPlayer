@@ -1,0 +1,36 @@
+{
+  "MediaSources": [
+    {
+      "Id": "MEDIASOURCE-DIRECT-1",
+      "Container": "mkv",
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": true,
+      "MediaStreams": [
+        {
+          "Index": 0,
+          "Type": "Video",
+          "Codec": "h264",
+          "Language": "und",
+          "IsDefault": true
+        },
+        {
+          "Index": 1,
+          "Type": "Audio",
+          "Codec": "aac",
+          "Language": "jpn",
+          "IsDefault": true
+        },
+        {
+          "Index": 2,
+          "Type": "Subtitle",
+          "Codec": "srt",
+          "Language": "zho",
+          "IsDefault": false,
+          "IsTextSubtitleStream": true,
+          "IsExternal": false
+        }
+      ]
+    }
+  ],
+  "PlaySessionId": "PLAYSESSION-DIRECT-1"
+}

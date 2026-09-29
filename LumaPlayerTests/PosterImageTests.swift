@@ -1,0 +1,216 @@
+import AppKit
+import XCTest
+@testable import LumaPlayer
+
+/// 图片加载器:计数用的替身(actor,不使用 `@unchecked Sendable`)。
+private actor CountingImageLoader: ImageDataLoading {
+    private(set) var callCount = 0
+    private let payload: Data
+
+    init(payload: Data) {
+        self.payload = payload
+    }
+
+    func data(for spec: ImageSpec) async throws -> Data {
+        callCount += 1
+        return payload
+    }
+}
+
+/// 海报图片的内存缓存(API_CONTRACT.md 3.3 的缓存 key 规则)。
+///
+/// 缓存 key 必须含 `Tag` 与服务器:两台共享媒体库的服务器 item id 可能相同,
+/// key 不含这些就会互相串图(3.3 的多服务器提醒)。
+final class PosterImageTests: XCTestCase {
+    private let serverA = UUID()
+    private let serverB = UUID()
+    private var diskDirectory: URL!
+
+    override func setUp() {
+        super.setUp()
+        diskDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LumaPlayerPosterStoreTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: diskDirectory)
+        diskDirectory = nil
+        try await super.tearDown()
+    }
+
+    @MainActor
+    func testRepeatedRequestHitsCache() async throws {
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let store = PosterImageStore(loader: loader)
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        _ = try await store.image(for: spec)
+        _ = try await store.image(for: spec)
+
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 1, "第二次必须命中内存缓存")
+        XCTAssertTrue(store.isCached(spec))
+    }
+
+    @MainActor
+    func testDifferentTagsDoNotShareCacheEntry() async throws {
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let store = PosterImageStore(loader: loader)
+        let first = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        let second = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-2", maxWidth: 300)
+
+        _ = try await store.image(for: first)
+        _ = try await store.image(for: second)
+
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 2, "Tag 变了就是另一张图(API_CONTRACT.md 3.3)")
+    }
+
+    @MainActor
+    func testSameItemOnAnotherServerDoesNotShareCacheEntry() async throws {
+        // 两台服务器镜像同一套媒体库:item id 与 tag 都一样,只有 serverID 不同
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let store = PosterImageStore(loader: loader)
+        let onA = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        let onB = ImageSpec(serverID: serverB, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        _ = try await store.image(for: onA)
+        _ = try await store.image(for: onB)
+
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 2, "换服务器不得复用另一台的图片缓存")
+    }
+
+    @MainActor
+    func testUndecodablePayloadThrows() async throws {
+        let loader = CountingImageLoader(payload: Data([0x00, 0x01, 0x02]))
+        let store = PosterImageStore(loader: loader)
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        do {
+            _ = try await store.image(for: spec)
+            XCTFail("解不出 NSImage 必须抛错,不能静默返回空图")
+        } catch let error as PosterImageError {
+            XCTAssertEqual(error, .undecodableImage)
+        }
+        XCTAssertFalse(store.isCached(spec), "失败结果不得进缓存")
+    }
+
+    @MainActor
+    func testClearCacheDropsEverything() async throws {
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let store = PosterImageStore(loader: loader)
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        _ = try await store.image(for: spec)
+        store.clearCache()
+        _ = try await store.image(for: spec)
+
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 2)
+    }
+
+    // MARK: - 磁盘层与 LRU
+
+    @MainActor
+    func testDiskHitAvoidsNetwork() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        // 第一个 store:走网络并落盘
+        let first = PosterImageStore(loader: loader, disk: disk)
+        _ = try await first.image(for: spec)
+        let afterFirst = await loader.callCount
+
+        // 第二个 store:内存为空,磁盘必须接住 —— 不再发网络请求
+        let second = PosterImageStore(loader: loader, disk: disk)
+        _ = try await second.image(for: spec)
+        let afterSecond = await loader.callCount
+
+        XCTAssertEqual(afterFirst, 1)
+        XCTAssertEqual(afterSecond, 1, "磁盘命中不得再走网络")
+    }
+
+    @MainActor
+    func testConcurrentRequestsWithDiskShareOneNetworkRequest() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        let store = PosterImageStore(loader: loader, disk: disk)
+
+        // 磁盘未命中时,读磁盘的挂起点不得让第二个调用绕过 inFlight 合并
+        async let first = store.image(for: spec)
+        async let second = store.image(for: spec)
+        _ = try await (first, second)
+
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 1, "同 key 并发请求必须合并为一次网络请求")
+    }
+
+    @MainActor
+    func testNetworkSuccessWritesToDisk() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        let store = PosterImageStore(loader: loader, disk: disk)
+
+        _ = try await store.image(for: spec)
+        guard let onDisk = await disk.data(for: spec) else {
+            return XCTFail("网络成功后必须落盘")
+        }
+        XCTAssertNotNil(NSImage(data: onDisk), "落盘的字节必须还能解回图片")
+    }
+
+    @MainActor
+    func testMemoryLRUEvictsLeastRecentlyUsed() async throws {
+        let loader = CountingImageLoader(payload: try makeImageData())
+        // 不注入磁盘层:纯测内存 LRU
+        let store = PosterImageStore(loader: loader)
+        // 填满内存上限
+        for index in 0..<PosterImageStore.cacheLimit {
+            let spec = ImageSpec(serverID: serverA, itemID: "ITEM-\(index)", type: .primary, tag: "TAG-\(index)", maxWidth: 300)
+            _ = try await store.image(for: spec)
+        }
+        // 访问最旧的:它变成「最近使用」,淘汰对象变成第二个
+        let oldest = ImageSpec(serverID: serverA, itemID: "ITEM-0", type: .primary, tag: "TAG-0", maxWidth: 300)
+        _ = try await store.image(for: oldest)
+        // 插入第 301 条:LRU 淘汰的必须是 ITEM-1(最久未用的)
+        let extra = ImageSpec(serverID: serverA, itemID: "ITEM-EXTRA", type: .primary, tag: "TAG-EXTRA", maxWidth: 300)
+        _ = try await store.image(for: extra)
+
+        let second = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        XCTAssertTrue(store.isCached(oldest), "刚访问过的条目不得被 LRU 淘汰")
+        XCTAssertFalse(store.isCached(second), "最久未用的条目必须被 LRU 淘汰")
+    }
+
+    @MainActor
+    func testPurgeDiskDropsServerImages() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        let store = PosterImageStore(loader: loader, disk: disk)
+        _ = try await store.image(for: spec)
+        // 清掉内存,只留磁盘层
+        store.clearCache()
+
+        await store.purgeDisk(serverID: serverA)
+
+        _ = try await store.image(for: spec)
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 2, "磁盘被 purge 后必须重新走网络")
+    }
+
+    // MARK: - 辅助
+
+    /// 造一张能解回 `NSImage` 的图(TIFF,AppKit 原生支持)。
+    @MainActor
+    private func makeImageData() throws -> Data {
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 4, height: 4).fill()
+        image.unlockFocus()
+        return try XCTUnwrap(image.tiffRepresentation)
+    }
+}
