@@ -5,9 +5,10 @@
 # 用 Release 配置构建 LumaPlayer，并安装到 /Applications。
 #
 # 用法（任意目录）：
-#   ./Scripts/deploy-to-applications.sh            # 构建 + 安装
+#   ./Scripts/deploy-to-applications.sh            # 构建 + 安装 + 启动
 #   ./Scripts/deploy-to-applications.sh --no-build # 只安装最近一次 Release 产物
 #   ./Scripts/deploy-to-applications.sh --allow-dirty # 工作区有未提交改动也照样构建
+#   ./Scripts/deploy-to-applications.sh --no-open  # 装完不自动启动
 #
 # 装好的 App 由 bundle-libmpv.sh 打入 libmpv 及全部依赖（方案 B），
 # 之后 brew upgrade mpv 不会影响它。
@@ -29,10 +30,12 @@ cd "${REPO_ROOT}"
 # 工作区不干净时构建号对不上实际代码，默认拒绝；确需临时装一版用 --allow-dirty。
 NO_BUILD=0
 ALLOW_DIRTY=0
+NO_OPEN=0
 for arg in "$@"; do
     case "${arg}" in
         --no-build)    NO_BUILD=1 ;;
         --allow-dirty) ALLOW_DIRTY=1 ;;
+        --no-open)     NO_OPEN=1 ;;
         *) echo "error: 未知参数 ${arg}" >&2; exit 2 ;;
     esac
 done
@@ -94,3 +97,14 @@ echo "已安装到: ${DEST}"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${DEST}/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${DEST}/Contents/Info.plist")"
 echo "签名校验通过，安装完成（版本 ${VERSION}，构建号 ${BUILD}）。"
+
+# --- 6. 启动刚装好的 App -----------------------------------------------------
+# 步骤 3 已经把旧实例退出，这里直接打开新版本，省得手动去 /Applications 点一次。
+if [[ "${NO_OPEN}" == 0 ]]; then
+    if /usr/bin/open "${DEST}"; then
+        echo "已启动 ${DEST}。"
+    else
+        echo "error: 安装已完成，但启动 ${DEST} 失败（--no-open 可跳过启动）。" >&2
+        exit 1
+    fi
+fi

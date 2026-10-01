@@ -48,7 +48,7 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' \
 ## 打包
 
 ```bash
-# 安装到本机 /Applications
+# 安装到本机 /Applications（装完自动启动；加 --no-open 则不启动）
 ./Scripts/deploy-to-applications.sh          # 加 --no-build 则只拷贝
 # 打 DMG（产物在 build/LumaPlayer-{版本}-{构建号}.dmg）
 ./Scripts/make-dmg.sh
