@@ -1,8 +1,3 @@
-# ── 内部文档：保留在本地，不发布 ──
-# 代码注释里的「API_CONTRACT.md 4.4」这类章节引用指向这些文件，公开仓库里会悬空，属已知取舍。
-docs/
-CLAUDE.md
-
 # ── 密钥与真实环境（不得放宽）──
 *.real.json
 *.local.xcconfig
@@ -39,3 +34,7 @@ Package.resolved
 Tools/emby-dev/config/
 Tools/emby-dev/media/
 Tools/emby-dev/.labels/
+
+
+docs/
+CLAUDE.md

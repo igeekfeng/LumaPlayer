@@ -24,6 +24,10 @@ final class PlayerViewModel {
     private let item: EmbyItem
     /// 上报出口(API_CONTRACT.md 5.4:所有上报经这一个 actor 串行)。
     private let reporter: PlaybackProgressReporter
+    /// 播放期的显示器休眠断言。⛔ 不能指望 mpv 的 `stop-screensaver`:
+    /// `vo=libmpv` 下它不生效,必须宿主自己持(手段见 `DisplaySleepAssertion`,
+    /// 判据见 `shouldPreventDisplaySleep`;GitHub issue #1)。
+    private let displaySleep: any DisplaySleepInhibiting
 
     /// 视频层绑定用;为 nil 表示还没到建播放器的阶段(仍在取播放信息)
     private(set) var player: MPVPlayer?
@@ -157,6 +161,7 @@ final class PlayerViewModel {
         item: EmbyItem,
         startFromBeginning: Bool = false,
         reporter: PlaybackProgressReporter? = nil,
+        displaySleep: (any DisplaySleepInhibiting)? = nil,
         defaults: UserDefaults = .standard
     ) {
         self.container = container
@@ -174,6 +179,9 @@ final class PlayerViewModel {
         self.reporter = reporter ?? PlaybackProgressReporter { endpoint in
             try await connection.reportPlayback(endpoint)
         }
+        // 显示器休眠断言:App 里用真的 IOKit 断言,单测注入替身
+        // (与 reporter 同一个理由:被测逻辑不该依赖系统资源的可用性)。
+        self.displaySleep = displaySleep ?? DisplaySleepAssertion()
         // 恢复播放位置:`UserData.PlaybackPositionTicks` 是服务端记录的进度。
         // 为 nil / 为 0 即从 0 开始 —— 不猜「看过了多少」(8.1 禁止填假默认值)。
         // 「从头播放」显式忽略它。
@@ -191,6 +199,10 @@ final class PlayerViewModel {
 
     /// 起播位置(秒);仅供测试与日志观察,不参与播放决策。
     var resumeStartSeconds: Double { startSeconds }
+
+    /// 是否正持有「阻止显示器休眠」的断言(仅供测试与日志观察;`pmset -g assertions`
+    /// 是另一个更权威的观察点,见 GitHub issue #1 的验收标准)。
+    var isPreventingDisplaySleep: Bool { displaySleep.isHeld }
 
     /// 正在播的项(标题栏 / 系统「正在播放」用)
     var playingItem: EmbyItem { item }
@@ -245,6 +257,10 @@ final class PlayerViewModel {
     /// Stopped),再拆播放器。关窗、切媒体、转码 seek 都走这里。
     func stop() {
         finishReporting(sendFinalProgress: true)
+        // 收尾这一刻就把显示器休眠还回去:关窗 / 切媒体 / 转码重新起流都走这里。
+        // 这里必须是**无条件释放**而不是按 phase 重算 —— stop() 返回后调用方
+        // (retry / restartStream)才把 phase 置回 .idle,重算会把断言又拿一份。
+        displaySleep.setActive(false)
         // 先递增:此后旧播放器再投递的事件代次都对不上,一律丢弃。
         generation &+= 1
         startTask?.cancel()
@@ -710,6 +726,31 @@ final class PlayerViewModel {
         start()
     }
 
+    // MARK: - 显示器休眠断言(播放期不息屏)
+
+    /// 播放期是否该阻止显示器休眠。
+    ///
+    /// 与 mpv 自带 `stop-screensaver=yes` 的语义对齐(⛔ 不是 `=2` 的「始终抑制」):
+    /// 只有正在播放才抑制,暂停 / 播完 / 加载 / 失败 / 拆播放器都还给系统。
+    ///
+    /// 三个判据各有各的必要性:
+    /// - `phase == .playing`:暂停会被 mpv 置成 `.paused`,加载是 `.loading`,失败是 `.failed`;
+    /// - `!isPaused`:起播前就按了暂停时,phase 仍会随 FILE_LOADED 变成 `.playing`
+    ///   (mpv 先报文件就绪、再报 pause),只看 phase 会为「暂停中的画面」占着断言;
+    /// - `!isEnded`:**播完时 phase 停在 `.playing`**(§8 状态机没有「已结束」态,
+    ///   `docs/PITFALLS.md` Q7),不看这个就会让播完卡片一直占着断言。
+    static func shouldPreventDisplaySleep(
+        phase: MPVPlayerPhase, isPaused: Bool, isEnded: Bool
+    ) -> Bool {
+        phase == .playing && !isPaused && !isEnded
+    }
+
+    /// 按当前状态刷新断言(幂等,状态每次变化都可以调)。
+    private func updateDisplaySleepAssertion() {
+        displaySleep.setActive(Self.shouldPreventDisplaySleep(
+            phase: phase, isPaused: isPaused, isEnded: isEnded))
+    }
+
     // MARK: - 上报
 
     /// 5.1 的快照:位置 / 暂停 / 静音 / 音量 / 轨道索引 / 倍速。
@@ -800,6 +841,7 @@ final class PlayerViewModel {
         switch event {
         case .phaseChanged(let newPhase):
             phase = newPhase
+            updateDisplaySleepAssertion()
             if newPhase == .playing {
                 markTimeline(.playing)
                 // DirectStream 的恢复位置:服务端吐的是整份文件,
@@ -840,6 +882,7 @@ final class PlayerViewModel {
 
         case .paused(let paused):
             isPaused = paused
+            updateDisplaySleepAssertion()
             // 5.2:暂停 / 恢复立即上报
             pushState()
             reportNow(paused ? .pause : .unpause)
@@ -880,6 +923,8 @@ final class PlayerViewModel {
         case .endFile(.eof):
             // 6.6:自然播完 → 直接 Stopped,位置用最终位置
             isEnded = true
+            // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)
+            updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
             // 没有片尾标记、也没赶上结束前的提示(比如直接拖到了最后)时,
             // 播完卡片同样按设置倒计时播下一集

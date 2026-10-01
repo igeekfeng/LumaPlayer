@@ -13,10 +13,14 @@ final class PlayerViewModelTests: XCTestCase {
 
     private var storage: CredentialFileStore!
     private var credentials: CredentialStore!
+    /// 显示器休眠断言用替身:这些用例验的是接线,不该真去占住显示器
+    /// (真断言的行为在 `DisplaySleepAssertionTests` 里验)。
+    private var displaySleep = RecordingDisplaySleepInhibitor()
 
     override func setUp() async throws {
         storage = CredentialFileStore(fileURL: .temporaryCredentialsFile())
         credentials = CredentialStore(storage: storage)
+        displaySleep = RecordingDisplaySleepInhibitor()
     }
 
     override func tearDown() async throws {
@@ -128,6 +132,48 @@ final class PlayerViewModelTests: XCTestCase {
         await viewModel.waitUntilReportingFinished()
     }
 
+    // MARK: - 显示器休眠断言(GitHub issue #1)
+
+    /// 断言跟着播放状态走:起播持、暂停放、恢复再持、播完放。
+    func testDisplaySleepAssertionFollowsPlaybackState() throws {
+        let viewModel = try makeViewModel()
+        XCTAssertFalse(displaySleep.isHeld, "还没起播就不该持有")
+
+        viewModel.handle(.phaseChanged(.loading), generation: 0)
+        XCTAssertFalse(displaySleep.isHeld, "起播准备中不持有(与 mpv 的 playback_active 一致)")
+
+        viewModel.handle(.phaseChanged(.playing), generation: 0)
+        XCTAssertTrue(displaySleep.isHeld)
+        XCTAssertTrue(viewModel.isPreventingDisplaySleep)
+
+        viewModel.handle(.paused(true), generation: 0)
+        XCTAssertFalse(displaySleep.isHeld, "暂停要立刻把休眠策略还给系统")
+
+        viewModel.handle(.paused(false), generation: 0)
+        XCTAssertTrue(displaySleep.isHeld)
+
+        // 播完(EOF):mpv 不把 phase 挪走,只能靠 isEnded
+        viewModel.handle(.endFile(.eof), generation: 0)
+        XCTAssertEqual(viewModel.phase, .playing)
+        XCTAssertFalse(displaySleep.isHeld, "播完的卡片不该占着断言")
+
+        viewModel.stop()
+        XCTAssertFalse(displaySleep.isHeld)
+    }
+
+    /// 关窗 / 切媒体 / 转码重新起流都走 `stop()`:即使还停在 playing 也必须释放,
+    /// 不能指望后面还有事件来收这个尾。
+    func testStopReleasesDisplaySleepAssertionEvenWhilePlaying() throws {
+        let viewModel = try makeViewModel()
+        viewModel.handle(.phaseChanged(.playing), generation: 0)
+        XCTAssertTrue(displaySleep.isHeld)
+
+        viewModel.stop()
+
+        XCTAssertFalse(displaySleep.isHeld)
+        XCTAssertFalse(viewModel.isPreventingDisplaySleep)
+    }
+
     // MARK: - 辅助
 
     private func track(
@@ -155,7 +201,8 @@ final class PlayerViewModelTests: XCTestCase {
         return PlayerViewModel(
             container: AppContainer(registry: registry, credentials: credentials),
             server: profile,
-            item: item
+            item: item,
+            displaySleep: displaySleep
         )
     }
 }
