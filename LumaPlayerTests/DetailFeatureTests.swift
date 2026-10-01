@@ -160,6 +160,40 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertNil(bare.landscapeImage, "没有任何横版 tag 就不请求")
     }
 
+    /// 卡片封面(`coverImage`)与它的失败退路(`coverImageFallback`)。
+    ///
+    /// 2026-10-01 在两台真实服务器的响应缓存里核实:`/Users/{UserId}/Items/Resume`
+    /// 里的电影条目常常只有 `ImageTags.Primary`(`BackdropImageTags` 是空数组),
+    /// 只认横版 tag 的话「继续观看」里的电影永远只有占位图(分集不受影响:
+    /// 分集的 `Primary` 本身就是 16:9 剧照)。
+    func testCoverImageFallsBackToOwnPoster() throws {
+        let movie = try decode(#"{"Id":"M","Name":"M","Type":"Movie","ImageTags":{"Primary":"P"}}"#)
+        XCTAssertNil(movie.landscapeImage, "横版图的语义不变:没有横版 tag 就是 nil")
+        XCTAssertEqual(movie.coverImage?.type, .primary, "封面退回竖版海报")
+        XCTAssertEqual(movie.coverImage?.itemID, "M")
+        XCTAssertEqual(movie.coverImage?.tag, "P")
+        XCTAssertNil(movie.coverImageFallback, "首选已经是海报,没有第二级可退")
+
+        let withThumb = try decode(#"{"Id":"M","Name":"M","Type":"Movie","ImageTags":{"Primary":"P","Thumb":"T"}}"#)
+        XCTAssertEqual(withThumb.coverImage?.type, .thumb, "有横版图时优先横版")
+        XCTAssertEqual(withThumb.coverImageFallback?.type, .primary, "横版图有可能是服务端取不到的假 tag,退路是海报")
+        XCTAssertEqual(withThumb.coverImageFallback?.tag, "P")
+
+        let withBackdrop = try decode(#"{"Id":"M","Name":"M","Type":"Movie","ImageTags":{"Primary":"P"},"BackdropImageTags":["B"]}"#)
+        XCTAssertEqual(withBackdrop.coverImage?.type, .backdrop)
+        XCTAssertEqual(withBackdrop.coverImage?.tag, "B")
+        XCTAssertEqual(withBackdrop.coverImageFallback?.tag, "P")
+
+        let episode = try decode(#"{"Id":"E","Name":"E","Type":"Episode","ImageTags":{"Primary":"EP"}}"#)
+        XCTAssertEqual(episode.coverImage?.type, .primary, "分集的 Primary 就是剧照,不受影响")
+        XCTAssertEqual(episode.coverImage?.tag, "EP")
+        XCTAssertNil(episode.coverImageFallback)
+
+        let noImage = try decode(#"{"Id":"M","Name":"M","Type":"Movie"}"#)
+        XCTAssertNil(noImage.coverImage, "连海报都没有:不请求、不编 tag,由 UI 决定显示占位图")
+        XCTAssertNil(noImage.coverImageFallback)
+    }
+
     func testLogoFallsBackToParent() throws {
         let own = try decode(#"{"Id":"M","Name":"M","ImageTags":{"Logo":"L"}}"#)
         XCTAssertEqual(own.logoSource?.itemID, "M")

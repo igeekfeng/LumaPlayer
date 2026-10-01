@@ -11,7 +11,8 @@ struct SearchView: View {
     let term: String
     /// 每次提交 +1:同一关键词再按一次回车也要重新搜
     let submission: Int
-    @Binding var selection: EmbyItem?
+    /// 打开某一项的详情(主窗口 push 详情页)
+    var onOpenItem: (EmbyItem) -> Void
 
     @State private var viewModel: SearchViewModel
     @Environment(\.openWindow) private var openWindow
@@ -21,13 +22,13 @@ struct SearchView: View {
         server: ServerProfile,
         term: String,
         submission: Int,
-        selection: Binding<EmbyItem?>
+        onOpenItem: @escaping (EmbyItem) -> Void
     ) {
         self.container = container
         self.server = server
         self.term = term
         self.submission = submission
-        self._selection = selection
+        self.onOpenItem = onOpenItem
         self._viewModel = State(initialValue: SearchViewModel(container: container))
     }
 
@@ -65,7 +66,7 @@ struct SearchView: View {
                             items: list.items,
                             serverID: server.id,
                             store: container.posters,
-                            selection: $selection,
+                            onOpenItem: onOpenItem,
                             actions: ItemGridActions(play: { item, fromBeginning in
                                 container.play(item, on: server, fromBeginning: fromBeginning)
                                 openWindow(id: PlayerSceneRoot.windowID)

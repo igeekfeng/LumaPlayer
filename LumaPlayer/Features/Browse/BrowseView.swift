@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 内容列的选择项。
+/// 内容页的选择项。
 enum BrowseSelection: Hashable {
     case home
     case search
@@ -8,22 +8,41 @@ enum BrowseSelection: Hashable {
     case library(String)
 }
 
-/// 主窗口:`NavigationSplitView` 两栏 —— 内容(首页 / 媒体库 / 搜索)+ 详情
-/// (UI_DESIGN.md 第 3 节)。
+/// 导航栈上的一页详情。
+///
+/// `NavigationStack(path:)` 要求元素 `Hashable`,而 `EmbyItem` 只有 `Equatable`
+/// (给它补 `Hashable` 要连带 `EmbyPerson` / `EmbyMediaStream` 等一堆模型)。
+/// 这里按 Id 判定同一页就够了:同一项不会在栈上出现两次。
+private struct DetailRoute: Hashable {
+    let item: EmbyItem
+
+    static func == (lhs: DetailRoute, rhs: DetailRoute) -> Bool {
+        lhs.item.id == rhs.item.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(item.id)
+    }
+}
+
+/// 主窗口:`NavigationStack` —— 内容(首页 / 媒体库 / 搜索)占满整窗,
+/// 点项目 push 到详情页(UI_DESIGN.md 第 3 节)。
 ///
 /// 2026-10-01 改版:原先的第三栏(左栏)已去掉 —— 媒体库入口在首页「我的媒体」,
 /// 服务器管理在设置窗口的「服务器」标签页,切换在工具栏的服务器菜单。
+/// 2026-10-01 再改:详情页不再占右边的第二栏 —— 440 的列宽装不下 hero、剧集列表与
+/// 演职员,改成 push 一整页,内容页也拿回全部宽度。
 struct BrowseView: View {
     let container: AppContainer
 
     @State private var viewModel: BrowseViewModel
     @State private var selection: BrowseSelection = .home
-    @State private var selectedItem: EmbyItem?
-    /// 首页 / 详情页的 ViewModel 放在这里而不是各自的 View 里:
-    /// 切走再切回时视图会重建,ViewModel 留着才能保住已有内容、不闪 loading。
+    /// 导航栈上已 push 的详情页(点相似推荐会再叠一页,返回栈逐级退)
+    @State private var detailPath: [DetailRoute] = []
+    /// 首页的 ViewModel 放在这里而不是在 `HomeView` 里:
+    /// 切到媒体库 / 搜索再切回时视图会重建,ViewModel 留着才能保住已有内容、不闪 loading。
     /// 首页与媒体库入口的状态按服务器分开存,切到别的服务器再切回来同样不闪(issue #3)
     @State private var homeViewModel: HomeViewModel
-    @State private var detailViewModel: MediaDetailViewModel
     /// 从首页「查看全部」进入的媒体库 Id;有值且仍停在该库时,工具栏出现「返回首页」
     @State private var libraryOpenedFromHome: String?
     @State private var servers: [ServerProfile] = []
@@ -42,41 +61,25 @@ struct BrowseView: View {
         self.container = container
         self._viewModel = State(initialValue: BrowseViewModel(container: container))
         self._homeViewModel = State(initialValue: HomeViewModel(container: container))
-        self._detailViewModel = State(initialValue: MediaDetailViewModel(container: container))
     }
 
     var body: some View {
-        NavigationSplitView {
-            contentColumn
-                // 内容列是主区域,默认宽度必须压过详情列。
-                // 不钉宽度的话第一列按「边栏」语义默认理想宽度只有 220 出头:
-                // 首页被挤成左边一条窄带,工具栏左侧区域也跟着变窄,
-                // 带文字的服务器切换器一溢出,整排控件看起来就像归了详情列。
-                .navigationSplitViewColumnWidth(
-                    min: Metrics.contentColumnMinWidth,
-                    ideal: Metrics.contentColumnIdealWidth
-                )
-                // 工具栏与搜索框声明在**内容列**上(而不是根 split view):它们操作的是
-                // 内容列 —— 切服务器、刷新当前页、搜索。声明在根上会被摆到详情列那一侧。
-                .toolbar { toolbarContent }
-                // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
-                // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
-                .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
-                .onSubmit(of: .search) {
-                    submittedSearch = searchText
-                    searchSubmission += 1
-                    selection = .search
-                }
-        } detail: {
-            detailColumn
-                // 详情列是次要区域,但要放得下 hero、简介与剧集列表
-                .navigationSplitViewColumnWidth(
-                    min: Metrics.detailColumnMinWidth,
-                    ideal: Metrics.detailColumnIdealWidth
-                )
+        NavigationStack(path: $detailPath) {
+            rootPage
         }
-        // 内容列就是主区域,不允许被系统的「隐藏边栏」收起来(收起来只剩一列空白)
-        .toolbar(removing: .sidebarToggle)
+        // 工具栏与搜索框声明在**导航栈**上(而不是内容页上):栈内所有页面都能用到
+        // 切服务器 / 刷新 / 搜索;声明在内容页上,push 到详情后就只剩返回按钮了。
+        .toolbar { toolbarContent }
+        // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
+        // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
+        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
+        .onSubmit(of: .search) {
+            submittedSearch = searchText
+            searchSubmission += 1
+            // 从详情页里搜索:先退回内容页,否则结果页被压在详情页下面看不见
+            detailPath.removeAll()
+            selection = .search
+        }
         .task { await reloadServers() }
         // 媒体库入口由主窗口统一加载(首页「我的媒体」与媒体库页都用这一份)
         .task(id: container.state.currentServer?.id) {
@@ -85,8 +88,8 @@ struct BrowseView: View {
             }
         }
         .onChange(of: container.state.currentServer?.id) {
-            // 选中的项属于上一台服务器,换服务器必须清掉(不串台)
-            selectedItem = nil
+            // 栈上的详情页属于上一台服务器,换服务器必须清掉(不串台)
+            detailPath.removeAll()
             selection = .home
             libraryOpenedFromHome = nil
             searchText = ""
@@ -118,51 +121,23 @@ struct BrowseView: View {
         }
     }
 
-    // MARK: - 内容列与详情列
+    // MARK: - 内容页与详情页
 
+    /// 导航栈的根:内容页,以及详情页的 `navigationDestination`
     @ViewBuilder
-    private var contentColumn: some View {
+    private var rootPage: some View {
         if let server = container.state.currentServer {
-            switch selection {
-            case .home:
-                HomeView(
-                    container: container,
-                    viewModel: homeViewModel,
-                    server: server,
-                    viewsState: viewsState,
-                    selection: $selectedItem,
-                    refreshToken: refreshToken,
-                    onOpenLibrary: {
-                        libraryOpenedFromHome = $0
-                        selection = .library($0)
-                    },
-                    onReloadLibraries: { viewModel.loadViews(server: server) }
-                )
-            case .search:
-                SearchView(
-                    container: container,
-                    server: server,
-                    term: submittedSearch,
-                    submission: searchSubmission,
-                    selection: $selectedItem
-                )
-            case .library(let viewID):
-                if let view = libraryView(id: viewID) {
-                    LibraryView(
+            contentPage(server: server)
+                // 详情页在这里注册:同一个导航栈里,内容页与详情页各占一整页。
+                // 点相似推荐再 append 一项即可叠上下一页。
+                .navigationDestination(for: DetailRoute.self) { route in
+                    MediaDetailView(
                         container: container,
                         server: server,
-                        view: view,
-                        selection: $selectedItem,
-                        refreshToken: refreshToken
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "媒体库已不可用",
-                        systemImage: "questionmark.folder",
-                        description: Text("这台服务器上找不到该媒体库,请返回首页重新选择。")
+                        item: route.item,
+                        onOpenItem: { detailPath.append(DetailRoute(item: $0)) }
                     )
                 }
-            }
         } else {
             ContentUnavailableView(
                 "没有选中的服务器",
@@ -173,23 +148,46 @@ struct BrowseView: View {
     }
 
     @ViewBuilder
-    private var detailColumn: some View {
-        if let server = container.state.currentServer, let selectedItem {
-            // 剧集里的分集不再换掉整个详情页(单页合并),
-            // 所以这里只需要把选中的项目交给详情列。
-            MediaDetailView(
+    private func contentPage(server: ServerProfile) -> some View {
+        switch selection {
+        case .home:
+            HomeView(
                 container: container,
-                viewModel: detailViewModel,
+                viewModel: homeViewModel,
                 server: server,
-                item: selectedItem,
-                onOpenItem: { self.selectedItem = $0 }
+                viewsState: viewsState,
+                onOpenItem: { detailPath.append(DetailRoute(item: $0)) },
+                refreshToken: refreshToken,
+                onOpenLibrary: {
+                    libraryOpenedFromHome = $0
+                    selection = .library($0)
+                },
+                onReloadLibraries: { viewModel.loadViews(server: server) }
             )
-        } else {
-            ContentUnavailableView(
-                "未选择内容",
-                systemImage: "film",
-                description: Text("在左边选一个项目查看详情。")
+        case .search:
+            SearchView(
+                container: container,
+                server: server,
+                term: submittedSearch,
+                submission: searchSubmission,
+                onOpenItem: { detailPath.append(DetailRoute(item: $0)) }
             )
+        case .library(let viewID):
+            if let view = libraryView(id: viewID) {
+                LibraryView(
+                    container: container,
+                    server: server,
+                    view: view,
+                    onOpenItem: { detailPath.append(DetailRoute(item: $0)) },
+                    refreshToken: refreshToken
+                )
+            } else {
+                ContentUnavailableView(
+                    "媒体库已不可用",
+                    systemImage: "questionmark.folder",
+                    description: Text("这台服务器上找不到该媒体库,请返回首页重新选择。")
+                )
+            }
         }
     }
 

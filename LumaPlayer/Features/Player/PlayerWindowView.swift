@@ -418,13 +418,11 @@ struct PlayerWindowView: View {
         )
     }
 
-    /// 系统「正在播放」的封面:分集用剧照,电影用横版图 / 海报。
+    /// 系统「正在播放」的封面:分集用剧照,电影用横版图 / 海报(`EmbyItem.coverImage`)。
     /// 走 `PosterImageStore`(带认证头,与海报墙共用缓存);没有图或加载失败就不设封面。
     private func loadNowPlayingArtwork() async {
         let item = request.item
-        let source = item.landscapeImage
-            ?? item.primaryImageTagValue.map { (itemID: item.id, type: EmbyImageType.primary, tag: $0) }
-        guard let source else { return }
+        guard let source = item.coverImage else { return }
         let spec = ImageSpec(
             serverID: request.server.id,
             itemID: source.itemID,

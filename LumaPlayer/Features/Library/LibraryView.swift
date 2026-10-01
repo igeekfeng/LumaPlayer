@@ -8,7 +8,8 @@ struct LibraryView: View {
     let container: AppContainer
     let server: ServerProfile
     let view: EmbyView?
-    @Binding var selection: EmbyItem?
+    /// 打开某一项的详情(主窗口 push 详情页)
+    var onOpenItem: (EmbyItem) -> Void
     /// 变化即重新加载(工具栏「刷新」)
     var refreshToken: Int = 0
 
@@ -19,13 +20,13 @@ struct LibraryView: View {
         container: AppContainer,
         server: ServerProfile,
         view: EmbyView?,
-        selection: Binding<EmbyItem?>,
+        onOpenItem: @escaping (EmbyItem) -> Void,
         refreshToken: Int = 0
     ) {
         self.container = container
         self.server = server
         self.view = view
-        self._selection = selection
+        self.onOpenItem = onOpenItem
         self.refreshToken = refreshToken
         self._viewModel = State(initialValue: LibraryViewModel(container: container))
     }
@@ -88,7 +89,7 @@ struct LibraryView: View {
                     items: list.items,
                     serverID: server.id,
                     store: container.posters,
-                    selection: $selection,
+                    onOpenItem: onOpenItem,
                     actions: ItemGridActions(
                         play: { item, fromBeginning in play(item, fromBeginning: fromBeginning) },
                         togglePlayed: { viewModel.togglePlayed($0) },

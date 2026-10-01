@@ -9,7 +9,7 @@ struct LumaPlayerApp: App {
         WindowGroup {
             RootView(container: container)
         }
-        .defaultSize(width: 1280, height: 800)
+        .defaultSize(width: Metrics.mainWindowWidth, height: Metrics.mainWindowHeight)
         .commands { PlayerCommands() }
 
         // 播放器:单实例独立窗口(ARCHITECTURE.md 7.5)。内容由

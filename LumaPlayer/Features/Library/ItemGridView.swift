@@ -16,7 +16,8 @@ struct ItemGridView: View {
     let items: [EmbyItem]
     let serverID: UUID
     let store: PosterImageStore
-    @Binding var selection: EmbyItem?
+    /// 打开某一项的详情(主窗口 push 详情页)
+    var onOpenItem: (EmbyItem) -> Void
     var actions = ItemGridActions()
 
     private var columns: [GridItem] {
@@ -27,7 +28,7 @@ struct ItemGridView: View {
         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
             ForEach(items) { item in
                 Button {
-                    selection = item
+                    onOpenItem(item)
                 } label: {
                     MediaCard(item: item, serverID: serverID, store: store)
                 }
@@ -53,7 +54,7 @@ struct ItemGridView: View {
             Divider()
         }
         Button("显示详情", systemImage: "info.circle") {
-            selection = item
+            onOpenItem(item)
         }
         if actions.togglePlayed != nil || actions.toggleFavorite != nil {
             Divider()

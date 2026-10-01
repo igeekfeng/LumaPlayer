@@ -219,6 +219,34 @@ extension EmbyItem {
         return nil
     }
 
+    /// 卡片封面图:优先横版(剧照 / 背景),没有可用的横版图就退回**自己的竖版海报**(Q35)。
+    ///
+    /// 「继续观看 / 下一集」的 16:9 卡片用这个,而不是直接用 `landscapeImage`。
+    /// 原因(2026-10-01 在两台真实服务器的响应缓存里核实):`/Users/{UserId}/Items/Resume`
+    /// 里的**电影条目常常只有 `ImageTags["Primary"]`**,`BackdropImageTags` 是空数组 ——
+    /// 竖版海报是它手头唯一能拿到的图,不退回就只剩占位图。分集不受影响:
+    /// 分集的 `Primary` 本身就是 16:9 剧照,走的是 `landscapeImage` 的第一条。
+    ///
+    /// 竖版海报在 16:9 卡片里按 `.fill` 居中裁切(`PosterImage` 的行为,Emby Web 同款),
+    /// 比空占位图好认。
+    var coverImage: (itemID: String, type: EmbyImageType, tag: String)? {
+        if let landscape = landscapeImage { return landscape }
+        if let tag = primaryImageTagValue { return (id, .primary, tag) }
+        return nil
+    }
+
+    /// `coverImage` 的失败退路:同一项的竖版海报。
+    ///
+    /// 首选已经是海报(`Primary`)、或连海报都没有时返回 nil(没有退路就停在占位图)。
+    /// 需要它的原因:有的服务器在 `BackdropImageTags` 里**回填 `Primary` 的 tag**,
+    /// 而 `/Items/{Id}/Images/Backdrop` 直接 404(响应体 `… does not have an image of type
+    /// Backdrop`,2026-09-28 诊断日志实测)—— 只看 tag 存不存在决定请求谁,
+    /// 遇到这种服务器卡片就永远是占位图。
+    var coverImageFallback: (itemID: String, type: EmbyImageType, tag: String)? {
+        guard coverImage?.type != .primary, let tag = primaryImageTagValue else { return nil }
+        return (id, .primary, tag)
+    }
+
     var isPlayed: Bool { userData?.played ?? false }
     var isFavorite: Bool { userData?.isFavorite ?? false }
 

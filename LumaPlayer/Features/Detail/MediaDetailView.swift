@@ -13,17 +13,17 @@ struct MediaDetailView: View {
     let container: AppContainer
     let server: ServerProfile
     let item: EmbyItem
-    /// 打开另一项(相似推荐)。由主窗口换掉详情列的选中项。
+    /// 打开另一项(相似推荐):主窗口往导航栈上再 push 一页,返回栈可逐级退回。
     var onOpenItem: (EmbyItem) -> Void = { _ in }
 
+    /// 每个 push 出来的详情页自带一份:栈上同时存在多页时各读各的项,
+    /// 共用一个 ViewModel 会让上层页面显示下层那一项的内容。
     @State private var viewModel: MediaDetailViewModel
     @State private var isOverviewExpanded = false
     @Environment(\.openWindow) private var openWindow
 
-    /// - Parameter viewModel: 由主窗口持有,同一项再次打开时保留已有内容原地刷新
     init(
         container: AppContainer,
-        viewModel: MediaDetailViewModel,
         server: ServerProfile,
         item: EmbyItem,
         onOpenItem: @escaping (EmbyItem) -> Void = { _ in }
@@ -32,7 +32,7 @@ struct MediaDetailView: View {
         self.server = server
         self.item = item
         self.onOpenItem = onOpenItem
-        self._viewModel = State(initialValue: viewModel)
+        self._viewModel = State(initialValue: MediaDetailViewModel(container: container))
     }
 
     var body: some View {
@@ -50,6 +50,8 @@ struct MediaDetailView: View {
                 detailContent(detail)
             }
         }
+        // 栈顶再 push 一页(相似推荐)时,返回按钮要有个名字可显示
+        .navigationTitle(item.name)
         .task(id: "\(server.id.uuidString)-\(item.id)") {
             isOverviewExpanded = false
             viewModel.load(item: item, server: server)

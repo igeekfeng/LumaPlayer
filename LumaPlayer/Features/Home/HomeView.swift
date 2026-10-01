@@ -14,7 +14,8 @@ struct HomeView: View {
     /// 当前服务器的媒体库入口状态(主窗口已加载的那份,不重复请求)。
     /// `.idle` / `.loading` 时首页**先不发请求**,见 `HomeViewModel.loadKey`
     let viewsState: LoadState<[EmbyView]>
-    @Binding var selection: EmbyItem?
+    /// 打开某一项的详情(主窗口 push 详情页)
+    var onOpenItem: (EmbyItem) -> Void
     /// 变化即重新加载(工具栏「刷新」)
     var refreshToken: Int = 0
     var onOpenLibrary: (String) -> Void = { _ in }
@@ -31,7 +32,7 @@ struct HomeView: View {
         viewModel: HomeViewModel,
         server: ServerProfile,
         viewsState: LoadState<[EmbyView]>,
-        selection: Binding<EmbyItem?>,
+        onOpenItem: @escaping (EmbyItem) -> Void,
         refreshToken: Int = 0,
         onOpenLibrary: @escaping (String) -> Void = { _ in },
         onReloadLibraries: @escaping () -> Void = {}
@@ -39,7 +40,7 @@ struct HomeView: View {
         self.container = container
         self.server = server
         self.viewsState = viewsState
-        self._selection = selection
+        self.onOpenItem = onOpenItem
         self.refreshToken = refreshToken
         self.onOpenLibrary = onOpenLibrary
         self.onReloadLibraries = onReloadLibraries
@@ -188,10 +189,10 @@ struct HomeView: View {
                             store: container.posters,
                             onPlay: { play(item) }
                         )
-                        .onTapGesture { selection = item }
+                        .onTapGesture { onOpenItem(item) }
                         .contextMenu { itemMenu(item, canHideFromResume: isResume) }
                         .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { selection = item }
+                        .accessibilityAction { onOpenItem(item) }
                         .accessibilityAction(named: "播放") { play(item) }
                     }
                 }
@@ -216,7 +217,7 @@ struct HomeView: View {
                 MediaShelf(title: title, seeAll: { onOpenLibrary(view.id) }) {
                     ForEach(items) { item in
                         Button {
-                            selection = item
+                            onOpenItem(item)
                         } label: {
                             MediaCard(item: item, serverID: server.id, store: container.posters)
                                 .frame(width: Metrics.posterMinWidth)
@@ -245,7 +246,7 @@ struct HomeView: View {
             Divider()
         }
         Button("显示详情", systemImage: "info.circle") {
-            selection = item
+            onOpenItem(item)
         }
         if canHideFromResume {
             Divider()

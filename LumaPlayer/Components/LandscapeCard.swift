@@ -21,7 +21,14 @@ struct LandscapeCard: View {
             Color.clear
                 .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
                 .frame(width: Self.width)
-                .overlay { PosterImage(spec: imageSpec, store: store, placeholderSystemImage: "play.rectangle") }
+                .overlay {
+                    PosterImage(
+                        spec: imageSpec,
+                        fallbackSpec: fallbackSpec,
+                        store: store,
+                        placeholderSystemImage: "play.rectangle"
+                    )
+                }
                 .overlay {
                 if isHovering, let onPlay {
                     Button(action: onPlay) {
@@ -81,16 +88,24 @@ struct LandscapeCard: View {
         return item.productionYear.map(String.init)
     }
 
+    /// 横版优先、没有横版就退回竖版海报(`EmbyItem.coverImage`)。
     private var imageSpec: ImageSpec? {
-        item.landscapeImage.map {
-            ImageSpec(
-                serverID: serverID,
-                itemID: $0.itemID,
-                type: $0.type,
-                tag: $0.tag,
-                maxWidth: Int(Self.width * 2)
-            )
-        }
+        item.coverImage.map { spec(for: $0) }
+    }
+
+    /// 首选图加载失败时的退路(同一项的竖版海报,规则在 `EmbyItem.coverImageFallback`)。
+    private var fallbackSpec: ImageSpec? {
+        item.coverImageFallback.map { spec(for: $0) }
+    }
+
+    private func spec(for source: (itemID: String, type: EmbyImageType, tag: String)) -> ImageSpec {
+        ImageSpec(
+            serverID: serverID,
+            itemID: source.itemID,
+            type: source.type,
+            tag: source.tag,
+            maxWidth: Int(Self.width * 2)
+        )
     }
 }
 
