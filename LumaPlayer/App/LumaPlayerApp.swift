@@ -25,7 +25,7 @@ struct LumaPlayerApp: App {
         .commandsRemoved()
 
         Settings {
-            AppSettingsView()
+            AppSettingsView(container: container)
         }
     }
 }

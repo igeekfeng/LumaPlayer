@@ -6,8 +6,9 @@ enum AppRoute: Equatable, Sendable {
     case launching
     /// 没有任何服务器:引导添加第一台
     case onboarding
-    /// 已有服务器:服务器管理列表
-    case serverList
-    /// 浏览媒体库(主窗口)
+    /// 浏览媒体库(主窗口,默认停在首页)
+    ///
+    /// 服务器管理已挪进设置窗口(⌘,),不再是根路由的一页
+    /// (`Features/Servers/ServerListView.swift`)。
     case browse
 }

@@ -1,7 +1,11 @@
 import SwiftUI
 
-/// 服务器管理列表:增 / 改 / 删 / 切换 / 登录。
+/// 服务器管理:增 / 改 / 删 / 切换 / 登录。
 /// 点击行切换当前服务器;行尾按钮与右键菜单提供编辑、删除、登录。
+///
+/// 作为设置窗口「服务器」标签页的内容(`AppSettingsView`):这里不再自带
+/// `NavigationStack` 与工具栏 —— 设置窗口的标签页就是它的外壳。
+/// 「打开媒体库」也随之去掉:切服务器后主窗口会自己跟着切换(⌘, 关掉即可)。
 struct ServerListView: View {
     let container: AppContainer
 
@@ -14,87 +18,63 @@ struct ServerListView: View {
     @State private var actionErrorMessage: String?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if servers.isEmpty {
-                    ContentUnavailableView(
-                        "没有服务器",
-                        systemImage: "server.rack",
-                        description: Text("添加一台 Emby 服务器开始使用。")
-                    )
-                } else {
-                    serverList
+        Group {
+            if servers.isEmpty {
+                ContentUnavailableView {
+                    Label("没有服务器", systemImage: "server.rack")
+                } description: {
+                    Text("添加一台 Emby 服务器开始使用。")
+                } actions: {
+                    Button("添加服务器…") { showsAddSheet = true }
                 }
+            } else {
+                serverList
             }
-            .navigationTitle("服务器")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await openLibrary() }
-                    } label: {
-                        Label("打开媒体库", systemImage: "rectangle.grid.2x2")
-                    }
-                    .disabled(servers.isEmpty)
-                    .help("浏览当前服务器的媒体库")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showsAddSheet = true
-                    } label: {
-                        Label("添加服务器", systemImage: "plus")
-                    }
-                }
+        }
+        .task {
+            await reload()
+        }
+        .sheet(isPresented: $showsAddSheet, onDismiss: {
+            Task { await reload() }
+        }) {
+            AddServerView(container: container, showsCancelButton: true)
+        }
+        .sheet(item: $editingServer, onDismiss: {
+            Task { await reload() }
+        }) { server in
+            ServerSettingsView(container: container, server: server)
+        }
+        .sheet(item: $serverToLogin, onDismiss: {
+            Task { await reload() }
+        }) { server in
+            LoginView(container: container, server: server)
+        }
+        .confirmationDialog(
+            "删除服务器",
+            isPresented: Binding(
+                get: { serverPendingDeletion != nil },
+                set: { if !$0 { serverPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: serverPendingDeletion
+        ) { server in
+            Button("删除", role: .destructive) {
+                Task { await remove(server) }
             }
-            .task {
-                await reload()
-                // 启动时发现当前服务器没有 token → 直接弹登录
-                // (ARCHITECTURE.md 7.3:返回登录界面,保留地址与用户名)
-                if let needing = container.state.serverNeedingLogin {
-                    serverToLogin = needing
-                }
-            }
-            .sheet(isPresented: $showsAddSheet, onDismiss: {
-                Task { await reload() }
-            }) {
-                AddServerView(container: container, showsCancelButton: true)
-            }
-            .sheet(item: $editingServer, onDismiss: {
-                Task { await reload() }
-            }) { server in
-                ServerSettingsView(container: container, server: server)
-            }
-            .sheet(item: $serverToLogin, onDismiss: {
-                Task { await reload() }
-            }) { server in
-                LoginView(container: container, server: server)
-            }
-            .confirmationDialog(
-                "删除服务器",
-                isPresented: Binding(
-                    get: { serverPendingDeletion != nil },
-                    set: { if !$0 { serverPendingDeletion = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: serverPendingDeletion
-            ) { server in
-                Button("删除", role: .destructive) {
-                    Task { await remove(server) }
-                }
-                Button("取消", role: .cancel) {}
-            } message: { server in
-                Text("将删除「\(server.displayName)」及其保存在本地的访问令牌,该操作不可撤销。")
-            }
-            .alert(
-                "操作失败",
-                isPresented: Binding(
-                    get: { actionErrorMessage != nil },
-                    set: { if !$0 { actionErrorMessage = nil } }
-                )
-            ) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(actionErrorMessage ?? "")
-            }
+            Button("取消", role: .cancel) {}
+        } message: { server in
+            Text("将删除「\(server.displayName)」及其保存在本地的访问令牌,该操作不可撤销。")
+        }
+        .alert(
+            "操作失败",
+            isPresented: Binding(
+                get: { actionErrorMessage != nil },
+                set: { if !$0 { actionErrorMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(actionErrorMessage ?? "")
         }
     }
 
@@ -107,16 +87,23 @@ struct ServerListView: View {
                         isCurrent: container.state.currentServer?.id == server.id,
                         isLoggedIn: loggedInIDs.contains(server.id),
                         onSelect: { Task { await select(server) } },
-                        onOpenLibrary: { Task { await openLibrary(server) } },
                         onLogin: { serverToLogin = server },
                         onEdit: { editingServer = server },
                         onDelete: { serverPendingDeletion = server }
                     )
                 }
             } footer: {
-                Text("单击切换当前服务器,双击打开媒体库。")
+                Text("单击切换当前服务器,主窗口会跟着切到这台。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Section {
+                Button {
+                    showsAddSheet = true
+                } label: {
+                    Label("添加服务器…", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
             }
         }
         .listStyle(.inset)
@@ -152,30 +139,6 @@ struct ServerListView: View {
         }
     }
 
-    /// 双击 / 菜单「打开媒体库」:先切到这台再进入。
-    private func openLibrary(_ server: ServerProfile) async {
-        await select(server)
-        guard container.state.currentServer?.id == server.id else { return }
-        container.state.route = .browse
-    }
-
-    /// 进入媒体库:没有当前服务器时先切到最近使用的一台。
-    private func openLibrary() async {
-        do {
-            if container.state.currentServer == nil,
-               let recent = await container.registry.mostRecentlyUsed() {
-                try await container.switchCurrent(to: recent)
-            }
-            guard container.state.currentServer != nil else {
-                actionErrorMessage = "请先选中一台服务器。"
-                return
-            }
-            container.state.route = .browse
-        } catch {
-            actionErrorMessage = "切换服务器失败,请重试。"
-        }
-    }
-
     private func remove(_ server: ServerProfile) async {
         do {
             try await container.removeServer(id: server.id)
@@ -192,7 +155,6 @@ private struct ServerRow: View {
     let isCurrent: Bool
     let isLoggedIn: Bool
     let onSelect: () -> Void
-    let onOpenLibrary: () -> Void
     let onLogin: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -222,7 +184,6 @@ private struct ServerRow: View {
         }
         .padding(.vertical, Metrics.spacingS)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpenLibrary)
         .onTapGesture(perform: onSelect)
         .contextMenu { menuItems }
         .accessibilityElement(children: .combine)
@@ -303,7 +264,6 @@ private struct ServerRow: View {
 
     @ViewBuilder
     private var menuItems: some View {
-        Button("打开媒体库", systemImage: "rectangle.grid.2x2", action: onOpenLibrary)
         if !isLoggedIn {
             Button("登录…", systemImage: "person.crop.circle", action: onLogin)
         }

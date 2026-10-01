@@ -81,7 +81,7 @@ final class SessionRestoreTests: XCTestCase {
             registry: try ServerRegistry(defaults: UserDefaults(suiteName: suiteName)!, credentials: credentials),
             credentials: credentials,
             expectedServerID: a.id,
-            expectedRoute: .serverList
+            expectedRoute: .browse
         )
     }
 

@@ -167,7 +167,7 @@ final class AppContainer {
         try await registry.add(profile)
         state.currentServer = profile
         state.serverNeedingLogin = nil
-        state.route = .serverList
+        state.route = .browse
         return profile
     }
 
@@ -268,6 +268,9 @@ final class AppContainer {
     /// (ARCHITECTURE.md 4.1「重新启动后自动恢复最近一次可用会话」;
     /// 7.3「token 无效时返回登录界面,但保留地址和用户名」)。
     ///
+    /// 有服务器就直接进主窗口的首页(左栏已去掉,不再先落在一页服务器管理);
+    /// 缺 token 时由 `BrowseView` 的登录 sheet 兜住(不静默重登,ARCHITECTURE.md 7.3)。
+    ///
     /// 这里**不发网络请求**:只判断本地有没有 token。token 是否仍然有效
     /// 由第一次鉴权请求决定,401 时回登录页(API_CONTRACT.md 2.5)。
     func restoreSession() async {
@@ -278,7 +281,7 @@ final class AppContainer {
             return
         }
         state.currentServer = recent
-        state.route = .serverList
+        state.route = .browse
         do {
             if try await !canResumeSession(for: recent) {
                 state.serverNeedingLogin = recent

@@ -8,7 +8,7 @@ import AppKit
 
 /// 背景图 hero:整幅剧照 + 底部渐变到窗口背景,海报与标题区压在渐变上。
 ///
-/// 背景图用 `backgroundExtensionEffect()` 延伸到工具栏 / 侧边栏下面
+/// 背景图用 `backgroundExtensionEffect()` 延伸到工具栏 / 内容列下面
 /// (macOS 27 Liquid Glass 的原生做法,内容本身不被拉伸)。
 /// 没有背景图时 hero 变矮,只留一层很淡的渐变 —— 不拿占位图撑出一大块灰。
 struct DetailHero<Header: View>: View {

@@ -12,8 +12,6 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .onboarding:
                 AddServerView(container: container)
-            case .serverList:
-                ServerListView(container: container)
             case .browse:
                 BrowseView(container: container)
             }

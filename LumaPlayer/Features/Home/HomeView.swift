@@ -1,20 +1,25 @@
 import SwiftUI
 
-/// 首页。
+/// 首页(主窗口内容列的默认页)。
 ///
 /// 自上而下:我的媒体 → 继续观看(横版)→ 下一集(横版)→ 每个媒体库的「最新」(海报)。
 /// 与 Emby Web 一样,**加载成功但为空的分区整行不显示**(不放「没有内容」占位);
 /// 失败的分区照常显示错误与重试入口;全部为空时给一个整页空状态。
+///
+/// 「我的媒体」是媒体库的唯一入口(主窗口左栏已去掉),所以它的加载态与失败态
+/// 必须露出来 —— 失败时静默少一行,用户只会以为这台服务器没有媒体库。
 struct HomeView: View {
     let container: AppContainer
     let server: ServerProfile
-    /// 当前服务器的媒体库入口(侧边栏已加载的那份,不重复请求)。
-    /// `nil` = 侧边栏还在加载,此时首页**先不发请求**,见 `HomeViewModel.loadKey`
-    let views: [EmbyView]?
+    /// 当前服务器的媒体库入口状态(主窗口已加载的那份,不重复请求)。
+    /// `.idle` / `.loading` 时首页**先不发请求**,见 `HomeViewModel.loadKey`
+    let viewsState: LoadState<[EmbyView]>
     @Binding var selection: EmbyItem?
     /// 变化即重新加载(工具栏「刷新」)
     var refreshToken: Int = 0
     var onOpenLibrary: (String) -> Void = { _ in }
+    /// 重新加载媒体库入口(「我的媒体」失败时的重试入口)
+    var onReloadLibraries: () -> Void = {}
 
     @State private var viewModel: HomeViewModel
     @Environment(\.openWindow) private var openWindow
@@ -25,31 +30,31 @@ struct HomeView: View {
         container: AppContainer,
         viewModel: HomeViewModel,
         server: ServerProfile,
-        views: [EmbyView]?,
+        viewsState: LoadState<[EmbyView]>,
         selection: Binding<EmbyItem?>,
         refreshToken: Int = 0,
-        onOpenLibrary: @escaping (String) -> Void = { _ in }
+        onOpenLibrary: @escaping (String) -> Void = { _ in },
+        onReloadLibraries: @escaping () -> Void = {}
     ) {
         self.container = container
         self.server = server
-        self.views = views
+        self.viewsState = viewsState
         self._selection = selection
         self.refreshToken = refreshToken
         self.onOpenLibrary = onOpenLibrary
+        self.onReloadLibraries = onReloadLibraries
         self._viewModel = State(initialValue: viewModel)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacingXL) {
-                if !settledViews.isEmpty {
-                    librariesShelf
-                }
+                librariesSection
                 landscapeSection(title: "继续观看", state: sections.resume, isResume: true)
                 if HomeViewModel.showsNextUpRow(sections.nextUp) {
                     landscapeSection(title: "下一集", state: nextUpState)
                 }
-                ForEach(HomeViewModel.latestViews(in: settledViews)) { view in
+                ForEach(HomeViewModel.latestViews(in: settledViews ?? [])) { view in
                     latestSection(view)
                 }
                 if isEverythingEmpty {
@@ -66,8 +71,8 @@ struct HomeView: View {
         }
         .navigationTitle("首页")
         .task(id: loadKey) {
-            guard let views else { return }
-            viewModel.load(server: server, views: views)
+            guard let settledViews else { return }
+            viewModel.load(server: server, views: settledViews)
         }
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
             guard finished?.serverID == server.id else { return }
@@ -84,11 +89,17 @@ struct HomeView: View {
     }
 
     private var loadKey: String {
-        HomeViewModel.loadKey(serverID: server.id, refreshToken: refreshToken, views: views)
+        HomeViewModel.loadKey(serverID: server.id, refreshToken: refreshToken, views: settledViews)
     }
 
-    private var settledViews: [EmbyView] {
-        views ?? []
+    /// 已有媒体库列表(加载中 / 失败时为 `nil`):首页据此先不发「最新」的请求,
+    /// 免得列表回来前后各加载一遍;失败时首页照常加载,只是少几行「最新」。
+    private var settledViews: [EmbyView]? {
+        switch viewsState {
+        case .idle, .loading: return nil
+        case .loaded(let views): return views
+        case .failed: return []
+        }
     }
 
     /// 只取当前服务器的那份:切服务器后、新一轮 `load` 之前,也不会露出别台的内容
@@ -117,9 +128,33 @@ struct HomeView: View {
 
     // MARK: - 我的媒体
 
-    private var librariesShelf: some View {
+    /// 媒体库入口。这里是**唯一**的媒体库入口(主窗口左栏已去掉),
+    /// 加载态与失败态都要露出来:失败时少一行而不报错,等于骗用户「这台服务器没有媒体库」。
+    @ViewBuilder
+    private var librariesSection: some View {
+        switch viewsState {
+        case .idle, .loading:
+            sectionPlaceholder(title: "我的媒体")
+        case .failed(let failure):
+            sectionError(title: "我的媒体", failure: failure, retry: onReloadLibraries)
+        case .loaded(let views):
+            if views.isEmpty {
+                VStack(alignment: .leading, spacing: Metrics.spacingS) {
+                    Text("我的媒体")
+                        .font(.title3.bold())
+                    Text("这台服务器没有媒体库入口。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                librariesShelf(views)
+            }
+        }
+    }
+
+    private func librariesShelf(_ views: [EmbyView]) -> some View {
         MediaShelf(title: "我的媒体") {
-            ForEach(settledViews) { view in
+            ForEach(views) { view in
                 Button {
                     onOpenLibrary(view.id)
                 } label: {
@@ -241,13 +276,18 @@ struct HomeView: View {
         }
     }
 
-    private func sectionError(title: String, failure: LoadFailure) -> some View {
+    private func sectionError(
+        title: String,
+        failure: LoadFailure,
+        retry: (() -> Void)? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             Text(title)
                 .font(.title3.bold())
             ErrorStateView(
                 failure: failure,
-                retry: { viewModel.load(server: server, views: settledViews) },
+                // 「我的媒体」的重试打在媒体库入口上,其余分区重试自己的内容
+                retry: retry ?? { viewModel.load(server: server, views: settledViews ?? []) },
                 login: { container.state.serverNeedingLogin = server }
             )
             .frame(height: Metrics.posterMinWidth)

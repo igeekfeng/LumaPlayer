@@ -35,6 +35,22 @@ enum Metrics {
     /// 服务器列表行首图标的边长
     static let serverRowIconSize: CGFloat = 36
 
+    // MARK: 主窗口
+
+    /// 主窗口内容列(首页 / 媒体库 / 搜索)是主区域:默认宽度要压过详情列。
+    /// 不钉宽度的话它会按「边栏」语义拿到 220 出头的默认宽度,首页被挤成一条窄带。
+    static let contentColumnMinWidth: CGFloat = 520
+    static let contentColumnIdealWidth: CGFloat = 840
+    /// 主窗口详情列:次要区域,但要放得下 hero、简介与剧集列表
+    static let detailColumnMinWidth: CGFloat = 380
+    static let detailColumnIdealWidth: CGFloat = 440
+
+    // MARK: 设置窗口
+
+    /// 设置窗口的尺寸(「服务器」标签页要放得下一行的名称 / 地址 / 账户 / 版本)
+    static let settingsWindowWidth: CGFloat = 560
+    static let settingsWindowHeight: CGFloat = 420
+
     // MARK: 播放器控制栏
 
     /// 底部控制栏高度(含内边距)

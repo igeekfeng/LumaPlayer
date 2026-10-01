@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 侧边栏的选择项。
+/// 内容列的选择项。
 enum BrowseSelection: Hashable {
     case home
     case search
@@ -8,8 +8,11 @@ enum BrowseSelection: Hashable {
     case library(String)
 }
 
-/// 主窗口:`NavigationSplitView` 三栏 —— 侧边栏 / 内容 / 详情
+/// 主窗口:`NavigationSplitView` 两栏 —— 内容(首页 / 媒体库 / 搜索)+ 详情
 /// (UI_DESIGN.md 第 3 节)。
+///
+/// 2026-10-01 改版:原先的第三栏(左栏)已去掉 —— 媒体库入口在首页「我的媒体」,
+/// 服务器管理在设置窗口的「服务器」标签页,切换在工具栏的服务器菜单。
 struct BrowseView: View {
     let container: AppContainer
 
@@ -18,7 +21,7 @@ struct BrowseView: View {
     @State private var selectedItem: EmbyItem?
     /// 首页 / 详情页的 ViewModel 放在这里而不是各自的 View 里:
     /// 切走再切回时视图会重建,ViewModel 留着才能保住已有内容、不闪 loading。
-    /// 首页与侧边栏的状态按服务器分开存,切到别的服务器再切回来同样不闪(issue #3)
+    /// 首页与媒体库入口的状态按服务器分开存,切到别的服务器再切回来同样不闪(issue #3)
     @State private var homeViewModel: HomeViewModel
     @State private var detailViewModel: MediaDetailViewModel
     /// 从首页「查看全部」进入的媒体库 Id;有值且仍停在该库时,工具栏出现「返回首页」
@@ -32,6 +35,8 @@ struct BrowseView: View {
     /// 已提交(按了回车)的关键词与提交次数
     @State private var submittedSearch = ""
     @State private var searchSubmission = 0
+    /// 工具栏服务器菜单里的「管理服务器…」——打开设置窗口(⌘,)
+    @Environment(\.openSettings) private var openSettings
 
     init(container: AppContainer) {
         self.container = container
@@ -42,22 +47,43 @@ struct BrowseView: View {
 
     var body: some View {
         NavigationSplitView {
-            sidebar
-        } content: {
             contentColumn
+                // 内容列是主区域,默认宽度必须压过详情列。
+                // 不钉宽度的话第一列按「边栏」语义默认理想宽度只有 220 出头:
+                // 首页被挤成左边一条窄带,工具栏左侧区域也跟着变窄,
+                // 带文字的服务器切换器一溢出,整排控件看起来就像归了详情列。
+                .navigationSplitViewColumnWidth(
+                    min: Metrics.contentColumnMinWidth,
+                    ideal: Metrics.contentColumnIdealWidth
+                )
+                // 工具栏与搜索框声明在**内容列**上(而不是根 split view):它们操作的是
+                // 内容列 —— 切服务器、刷新当前页、搜索。声明在根上会被摆到详情列那一侧。
+                .toolbar { toolbarContent }
+                // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
+                // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
+                .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
+                .onSubmit(of: .search) {
+                    submittedSearch = searchText
+                    searchSubmission += 1
+                    selection = .search
+                }
         } detail: {
             detailColumn
+                // 详情列是次要区域,但要放得下 hero、简介与剧集列表
+                .navigationSplitViewColumnWidth(
+                    min: Metrics.detailColumnMinWidth,
+                    ideal: Metrics.detailColumnIdealWidth
+                )
         }
-        .toolbar { toolbarContent }
-        // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
-        // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
-        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
-        .onSubmit(of: .search) {
-            submittedSearch = searchText
-            searchSubmission += 1
-            selection = .search
-        }
+        // 内容列就是主区域,不允许被系统的「隐藏边栏」收起来(收起来只剩一列空白)
+        .toolbar(removing: .sidebarToggle)
         .task { await reloadServers() }
+        // 媒体库入口由主窗口统一加载(首页「我的媒体」与媒体库页都用这一份)
+        .task(id: container.state.currentServer?.id) {
+            if let server = container.state.currentServer {
+                viewModel.loadViews(server: server)
+            }
+        }
         .onChange(of: container.state.currentServer?.id) {
             // 选中的项属于上一台服务器,换服务器必须清掉(不串台)
             selectedItem = nil
@@ -92,76 +118,6 @@ struct BrowseView: View {
         }
     }
 
-    // MARK: - 侧边栏
-
-    private var sidebar: some View {
-        List(selection: $selection) {
-            Label("首页", systemImage: "house")
-                .tag(BrowseSelection.home)
-            Section(currentServerName) {
-                switch viewsState {
-                case .idle, .loading:
-                    HStack(spacing: Metrics.spacingM) {
-                        ProgressView()
-                        Text("正在加载媒体库…")
-                            .font(.caption)
-                    }
-                case .failed(let failure):
-                    VStack(alignment: .leading, spacing: Metrics.spacingS) {
-                        Text(failure.message)
-                            .font(.caption)
-                        Button("重试") {
-                            if let server = container.state.currentServer {
-                                viewModel.loadViews(server: server)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                case .loaded(let views):
-                    if views.isEmpty {
-                        Text("这台服务器没有媒体库入口。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(views) { view in
-                            Label(view.name ?? "未命名媒体库", systemImage: view.symbolName)
-                                .tag(BrowseSelection.library(view.id))
-                        }
-                    }
-                }
-            }
-            Section("服务器") {
-                ForEach(servers) { server in
-                    Button {
-                        Task { await switchTo(server) }
-                    } label: {
-                        HStack {
-                            Label(server.displayName, systemImage: "server.rack")
-                            Spacer()
-                            if container.state.currentServer?.id == server.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-                Button {
-                    container.state.route = .serverList
-                } label: {
-                    Label("管理服务器…", systemImage: "gearshape")
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .navigationTitle(currentServerName)
-        .task(id: container.state.currentServer?.id) {
-            if let server = container.state.currentServer {
-                viewModel.loadViews(server: server)
-            }
-        }
-    }
-
     // MARK: - 内容列与详情列
 
     @ViewBuilder
@@ -173,13 +129,14 @@ struct BrowseView: View {
                     container: container,
                     viewModel: homeViewModel,
                     server: server,
-                    views: settledViews,
+                    viewsState: viewsState,
                     selection: $selectedItem,
                     refreshToken: refreshToken,
                     onOpenLibrary: {
                         libraryOpenedFromHome = $0
                         selection = .library($0)
-                    }
+                    },
+                    onReloadLibraries: { viewModel.loadViews(server: server) }
                 )
             case .search:
                 SearchView(
@@ -231,7 +188,7 @@ struct BrowseView: View {
             ContentUnavailableView(
                 "未选择内容",
                 systemImage: "film",
-                description: Text("在左侧选一个项目查看详情。")
+                description: Text("在左边选一个项目查看详情。")
             )
         }
     }
@@ -240,7 +197,7 @@ struct BrowseView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // 「查看全部」进来的媒体库:侧边栏收起或没注意到时也有明确的返回入口
+        // 「查看全部」进来的媒体库:给一个明确的返回首页入口(⌘[)
         if case .library(let id) = selection, id == libraryOpenedFromHome {
             ToolbarItem(placement: .navigation) {
                 Button {
@@ -266,10 +223,17 @@ struct BrowseView: View {
                         }
                     }
                 }
+                Divider()
+                // 服务器管理(增 / 改 / 删 / 登录)在设置窗口的「服务器」标签页
+                Button {
+                    openSettings()
+                } label: {
+                    Label("管理服务器…", systemImage: "gearshape")
+                }
             } label: {
                 Label(currentServerName, systemImage: "server.rack")
             }
-            .help("切换服务器")
+            .help("切换服务器;「管理服务器…」在设置窗口(⌘,)")
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
@@ -323,15 +287,5 @@ struct BrowseView: View {
     private func libraryView(id: String) -> EmbyView? {
         guard case .loaded(let views) = viewsState else { return nil }
         return views.first { $0.id == id }
-    }
-
-    /// 交给首页的媒体库入口。加载中(`.idle` / `.loading`)为 `nil`,首页据此先不发请求,
-    /// 免得列表回来前后各加载一遍;失败时是空数组(首页照常加载,只是少几行「最新」)。
-    private var settledViews: [EmbyView]? {
-        switch viewsState {
-        case .idle, .loading: return nil
-        case .loaded(let views): return views
-        case .failed: return []
-        }
     }
 }

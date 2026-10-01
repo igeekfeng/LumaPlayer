@@ -233,9 +233,9 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(try loadedResumeItems(viewModel, server: serverA).map(\.id), before.map(\.id))
     }
 
-    /// issue #3:侧边栏的媒体库列表同样按服务器保留,切回来不先变成 loading
+    /// issue #3:媒体库入口列表同样按服务器保留,切回来不先变成 loading
     /// (否则首页拿到 `views == nil`,要等列表回来才开始加载)。
-    func testSidebarViewsKeptPerServer() async throws {
+    func testViewsKeptPerServer() async throws {
         let views = try FixtureLoader.json("user_views_mixed_synthetic.json")
         MockEmbyURLProtocol.stub(.json(views), path: "/emby/Users/USER-1/Views")
         MockEmbyURLProtocol.stub(.json(views), host: "emby-b.test", path: "/emby/Users/USER-1/Views")

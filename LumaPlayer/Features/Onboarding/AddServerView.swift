@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 两种使用场景:
 /// - 首次启动的引导页(无取消按钮 —— 没有可返回的地方);
-/// - 服务器列表的工具栏 +(sheet,有取消按钮)。
+/// - 设置窗口「服务器」标签页里的 +(sheet,有取消按钮)。
 struct AddServerView: View {
     @State private var viewModel: AddServerViewModel
     @Environment(\.dismiss) private var dismiss
