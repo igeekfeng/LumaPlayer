@@ -13,7 +13,6 @@ struct MediaShelf<Content: View>: View {
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
@@ -31,7 +30,7 @@ struct MediaShelf<Content: View>: View {
                 }
                 Spacer()
                 if geometry.isScrollable {
-                    pagingButtons
+                    ShelfPagingButtons(position: $position, geometry: geometry)
                 }
             }
             ScrollView(.horizontal) {
@@ -54,7 +53,18 @@ struct MediaShelf<Content: View>: View {
         }
     }
 
-    private var pagingButtons: some View {
+}
+
+/// 横向货架的左右翻页按钮。内容能滚动时才显示,到头的一侧禁用。
+///
+/// 抽出来是因为首页货架与详情页的分集都要它 —— macOS 上鼠标用户没法横滑,
+/// 翻页按钮不是装饰。
+struct ShelfPagingButtons: View {
+    @Binding var position: ScrollPosition
+    let geometry: ShelfGeometry
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
         ControlGroup {
             Button {
                 page(by: -1)

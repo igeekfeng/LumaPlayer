@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// 某一季的分集列表(UI_DESIGN.md 6.2 的可扫描性优先)。
+/// 某一季的分集:横向排列、可滚动的一排卡片(UI_DESIGN.md 6.2 的可扫描性优先)。
 ///
-/// 整行不加玻璃(4.2 禁止区域);未看完的集有稳定的进度条标记、看完的集
-/// 有 ✓ 角标,不只靠颜色或透明度。
+/// 一集一张卡,卡内的信息不减(剧照 + 集号与集名 + 时长 / 日期 / 剩余 + 简介 +
+/// 进度条 + ✓),只是把「一行一集」的纵向列表改成横向一条 —— 整季不再把详情页撑长,
+/// 顺序往下看时当前集和后面几集就在眼前,要跳远的集滚一下就行。
 ///
 /// 点一集是**就地换定位**(详情页的播放按钮跟着换),不是跳页,所以当前
-/// 定位的那一集要有明确的选中标记 —— 整行高亮 + `.isSelected` 语义。
+/// 定位的那一集要有明确的选中标记 —— 整卡高亮 + 描边 + `.isSelected` 语义。
+/// 打开或切季时把它滚到可见,否则定位的那一集在屏幕外,和播放按钮对不上。
 /// 想直接播某一集:悬停时缩略图上的播放按钮,或右键菜单。
 struct EpisodeListView: View {
     let episodes: [EmbyItem]
@@ -21,20 +23,58 @@ struct EpisodeListView: View {
     let onPlay: (EmbyItem, Bool) -> Void
     let onTogglePlayed: (EmbyItem) -> Void
 
+    @State private var position = ScrollPosition()
+    @State private var geometry = ShelfGeometry()
+
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: Metrics.spacingXS) {
-            ForEach(episodes) { episode in
-                EpisodeRow(
-                    episode: episode,
-                    isSelected: episode.id == selectedEpisodeID,
-                    serverID: serverID,
-                    store: store,
-                    onPlay: { onPlay(episode, false) }
+        VStack(alignment: .leading, spacing: Metrics.spacingXS) {
+            HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingM) {
+                Text("共 \(episodes.count) 集")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if geometry.isScrollable {
+                    ShelfPagingButtons(position: $position, geometry: geometry)
+                }
+            }
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
+                    ForEach(episodes) { episode in
+                        EpisodeCard(
+                            episode: episode,
+                            isSelected: episode.id == selectedEpisodeID,
+                            serverID: serverID,
+                            store: store,
+                            onPlay: { onPlay(episode, false) }
+                        )
+                        .id(episode.id)
+                        .onTapGesture { onSelect(episode) }
+                        .contextMenu { menu(for: episode) }
+                    }
+                }
+                .padding(.vertical, Metrics.spacingS)
+            }
+            .scrollIndicators(.hidden)
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: ShelfGeometry.self) { proxy in
+                ShelfGeometry(
+                    offset: proxy.contentOffset.x,
+                    contentWidth: proxy.contentSize.width,
+                    containerWidth: proxy.containerSize.width
                 )
-                .onTapGesture { onSelect(episode) }
-                .contextMenu { menu(for: episode) }
+            } action: { _, new in
+                geometry = new
             }
         }
+        .onAppear(perform: scrollToSelection)
+        // 切季时整段换掉,定位的集也跟着变 —— 重新对齐一次
+        .onChange(of: episodes.first?.id) { _, _ in scrollToSelection() }
+    }
+
+    /// 只在初次出现与切季时对齐:点选某一集后再自动滚动,会把刚点的那张卡挪走
+    private func scrollToSelection() {
+        guard let selectedEpisodeID else { return }
+        position.scrollTo(id: selectedEpisodeID, anchor: .leading)
     }
 
     @ViewBuilder
@@ -56,7 +96,7 @@ struct EpisodeListView: View {
     }
 }
 
-private struct EpisodeRow: View {
+private struct EpisodeCard: View {
     let episode: EmbyItem
     let isSelected: Bool
     let serverID: UUID
@@ -65,36 +105,41 @@ private struct EpisodeRow: View {
 
     @State private var isHovering = false
 
-    private static let thumbnailWidth = Metrics.posterMinWidth * 1.2
-
     var body: some View {
-        HStack(alignment: .top, spacing: Metrics.spacingL) {
+        VStack(alignment: .leading, spacing: Metrics.spacingS) {
             thumbnail
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
+            VStack(alignment: .leading, spacing: Metrics.spacingXXS) {
                 Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
+                    .font(.subheadline)
+                    .lineLimit(2)
                 if let meta {
                     Text(meta)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 if let overview = episode.overview, !overview.isEmpty {
                     Text(overview)
-                        .font(.callout)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(Self.overviewLineLimit)
                 }
             }
-            Spacer(minLength: Metrics.spacingS)
         }
         .padding(Metrics.spacingS)
-        // 系统惯例:选中是整行高亮;悬停给一层更淡的底,告诉用户这一行可以点
+        .frame(width: Metrics.landscapeCardWidth, alignment: .topLeading)
+        // 系统惯例:选中是整块高亮,再加一圈描边 —— 卡片挨得近时只靠底色分不清
         .background {
             RoundedRectangle(cornerRadius: Radius.panel)
                 .fill(isSelected
                       ? Color.accentColor.opacity(0.15)
                       : Color.primary.opacity(isHovering ? 0.05 : 0))
+        }
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: Radius.panel)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+            }
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
@@ -103,6 +148,8 @@ private struct EpisodeRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : AccessibilityTraits())
         .accessibilityAction(named: "播放") { onPlay() }
     }
+
+    private static let overviewLineLimit = 3
 
     private var thumbnail: some View {
         ZStack {
@@ -113,7 +160,7 @@ private struct EpisodeRow: View {
                         itemID: $0.itemID,
                         type: $0.type,
                         tag: $0.tag,
-                        maxWidth: Int(Self.thumbnailWidth * 2)
+                        maxWidth: Int(Metrics.landscapeCardWidth * 2)
                     )
                 },
                 store: store,
@@ -131,8 +178,8 @@ private struct EpisodeRow: View {
                 .transition(.opacity)
             }
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .frame(width: Self.thumbnailWidth)
+        .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
+        .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
         .overlay(alignment: .bottom) {
             if let progress = episode.progressFraction {
