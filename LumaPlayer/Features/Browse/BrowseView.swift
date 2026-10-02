@@ -68,7 +68,8 @@ struct BrowseView: View {
             // 返回一次就回到首页
             path = [.search(term: searchText, submission: searchSubmission)]
         }
-        .task { await reloadServers() }
+        // 设置窗口里增 / 改 / 删服务器后重读,菜单里的名称跟着变
+        .task(id: container.state.serverListRevision) { await reloadServers() }
         .onChange(of: container.state.currentServer?.id) {
             // 栈上的页属于上一台服务器,换服务器必须清掉(不串台)
             path.removeAll()
@@ -165,17 +166,14 @@ struct BrowseView: View {
         if !isShowingDetail {
             ToolbarItem(placement: .navigation) {
                 Menu {
-                    ForEach(servers) { server in
-                        Button {
-                            Task { await switchTo(server) }
-                        } label: {
-                            if container.state.currentServer?.id == server.id {
-                                Label(server.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(server.displayName)
-                            }
+                    // inline Picker:系统在当前服务器那一项前画原生勾选标记
+                    Picker("服务器", selection: currentServerSelection) {
+                        ForEach(servers) { server in
+                            Text(server.displayName).tag(Optional(server.id))
                         }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                     Divider()
                     // 服务器管理(增 / 改 / 删 / 登录)在设置窗口的「服务器」标签页
                     Button {
@@ -235,6 +233,17 @@ struct BrowseView: View {
     private var isShowingDetail: Bool {
         if case .detail = path.last { return true }
         return false
+    }
+
+    /// 服务器菜单里 Picker 的选中值:读当前服务器,选中别的服务器即切换
+    private var currentServerSelection: Binding<UUID?> {
+        Binding(
+            get: { container.state.currentServer?.id },
+            set: { id in
+                guard let server = servers.first(where: { $0.id == id }) else { return }
+                Task { await switchTo(server) }
+            }
+        )
     }
 
     private var currentServerName: String {

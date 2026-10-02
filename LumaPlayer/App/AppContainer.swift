@@ -179,6 +179,7 @@ final class AppContainer {
             throw CancellationError()
         }
         try await registry.add(profile)
+        state.serverListRevision += 1
         state.currentServer = profile
         state.serverNeedingLogin = nil
         state.route = .browse
@@ -248,6 +249,7 @@ final class AppContainer {
     /// 保存档案。若是当前服务器,同步刷新 currentServer。
     func updateServer(_ profile: ServerProfile) async throws {
         try await registry.update(profile)
+        state.serverListRevision += 1
         // 缓存的浏览连接还拿着旧地址 / 旧前缀,换一个新的(否则要重启 App 才生效)
         connections.removeValue(forKey: profile.id)
         if state.currentServer?.id == profile.id {
@@ -263,6 +265,7 @@ final class AppContainer {
             state.nowPlaying = nil
         }
         try await registry.remove(id: id)
+        state.serverListRevision += 1
         // 连接实例跟着服务器一起走:留着会持有一个已不存在的服务器的 token 状态
         connections.removeValue(forKey: id)
         // 本地缓存也一起走:接口响应与图片磁盘目录都不留在盘上

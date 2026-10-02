@@ -11,6 +11,9 @@ final class AppState {
     /// 需要重新登录的服务器(token 缺失或已失效)。
     /// 只标这一台,其他服务器不受影响(API_CONTRACT.md 2.5)
     var serverNeedingLogin: ServerProfile?
+    /// 服务器列表的修订号:增 / 改 / 删后 +1。列表本身在 ServerRegistry(actor)里,
+    /// 各视图持有的是快照,观察它来重读 —— 否则在设置窗口改了名,主窗口菜单还是旧名
+    var serverListRevision = 0
     /// 启动期异常(如本地存储损坏),由 RootView 弹提示
     var startupError: AppError?
     /// 会话恢复只做一次(防 task 重入)

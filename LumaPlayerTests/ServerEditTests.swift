@@ -101,7 +101,10 @@ final class ServerEditTests: XCTestCase {
                 credentials: credentials,
                 session: MockEmbyURLProtocol.makeSession()
             )
+            let revisionBefore = container.state.serverListRevision
             try await container.editServer(original, displayName: "只改名", address: "https://emby.test")
+            // 主窗口的服务器菜单靠修订号重读列表,改名也必须 +1
+            XCTAssertEqual(container.state.serverListRevision, revisionBefore + 1)
             let all = await registry.all()
             let stored = try XCTUnwrap(all.first)
             XCTAssertEqual(stored.displayName, "只改名")
