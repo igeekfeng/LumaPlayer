@@ -1,6 +1,9 @@
 import Foundation
 
-/// 首页:我的媒体 / 继续观看 / 下一集 / 每个媒体库的「最新」。
+/// 首页:我的媒体 / 继续观看 / 每个媒体库的「最新」。
+///
+/// 没有跨剧集的「下一集」行(2026-10-02 去掉):用户所有服务器上它都是加载一下就消失,
+/// 见 `docs/PITFALLS.md` Q31。
 ///
 /// 每个分区各自独立加载、各自有自己的状态:一个失败不该让另一个也消失。
 /// 每个分区都带 generation 检查 —— 快速切换服务器时,旧服务器慢到的响应
@@ -18,22 +21,65 @@ final class HomeViewModel {
     /// (ARCHITECTURE.md 2.4),`CollectionType` 为 null 的混合库照常显示。
     static let latestCollectionTypes: Set<String?> = [nil, "movies", "tvshows", "homevideos", "musicvideos", "mixed"]
 
+    /// 「最新」同时最多在途几个请求。媒体库 20+ 的服务器上,一次刷新不该把
+    /// 二十几个请求同时压过去(真实服务器使用纪律:低频率)。取 4:
+    /// `URLSession` 每台主机默认 6 个连接,给「继续观看」与首屏图片留出余量。
+    static let latestConcurrency = 4
+
     private let container: AppContainer
 
+    /// 首页的一行。每行一个独立的 `@Observable` 对象:行视图只读自己那一个 `state`,
+    /// 别的行到数据时不会让它(以及整个首页)重新求值 —— 媒体库多时「最新」有很多行。
+    @MainActor
+    @Observable
+    final class Row<Value: Sendable> {
+        private(set) var state: LoadState<Value> = .idle
+
+        /// 已有内容(`.loaded`)保持不动;其余(空闲 / 失败 / 加载中)进入加载态。
+        /// 不变时不写属性:写 `@Observable` 属性即通知,哪怕值没变
+        func markLoading() {
+            if case .loaded = state { return }
+            if case .loading = state { return }
+            state = .loading
+        }
+
+        /// 新结果并入现有状态:成功一律替换;失败时若已有内容则保留内容(后台刷新失败不该
+        /// 把好好的一行换成错误卡片,401 等问题会在用户下一次操作时由正常路径暴露)
+        func receive(_ new: LoadState<Value>) {
+            if case .failed = new, case .loaded = state { return }
+            state = new
+        }
+
+        /// 直接覆盖(乐观更新、回滚、播放后的静默校正)
+        func replace(with new: LoadState<Value>) {
+            state = new
+        }
+    }
+
     /// 一台服务器的首页各分区
-    struct Sections {
+    @MainActor
+    @Observable
+    final class Sections {
         /// 「我的媒体」:`/Users/{UserId}/Views`,入口列表来自服务器、不写死「电影/电视剧」
         /// (UI_DESIGN.md 3.1)。「最新」的行也按它来,所以先回来它才发「最新」的请求
-        var views: LoadState<[EmbyView]> = .idle
-        var resume: LoadState<[EmbyItem]> = .idle
-        var nextUp: LoadState<[EmbyItem]> = .idle
-        /// 每个媒体库的「最新」,键是 View 的 Id
-        var latest: [String: LoadState<[EmbyItem]>] = [:]
+        let views = Row<[EmbyView]>()
+        let resume = Row<[EmbyItem]>()
+        /// 每个媒体库的「最新」,键是 View 的 Id。只在库的集合变了时整体替换,
+        /// 行对象跨刷新复用(刷新只改行内的 `state`)
+        private(set) var latest: [String: Row<[EmbyItem]>] = [:]
+
+        fileprivate func setLatest(_ rows: [String: Row<[EmbyItem]>]) {
+            guard Set(rows.keys) != Set(latest.keys) else { return }
+            latest = rows
+        }
     }
 
     /// 键是 `ServerProfile.id`。只增不删:服务器数量很少,且首页重建
-    /// (删光服务器回到引导页再进来)时整个 ViewModel 随之重建
-    private var sectionsByServer: [UUID: Sections] = [:]
+    /// (删光服务器回到引导页再进来)时整个 ViewModel 随之重建。
+    ///
+    /// 不参与观察:`Sections` 对象一旦建出来就不再替换,视图观察的是对象内部的属性。
+    /// 所以 `sections(for:)` 可以在视图求值时按需建对象,不会触发「求值中改状态」
+    @ObservationIgnored private var sectionsByServer: [UUID: Sections] = [:]
 
     /// 正在写「继续观看」的条目(菜单里的「移出继续观看」据此禁用)
     private(set) var updatingResumeIDs: Set<String> = []
@@ -47,14 +93,18 @@ final class HomeViewModel {
         self.container = container
     }
 
-    /// 某台服务器的首页内容;没加载过就是全 `.idle`
+    /// 某台服务器的首页内容;没加载过就是全 `.idle`。
+    /// 同一台服务器始终返回同一个对象(没有就当场建一个)
     func sections(for serverID: UUID) -> Sections {
-        sectionsByServer[serverID] ?? Sections()
+        if let sections = sectionsByServer[serverID] { return sections }
+        let sections = Sections()
+        sectionsByServer[serverID] = sections
+        return sections
     }
 
     /// 加载(或切换服务器 / 刷新后重新加载)全部分区。
     ///
-    /// 「继续观看」「下一集」与媒体库列表并行;「最新」等媒体库列表回来再按库发,
+    /// 「继续观看」与媒体库列表并行;「最新」等媒体库列表回来再按库发,
     /// 每个库只请求一次。
     func load(server: ServerProfile) {
         tasks.forEach { $0.cancel() }
@@ -63,69 +113,95 @@ final class HomeViewModel {
         // 这台服务器已有内容时不回退到 loading(同一台刷新、或从别的服务器切回来):
         // 保留当前内容,新数据到达后原地替换,失败则保留旧内容。
         // 首次加载 / 上次失败才显示加载态。
-        let serverID = server.id
-        update(serverID) {
-            Self.markLoading(&$0.views)
-            Self.markLoading(&$0.resume)
-            Self.markLoading(&$0.nextUp)
-        }
+        let sections = self.sections(for: server.id)
+        sections.views.markLoading()
+        sections.resume.markLoading()
 
         let connection = container.connection(for: server)
         // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
         let limit = Self.sectionLimit
         track { try await connection.userViews() } apply: { [weak self] new in
             guard let self else { return }
-            update(serverID) { $0.views = Self.merge(new, into: $0.views) }
+            sections.views.receive(new)
             // 刷新失败时保留的旧列表照常加载「最新」;首次就失败则没有「最新」可加载
-            loadLatest(views: sections(for: serverID).views.value ?? [], serverID: serverID, connection: connection)
+            loadLatest(views: sections.views.state.value ?? [], sections: sections, connection: connection)
         }
-        track { try await connection.resume(limit: limit).items } apply: { [weak self] new in
-            self?.update(serverID) { $0.resume = Self.merge(new, into: $0.resume) }
-        }
-        track { try await connection.nextUp(limit: limit) } apply: { [weak self] new in
-            self?.update(serverID) { $0.nextUp = Self.merge(new, into: $0.nextUp) }
+        track { try await connection.resume(limit: limit).items } apply: { new in
+            sections.resume.receive(new)
         }
     }
 
-    /// 每个视频类媒体库一行「最新」。列表里已没有的库顺手丢掉
-    private func loadLatest(views: [EmbyView], serverID: UUID, connection: ServerConnection) {
+    /// 每个视频类媒体库一行「最新」。列表里已没有的库顺手丢掉。
+    ///
+    /// 按页面上**从上到下**的顺序发,同时最多 `latestConcurrency` 个:首屏那几行先回来,
+    /// 排队中的行先显示加载态。
+    private func loadLatest(views: [EmbyView], sections: Sections, connection: ServerConnection) {
         let latestViews = Self.latestViews(in: views)
-        update(serverID) { sections in
-            sections.latest = Dictionary(uniqueKeysWithValues: latestViews.map { view in
-                var state = sections.latest[view.id] ?? .idle
-                Self.markLoading(&state)
-                return (view.id, state)
-            })
-        }
+        let rows = Dictionary(uniqueKeysWithValues: latestViews.map { view in
+            (view.id, sections.latest[view.id] ?? Row())
+        })
+        sections.setLatest(rows)
+        let orderedRows = latestViews.compactMap { rows[$0.id] }
+        orderedRows.forEach { $0.markLoading() }
+
+        let parentIDs = latestViews.map(\.id)
         let limit = Self.sectionLimit
-        for view in latestViews {
-            track {
+        let myGeneration = generation
+        tasks.append(Task { [weak self] in
+            await Self.runLimited(
+                count: parentIDs.count,
+                maxConcurrent: Self.latestConcurrency
+            ) { index in
                 var query = EmbyLatestQuery()
-                query.parentID = view.id
+                query.parentID = parentIDs[index]
                 query.limit = limit
-                return try await connection.latest(query: query)
-            } apply: { [weak self] new in
-                self?.update(serverID) { $0.latest[view.id] = Self.merge(new, into: $0.latest[view.id]) }
+                let request = query
+                return await Self.fetchState { try await connection.latest(query: request) }
+            } onResult: { index, state in
+                guard let self, let state, myGeneration == self.generation else { return }
+                orderedRows[index].receive(state)
+            }
+        })
+    }
+
+    /// 依次启动 `count` 个任务(下标从小到大),同时在跑的不超过 `maxConcurrent`;
+    /// 每完成一个就补一个,结果一回来就交给 `onResult`(在 MainActor 上,不等其余的)。
+    /// 外层任务被取消后不再启动新的,已在跑的随任务组一起取消。
+    static func runLimited<Result: Sendable>(
+        count: Int,
+        maxConcurrent: Int,
+        operation: @escaping @Sendable (Int) async -> Result,
+        onResult: (Int, Result) -> Void
+    ) async {
+        await withTaskGroup(of: (Int, Result).self) { group in
+            var nextIndex = 0
+            while nextIndex < min(count, max(1, maxConcurrent)) {
+                let index = nextIndex
+                group.addTask { (index, await operation(index)) }
+                nextIndex += 1
+            }
+            while let (index, result) = await group.next() {
+                onResult(index, result)
+                guard nextIndex < count, !Task.isCancelled else { continue }
+                let next = nextIndex
+                group.addTask { (next, await operation(next)) }
+                nextIndex += 1
             }
         }
     }
 
-    /// 播放结束后静默刷新「继续观看」与「下一集」(Q22:进度以服务端为准)。
+    /// 播放结束后静默刷新「继续观看」(Q22:进度以服务端为准)。
     /// 不切回加载态、失败时保留原内容 —— 这是后台校正,页面不该闪。
     func refreshProgress(server: ServerProfile) {
         let connection = container.connection(for: server)
         let myGeneration = generation
+        let sections = self.sections(for: server.id)
         tasks.append(Task {
-            // 两段各自 do/catch:一段失败不影响另一段;失败时刻意保留原内容
-            // (与 MediaDetailViewModel.refreshDetail 同一立场),401 等问题会在
-            // 用户下一次操作时由正常加载路径暴露。
+            // 失败时刻意保留原内容(与 MediaDetailViewModel.refreshDetail 同一立场),
+            // 401 等问题会在用户下一次操作时由正常加载路径暴露。
             do {
                 let items = try await connection.resume(limit: Self.sectionLimit).items
-                if myGeneration == generation { update(server.id) { $0.resume = .loaded(items) } }
-            } catch {}
-            do {
-                let items = try await connection.nextUp(limit: Self.sectionLimit)
-                if myGeneration == generation { update(server.id) { $0.nextUp = .loaded(items) } }
+                if myGeneration == generation { sections.resume.replace(with: .loaded(items)) }
             } catch {}
         })
     }
@@ -139,15 +215,15 @@ final class HomeViewModel {
     /// 等一个往返再动界面会显得没反应;失败则把列表**按原样放回**并给出提示
     /// (硬规则:不静默吞错、不用假数据占位)。
     func hideFromResume(_ item: EmbyItem, server: ServerProfile) {
-        let serverID = server.id
-        let snapshot = sections(for: serverID).resume
+        let resume = self.sections(for: server.id).resume
+        let snapshot = resume.state
         guard case .loaded(let items) = snapshot,
               items.contains(where: { $0.id == item.id }),
               !updatingResumeIDs.contains(item.id) else { return }
         updatingResumeIDs.insert(item.id)
         let myGeneration = generation
         let connection = container.connection(for: server)
-        update(serverID) { $0.resume = .loaded(items.filter { $0.id != item.id }) }
+        resume.replace(with: .loaded(items.filter { $0.id != item.id }))
         tasks.append(Task { [weak self] in
             defer { self?.updatingResumeIDs.remove(item.id) }
             do {
@@ -156,43 +232,29 @@ final class HomeViewModel {
                 guard let self, myGeneration == self.generation, error != .cancelled else { return }
                 // 列表已经换过一代(切服务器 / 刷新)就不回滚:快照是上一代的内容
                 if error == .unauthorized { self.container.state.serverNeedingLogin = server }
-                self.update(serverID) { $0.resume = snapshot }
+                resume.replace(with: snapshot)
                 self.resumeActionError = "移出继续观看失败:\(error.userMessage)"
             } catch {
                 guard let self, myGeneration == self.generation else { return }
-                self.update(serverID) { $0.resume = snapshot }
+                resume.replace(with: snapshot)
                 self.resumeActionError = "移出继续观看失败,请稍后重试。"
             }
         })
     }
 
-    /// 「下一集」行失败时整行不显示(docs/PITFALLS.md Q31 方案 B)。
-    ///
-    /// 跨剧集的 NextUp 不带 `SeriesId`,有的服务器会直接拒绝
-    /// (实测一台 4.7.11.0 返回 400 `{"error":"SeriesId is required"}`)。
-    /// 这一行是锦上添花,失败时露出错误卡片只会让首页看起来坏了;
-    /// 状态本身仍保留 `.failed`,不伪装成空列表,原因由 `NetworkDiagnostics` 留档。
-    static func showsNextUpRow(_ state: LoadState<[EmbyItem]>) -> Bool {
-        if case .failed = state { return false }
-        return true
-    }
-
-    /// 所有**可见**分区都加载完且都为空。被隐藏的「下一集」不参与判断 ——
-    /// 否则它一失败,空服务器上的「还没有可看的内容」提示就永远出不来。
+    /// 所有分区都加载完且都为空。
     ///
     /// 媒体库列表还没回来时不算空:「最新」的行要等它回来才知道有几行。
     static func isEverythingEmpty(
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
-        nextUp: LoadState<[EmbyItem]>,
         latest: [LoadState<[EmbyItem]>]
     ) -> Bool {
         switch views {
         case .idle, .loading: return false
         case .loaded, .failed: break
         }
-        let states = [resume] + (showsNextUpRow(nextUp) ? [nextUp] : []) + latest
-        return states.allSatisfy { state in
+        return ([resume] + latest).allSatisfy { state in
             if case .loaded(let items) = state { return items.isEmpty }
             return false
         }
@@ -204,45 +266,27 @@ final class HomeViewModel {
 
     // MARK: - 内部
 
-    private func update(_ serverID: UUID, _ change: (inout Sections) -> Void) {
-        var sections = sections(for: serverID)
-        change(&sections)
-        sectionsByServer[serverID] = sections
-    }
-
-    /// 已有内容(`.loaded`)保持不动;其余(空闲 / 失败 / 加载中)进入加载态
-    private static func markLoading<Value>(_ state: inout LoadState<Value>) {
-        if case .loaded = state { return }
-        state = .loading
-    }
-
-    /// 新结果并入现有状态:成功一律替换;失败时若已有内容则保留内容(后台刷新失败不该
-    /// 把好好的一行换成错误卡片,401 等问题会在用户下一次操作时由正常路径暴露)
-    private static func merge<Value>(
-        _ new: LoadState<Value>,
-        into current: LoadState<Value>?
-    ) -> LoadState<Value> {
-        if case .failed = new, case .loaded? = current { return current ?? new }
-        return new
-    }
-
-    private func track<Value>(
+    private func track<Value: Sendable>(
         _ fetch: @escaping @Sendable () async throws -> Value,
         apply: @escaping (LoadState<Value>) -> Void
     ) {
         let myGeneration = generation
         tasks.append(Task {
-            do {
-                let items = try await fetch()
-                guard myGeneration == generation else { return }
-                apply(.loaded(items))
-            } catch let error as EmbyAPIError {
-                guard myGeneration == generation, error != .cancelled else { return }
-                apply(.failed(LoadFailure(error)))
-            } catch {
-                guard myGeneration == generation else { return }
-                apply(.failed(LoadFailure(.transport(.unknown))))
-            }
+            guard let state = await Self.fetchState(fetch), myGeneration == generation else { return }
+            apply(state)
         })
+    }
+
+    /// 取一次数据并折成 `LoadState`。被取消(`.cancelled`)返回 nil:调用方什么都不应用
+    nonisolated private static func fetchState<Value: Sendable>(
+        _ fetch: @Sendable () async throws -> Value
+    ) async -> LoadState<Value>? {
+        do {
+            return .loaded(try await fetch())
+        } catch let error as EmbyAPIError {
+            return error == .cancelled ? nil : .failed(LoadFailure(error))
+        } catch {
+            return .failed(LoadFailure(.transport(.unknown)))
+        }
     }
 }

@@ -2,12 +2,19 @@ import SwiftUI
 
 /// 首页(主窗口导航栈的根页)。
 ///
-/// 自上而下:我的媒体 → 继续观看(横版)→ 下一集(横版)→ 每个媒体库的「最新」(海报)。
+/// 自上而下:我的媒体 → 继续观看(横版)→ 每个媒体库的「最新」(海报)。
 /// 与 Emby Web 一样,**加载成功但为空的分区整行不显示**(不放「没有内容」占位);
 /// 失败的分区照常显示错误与重试入口;全部为空时给一个整页空状态。
 ///
 /// 「我的媒体」是媒体库的唯一入口,所以它的加载态与失败态必须露出来 ——
 /// 失败时静默少一行,用户只会以为这台服务器没有媒体库。
+///
+/// 媒体库多时的两点约束(别回退):
+/// - 外层是 `LazyVStack`:屏幕外的行不建,它的卡片也就不提前发图片请求,
+///   首屏的图片不被下方的行挤着排队;
+/// - 每一行是独立的子视图,只读自己那一行的 `HomeViewModel.Row`:
+///   一行的数据到了只让这一行重新求值,不让整页跟着重算。
+///   本视图的 `body` 只依赖媒体库列表(决定有哪些「最新」行)。
 struct HomeView: View {
     let container: AppContainer
     let server: ServerProfile
@@ -21,7 +28,6 @@ struct HomeView: View {
     /// 首页是导航栈的根,push 别的页时不会销毁,ViewModel 一直留着;
     /// 状态按服务器分开存,切到别的服务器再切回来也不闪 loading(issue #3)
     @State private var viewModel: HomeViewModel
-    @Environment(\.openWindow) private var openWindow
 
     init(
         container: AppContainer,
@@ -39,24 +45,23 @@ struct HomeView: View {
     }
 
     var body: some View {
+        // 只取当前服务器的那份:切服务器后、新一轮 `load` 之前,也不会露出别台的内容
+        let sections = viewModel.sections(for: server.id)
+        let context = HomeRowContext(
+            container: container,
+            server: server,
+            viewModel: viewModel,
+            onOpenItem: onOpenItem,
+            onOpenLibrary: onOpenLibrary
+        )
         ScrollView {
-            VStack(alignment: .leading, spacing: Metrics.spacingXL) {
-                librariesSection
-                landscapeSection(title: "继续观看", state: sections.resume, isResume: true)
-                if HomeViewModel.showsNextUpRow(sections.nextUp) {
-                    landscapeSection(title: "下一集", state: nextUpState)
+            LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
+                HomeLibrariesRow(row: sections.views, context: context)
+                HomeResumeRow(row: sections.resume, context: context)
+                ForEach(HomeViewModel.latestViews(in: sections.views.state.value ?? [])) { view in
+                    HomeLatestRow(view: view, row: sections.latest[view.id], context: context)
                 }
-                ForEach(HomeViewModel.latestViews(in: sections.views.value ?? [])) { view in
-                    latestSection(view)
-                }
-                if isEverythingEmpty {
-                    ContentUnavailableView(
-                        "这台服务器上还没有可看的内容",
-                        systemImage: "film.stack",
-                        description: Text("媒体库里添加了影片或剧集后,会出现在这里。")
-                    )
-                    .padding(.top, Metrics.spacingXL)
-                }
+                HomeEmptyState(sections: sections)
             }
             .padding(Metrics.spacingXL)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,168 +83,203 @@ struct HomeView: View {
             Text(viewModel.resumeActionError ?? "")
         }
     }
+}
 
-    /// 只取当前服务器的那份:切服务器后、新一轮 `load` 之前,也不会露出别台的内容
-    private var sections: HomeViewModel.Sections {
-        viewModel.sections(for: server.id)
+/// 首页各行共用的依赖与动作(MainActor:只在视图里构造与调用)
+@MainActor
+private struct HomeRowContext {
+    let container: AppContainer
+    let server: ServerProfile
+    let viewModel: HomeViewModel
+    let onOpenItem: (EmbyItem) -> Void
+    let onOpenLibrary: (EmbyView) -> Void
+
+    func play(_ item: EmbyItem, fromBeginning: Bool = false, openWindow: OpenWindowAction) {
+        container.play(item, on: server, fromBeginning: fromBeginning)
+        openWindow(id: PlayerSceneRoot.windowID)
     }
+}
 
-    /// 「下一集」里去掉已经出现在「继续观看」里的集:看到一半的集两个接口都会返回,
-    /// 同一集在相邻两行各出现一次只是噪音。
-    private var nextUpState: LoadState<[EmbyItem]> {
-        let sections = sections
-        guard case .loaded(let next) = sections.nextUp,
-              case .loaded(let resume) = sections.resume else { return sections.nextUp }
-        let resumeIDs = Set(resume.map(\.id))
-        return .loaded(next.filter { !resumeIDs.contains($0.id) })
-    }
+// MARK: - 我的媒体
 
-    private var isEverythingEmpty: Bool {
-        let sections = sections
-        return HomeViewModel.isEverythingEmpty(
-            views: sections.views,
-            resume: sections.resume,
-            nextUp: sections.nextUp,
-            latest: Array(sections.latest.values)
-        )
-    }
+/// 媒体库入口。这里是**唯一**的媒体库入口,加载态与失败态都要露出来:
+/// 失败时少一行而不报错,等于骗用户「这台服务器没有媒体库」。
+private struct HomeLibrariesRow: View {
+    let row: HomeViewModel.Row<[EmbyView]>
+    let context: HomeRowContext
 
-    // MARK: - 我的媒体
+    private static let title = "我的媒体"
 
-    /// 媒体库入口。这里是**唯一**的媒体库入口,加载态与失败态都要露出来:
-    /// 失败时少一行而不报错,等于骗用户「这台服务器没有媒体库」。
-    @ViewBuilder
-    private var librariesSection: some View {
-        switch sections.views {
+    var body: some View {
+        switch row.state {
         case .idle, .loading:
-            sectionPlaceholder(title: "我的媒体")
+            HomeSectionPlaceholder(title: Self.title)
         case .failed(let failure):
-            sectionError(title: "我的媒体", failure: failure)
+            HomeSectionError(title: Self.title, failure: failure, context: context)
         case .loaded(let views):
             if views.isEmpty {
                 VStack(alignment: .leading, spacing: Metrics.spacingS) {
-                    Text("我的媒体")
+                    Text(Self.title)
                         .font(.title3.bold())
                     Text("这台服务器没有媒体库入口。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             } else {
-                librariesShelf(views)
-            }
-        }
-    }
-
-    private func librariesShelf(_ views: [EmbyView]) -> some View {
-        MediaShelf(title: "我的媒体") {
-            ForEach(views) { view in
-                Button {
-                    onOpenLibrary(view)
-                } label: {
-                    LibraryTile(view: view, serverID: server.id, store: container.posters)
+                MediaShelf(title: Self.title) {
+                    ForEach(views) { view in
+                        Button {
+                            context.onOpenLibrary(view)
+                        } label: {
+                            LibraryTile(view: view, serverID: context.server.id, store: context.container.posters)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
     }
+}
 
-    // MARK: - 横版分区(继续观看 / 下一集)
+// MARK: - 继续观看(横版)
 
-    /// - Parameter isResume: 只有「继续观看」有「移出继续观看」(API_CONTRACT.md 5.7)——
-    ///   隐藏态是服务端的 per-item 状态,「下一集」里的条目本来就不在继续观看里。
-    @ViewBuilder
-    private func landscapeSection(title: String, state: LoadState<[EmbyItem]>, isResume: Bool = false) -> some View {
-        switch state {
+private struct HomeResumeRow: View {
+    let row: HomeViewModel.Row<[EmbyItem]>
+    let context: HomeRowContext
+
+    @Environment(\.openWindow) private var openWindow
+
+    private static let title = "继续观看"
+
+    var body: some View {
+        let title = Self.title
+        switch row.state {
         case .idle:
             EmptyView()
         case .loading:
-            sectionPlaceholder(title: title)
+            HomeSectionPlaceholder(title: title)
         case .failed(let failure):
-            sectionError(title: title, failure: failure)
+            HomeSectionError(title: title, failure: failure, context: context)
         case .loaded(let items):
             if !items.isEmpty {
                 MediaShelf(title: title) {
                     ForEach(items) { item in
                         LandscapeCard(
                             item: item,
-                            serverID: server.id,
-                            store: container.posters,
-                            onPlay: { play(item) }
+                            serverID: context.server.id,
+                            store: context.container.posters,
+                            onPlay: { context.play(item, openWindow: openWindow) }
                         )
-                        .onTapGesture { onOpenItem(item) }
-                        .contextMenu { itemMenu(item, canHideFromResume: isResume) }
+                        .onTapGesture { context.onOpenItem(item) }
+                        .contextMenu { HomeItemMenu(item: item, canHideFromResume: true, context: context) }
                         .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { onOpenItem(item) }
-                        .accessibilityAction(named: "播放") { play(item) }
+                        .accessibilityAction { context.onOpenItem(item) }
+                        .accessibilityAction(named: "播放") { context.play(item, openWindow: openWindow) }
                     }
                 }
             }
         }
     }
+}
 
-    // MARK: - 最新
+// MARK: - 最新
 
-    @ViewBuilder
-    private func latestSection(_ view: EmbyView) -> some View {
-        let title = "最新 · \(view.name ?? "媒体库")"
-        switch sections.latest[view.id] ?? .idle {
+private struct HomeLatestRow: View {
+    let view: EmbyView
+    /// 媒体库列表刚回来、`loadLatest` 还没建行时为 nil,按 `.idle` 处理
+    let row: HomeViewModel.Row<[EmbyItem]>?
+    let context: HomeRowContext
+
+    var body: some View {
+        // 标题就是库名,不加「最新 ·」前缀(2026-10-02 用户要求);没名字时与「我的媒体」里的入口块一致
+        let title = view.name ?? "未命名媒体库"
+        switch row?.state ?? .idle {
         case .idle:
             EmptyView()
         case .loading:
-            sectionPlaceholder(title: title)
+            HomeSectionPlaceholder(title: title)
         case .failed(let failure):
-            sectionError(title: title, failure: failure)
+            HomeSectionError(title: title, failure: failure, context: context)
         case .loaded(let items):
             if !items.isEmpty {
-                MediaShelf(title: title, seeAll: { onOpenLibrary(view) }) {
+                MediaShelf(title: title, seeAll: { context.onOpenLibrary(view) }) {
                     ForEach(items) { item in
                         Button {
-                            onOpenItem(item)
+                            context.onOpenItem(item)
                         } label: {
-                            MediaCard(item: item, serverID: server.id, store: container.posters)
+                            MediaCard(item: item, serverID: context.server.id, store: context.container.posters)
                                 .frame(width: Metrics.posterMinWidth)
                         }
                         .buttonStyle(.plain)
-                        .contextMenu { itemMenu(item) }
+                        .contextMenu { HomeItemMenu(item: item, context: context) }
                     }
                 }
             }
         }
     }
+}
 
-    // MARK: - 共用
+// MARK: - 整页空状态
 
-    @ViewBuilder
-    private func itemMenu(_ item: EmbyItem, canHideFromResume: Bool = false) -> some View {
+/// 所有可见分区都加载完且都为空时的整页提示。要读所有行的状态,
+/// 所以单独成一个视图:任何一行变化只让它(很轻)重新求值,不连带整页。
+private struct HomeEmptyState: View {
+    let sections: HomeViewModel.Sections
+
+    var body: some View {
+        if HomeViewModel.isEverythingEmpty(
+            views: sections.views.state,
+            resume: sections.resume.state,
+            latest: sections.latest.values.map(\.state)
+        ) {
+            ContentUnavailableView(
+                "这台服务器上还没有可看的内容",
+                systemImage: "film.stack",
+                description: Text("媒体库里添加了影片或剧集后,会出现在这里。")
+            )
+            .padding(.top, Metrics.spacingXL)
+        }
+    }
+}
+
+// MARK: - 共用
+
+private struct HomeItemMenu: View {
+    let item: EmbyItem
+    var canHideFromResume = false
+    let context: HomeRowContext
+
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
         if item.kind == .movie || item.kind == .episode {
             Button(item.progressFraction == nil ? "播放" : "继续播放", systemImage: "play.fill") {
-                play(item)
+                context.play(item, openWindow: openWindow)
             }
             if item.progressFraction != nil {
                 Button("从头播放", systemImage: "arrow.counterclockwise") {
-                    play(item, fromBeginning: true)
+                    context.play(item, fromBeginning: true, openWindow: openWindow)
                 }
             }
             Divider()
         }
         Button("显示详情", systemImage: "info.circle") {
-            onOpenItem(item)
+            context.onOpenItem(item)
         }
         if canHideFromResume {
             Divider()
             Button("移出继续观看", systemImage: "eye.slash") {
-                viewModel.hideFromResume(item, server: server)
+                context.viewModel.hideFromResume(item, server: context.server)
             }
-            .disabled(viewModel.updatingResumeIDs.contains(item.id))
+            .disabled(context.viewModel.updatingResumeIDs.contains(item.id))
         }
     }
+}
 
-    private func play(_ item: EmbyItem, fromBeginning: Bool = false) {
-        container.play(item, on: server, fromBeginning: fromBeginning)
-        openWindow(id: PlayerSceneRoot.windowID)
-    }
+private struct HomeSectionPlaceholder: View {
+    let title: String
 
-    private func sectionPlaceholder(title: String) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             Text(title)
                 .font(.title3.bold())
@@ -253,16 +293,22 @@ struct HomeView: View {
             .padding(.vertical, Metrics.spacingL)
         }
     }
+}
 
-    private func sectionError(title: String, failure: LoadFailure) -> some View {
+private struct HomeSectionError: View {
+    let title: String
+    let failure: LoadFailure
+    let context: HomeRowContext
+
+    var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             Text(title)
                 .font(.title3.bold())
             ErrorStateView(
                 failure: failure,
                 // 重试即整页重新加载:已加载的分区保持原样不闪(见 `HomeViewModel.load`)
-                retry: { viewModel.load(server: server) },
-                login: { container.state.serverNeedingLogin = server }
+                retry: { context.viewModel.load(server: context.server) },
+                login: { context.container.state.serverNeedingLogin = context.server }
             )
             .frame(height: Metrics.posterMinWidth)
         }

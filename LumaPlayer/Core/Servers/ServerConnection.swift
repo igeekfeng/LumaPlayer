@@ -249,16 +249,6 @@ actor ServerConnection {
         return response.items.first
     }
 
-    /// `GET /Shows/NextUp`(不带 `SeriesId`)—— 所有剧集里「接着看哪一集」,首页用。
-    /// 排序与取舍全由服务端决定(看到一半的集优先,其后是各剧下一个未看的集)。
-    func nextUp(limit: Int) async throws -> [EmbyItem] {
-        let userID = try await currentUserID()
-        var query = EmbyNextUpQuery(userID: userID, seriesID: nil)
-        query.limit = limit
-        let response: EmbyItemsResponse<EmbyItem> = try await authenticated(.nextUp(query: query))
-        return response.items
-    }
-
     /// 剧集页「该播哪一集」:NextUp → 可续播 → nil(由调用方回退到第一集)。
     ///
     /// **NextUp 排在前面**,不是因为它更「新」,而是因为它不依赖

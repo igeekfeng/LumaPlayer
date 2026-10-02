@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 首页:跨剧集「下一集」、按媒体库分组的「最新」(API_CONTRACT.md 3.2)。
+/// 首页:继续观看、按媒体库分组的「最新」(API_CONTRACT.md 3.2)。
 /// 全部走 `MockEmbyURLProtocol`,零真实网络依赖。
 @MainActor
 final class HomeFeatureTests: XCTestCase {
@@ -30,23 +30,6 @@ final class HomeFeatureTests: XCTestCase {
         session = nil
     }
 
-    /// 首页的「下一集」不带 `SeriesId`(4.1.1.0 里它是可选参数)—— 带了就只剩一部剧。
-    func testNextUpAcrossSeriesOmitsSeriesID() async throws {
-        MockEmbyURLProtocol.stub(
-            .json(try FixtureLoader.json("shows_episodes_synthetic.json")),
-            path: "/emby/Shows/NextUp"
-        )
-        let connection = try await makeConnection()
-
-        let items = try await connection.nextUp(limit: 20)
-
-        XCTAssertEqual(items.count, 3)
-        let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "Shows/NextUp"))
-        XCTAssertNil(queryValue(request.url, "SeriesId"))
-        XCTAssertEqual(queryValue(request.url, "UserId"), Self.userID)
-        XCTAssertEqual(queryValue(request.url, "Limit"), "20")
-    }
-
     func testNextUpQueryStillSendsSeriesIDWhenGiven() {
         let query = EmbyNextUpQuery(userID: "U", seriesID: "S")
         XCTAssertEqual(query.queryItems, [EmbyQueryItem("UserId", "U"), EmbyQueryItem("SeriesId", "S")])
@@ -64,8 +47,9 @@ final class HomeFeatureTests: XCTestCase {
 
     // MARK: - 一次加载(避免重复请求)
 
-    /// 一次 `load`:媒体库列表、继续观看、下一集各请求**一次**,列表回来后每个视频库
+    /// 一次 `load`:媒体库列表、继续观看各请求**一次**,列表回来后每个视频库
     /// 的「最新」各请求一次(2026-09-24 诊断日志里同一 NextUp 1 秒内打了两遍,别回退)。
+    /// 跨剧集的 NextUp 已随「下一集」行一起去掉(PITFALLS.md Q31),首页不再请求它。
     func testLoadRequestsEachSectionOnce() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("user_views_mixed_synthetic.json")),
@@ -76,12 +60,12 @@ final class HomeFeatureTests: XCTestCase {
         viewModel.load(server: server)
         try await Task.sleep(for: .milliseconds(50))
 
-        let views = try XCTUnwrap(viewModel.sections(for: server.id).views.value)
+        let views = try XCTUnwrap(viewModel.sections(for: server.id).views.state.value)
         XCTAssertEqual(views.count, 3)
         let paths = MockEmbyURLProtocol.recordedRequests().map(\.url.path)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Views") }.count, 1)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Items/Resume") }.count, 1)
-        XCTAssertEqual(paths.filter { $0.hasSuffix("/Shows/NextUp") }.count, 1)
+        XCTAssertEqual(paths.filter { $0.hasSuffix("/Shows/NextUp") }.count, 0)
         let latestParents = MockEmbyURLProtocol.recordedRequests()
             .filter { $0.url.path.hasSuffix("/Items/Latest") }
             .compactMap { queryValue($0.url, "ParentId") }
@@ -89,31 +73,89 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(latestParents.count, views.count)
     }
 
-    // MARK: - 「下一集」行失败即隐藏(Q31 方案 B)
+    /// 刷新时复用「最新」的行对象:每行视图只观察自己那一个 `Row`,
+    /// 整体换成新对象会让所有行(和整页)重新求值。
+    func testReloadReusesLatestRowObjects() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("user_views_mixed_synthetic.json")),
+            path: "/emby/Users/USER-1/Views"
+        )
+        let (viewModel, server) = try await makeHomeViewModel()
+        viewModel.load(server: server)
+        try await Task.sleep(for: .milliseconds(50))
+        let before = viewModel.sections(for: server.id).latest
+        XCTAssertFalse(before.isEmpty)
 
-    func testNextUpRowHiddenOnlyWhenFailed() {
-        XCTAssertFalse(HomeViewModel.showsNextUpRow(.failed(LoadFailure(.unexpectedStatus(400)))))
-        XCTAssertTrue(HomeViewModel.showsNextUpRow(.loading))
-        XCTAssertTrue(HomeViewModel.showsNextUpRow(.loaded([])))
+        viewModel.load(server: server)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let after = viewModel.sections(for: server.id).latest
+        XCTAssertEqual(Set(after.keys), Set(before.keys))
+        for (id, row) in before {
+            XCTAssertTrue(after[id] === row, "行 \(id) 被换成了新对象")
+        }
     }
 
-    /// 「下一集」被隐藏时不能挡住空服务器提示。
-    func testFailedNextUpDoesNotBlockEmptyPlaceholder() {
-        let failed = LoadState<[EmbyItem]>.failed(LoadFailure(.unexpectedStatus(400)))
+    // MARK: - 「最新」并发上限
+
+    /// 媒体库 20+ 时不能把「最新」一次全压到服务器:同时在途不超过上限,且每个都跑到。
+    func testRunLimitedNeverExceedsMaxConcurrent() async {
+        let probe = ConcurrencyProbe()
+        var finished: [Int] = []
+
+        await HomeViewModel.runLimited(count: 23, maxConcurrent: 4) { index in
+            await probe.enter()
+            try? await Task.sleep(for: .milliseconds(5))
+            await probe.leave()
+            return index
+        } onResult: { index, value in
+            XCTAssertEqual(index, value)
+            finished.append(index)
+        }
+
+        let peak = await probe.peak
+        XCTAssertLessThanOrEqual(peak, 4)
+        XCTAssertGreaterThan(peak, 1, "应当并行,不是退化成串行")
+        XCTAssertEqual(finished.sorted(), Array(0..<23))
+    }
+
+    /// 切服务器 / 刷新会取消上一轮:取消后排队中的不再发出。
+    func testRunLimitedStopsLaunchingAfterCancellation() async throws {
+        let probe = ConcurrencyProbe()
+        let task = Task { @MainActor in
+            await HomeViewModel.runLimited(count: 20, maxConcurrent: 2) { index in
+                await probe.enter()
+                try? await Task.sleep(for: .milliseconds(20))
+                await probe.leave()
+                return index
+            } onResult: { _, _ in }
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        task.cancel()
+        await task.value
+
+        let started = await probe.started
+        XCTAssertLessThan(started, 20)
+    }
+
+    // MARK: - 整页空状态
+
+    /// 所有分区都加载完且为空才算空;还在加载或失败的分区不算空。
+    func testEmptyPlaceholderNeedsEverySectionLoadedAndEmpty() {
         XCTAssertTrue(HomeViewModel.isEverythingEmpty(
-            views: .loaded([]), resume: .loaded([]), nextUp: failed, latest: [.loaded([])]))
+            views: .loaded([]), resume: .loaded([]), latest: [.loaded([])]))
         XCTAssertFalse(HomeViewModel.isEverythingEmpty(
-            views: .loaded([]), resume: .loading, nextUp: failed, latest: []))
+            views: .loaded([]), resume: .loading, latest: []))
         XCTAssertFalse(HomeViewModel.isEverythingEmpty(
-            views: .loaded([]), resume: .failed(LoadFailure(.unexpectedStatus(400))), nextUp: .loaded([]), latest: []))
+            views: .loaded([]), resume: .failed(LoadFailure(.unexpectedStatus(400))), latest: []))
     }
 
     /// 媒体库列表还没回来时不能提前报「没有内容」:「最新」的行要等它回来才知道有几行。
     func testEmptyPlaceholderWaitsForViews() {
         XCTAssertFalse(HomeViewModel.isEverythingEmpty(
-            views: .loading, resume: .loaded([]), nextUp: .loaded([]), latest: []))
+            views: .loading, resume: .loaded([]), latest: []))
         XCTAssertTrue(HomeViewModel.isEverythingEmpty(
-            views: .failed(LoadFailure(.unexpectedStatus(500))), resume: .loaded([]), nextUp: .loaded([]), latest: []))
+            views: .failed(LoadFailure(.unexpectedStatus(500))), resume: .loaded([]), latest: []))
     }
 
     // MARK: - 移出继续观看(API_CONTRACT.md 5.7)
@@ -241,7 +283,7 @@ final class HomeFeatureTests: XCTestCase {
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: serverA))
 
         viewModel.load(server: serverB)
-        guard case .loading = viewModel.sections(for: serverB.id).resume else {
+        guard case .loading = viewModel.sections(for: serverB.id).resume.state else {
             return XCTFail("B 首次加载应是 loading,不能露出 A 的内容")
         }
         try await Task.sleep(for: .milliseconds(20))
@@ -261,22 +303,22 @@ final class HomeFeatureTests: XCTestCase {
         let serverB = try await makeServer(host: "emby-b.test")
         viewModel.load(server: serverA)
         try await Task.sleep(for: .milliseconds(20))
-        let loadedA = try XCTUnwrap(viewModel.sections(for: serverA.id).views.value)
+        let loadedA = try XCTUnwrap(viewModel.sections(for: serverA.id).views.state.value)
 
         viewModel.load(server: serverB)
-        guard case .loading = viewModel.sections(for: serverB.id).views else {
+        guard case .loading = viewModel.sections(for: serverB.id).views.state else {
             return XCTFail("B 首次加载应是 loading")
         }
         try await Task.sleep(for: .milliseconds(20))
 
         viewModel.load(server: serverA)
-        XCTAssertEqual(viewModel.sections(for: serverA.id).views.value?.map(\.id), loadedA.map(\.id))
+        XCTAssertEqual(viewModel.sections(for: serverA.id).views.state.value?.map(\.id), loadedA.map(\.id))
     }
 
     // MARK: - 辅助
 
     private func loadedResumeItems(_ viewModel: HomeViewModel, server: ServerProfile) throws -> [EmbyItem] {
-        let state = viewModel.sections(for: server.id).resume
+        let state = viewModel.sections(for: server.id).resume.state
         guard case .loaded(let items) = state else {
             XCTFail("继续观看应在加载完成状态,实际 \(state)")
             throw CancellationError()
@@ -331,5 +373,22 @@ final class HomeFeatureTests: XCTestCase {
     private func queryValue(_ url: URL, _ name: String) -> String? {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == name }?.value
+    }
+}
+
+/// 记录同时在跑的任务数峰值与累计启动数
+private actor ConcurrencyProbe {
+    private(set) var peak = 0
+    private(set) var started = 0
+    private var running = 0
+
+    func enter() {
+        running += 1
+        started += 1
+        peak = max(peak, running)
+    }
+
+    func leave() {
+        running -= 1
     }
 }
