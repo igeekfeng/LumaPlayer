@@ -16,7 +16,7 @@ struct EmbyItemsResponse<Element: Decodable & Sendable>: Decodable, Sendable {
 
 /// `/Users/{UserId}/Views` 返回的一个媒体库入口。
 /// 术语统一为 View,不要叫 Library(API_CONTRACT.md 第 10 节)。
-struct EmbyView: Decodable, Sendable, Equatable, Identifiable {
+struct EmbyView: Decodable, Sendable, Hashable, Identifiable {
     /// BaseItem 的 Id 与 Name 必填(API_CONTRACT.md 8.1)
     let id: String
     let name: String?

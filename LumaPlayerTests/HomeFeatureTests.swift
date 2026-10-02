@@ -62,22 +62,31 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(HomeViewModel.latestViews(in: views).map(\.id), ["V1", "V2", "V4"])
     }
 
-    // MARK: - 加载键(避免重复请求)
+    // MARK: - 一次加载(避免重复请求)
 
-    /// 媒体库列表加载中时键固定,列表回来只触发**一次**加载;
-    /// 点刷新(计数 +1、列表回到加载中)在列表回来前也不加载。
-    func testLoadKeyWaitsForViewsAndChangesOnce() throws {
-        let serverID = UUID()
-        let views = try [view("V1", "movies")]
-        let pendingKey = HomeViewModel.loadKey(serverID: serverID, refreshToken: 0, views: nil)
-        let loadedKey = HomeViewModel.loadKey(serverID: serverID, refreshToken: 0, views: views)
+    /// 一次 `load`:媒体库列表、继续观看、下一集各请求**一次**,列表回来后每个视频库
+    /// 的「最新」各请求一次(2026-09-24 诊断日志里同一 NextUp 1 秒内打了两遍,别回退)。
+    func testLoadRequestsEachSectionOnce() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("user_views_mixed_synthetic.json")),
+            path: "/emby/Users/USER-1/Views"
+        )
+        let (viewModel, server) = try await makeHomeViewModel()
 
-        XCTAssertTrue(pendingKey.hasSuffix("<pending>"))
-        XCTAssertNotEqual(pendingKey, loadedKey)
-        XCTAssertNotEqual(
-            HomeViewModel.loadKey(serverID: serverID, refreshToken: 1, views: views), loadedKey)
-        // 加载失败(空数组)与加载中是两个不同的键,失败后首页照常加载
-        XCTAssertNotEqual(HomeViewModel.loadKey(serverID: serverID, refreshToken: 0, views: []), pendingKey)
+        viewModel.load(server: server)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let views = try XCTUnwrap(viewModel.sections(for: server.id).views.value)
+        XCTAssertEqual(views.count, 3)
+        let paths = MockEmbyURLProtocol.recordedRequests().map(\.url.path)
+        XCTAssertEqual(paths.filter { $0.hasSuffix("/Views") }.count, 1)
+        XCTAssertEqual(paths.filter { $0.hasSuffix("/Items/Resume") }.count, 1)
+        XCTAssertEqual(paths.filter { $0.hasSuffix("/Shows/NextUp") }.count, 1)
+        let latestParents = MockEmbyURLProtocol.recordedRequests()
+            .filter { $0.url.path.hasSuffix("/Items/Latest") }
+            .compactMap { queryValue($0.url, "ParentId") }
+        XCTAssertEqual(Set(latestParents), Set(views.map(\.id)))
+        XCTAssertEqual(latestParents.count, views.count)
     }
 
     // MARK: - 「下一集」行失败即隐藏(Q31 方案 B)
@@ -91,10 +100,20 @@ final class HomeFeatureTests: XCTestCase {
     /// 「下一集」被隐藏时不能挡住空服务器提示。
     func testFailedNextUpDoesNotBlockEmptyPlaceholder() {
         let failed = LoadState<[EmbyItem]>.failed(LoadFailure(.unexpectedStatus(400)))
-        XCTAssertTrue(HomeViewModel.isEverythingEmpty(resume: .loaded([]), nextUp: failed, latest: [.loaded([])]))
-        XCTAssertFalse(HomeViewModel.isEverythingEmpty(resume: .loading, nextUp: failed, latest: []))
+        XCTAssertTrue(HomeViewModel.isEverythingEmpty(
+            views: .loaded([]), resume: .loaded([]), nextUp: failed, latest: [.loaded([])]))
         XCTAssertFalse(HomeViewModel.isEverythingEmpty(
-            resume: .failed(LoadFailure(.unexpectedStatus(400))), nextUp: .loaded([]), latest: []))
+            views: .loaded([]), resume: .loading, nextUp: failed, latest: []))
+        XCTAssertFalse(HomeViewModel.isEverythingEmpty(
+            views: .loaded([]), resume: .failed(LoadFailure(.unexpectedStatus(400))), nextUp: .loaded([]), latest: []))
+    }
+
+    /// 媒体库列表还没回来时不能提前报「没有内容」:「最新」的行要等它回来才知道有几行。
+    func testEmptyPlaceholderWaitsForViews() {
+        XCTAssertFalse(HomeViewModel.isEverythingEmpty(
+            views: .loading, resume: .loaded([]), nextUp: .loaded([]), latest: []))
+        XCTAssertTrue(HomeViewModel.isEverythingEmpty(
+            views: .failed(LoadFailure(.unexpectedStatus(500))), resume: .loaded([]), nextUp: .loaded([]), latest: []))
     }
 
     // MARK: - 移出继续观看(API_CONTRACT.md 5.7)
@@ -145,7 +164,7 @@ final class HomeFeatureTests: XCTestCase {
             path: "/emby/Users/USER-1/Items/00000000-0000-0000-0000-000000000202/HideFromResume"
         )
         let (viewModel, server) = try await makeHomeViewModel()
-        viewModel.load(server: server, views: [])
+        viewModel.load(server: server)
         try await Task.sleep(for: .milliseconds(20))
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
         XCTAssertEqual(before.count, 3)
@@ -169,7 +188,7 @@ final class HomeFeatureTests: XCTestCase {
             path: "/emby/Users/USER-1/Items/00000000-0000-0000-0000-000000000202/HideFromResume"
         )
         let (viewModel, server) = try await makeHomeViewModel()
-        viewModel.load(server: server, views: [])
+        viewModel.load(server: server)
         try await Task.sleep(for: .milliseconds(20))
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
 
@@ -189,13 +208,13 @@ final class HomeFeatureTests: XCTestCase {
             path: "/emby/Users/USER-1/Items/Resume"
         )
         let (viewModel, server) = try await makeHomeViewModel()
-        viewModel.load(server: server, views: [])
+        viewModel.load(server: server)
         try await Task.sleep(for: .milliseconds(20))
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
 
         // 第二次 load:同步返回时状态仍是 loaded(不闪 loading)
         MockEmbyURLProtocol.stub(.status(500), path: "/emby/Users/USER-1/Items/Resume")
-        viewModel.load(server: server, views: [])
+        viewModel.load(server: server)
         XCTAssertEqual(try loadedResumeItems(viewModel, server: server).map(\.id), before.map(\.id))
 
         // 刷新失败:保留旧内容,不换成错误态
@@ -217,11 +236,11 @@ final class HomeFeatureTests: XCTestCase {
         )
         let (viewModel, serverA) = try await makeHomeViewModel()
         let serverB = try await makeServer(host: "emby-b.test")
-        viewModel.load(server: serverA, views: [])
+        viewModel.load(server: serverA)
         try await Task.sleep(for: .milliseconds(20))
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: serverA))
 
-        viewModel.load(server: serverB, views: [])
+        viewModel.load(server: serverB)
         guard case .loading = viewModel.sections(for: serverB.id).resume else {
             return XCTFail("B 首次加载应是 loading,不能露出 A 的内容")
         }
@@ -229,31 +248,29 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertTrue(try loadedResumeItems(viewModel, server: serverB).isEmpty)
 
         // 切回 A:同步返回时就是 A 上次的内容
-        viewModel.load(server: serverA, views: [])
+        viewModel.load(server: serverA)
         XCTAssertEqual(try loadedResumeItems(viewModel, server: serverA).map(\.id), before.map(\.id))
     }
 
-    /// issue #3:媒体库入口列表同样按服务器保留,切回来不先变成 loading
-    /// (否则首页拿到 `views == nil`,要等列表回来才开始加载)。
+    /// issue #3:媒体库入口列表同样按服务器保留,切回来不先变成 loading。
     func testViewsKeptPerServer() async throws {
         let views = try FixtureLoader.json("user_views_mixed_synthetic.json")
         MockEmbyURLProtocol.stub(.json(views), path: "/emby/Users/USER-1/Views")
         MockEmbyURLProtocol.stub(.json(views), host: "emby-b.test", path: "/emby/Users/USER-1/Views")
-        let (_, serverA, container) = try await makeHomeContainer()
+        let (viewModel, serverA) = try await makeHomeViewModel()
         let serverB = try await makeServer(host: "emby-b.test")
-        let browse = BrowseViewModel(container: container)
-        browse.loadViews(server: serverA)
+        viewModel.load(server: serverA)
         try await Task.sleep(for: .milliseconds(20))
-        let loadedA = try XCTUnwrap(browse.viewsState(for: serverA.id).value)
+        let loadedA = try XCTUnwrap(viewModel.sections(for: serverA.id).views.value)
 
-        browse.loadViews(server: serverB)
-        guard case .loading = browse.viewsState(for: serverB.id) else {
+        viewModel.load(server: serverB)
+        guard case .loading = viewModel.sections(for: serverB.id).views else {
             return XCTFail("B 首次加载应是 loading")
         }
         try await Task.sleep(for: .milliseconds(20))
 
-        browse.loadViews(server: serverA)
-        XCTAssertEqual(browse.viewsState(for: serverA.id).value?.map(\.id), loadedA.map(\.id))
+        viewModel.load(server: serverA)
+        XCTAssertEqual(viewModel.sections(for: serverA.id).views.value?.map(\.id), loadedA.map(\.id))
     }
 
     // MARK: - 辅助
@@ -268,18 +285,13 @@ final class HomeFeatureTests: XCTestCase {
     }
 
     private func makeHomeViewModel() async throws -> (HomeViewModel, ServerProfile) {
-        let (viewModel, profile, _) = try await makeHomeContainer()
-        return (viewModel, profile)
-    }
-
-    private func makeHomeContainer() async throws -> (HomeViewModel, ServerProfile, AppContainer) {
         let profile = try await makeServer(host: "emby.test")
         // UserDefaults 不是 Sendable,不能在 MainActor 上构造好再送进 actor 的 init;
         // 用默认参数(在 actor 一侧求值)。这个 registry 只用来装配 container,不落库,
         // 所以不必自带 suite。
         let registry = ServerRegistry(profiles: [], credentials: credentials)
         let container = AppContainer(registry: registry, credentials: credentials, session: session)
-        return (HomeViewModel(container: container), profile, container)
+        return (HomeViewModel(container: container), profile)
     }
 
     private func makeServer(host: String) async throws -> ServerProfile {

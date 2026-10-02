@@ -1,6 +1,6 @@
 import Foundation
 
-/// 首页:继续观看 / 下一集 / 每个媒体库的「最新」。
+/// 首页:我的媒体 / 继续观看 / 下一集 / 每个媒体库的「最新」。
 ///
 /// 每个分区各自独立加载、各自有自己的状态:一个失败不该让另一个也消失。
 /// 每个分区都带 generation 检查 —— 快速切换服务器时,旧服务器慢到的响应
@@ -22,14 +22,17 @@ final class HomeViewModel {
 
     /// 一台服务器的首页各分区
     struct Sections {
+        /// 「我的媒体」:`/Users/{UserId}/Views`,入口列表来自服务器、不写死「电影/电视剧」
+        /// (UI_DESIGN.md 3.1)。「最新」的行也按它来,所以先回来它才发「最新」的请求
+        var views: LoadState<[EmbyView]> = .idle
         var resume: LoadState<[EmbyItem]> = .idle
         var nextUp: LoadState<[EmbyItem]> = .idle
         /// 每个媒体库的「最新」,键是 View 的 Id
         var latest: [String: LoadState<[EmbyItem]>] = [:]
     }
 
-    /// 键是 `ServerProfile.id`。只增不删:服务器数量很少,且主窗口重建(回服务器管理页
-    /// 再进来)时整个 ViewModel 随之重建
+    /// 键是 `ServerProfile.id`。只增不删:服务器数量很少,且首页重建
+    /// (删光服务器回到引导页再进来)时整个 ViewModel 随之重建
     private var sectionsByServer: [UUID: Sections] = [:]
 
     /// 正在写「继续观看」的条目(菜单里的「移出继续观看」据此禁用)
@@ -50,7 +53,10 @@ final class HomeViewModel {
     }
 
     /// 加载(或切换服务器 / 刷新后重新加载)全部分区。
-    func load(server: ServerProfile, views: [EmbyView]) {
+    ///
+    /// 「继续观看」「下一集」与媒体库列表并行;「最新」等媒体库列表回来再按库发,
+    /// 每个库只请求一次。
+    func load(server: ServerProfile) {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
         generation += 1
@@ -58,26 +64,40 @@ final class HomeViewModel {
         // 保留当前内容,新数据到达后原地替换,失败则保留旧内容。
         // 首次加载 / 上次失败才显示加载态。
         let serverID = server.id
-        var current = sections(for: serverID)
-        Self.markLoading(&current.resume)
-        Self.markLoading(&current.nextUp)
-        let latestViews = Self.latestViews(in: views)
-        current.latest = Dictionary(uniqueKeysWithValues: latestViews.map { view in
-            var state = current.latest[view.id] ?? .idle
-            Self.markLoading(&state)
-            return (view.id, state)
-        })
-        sectionsByServer[serverID] = current
+        update(serverID) {
+            Self.markLoading(&$0.views)
+            Self.markLoading(&$0.resume)
+            Self.markLoading(&$0.nextUp)
+        }
 
         let connection = container.connection(for: server)
         // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
         let limit = Self.sectionLimit
+        track { try await connection.userViews() } apply: { [weak self] new in
+            guard let self else { return }
+            update(serverID) { $0.views = Self.merge(new, into: $0.views) }
+            // 刷新失败时保留的旧列表照常加载「最新」;首次就失败则没有「最新」可加载
+            loadLatest(views: sections(for: serverID).views.value ?? [], serverID: serverID, connection: connection)
+        }
         track { try await connection.resume(limit: limit).items } apply: { [weak self] new in
             self?.update(serverID) { $0.resume = Self.merge(new, into: $0.resume) }
         }
         track { try await connection.nextUp(limit: limit) } apply: { [weak self] new in
             self?.update(serverID) { $0.nextUp = Self.merge(new, into: $0.nextUp) }
         }
+    }
+
+    /// 每个视频类媒体库一行「最新」。列表里已没有的库顺手丢掉
+    private func loadLatest(views: [EmbyView], serverID: UUID, connection: ServerConnection) {
+        let latestViews = Self.latestViews(in: views)
+        update(serverID) { sections in
+            sections.latest = Dictionary(uniqueKeysWithValues: latestViews.map { view in
+                var state = sections.latest[view.id] ?? .idle
+                Self.markLoading(&state)
+                return (view.id, state)
+            })
+        }
+        let limit = Self.sectionLimit
         for view in latestViews {
             track {
                 var query = EmbyLatestQuery()
@@ -146,17 +166,6 @@ final class HomeViewModel {
         })
     }
 
-    /// 首页 `.task(id:)` 的键:服务器、刷新计数、媒体库集合任一变化都重新加载。
-    ///
-    /// `views == nil`(主窗口的 `/Users/{UserId}/Views` 还没回来)时给一个固定的
-    /// 「等待」键,`.task` 里不发请求。否则进首页 / 点刷新时会先按空列表加载一次、
-    /// 列表回来后再加载一次 —— 「继续观看」「下一集」每次都被打两遍
-    /// (2026-09-24 诊断日志里同一 NextUp 1 秒内两行 400 即此原因)。
-    static func loadKey(serverID: UUID, refreshToken: Int, views: [EmbyView]?) -> String {
-        let viewsPart = views.map { $0.map(\.id).joined(separator: ",") } ?? "<pending>"
-        return "\(serverID.uuidString)-\(refreshToken)-\(viewsPart)"
-    }
-
     /// 「下一集」行失败时整行不显示(docs/PITFALLS.md Q31 方案 B)。
     ///
     /// 跨剧集的 NextUp 不带 `SeriesId`,有的服务器会直接拒绝
@@ -170,11 +179,18 @@ final class HomeViewModel {
 
     /// 所有**可见**分区都加载完且都为空。被隐藏的「下一集」不参与判断 ——
     /// 否则它一失败,空服务器上的「还没有可看的内容」提示就永远出不来。
+    ///
+    /// 媒体库列表还没回来时不算空:「最新」的行要等它回来才知道有几行。
     static func isEverythingEmpty(
+        views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
         nextUp: LoadState<[EmbyItem]>,
         latest: [LoadState<[EmbyItem]>]
     ) -> Bool {
+        switch views {
+        case .idle, .loading: return false
+        case .loaded, .failed: break
+        }
         let states = [resume] + (showsNextUpRow(nextUp) ? [nextUp] : []) + latest
         return states.allSatisfy { state in
             if case .loaded(let items) = state { return items.isEmpty }
@@ -195,24 +211,24 @@ final class HomeViewModel {
     }
 
     /// 已有内容(`.loaded`)保持不动;其余(空闲 / 失败 / 加载中)进入加载态
-    private static func markLoading(_ state: inout LoadState<[EmbyItem]>) {
+    private static func markLoading<Value>(_ state: inout LoadState<Value>) {
         if case .loaded = state { return }
         state = .loading
     }
 
     /// 新结果并入现有状态:成功一律替换;失败时若已有内容则保留内容(后台刷新失败不该
     /// 把好好的一行换成错误卡片,401 等问题会在用户下一次操作时由正常路径暴露)
-    private static func merge(
-        _ new: LoadState<[EmbyItem]>,
-        into current: LoadState<[EmbyItem]>?
-    ) -> LoadState<[EmbyItem]> {
+    private static func merge<Value>(
+        _ new: LoadState<Value>,
+        into current: LoadState<Value>?
+    ) -> LoadState<Value> {
         if case .failed = new, case .loaded? = current { return current ?? new }
         return new
     }
 
-    private func track(
-        _ fetch: @escaping @Sendable () async throws -> [EmbyItem],
-        apply: @escaping (LoadState<[EmbyItem]>) -> Void
+    private func track<Value>(
+        _ fetch: @escaping @Sendable () async throws -> Value,
+        apply: @escaping (LoadState<Value>) -> Void
     ) {
         let myGeneration = generation
         tasks.append(Task {

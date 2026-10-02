@@ -282,7 +282,7 @@ final class AppContainer {
     /// (ARCHITECTURE.md 4.1「重新启动后自动恢复最近一次可用会话」;
     /// 7.3「token 无效时返回登录界面,但保留地址和用户名」)。
     ///
-    /// 有服务器就直接进主窗口的首页(左栏已去掉,不再先落在一页服务器管理);
+    /// 有服务器就直接进主窗口的首页;
     /// 缺 token 时由 `BrowseView` 的登录 sheet 兜住(不静默重登,ARCHITECTURE.md 7.3)。
     ///
     /// 这里**不发网络请求**:只判断本地有没有 token。token 是否仍然有效
