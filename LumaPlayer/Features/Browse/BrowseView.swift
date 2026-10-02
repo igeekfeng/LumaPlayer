@@ -67,9 +67,12 @@ struct BrowseView: View {
         NavigationStack(path: $detailPath) {
             rootPage
         }
-        // 工具栏与搜索框声明在**导航栈**上(而不是内容页上):栈内所有页面都能用到
-        // 切服务器 / 刷新 / 搜索;声明在内容页上,push 到详情后就只剩返回按钮了。
+        // 工具栏与搜索框声明在**导航栈**上(而不是内容页上):内容页与详情页都能搜索;
+        // 服务器切换器只属于内容页(见 `toolbarContent`)。
         .toolbar { toolbarContent }
+        // 详情页是一整页 hero(详情页用 `backgroundExtensionEffect` 把背景图铺到标题栏下面):
+        // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(UI_DESIGN.md 6.2)。
+        .toolbarBackgroundVisibility(detailPath.isEmpty ? .automatic : .hidden, for: .windowToolbar)
         // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
         // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
         .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
@@ -208,30 +211,35 @@ struct BrowseView: View {
                 .help("返回首页(⌘[)")
             }
         }
-        ToolbarItem(placement: .navigation) {
-            Menu {
-                ForEach(servers) { server in
-                    Button {
-                        Task { await switchTo(server) }
-                    } label: {
-                        if container.state.currentServer?.id == server.id {
-                            Label(server.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(server.displayName)
+        // 服务器切换器只在内容页出现:详情页属于当前这台服务器,而切换会清掉
+        // 整个导航栈(见 `onChange(of: container.state.currentServer?.id)`),
+        // 在一页详情上切服务器没有意义 —— 详情页头部不再有服务器入口。
+        if detailPath.isEmpty {
+            ToolbarItem(placement: .navigation) {
+                Menu {
+                    ForEach(servers) { server in
+                        Button {
+                            Task { await switchTo(server) }
+                        } label: {
+                            if container.state.currentServer?.id == server.id {
+                                Label(server.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(server.displayName)
+                            }
                         }
                     }
-                }
-                Divider()
-                // 服务器管理(增 / 改 / 删 / 登录)在设置窗口的「服务器」标签页
-                Button {
-                    openSettings()
+                    Divider()
+                    // 服务器管理(增 / 改 / 删 / 登录)在设置窗口的「服务器」标签页
+                    Button {
+                        openSettings()
+                    } label: {
+                        Label("管理服务器…", systemImage: "gearshape")
+                    }
                 } label: {
-                    Label("管理服务器…", systemImage: "gearshape")
+                    Label(currentServerName, systemImage: "server.rack")
                 }
-            } label: {
-                Label(currentServerName, systemImage: "server.rack")
+                .help("切换服务器;「管理服务器…」在设置窗口(⌘,)")
             }
-            .help("切换服务器;「管理服务器…」在设置窗口(⌘,)")
         }
         ToolbarItem(placement: .primaryAction) {
             Button {

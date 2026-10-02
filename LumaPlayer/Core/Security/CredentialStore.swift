@@ -8,15 +8,16 @@ enum CredentialStoreError: Error {
 
 /// 服务器凭证的存取语义(actor,ARCHITECTURE.md 3.1.2)。
 ///
-/// 两个职责:
+/// 三个职责:
 /// - **AccessToken**:按 `ServerProfile.id` 分服务器存,删除服务器时同步删
 ///   (token 本体走 `X-Emby-Token` 头,见 API_CONTRACT.md 2.2);
 /// - **DeviceId**:全 App 唯一,首次生成后落盘,account 固定 `deviceId`,
 ///   删除服务器时**不**删(API_CONTRACT.md 2.4 —— 按服务器生成会让
 ///   Emby 后台出现一堆重复设备记录)。
 ///
-/// 密码**不存**:token 被吊销后回登录页手动输入
-/// (`docs/DECISIONS/credentials-file-storage.md`,推翻了 `remember-password-auto-relogin.md`)。
+/// - **密码**:**可选**,仅用户在登录表单勾了「记住密码」的服务器才有;
+///   用于 token 被吊销后静默重新登录(`docs/DECISIONS/remember-password-credentials-file.md`)。
+///   和 token 一样存凭据文件(base64 只是编码,不是加密),**不进钥匙串**。
 ///
 /// 方法是 `async`:CredentialFileStore 是另一个 actor,跨 actor 调用隐式异步
 /// (`ServerRegistry.remove(id:) async throws` 同理,见 ARCHITECTURE.md 3.1.2)。
@@ -24,6 +25,7 @@ actor CredentialStore {
     /// DeviceId 的固定 account(API_CONTRACT.md 2.4)
     private static let deviceIDAccount = "deviceId"
     private static let tokenAccountPrefix = "server-token:"
+    private static let passwordAccountPrefix = "server-password:"
 
     private let storage: CredentialFileStore
 
@@ -62,6 +64,27 @@ actor CredentialStore {
 
     private static func tokenAccount(forServer id: UUID) -> String {
         tokenAccountPrefix + id.uuidString
+    }
+
+    // MARK: - 服务器密码(可选)
+
+    func savePassword(_ password: String, forServer id: UUID) async throws {
+        try await storage.setValue(Data(password.utf8), forAccount: Self.passwordAccount(forServer: id))
+    }
+
+    func password(forServer id: UUID) async throws -> String? {
+        guard let data = try await storage.value(forAccount: Self.passwordAccount(forServer: id)) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func deletePassword(forServer id: UUID) async throws {
+        try await storage.removeValue(forAccount: Self.passwordAccount(forServer: id))
+    }
+
+    private static func passwordAccount(forServer id: UUID) -> String {
+        passwordAccountPrefix + id.uuidString
     }
 
     // MARK: - DeviceId

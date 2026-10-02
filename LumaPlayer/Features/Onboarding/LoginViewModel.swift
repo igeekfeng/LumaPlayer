@@ -4,12 +4,14 @@ import Observation
 /// 已有服务器的重新登录(token 缺失或 401 之后)。
 ///
 /// 用户名预填上次成功的那个(ARCHITECTURE.md 7.3「保留地址和用户名」);
-/// 密码不预填 —— 它从不落盘(8.1)。
+/// 密码不预填;记住密码默认不勾 —— 走到这里说明静默重登没成立(没记住,或服务端改过密码),
+/// 是否再记一次交给用户。
 @MainActor
 @Observable
 final class LoginViewModel {
     var username: String
     var password = ""
+    var rememberPassword = false
     var errorMessage: String?
     private(set) var isSubmitting = false
 
@@ -47,7 +49,7 @@ final class LoginViewModel {
         isSubmitting = true
         defer { isSubmitting = false }
         do {
-            _ = try await container.login(to: server, username: username, password: password)
+            _ = try await container.login(to: server, username: username, password: password, rememberPassword: rememberPassword)
             return true
         } catch let error as ServerLoginError {
             errorMessage = error.userMessage

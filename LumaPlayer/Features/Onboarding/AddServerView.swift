@@ -72,6 +72,8 @@ struct AddServerView: View {
                         .textContentType(.password)
                         .focused($focusedField, equals: .password)
                         .onSubmit(submit)
+                    Toggle("记住密码", isOn: $viewModel.rememberPassword)
+                        .help("登录失效时自动重新登录。密码保存在本机沙盒容器的凭据文件里,未加密。")
                 } header: {
                     Text("账户")
                 } footer: {

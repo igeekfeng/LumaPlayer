@@ -50,6 +50,9 @@ actor ServerConnection {
     /// 地址里的 scheme 是不是规范化算法补的(API_CONTRACT.md 1.3)。
     /// 只有为 true 时才允许局域网 http 回退(1.4)。
     private let schemeWasInferred: Bool
+    /// 在途的静默重新登录。并发的多个 401 / 缺 token 共用同一次登录,
+    /// 不各自打一遍 `AuthenticateByName`。
+    private var reauthentication: Task<Void, Error>?
 
     init(
         profile: ServerProfile,
@@ -72,10 +75,16 @@ actor ServerConnection {
         profile
     }
 
-    /// 本地有没有这台服务器的 token。没有 = 需要重新登录(ARCHITECTURE.md 7.3)。
-    /// 有效性由第一次鉴权请求验证,启动时不发网络请求。
+    /// 本地有没有这台服务器的 token。有效性由第一次鉴权请求验证,启动时不发网络请求。
     func hasStoredToken() async throws -> Bool {
         try await credentials.token(forServer: profile.id) != nil
+    }
+
+    /// 免输入就能进:有 token,或记住了密码(缺 token 时第一次鉴权请求前会静默登录)。
+    /// false = 需要用户重新登录(ARCHITECTURE.md 7.3)。
+    func canAuthenticateWithoutPrompt() async throws -> Bool {
+        if try await hasStoredToken() { return true }
+        return try await credentials.password(forServer: profile.id) != nil
     }
 
     // MARK: - 登录
@@ -85,7 +94,14 @@ actor ServerConnection {
     ///
     /// 返回更新后的档案与兼容信息;**本方法不碰注册表**,持久化由调用方决定,
     /// 这样「登录失败就不落库」(不留一条存在但用不了的服务器)。
-    func login(username: String, password: String) async throws -> ServerLoginResult {
+    ///
+    /// - Parameter rememberPassword: true 则验证通过后把密码存凭据文件,供 token 被吊销后
+    ///   静默重登;false 则顺手清掉这台之前可能存过的密码(取消勾选 = 忘记)。
+    func login(
+        username: String,
+        password: String,
+        rememberPassword: Bool = false
+    ) async throws -> ServerLoginResult {
         let probe = try await probeServer()
         profile.baseURL = probe.baseURL
         profile.apiPathPrefix = probe.compatibility.apiPathPrefix
@@ -124,19 +140,32 @@ actor ServerConnection {
             throw ServerLoginError.accessDenied(error)
         }
 
+        do {
+            if rememberPassword {
+                try await credentials.savePassword(password, forServer: profile.id)
+            } else {
+                try await credentials.deletePassword(forServer: profile.id)
+            }
+        } catch {
+            await clearStoredCredentials()
+            throw ServerLoginError.credentialFailure
+        }
+
         profile.compatibility = probe.compatibility
         // 换用户 / 重新登录后旧用户的缓存条目就是死数据,整台作废
         await responseCache?.invalidate(serverID: profile.id)
         return ServerLoginResult(profile: profile, compatibility: probe.compatibility)
     }
 
-    /// 登出:先远程吊销(尽力而为),再清本地 token。
+    /// 登出:先远程吊销(尽力而为),再清本地 token 与记住的密码
+    /// (否则下一次请求会被静默登录回去)。
     func logout() async throws {
         // 远程吊销失败也要清本地 token —— 否则用户以为已登出,下次启动
         // 却拿着一个仍有效的 token 直接进去了。这里不是「静默吞错」:
         // 失败不影响本地登出的语义,也不需要用户做任何补救。
         try? await client.sendVoid(.logout)
         try await credentials.deleteToken(forServer: profile.id)
+        try await credentials.deletePassword(forServer: profile.id)
         await client.setCredentials(accessToken: nil, userID: nil)
         // 已登出服务器的媒体数据不该继续留在本地缓存里
         await responseCache?.invalidate(serverID: profile.id)
@@ -490,10 +519,12 @@ actor ServerConnection {
     ///
     /// 1. 那次请求用的 token 已被换掉(并发的另一条路径刚登录过)→ 用新 token
     ///    把原请求**重发一次**;
-    /// 2. 否则 / 重发仍 401 → 只清**这一台**的 token,抛 `.unauthorized` 让 UI 回登录页。
+    /// 2. 用户记住了密码 → 静默 `AuthenticateByName` **一次**,成功后原请求**重发一次**;
+    /// 3. 否则 / 重发仍 401 → 只清**这一台**的 token(记住的密码也清,免得下次又
+    ///    用一个无效组合登录),抛 `.unauthorized` 让 UI 回登录页。
     ///    不会循环重试,不碰其他服务器。
     ///
-    /// 密码不存,所以没有静默重新登录(`docs/DECISIONS/credentials-file-storage.md`)。
+    /// 没记住密码时没有静默重登(`docs/DECISIONS/remember-password-credentials-file.md`)。
     private func withUnauthorizedHandling<R: Sendable>(
         _ operation: () async throws -> R
     ) async throws -> R {
@@ -501,19 +532,67 @@ actor ServerConnection {
         do {
             return try await operation()
         } catch EmbyAPIError.unauthorized {
-            guard let current = await client.currentAccessToken, current != usedToken else {
-                await invalidateSession(ifTokenIs: usedToken)
-                throw EmbyAPIError.unauthorized
+            let tokenWasReplaced = await client.currentAccessToken.map { $0 != usedToken } ?? false
+            if !tokenWasReplaced {
+                guard try await reauthenticateIfPossible() else {
+                    await invalidateSession(ifTokenIs: usedToken)
+                    throw EmbyAPIError.unauthorized
+                }
             }
         }
         let retriedToken = await client.currentAccessToken
         do {
             return try await operation()
         } catch EmbyAPIError.unauthorized {
-            // 换过的新 token 依然被拒:不是 token 新旧的问题,再试也没用
+            // 换过的新 token(别处登录的或刚静默登录拿到的)依然被拒:
+            // 不是 token 新旧的问题,再试也没用
             await invalidateSession(ifTokenIs: retriedToken)
+            await forgetPassword()
             throw EmbyAPIError.unauthorized
         }
+    }
+
+    /// 用记住的密码静默重新登录。没记住密码返回 false(调用方走原来的 401 处置)。
+    ///
+    /// 登录请求本身 401 = 密码已在服务端改过:清 token 与密码,抛 `.unauthorized`。
+    /// 网络等其他错误原样往上抛、不清任何东西 —— 此时服务器没有表态,
+    /// 不该把用户踢到登录页,下次请求再试。
+    private func reauthenticateIfPossible() async throws -> Bool {
+        guard let username = profile.username,
+              let password = try await credentials.password(forServer: profile.id) else {
+            return false
+        }
+        // 上面的 await 之后才检查在途任务,中间别的调用可能已经起了一个
+        if let running = reauthentication {
+            try await running.value
+            return true
+        }
+        let task = Task { try await self.performReauthentication(username: username, password: password) }
+        reauthentication = task
+        defer { reauthentication = nil }
+        try await task.value
+        return true
+    }
+
+    private func performReauthentication(username: String, password: String) async throws {
+        let auth: AuthenticationResult
+        do {
+            auth = try await client.send(.authenticateByName(username: username, password: password))
+        } catch EmbyAPIError.unauthorized {
+            await clearStoredCredentials()
+            await forgetPassword()
+            throw EmbyAPIError.unauthorized
+        }
+        try await credentials.saveToken(auth.accessToken, forServer: profile.id)
+        // 同一用户名在同一台服务器上 UserId 不变;以返回值为准,免得路径里的 UserId 过时
+        profile.userID = auth.user.id
+        await client.setCredentials(accessToken: auth.accessToken, userID: auth.user.id)
+    }
+
+    /// 清掉记住的密码。失败不改变调用处「回登录页」的结论,故不往上抛
+    /// (最坏结果是下次又试一次静默登录再失败)。
+    private func forgetPassword() async {
+        try? await credentials.deletePassword(forServer: profile.id)
     }
 
     /// 当前用户 Id。没有 token / 没有 userID 都视为未登录 ——
@@ -538,10 +617,14 @@ actor ServerConnection {
 
     /// 首次鉴权请求前从本地凭据取回 token(启动恢复会话用)。
     /// 本地没有 token = 需要登录。
+    /// 本地没有 token 但记住了密码 → 静默登录;两者都没有 = 需要登录。
     private func ensureCredentials() async throws {
         if await client.hasToken { return }
         guard let token = try await credentials.token(forServer: profile.id) else {
-            throw EmbyAPIError.unauthorized
+            guard try await reauthenticateIfPossible() else {
+                throw EmbyAPIError.unauthorized
+            }
+            return
         }
         await client.setCredentials(accessToken: token, userID: profile.userID)
     }

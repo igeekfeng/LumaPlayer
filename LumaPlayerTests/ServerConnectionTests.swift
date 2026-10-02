@@ -273,6 +273,133 @@ final class ServerConnectionTests: XCTestCase {
         XCTAssertEqual(authRequests(host: "emby.test").count - authBefore, 0)
     }
 
+    // MARK: - 记住密码 → 静默重新登录(docs/DECISIONS/remember-password-credentials-file.md)
+
+    private var viewsPath: String { "/emby/Users/\(fixtureUserID)/Views" }
+
+    func testRememberedPasswordIsStoredOnlyWhenAsked() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+        let remembered = try await credentials.password(forServer: profile.id)
+        XCTAssertEqual(remembered, "secret")
+
+        // 再登一次但不勾选 = 忘记
+        _ = try await connection.login(username: "alice", password: "secret", rememberPassword: false)
+        let forgotten = try await credentials.password(forServer: profile.id)
+        XCTAssertNil(forgotten)
+    }
+
+    func testUnauthorizedWithRememberedPasswordReloginsAndRetriesOnce() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+
+        MockEmbyURLProtocol.stub(
+            sequence: [.status(401), .json(try FixtureLoader.json("user_views_mixed_synthetic.json"))],
+            path: viewsPath
+        )
+        let authBefore = authRequests(host: "emby.test").count
+        let viewsBefore = viewRequests(host: "emby.test").count
+
+        _ = try await connection.userViews()
+
+        XCTAssertEqual(authRequests(host: "emby.test").count - authBefore, 1, "静默登录恰好一次")
+        XCTAssertEqual(viewRequests(host: "emby.test").count - viewsBefore, 2, "原请求重发恰好一次")
+        let token = try await credentials.token(forServer: profile.id)
+        XCTAssertEqual(token, "FAKE_TOKEN_0123456789")
+    }
+
+    func testSilentReloginRejectedClearsTokenAndPassword() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+
+        MockEmbyURLProtocol.stub(.status(401), path: viewsPath)
+        MockEmbyURLProtocol.stub(.status(401), path: "/emby/Users/AuthenticateByName")
+
+        do {
+            _ = try await connection.userViews()
+            XCTFail("密码已失效应抛 unauthorized")
+        } catch let error as EmbyAPIError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        let token = try await credentials.token(forServer: profile.id)
+        let password = try await credentials.password(forServer: profile.id)
+        XCTAssertNil(token)
+        XCTAssertNil(password, "服务端已拒绝这个密码,不能留着反复试")
+    }
+
+    func testSilentReloginNetworkErrorKeepsPasswordAndIsNotUnauthorized() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+
+        MockEmbyURLProtocol.stub(.status(401), path: viewsPath)
+        MockEmbyURLProtocol.stub(.failure(.notConnectedToInternet), path: "/emby/Users/AuthenticateByName")
+
+        do {
+            _ = try await connection.userViews()
+            XCTFail("网络不通应抛错")
+        } catch let error as EmbyAPIError {
+            XCTAssertNotEqual(error, .unauthorized, "网络问题不该把用户踢去登录页")
+        }
+        let password = try await credentials.password(forServer: profile.id)
+        XCTAssertEqual(password, "secret")
+    }
+
+    func testStillUnauthorizedAfterSilentReloginGivesUp() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+
+        MockEmbyURLProtocol.stub(.status(401), path: viewsPath)
+        let authBefore = authRequests(host: "emby.test").count
+
+        do {
+            _ = try await connection.userViews()
+            XCTFail("新 token 仍被拒应抛 unauthorized")
+        } catch let error as EmbyAPIError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        XCTAssertEqual(authRequests(host: "emby.test").count - authBefore, 1, "不得循环登录")
+        let password = try await credentials.password(forServer: profile.id)
+        XCTAssertNil(password)
+    }
+
+    func testMissingTokenWithRememberedPasswordLogsInSilently() async throws {
+        try stubHappyPath()
+        let profile = try await makeConnection(host: "emby.test")
+            .login(username: "alice", password: "secret", rememberPassword: true).profile
+        try await credentials.deleteToken(forServer: profile.id)
+
+        // 新实例 = 重启 App 后
+        let restored = makeConnection(profile: profile)
+        let canResume = try await restored.canAuthenticateWithoutPrompt()
+        XCTAssertTrue(canResume)
+        let authBefore = authRequests(host: "emby.test").count
+
+        _ = try await restored.userViews()
+
+        XCTAssertEqual(authRequests(host: "emby.test").count - authBefore, 1)
+        let token = try await credentials.token(forServer: profile.id)
+        XCTAssertNotNil(token)
+    }
+
+    func testLogoutForgetsRememberedPassword() async throws {
+        try stubHappyPath()
+        let connection = makeConnection(host: "emby.test")
+        let profile = try await connection.login(username: "alice", password: "secret", rememberPassword: true).profile
+        MockEmbyURLProtocol.stub(.status(204), path: "/emby/Sessions/Logout")
+
+        try await connection.logout()
+
+        let password = try await credentials.password(forServer: profile.id)
+        XCTAssertNil(password)
+        let canResume = try await connection.canAuthenticateWithoutPrompt()
+        XCTAssertFalse(canResume)
+    }
+
     func testLate401DoesNotDeleteNewerToken() async throws {
         try stubHappyPath()
         let connection = makeConnection(host: "emby.test")

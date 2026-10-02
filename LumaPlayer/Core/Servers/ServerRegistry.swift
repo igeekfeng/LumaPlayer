@@ -85,6 +85,7 @@ actor ServerRegistry {
         profiles.removeAll { $0.id == id }
         try persist()
         try await credentials.deleteToken(forServer: id)
+        try await credentials.deletePassword(forServer: id)
     }
 
     func mostRecentlyUsed() -> ServerProfile? {

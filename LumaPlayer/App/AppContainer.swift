@@ -71,9 +71,9 @@ final class AppContainer {
         )
     }
 
-    /// 这台服务器能否免输入进入:本地有 token。false = 需要用户重新登录。
+    /// 这台服务器能否免输入进入:本地有 token,或记住了密码。false = 需要用户重新登录。
     func canResumeSession(for server: ServerProfile) async throws -> Bool {
-        try await makeConnection(for: server).hasStoredToken()
+        try await makeConnection(for: server).canAuthenticateWithoutPrompt()
     }
 
     // MARK: - 浏览用连接与图片缓存
@@ -112,8 +112,17 @@ final class AppContainer {
 
     /// 已有服务器重新登录(token 失效或未登录)。保留地址与用户名
     /// (ARCHITECTURE.md 7.3)。
-    func login(to server: ServerProfile, username: String, password: String) async throws -> ServerProfile {
-        let result = try await makeConnection(for: server).login(username: username, password: password)
+    func login(
+        to server: ServerProfile,
+        username: String,
+        password: String,
+        rememberPassword: Bool = false
+    ) async throws -> ServerProfile {
+        let result = try await makeConnection(for: server).login(
+            username: username,
+            password: password,
+            rememberPassword: rememberPassword
+        )
         try await registry.update(result.profile)
         // 缓存的浏览连接还拿着旧档案 / 旧 token 状态,换一个新的
         connections.removeValue(forKey: result.profile.id)
@@ -141,7 +150,8 @@ final class AppContainer {
         address: String,
         displayName: String,
         username: String,
-        password: String
+        password: String,
+        rememberPassword: Bool = false
     ) async throws -> ServerProfile {
         let normalized = try normalizeServerURL(address)
         let deviceID = try await credentials.deviceID()
@@ -152,7 +162,11 @@ final class AppContainer {
             lastUsedAt: Date()
         )
         let connection = makeConnection(for: pending, schemeWasInferred: normalized.schemeWasInferred)
-        let result = try await connection.login(username: username, password: password)
+        let result = try await connection.login(
+            username: username,
+            password: password,
+            rememberPassword: rememberPassword
+        )
         var profile = result.profile
         if isBlank(displayName), let serverName = result.compatibility.serverName, !isBlank(serverName) {
             // 用户没填名称:用服务器自报的 ServerName(探测时 /System/Info/Public 已拿到),

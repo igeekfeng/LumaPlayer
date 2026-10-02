@@ -4,7 +4,7 @@ import SwiftUI
 /// (ARCHITECTURE.md 7.3)。
 ///
 /// 记住了密码时 401 会先静默重新登录,走到这里说明静默登录也没成立
-/// (密码在服务端改过、或从没记住过密码)。
+/// (密码在服务端改过、或没勾选记住密码)。
 struct LoginView: View {
     @State private var viewModel: LoginViewModel
     @Environment(\.dismiss) private var dismiss
@@ -45,6 +45,8 @@ struct LoginView: View {
                         .textContentType(.password)
                         .focused($passwordFocused)
                         .onSubmit(submit)
+                    Toggle("记住密码", isOn: $viewModel.rememberPassword)
+                        .help("登录失效时自动重新登录。密码保存在本机沙盒容器的凭据文件里,未加密。")
                 } footer: {
                     if let message = viewModel.errorMessage {
                         OnboardingNotice(text: message, style: .error)

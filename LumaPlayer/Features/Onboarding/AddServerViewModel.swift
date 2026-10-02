@@ -12,6 +12,7 @@ final class AddServerViewModel {
     var displayName = ""
     var username = ""
     var password = ""
+    var rememberPassword = false
     var errorMessage: String?
     private(set) var isSaving = false
 
@@ -48,7 +49,8 @@ final class AddServerViewModel {
                 address: address,
                 displayName: displayName,
                 username: username,
-                password: password
+                password: password,
+                rememberPassword: rememberPassword
             )
             return true
         } catch is CancellationError {
