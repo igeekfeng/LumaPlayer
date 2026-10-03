@@ -136,6 +136,109 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerTime.text(3725), "1:02:05")
     }
 
+    /// 剩余时长带负号前缀;剩余为 0 时给 `-00:00`。
+    /// ⛔ 曾经在这里输出 `---:--`:`text(0)` 返回 `--:--`,被拼上负号
+    /// (2026-10-03 修复,拖到进度条最右端 / 播完必现)。
+    func testRemainingTextRendersZeroWithMinusPrefix() {
+        XCTAssertEqual(PlayerTime.remainingText(0, durationKnown: true), "-00:00")
+        // 不足 1 秒也落到 -00:00,不能闪出 ---:--
+        XCTAssertEqual(PlayerTime.remainingText(0.4, durationKnown: true), "-00:00")
+        XCTAssertEqual(PlayerTime.remainingText(300, durationKnown: true), "-05:00")
+        XCTAssertEqual(PlayerTime.remainingText(3300, durationKnown: true), "-55:00")
+        XCTAssertEqual(PlayerTime.remainingText(3725, durationKnown: true), "-1:02:05")
+        // 拖过头(夹取)也不能出负号时长
+        XCTAssertEqual(PlayerTime.remainingText(-10, durationKnown: true), "-00:00")
+    }
+
+    /// 时长未知时**不加负号**:`--:--` 的语义是「不知道」,
+    /// 负号的语义是「相对总量的差值」,没有总量就没有差值。
+    func testRemainingTextOmitsMinusWhenDurationUnknown() {
+        XCTAssertEqual(PlayerTime.remainingText(0, durationKnown: false), "--:--")
+        XCTAssertEqual(PlayerTime.remainingText(120, durationKnown: false), "--:--")
+    }
+
+    // MARK: - 连点累加跳转
+
+    /// 首次点击是 1 倍,`seekRepeatResetDelay` 内连点逐级加。
+    func testSkipRepeatCountsUpWithinWindow() {
+        var state = PlayerSkipRepeat()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(state.advance(now: start), 1)
+        XCTAssertEqual(state.advance(now: start.addingTimeInterval(0.3)), 2)
+        XCTAssertEqual(state.advance(now: start.addingTimeInterval(0.6)), 3)
+    }
+
+    /// 超过归零间隔后重新从 1 倍开始 —— 否则停一阵再点会突然跳很远。
+    func testSkipRepeatResetsAfterIdle() {
+        var state = PlayerSkipRepeat()
+        let first = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(state.advance(now: first), 1)
+        let second = first.addingTimeInterval(0.3)
+        XCTAssertEqual(state.advance(now: second), 2)
+        // 从**最后一次**点击起算超过归零间隔
+        let later = second.addingTimeInterval(Metrics.seekRepeatResetDelay + 0.1)
+        XCTAssertEqual(state.advance(now: later), 1)
+    }
+
+    /// 必须封顶:不封顶的话连点几十次会一次跳走几小时。
+    func testSkipRepeatStopsAtMaxMultiple() {
+        var state = PlayerSkipRepeat()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        for _ in 0..<20 { _ = state.advance(now: start) }
+        XCTAssertEqual(state.advance(now: start), Metrics.seekRepeatMaxMultiple)
+    }
+
+    /// tooltip 预告的是**下一次**会跳多少,不是已经用掉的那一档;
+    /// 没点过时预告 1 倍,点满上限后不再往上加。
+    func testSkipRepeatUpcomingPreviewsNextClick() {
+        var state = PlayerSkipRepeat()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(state.upcoming(now: start), 1)
+        _ = state.advance(now: start)
+        XCTAssertEqual(state.upcoming(now: start), 2)
+        for _ in 0..<20 { _ = state.advance(now: start) }
+        XCTAssertEqual(state.upcoming(now: start), Metrics.seekRepeatMaxMultiple)
+        // 归零后预告也回到 1 倍
+        let later = start.addingTimeInterval(Metrics.seekRepeatResetDelay + 0.1)
+        XCTAssertEqual(state.upcoming(now: later), 1)
+    }
+
+    // MARK: - 预计结束时刻
+
+    /// 倍速必须参与换算:1.25× 下剩 1200 秒,实际只过 960 秒。
+    func testEndTimeAccountsForPlaybackSpeed() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let endsAt = try XCTUnwrap(PlayerTime.endsAt(
+            position: 0, duration: 1200, speed: 1.25, isEnded: false, now: now
+        ))
+        XCTAssertEqual(endsAt.timeIntervalSince(now), 960, accuracy: 0.001)
+    }
+
+    /// 正常速度就是「现在 + 剩余」。
+    func testEndTimeAtNormalSpeedIsNowPlusRemaining() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let endsAt = try XCTUnwrap(PlayerTime.endsAt(
+            position: 300, duration: 3600, speed: 1, isEnded: false, now: now
+        ))
+        XCTAssertEqual(endsAt.timeIntervalSince(now), 3300, accuracy: 0.001)
+    }
+
+    /// 四种「宁可不显示」的情况都不能给出时刻 —— 编一个假的结束时间比不显示更糟。
+    func testEndTimeIsNilWhenUnknownOrFinished() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        // 时长未知
+        XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 0, speed: 1, isEnded: false, now: now))
+        // 已播完
+        XCTAssertNil(PlayerTime.endsAt(position: 3600, duration: 3600, speed: 1, isEnded: true, now: now))
+        // 剩余非正(拖过了头)
+        XCTAssertNil(PlayerTime.endsAt(position: 3700, duration: 3600, speed: 1, isEnded: false, now: now))
+        // 倍速非法
+        XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 3600, speed: 0, isEnded: false, now: now))
+        XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 3600, speed: .nan, isEnded: false, now: now))
+        // 位置非有限
+        XCTAssertNil(PlayerTime.endsAt(position: .nan, duration: 3600, speed: 1, isEnded: false, now: now))
+    }
+
     // MARK: - 播放请求(独立窗口)
 
     /// 同一项再点一次播放必须是新请求:播放窗口按 id 重建播放页,

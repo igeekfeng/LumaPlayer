@@ -49,13 +49,30 @@ enum Metrics {
 
     // MARK: 播放器控制栏
 
-    /// 底部控制栏高度(含内边距)
-    static let controlBarHeight: CGFloat = 56
+    /// 控制栏距窗口左右边缘的内边距。全宽横条的排版里,内容仍然要缩进,
+    /// 不能顶到窗口边缘(UI_DESIGN.md 5.1)。
+    static let controlBarSideInset: CGFloat = 32
     /// 控制栏距窗口底部
-    static let controlBarBottomInset: CGFloat = 12
-    /// 无交互后控制栏淡出
-    static let autoHideDelay: TimeInterval = 3
-    /// 恢复播放后额外等待(避免刚恢复就隐藏)
+    static let controlBarBottomInset: CGFloat = 16
+    /// 控制栏顶部的留白(进度条与画面之间的呼吸位)
+    static let controlBarTopInset: CGFloat = 20
+    /// 底部压暗衬底的不透明度。
+    ///
+    /// HIG Materials 明确:玻璃浮在 media background 上必须配 dimming layer,
+    /// Apple 给的参考值是 35%。这里不用玻璃(理由见 UI_DESIGN.md 4.1),
+    /// 用自下而上的黑色渐变,底端取这个值 —— 视频亮画面下白字才读得出来。
+    static let controlBarScrimOpacity: Double = 0.55
+    /// 压暗衬底的起始高度(占控制栏总高的比例),再往上完全透明
+    static let controlBarScrimStart: Double = 0.05
+    /// 指针**静止**在窗口里多久后隐藏控制栏。
+    ///
+    /// 每次指针移动都会重置这个计时。mpv OSC 的 `fadedelay` 默认就是这个量级;
+    /// 太短会让人来不及把指针移到控制栏上,太长则控制栏一直压在画面上。
+    static let autoHideDelay: TimeInterval = 2
+    /// 指针**移出窗口**后多久隐藏。比 `autoHideDelay` 短 —— 指针都不在窗口里了,
+    /// 没有任何继续显示它的理由。
+    static let autoHidePointerExitDelay: TimeInterval = 0.3
+    /// 恢复播放 / 菜单操作后额外等待(避免刚有动作就隐藏)
     static let autoHideResumeDelay: TimeInterval = 5
     /// 方向键单次 seek
     ///
@@ -64,6 +81,24 @@ enum Metrics {
     static let seekStep: TimeInterval = 10
     /// Shift+方向键单次 seek
     static let seekStepLarge: TimeInterval = 30
+    /// 转码 seek 的重新起流合并窗口(秒)
+    ///
+    /// 连点前进 / 后退时,每次点击都是一次「停流 + 重新起流」——
+    /// 最终 Progress + Stopped + Playing + PlaybackInfo,约 4 个请求,
+    /// 连点 5 下就是 ~20 个请求 / 1 秒内,而且每轮都拆一次会话。
+    /// 同一个坑倍速改滑块时踩过一次(`docs/PITFALLS.md` 第 4 节:
+    /// 「凡是从离散选项改成连续调节的控件,都要回头看它的副作用是按次
+    /// 还是按值触发」),所以这里等连点停下来再起流。
+    ///
+    /// ⛔ 不适用于 DirectStream:那是 mpv seek,本来就便宜,合并只会让
+    /// 画面响应变慢。窗口 0.25 秒:短到感觉不到,长到足以吃掉连点。
+    static let seekRestartMergeDelay: TimeInterval = 0.25
+    /// 连点后退 / 前进时的累加上限(倍)。第 n 次点击跳 `seekStep × n`,
+    /// 到这个倍数就不再加了(Apple TV 是「Click again to skip another 10 seconds」,
+    /// Plex 同类;不加上限的话连点几十次会一次跳走几小时)。
+    static let seekRepeatMaxMultiple: Int = 5
+    /// 连点累加的归零间隔:超过这个时间没再点就重新从 1 倍开始
+    static let seekRepeatResetDelay: TimeInterval = 1.2
     /// 音量单次增减(0–100)
     static let volumeStep: Double = 5
     /// 倍速区间:与 `MPVPlayer.setSpeed` 的夹取一致(超出这个范围音频严重失真)
@@ -78,6 +113,25 @@ enum Metrics {
     static let playerButtonSize: CGFloat = 32
     /// 屏显提示(OSD,如「1.25×」「字幕:中文」)停留时长
     static let osdDuration: TimeInterval = 1.2
+    // MARK: 进度条
+
+    /// 进度条静止时的轨道高度
+    static let scrubberTrackHeight: CGFloat = 4
+    /// 悬停 / 拖动时的轨道高度
+    static let scrubberTrackHeightActive: CGFloat = 7
+    /// 播放头圆点直径(静止)。Apple 在 Liquid Glass 里把播放头「从小变得更大更显眼」,
+    /// 圆点是 mpv OSC `seekbarstyle=knob` 的做法(官方推荐 `seekbarhandlesize=0.6`)。
+    static let scrubberKnobSize: CGFloat = 11
+    /// 悬停 / 拖动时的播放头直径
+    static let scrubberKnobSizeActive: CGFloat = 15
+    /// 轨道底色
+    static let scrubberTrackOpacity: Double = 0.28
+    /// 已播放段
+    static let scrubberPlayedOpacity: Double = 1.0
+    /// 已缓冲段。比底色亮一档、比已播放段暗一档,层次靠这三个不透明度拉开。
+    static let scrubberBufferedOpacity: Double = 0.55
+    /// 悬停时间气泡距轨道的垂直距离
+    static let scrubberTooltipOffset: CGFloat = 28
     /// 续播时从服务端记录的位置往回退的秒数(接上前情,Infuse / Plex 的做法)
     static let resumeRewind: TimeInterval = 5
     /// 片头最后几秒不再显示「跳过片头」(见 `PlaybackMarkers.isInIntro`)
@@ -128,6 +182,4 @@ enum Radius {
     static let card: CGFloat = 8
     /// 浮层面板
     static let panel: CGFloat = 12
-    /// 播放器底部控制栏(与 UI_DESIGN.md 4.3 示例一致)
-    static let glassBar: CGFloat = 18
 }

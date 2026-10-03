@@ -100,7 +100,19 @@ struct PlayerWindowView: View {
         .task { await loadNowPlayingArtwork() }
         .onDisappear(perform: tearDown)
         .onContinuousHover { phase in
-            if case .active = phase { revealControls() }
+            // 指针在窗口内移动:显示并**重新计时**,静止 `autoHideDelay`
+            // 秒后自动隐藏。指针移出窗口:同样走计时(延迟更短,见 Metrics)。
+            //
+            // ⛔ 不要写成「只在移出窗口时隐藏」——那样指针停在窗口里不动
+            // 就永远不会收起,控制栏会一直压在画面上(2026-10-02 用户实测反馈)。
+            // Apple TV 是「移出 viewer 即隐藏」,mpv OSC 是「静止 0.5 秒」,
+            // 两条并不冲突:移动 → 显示并重置计时,静止或移出 → 到点隐藏。
+            switch phase {
+            case .active:
+                revealControls()
+            case .ended:
+                revealControls(delay: Metrics.autoHidePointerExitDelay)
+            }
         }
         .onChange(of: viewModel.isPaused) { _, paused in
             // 暂停时常驻;恢复播放后多等一会儿再隐藏(UI_DESIGN.md 2.1 autoHideResumeDelay)
@@ -314,18 +326,18 @@ struct PlayerWindowView: View {
         let playNext: (() -> Void)? = viewModel.nextEpisode == nil
             ? nil
             : { viewModel.playNextEpisode() }
+        // 全宽触底:不再加水平 padding 与最大宽度,压暗衬底要一直铺到窗口边缘。
+        // 内容的左右缩进在 `PlayerControlsView` 内部做(controlBarSideInset)。
         return PlayerControlsView(
             viewModel: viewModel,
             toggleFullScreen: { toggleFullScreen() },
             playNext: playNext,
             isSpeedPopoverPresented: $isSpeedPopoverPresented
         )
-        .frame(maxWidth: Metrics.contentMaxWidth * 1.5)
-        .padding(.horizontal, Metrics.spacingXL)
-        .padding(.bottom, Metrics.controlBarBottomInset)
         .onHover { hovering in
             isHoveringControls = hovering
-            if !hovering { revealControls() }
+            // 指针扫进控制栏就取消隐藏;扫出去再按正常节奏重新计时
+            if hovering { revealControls(autoHide: false) } else { revealControls() }
         }
     }
 
@@ -364,7 +376,11 @@ struct PlayerWindowView: View {
 
     // MARK: - 自动隐藏
 
-    /// 显示控制层;`autoHide` 时在无交互 `delay` 秒后再隐藏(UI_DESIGN.md 5.1)。
+    /// 显示控制层;`autoHide` 时在 `delay` 秒后隐藏(UI_DESIGN.md 5.1)。
+    ///
+    /// 每次调用都会**重置**计时(`hideTask?.cancel()` 后重新排),所以
+    /// 「指针移动 → 显示 → 静止 → 隐藏」是一个自然的循环。
+    /// `canAutoHide` 为假时(暂停、缓冲、播完、指针停在控制栏上…)到点也不会收。
     private func revealControls(autoHide: Bool = true, delay: TimeInterval = Metrics.autoHideDelay) {
         if !controlsVisible { controlsVisible = true }
         hideTask?.cancel()
@@ -482,29 +498,42 @@ struct PlayerWindowView: View {
 
 // MARK: - 标题栏 / 屏显提示 / 播完卡片
 
-/// 顶部标题:剧名 + 「S1E2 · 集名」+ 播放方式与预计结束时间。
+/// 顶部标题:**一行**,剧集是「剧名 + S1E2 · 集名」两级,电影只有标题。
 /// 居中放置,避开左上角的红绿灯。
+///
+/// **只有标题,没有别的。** 原先这里还有第三行「直接串流 · MKV · 1.25× ·
+/// 21:35 结束」,2026-10-02 删掉了,理由不是「和统计 overlay 重复」那么简单:
+///
+/// - 播放方式 / 容器格式是**诊断信息**。统计 overlay(按 I)是用户主动索取,
+///   顶栏是环境信息、视线扫过。把诊断字段放在视觉最顶层,等于让所有人在
+///   所有时间都看只有少数人需要的东西 —— mpv 同样把 cache 指示器放在
+///   OSC 标题行,但那一整行**随鼠标移动出现、静止即消失**,本质是调试面板。
+/// - 倍速已有更好的落点:控制栏的常驻按钮 + 改速瞬间的 OSD 提示。
+/// - 预计结束时刻移到了进度条的切换态(见 `PlayerScrubber`)。
+///
+/// 层级归属的调研依据见 `UI_DESIGN.md` 5.1;逐家播放器对照见那里的表。
 struct PlayerTitleBar: View {
     let viewModel: PlayerViewModel
 
     var body: some View {
-        VStack(spacing: Metrics.spacingXS) {
+        // 剧集是两级排版(剧名 / 集号集名),电影只有一级 —— 用 `HStack` 的
+        // baseline 对齐,⛔ 不要改成 `VStack` 上下两行:那是把 SwiftUI 的
+        // 单行两级排版当两行用,白白多占一行动画高度。
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingS) {
             Text(title)
                 .font(.headline)
             if let subtitle {
                 Text(subtitle)
                     .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            PlayerInfoLine(viewModel: viewModel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .lineLimit(1)
-        .multilineTextAlignment(.center)
+        .truncationMode(.tail)
         .frame(maxWidth: .infinity)
         .padding(.top, Metrics.spacingS)
         .padding(.horizontal, Metrics.spacingXL * 4)
-        .padding(.bottom, Metrics.spacingXL * 2)
+        .padding(.bottom, Metrics.spacingXL)
         .background(
             LinearGradient(colors: [.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
         )
@@ -523,42 +552,6 @@ struct PlayerTitleBar: View {
             .compactMap { $0 }
             .joined(separator: " · ")
             .nilIfEmpty
-    }
-}
-
-/// 「直接串流 · MKV · 1.25× · 21:35 结束」。单独成视图:它读播放位置,
-/// 每 0.2s 重算一次,不该把整个标题栏带着一起重算。
-private struct PlayerInfoLine: View {
-    let viewModel: PlayerViewModel
-
-    var body: some View {
-        Text(parts.joined(separator: " · "))
-    }
-
-    private var parts: [String] {
-        var parts: [String] = []
-        if let session = viewModel.session {
-            parts.append(session.plan.method.displayName)
-            if let container = session.mediaSource.container, !container.isEmpty {
-                parts.append(container.uppercased())
-            }
-        }
-        if abs(viewModel.speed - 1) > 0.001 {
-            parts.append(PlayerViewModel.speedText(viewModel.speed))
-        }
-        if let endsAt {
-            parts.append("\(endsAt.formatted(date: .omitted, time: .shortened)) 结束")
-        }
-        return parts
-    }
-
-    /// 按剩余时长与倍速推算的结束时刻;时长未知或已播完时不显示。
-    private var endsAt: Date? {
-        let remaining = viewModel.durationSeconds - viewModel.positionSeconds
-        guard viewModel.durationSeconds > 0, remaining > 0, viewModel.speed > 0, !viewModel.isEnded else {
-            return nil
-        }
-        return Date().addingTimeInterval(remaining / viewModel.speed)
     }
 }
 

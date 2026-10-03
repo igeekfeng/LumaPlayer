@@ -132,6 +132,31 @@ final class PlayerViewModelTests: XCTestCase {
         await viewModel.waitUntilReportingFinished()
     }
 
+    // MARK: - 转码 seek 的合并起流
+
+    /// 关窗 / 切媒体后,待起流的合并 seek 必须被作废。
+    ///
+    /// ⛔ 这条防的是「已经过了 sleep 的任务」:`stop()` 里 `cancel()` 对它无效,
+    /// 只靠 `restartEpoch` 代次门拦住 —— 没有它,关窗后 0.25 秒会自己起流。
+    /// `isRestarting` 同时被复位,UI 不会一直挂在「正在从新位置起流…」。
+    func testStopCancelsPendingTranscodeSeekMerge() async throws {
+        let viewModel = try makeViewModel()
+        XCTAssertFalse(viewModel.isRestarting)
+
+        viewModel.stop()
+        // stop() 之后再等一拍:若合并没有被作废,这里会看到 isRestarting 转回 true
+        try await Task.sleep(for: .milliseconds(
+            Int(Metrics.seekRestartMergeDelay * 1000) + 120))
+        XCTAssertFalse(viewModel.isRestarting, "关窗后不该还有待起流的 seek")
+    }
+
+    /// 合并窗口必须短到感觉不到,又长到足以吃掉连点 —— 0.25 秒是这个取舍的落点。
+    /// 太短则连点仍会各起一次流(等于没合并),太长则单次 seek 会明显延迟。
+    func testSeekMergeDelayStaysInSensibleRange() {
+        XCTAssertGreaterThan(Metrics.seekRestartMergeDelay, 0.1)
+        XCTAssertLessThanOrEqual(Metrics.seekRestartMergeDelay, 0.4)
+    }
+
     // MARK: - 显示器休眠断言(GitHub issue #1)
 
     /// 断言跟着播放状态走:起播持、暂停放、恢复再持、播完放。

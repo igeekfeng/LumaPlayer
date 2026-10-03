@@ -142,6 +142,10 @@ final class PlayerViewModel {
     private var reportingFinishTask: Task<Void, Never>?
     /// 合并后的倍速上报任务(拖滑块时只留最后一次)
     private var rateReportTask: Task<Void, Never>?
+    /// 转码 seek 合并后的重新起流任务(连点时只留最后一次)
+    private var seekRestartTask: Task<Void, Never>?
+    /// 每次「重新起流 / 收尾」自增。合并任务用它判断自己是否已被作废。
+    private var restartEpoch = 0
 
     /// 播放会话代次。每次 `stop()` +1,用来丢弃上一轮播放器的迟到事件。
     ///
@@ -270,6 +274,13 @@ final class PlayerViewModel {
         // 待发的倍速上报属于已经结束的会话:Stopped 之前的最终 Progress 会带上倍速
         rateReportTask?.cancel()
         rateReportTask = nil
+        // 待起流的合并 seek 同样作废:关窗 / 切媒体后不能再自己起流。
+        // 代次 +1 是给「已经过了 sleep、cancel 对它无效」的那个任务兜底。
+        // `restartStream` 内部也会 stop(),那属于新一轮,不能在这里取消自己。
+        seekRestartTask?.cancel()
+        seekRestartTask = nil
+        restartEpoch &+= 1
+        isRestarting = false
         stopUpNextCountdown()
         scrubPreviewSeconds = nil
         player?.shutdown()
@@ -331,6 +342,11 @@ final class PlayerViewModel {
     /// ⛔ 两种播放方式的 seek **不是同一件事**(API_CONTRACT.md 4.5):
     /// DirectStream 是静态文件,交给 mpv seek;转码流不能客户端 seek,
     /// 必须停流 + `StartTimeTicks` 重新起一路流。
+    ///
+    /// 转码这条路径**带合并**:一次重新起流是 ~4 个请求,而连点前进 / 后退
+    /// 会把同一个动作按次触发 `seekRepeatMaxMultiple` 次。合并后连点只在
+    /// 停下来时起一次流(`seekRestartMergeDelay`)。`positionSeconds` 仍
+    /// 立即更新 —— 进度条与 tooltip 要马上响应,不能等起流。
     func seek(to seconds: Double) {
         guard let session else { return }
         let target = max(0, min(seconds, durationSeconds > 0 ? durationSeconds : seconds))
@@ -346,7 +362,32 @@ final class PlayerViewModel {
             pushState()
             reportNow(.timeUpdate)
         } else {
-            restartStream(at: target)
+            scheduleRestartStream(at: target)
+        }
+    }
+
+    /// 转码 seek 的合并起流:等 `seekRestartMergeDelay` 内没有新的 seek 再起流。
+    ///
+    /// ⛔ 拖动进度条**也要走合并**:拖动松手只触发一次 seek,合并不影响它;
+    /// 但转码下拖动的 `onChanged` 期间 `displayed` 已经变了,若同时有残留的
+    /// 待执行任务,两者会以不同的目标位置起流,这里统一收敛到最后一次。
+    private func scheduleRestartStream(at seconds: Double) {
+        seekRestartTask?.cancel()
+        isRestarting = true
+        restartEpoch &+= 1
+        let epoch = restartEpoch
+        seekRestartTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(
+                    Int(Metrics.seekRestartMergeDelay * 1000)))
+            } catch {
+                return
+            }
+            // 三重判据:任务没被取消、self 还在、代次没被 stop() / 新 seek 推进。
+            // 最后一条是关键 —— stop() 会 cancel 本任务并清空引用,但已经
+            // 通过 sleep 的任务不会因此被取消,不加代次就会在关窗后自己起流。
+            guard let self, !Task.isCancelled, self.restartEpoch == epoch else { return }
+            self.restartStream(at: seconds)
         }
     }
 
@@ -711,9 +752,11 @@ final class PlayerViewModel {
     /// 转码 seek 的重新起流:结束旧上报会话 → 拆掉 mpv(连接断开即停流)
     /// → 以新的 StartTimeTicks 重新走一遍准备流程(4.5)。
     private func restartStream(at seconds: Double) {
-        isRestarting = true
         // stop() 内部会发最终 Progress + Stopped(6.6:切换流即结束旧会话)
         stop()
+        // ⛔ 必须在 stop() **之后**置位:stop() 会把待起流任务取消并复位
+        // isRestarting,写在前面会被它冲掉。
+        isRestarting = true
         startSeconds = seconds
         didApplyStartOffset = false
         didBeginReporting = false
