@@ -20,6 +20,8 @@ enum MPVPlayerEvent: Sendable, Equatable {
     /// 静音状态(`UI_DESIGN.md` 5.3 的 M 键)
     case muted(Bool)
     case speed(Double)
+    /// `sub-delay` 读回值(秒,正 = 字幕延后显示;MPV_INTEGRATION.md 7.1)
+    case subtitleDelay(Double)
     /// `track-list` 的完整快照(音轨/字幕菜单与 5.1 的轨道索引)
     case trackList([MPVTrack])
     /// 文件播放结束(eof=自然播完;stop=外部停止;error=加载/播放失败)

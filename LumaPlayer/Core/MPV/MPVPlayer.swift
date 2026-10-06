@@ -192,6 +192,8 @@ final class MPVPlayer: @unchecked Sendable {
         // track-list 是 NODE:一次拿到全部轨道,比逐个读 track-list/N/* 便宜。
         ("track-list", MPV_FORMAT_NODE),
         ("mute", MPV_FORMAT_FLAG),
+        // 字幕延迟(MPV_INTEGRATION.md 7.1):读回值驱动屏显与菜单里的当前值
+        ("sub-delay", MPV_FORMAT_DOUBLE),
     ]
 
     /// GL 符号解析回调(ctx = `openGLFramework` 的 dlopen 句柄)。
@@ -415,6 +417,39 @@ final class MPVPlayer: @unchecked Sendable {
     /// 选字幕轨:设 `sid` = track id;传 nil 表示关字幕(`sid` = `no`)。
     func selectSubtitleTrack(id: Int?) throws {
         try setStringProperty("sid", id.map(String.init) ?? "no")
+    }
+
+    // MARK: - 字幕延迟与外观(MPV_INTEGRATION.md 7.1)
+
+    /// 字幕延迟(秒,`sub-delay`,RW):正值 = 字幕晚于画面出现,负值 = 提前。
+    /// 只作用于 mpv 自己渲染的字幕轨;服务端烧录进画面的字幕(转码)调不动。
+    func setSubtitleDelay(_ seconds: Double) throws {
+        try withLiveHandle { handle, _ in
+            var v = seconds
+            let err = mpv_set_property(handle, "sub-delay", MPV_FORMAT_DOUBLE, &v)
+            guard err >= 0 else { throw mpvFailure(err, "设置 sub-delay") }
+        }
+    }
+
+    /// 一组字幕外观属性(`sub-scale` / `sub-color` / `sub-border-style` …)。
+    /// 值由 `SubtitleStyle.mpvProperties` 生成;全是运行时可改的选项属性,
+    /// 播放中改也立即生效。
+    ///
+    /// 只放行 `sub-` 前缀:这是给字幕外观开的口子,⛔ 不是通用的「随便设个属性」,
+    /// 业务代码借它绕过封装去改别的选项会让本类型的状态机失去意义。
+    /// 中途某一项被拒即抛错,前面已设上的保持生效(mpv 无批量事务)。
+    func setSubtitleProperties(_ properties: [(name: String, value: String)]) throws {
+        try withLiveHandle { handle, _ in
+            for (name, value) in properties {
+                guard name.hasPrefix("sub-") else {
+                    throw MPVError.commandFailed(
+                        code: MPV_ERROR_INVALID_PARAMETER.rawValue,
+                        message: "setSubtitleProperties 只接受 sub-* 属性,收到 \(name)")
+                }
+                let err = mpv_set_property_string(handle, name, value)
+                guard err >= 0 else { throw mpvFailure(err, "设置 \(name)=\(value)") }
+            }
+        }
     }
 
     // MARK: - 轮询读取(统计信息 / 缓冲进度)
@@ -785,6 +820,10 @@ final class MPVPlayer: @unchecked Sendable {
         case ("speed", MPV_FORMAT_DOUBLE):
             guard let data = property.data else { return }
             submitEvent(.speed(data.assumingMemoryBound(to: Double.self).pointee))
+
+        case ("sub-delay", MPV_FORMAT_DOUBLE):
+            guard let data = property.data else { return }
+            submitEvent(.subtitleDelay(data.assumingMemoryBound(to: Double.self).pointee))
 
         case ("hwdec-current", MPV_FORMAT_STRING):
             guard let data = property.data else { return }

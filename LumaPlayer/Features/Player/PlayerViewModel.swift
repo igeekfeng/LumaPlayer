@@ -58,6 +58,18 @@ final class PlayerViewModel {
     /// 转码 seek 正在重新起流(4.5):与首次取播放信息区分开,便于 UI 给准话
     private(set) var isRestarting = false
 
+    // MARK: - 字幕延迟(MPV_INTEGRATION.md 7.1)
+
+    /// 字幕延迟(秒,mpv `sub-delay` 读回值):正 = 字幕延后出现,负 = 提前。
+    private(set) var subtitleDelay: Double = 0
+    /// 用户要的字幕延迟。与 `subtitleDelay` 分开存,原因有二:
+    /// - 新建的 mpv 一律是 0,转码 seek 重新起流 / 重试都要把它设回去;
+    /// - 连按 Z / X 时读回值还没回来,按读回值步进会丢步。
+    ///
+    /// 只活在这一集里:延迟是「这个文件的字幕和画面差多少」,换一集(新 ViewModel)
+    /// 就是另一个文件,⛔ 不跨集沿用、不持久化 —— 与倍速的「同一部剧沿用」不同。
+    private var requestedSubtitleDelay: Double = 0
+
     // MARK: - 体验打磨(倍速 / 缓冲 / 播完 / 下一集 / 屏显提示)
 
     /// 播放速率(mpv `speed` 读回值,不是设置值)。
@@ -337,6 +349,97 @@ final class PlayerViewModel {
             let reason = String(describing: error)
             Self.logger.error(
                 "倍速 \(startup, privacy: .public)× 设回新建播放器失败,本集按 1× 起播:\(reason, privacy: .public)")
+        }
+    }
+
+    // MARK: 字幕延迟
+
+    /// 当前能不能调字幕延迟:要有会话,且选中了一条字幕轨 ——
+    /// 字幕关着时调了也看不出效果,菜单与快捷键一律不响应,免得留下看不见的状态。
+    var canAdjustSubtitleDelay: Bool {
+        session != nil && selectedSubtitleTrackID != nil
+    }
+
+    /// 设字幕延迟(秒),夹在 `Metrics.subtitleDelayRange` 内。
+    /// 播放器还没建起来时照样记下,新 mpv 建好后由 `applySubtitleSettings` 设上。
+    func setSubtitleDelay(_ seconds: Double) {
+        let target = Self.clampedSubtitleDelay(seconds)
+        do { try player?.setSubtitleDelay(target) } catch { return }
+        requestedSubtitleDelay = target
+        flash(Self.subtitleDelayText(target), systemImage: "captions.bubble")
+    }
+
+    /// Z / X(`step` 默认 `Metrics.subtitleDelayStep`,⇧ 为 `subtitleDelayLargeStep`)。
+    /// 从「要的值」步进而不是读回值,理由见 `requestedSubtitleDelay`。
+    func stepSubtitleDelay(later: Bool, step: Double = Metrics.subtitleDelayStep) {
+        guard canAdjustSubtitleDelay else { return }
+        setSubtitleDelay(requestedSubtitleDelay + (later ? step : -step))
+    }
+
+    func resetSubtitleDelay() {
+        guard canAdjustSubtitleDelay else { return }
+        setSubtitleDelay(0)
+    }
+
+    /// 夹到区间并抹到两位小数(0.1 一步连加会累出 `0.30000000000000004`)。
+    /// 非有限值不该出现;真出现时归零。
+    static func clampedSubtitleDelay(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        let clamped = min(max(value, Metrics.subtitleDelayRange.lowerBound),
+                          Metrics.subtitleDelayRange.upperBound)
+        let rounded = (clamped * 100).rounded() / 100
+        // -0.0 显示成「提前 0 秒」,统一成 0
+        return rounded == 0 ? 0 : rounded
+    }
+
+    /// 屏显用:「字幕延后 0.3 秒」「字幕提前 1.5 秒」「字幕无延迟」。
+    /// 用「延后 / 提前」而不是正负号:`+0.3` 到底是字幕快了还是慢了,没人记得住。
+    static func subtitleDelayText(_ seconds: Double) -> String {
+        guard seconds != 0 else { return "字幕无延迟" }
+        return "字幕\(seconds > 0 ? "延后" : "提前") \(subtitleDelaySeconds(abs(seconds))) 秒"
+    }
+
+    /// 菜单里的当前值:「+0.3 秒」「-1.5 秒」「0 秒」
+    static func subtitleDelayValueText(_ seconds: Double) -> String {
+        guard seconds != 0 else { return "0 秒" }
+        return "\(seconds > 0 ? "+" : "-")\(subtitleDelaySeconds(abs(seconds))) 秒"
+    }
+
+    private static func subtitleDelaySeconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX")))
+    }
+
+    // MARK: 字幕外观
+
+    /// 把当前的字幕外观偏好套到 mpv 上。设置窗口里改了外观之后由播放窗口调用
+    /// (`PlayerWindowView` 的 onChange),新建 mpv 时也走这里。
+    func applySubtitleStyle() {
+        guard let player else { return }
+        applySubtitleStyle(container.subtitleStyles.style, to: player)
+    }
+
+    private func applySubtitleStyle(_ style: SubtitleStyle, to player: MPVPlayer) {
+        do {
+            try player.setSubtitleProperties(style.mpvProperties)
+        } catch {
+            // 外观设不上不影响能不能播,不挂到 failure 上;但要留痕,
+            // 否则「设置改了没反应」无从查起。
+            Self.logger.error("字幕外观设置失败: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// 新建的 mpv:字幕延迟是 0、外观是 mpv 默认,把本集的延迟与外观偏好设上。
+    /// 与 `applyRememberedSpeed` 同理,⛔ 要在挂事件桥**之前**调用 ——
+    /// 桥挂上后推的第一次 `sub-delay` 就是目标值,屏显不会先闪一下 0。
+    private func applySubtitleSettings(to player: MPVPlayer) {
+        applySubtitleStyle(container.subtitleStyles.style, to: player)
+        guard requestedSubtitleDelay != 0 else { return }
+        do {
+            try player.setSubtitleDelay(requestedSubtitleDelay)
+        } catch {
+            let delay = requestedSubtitleDelay
+            Self.logger.error(
+                "字幕延迟 \(delay, privacy: .public) 秒设回新建播放器失败: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -738,6 +841,7 @@ final class PlayerViewModel {
 
             // 新 mpv 默认 1×:把这部剧记下的倍速设回去,要在挂事件桥之前(见方法注释)。
             applyRememberedSpeed(to: player)
+            applySubtitleSettings(to: player)
 
             let generation = self.generation
             let bridge = MPVEventBridge { [weak self] event in
@@ -951,6 +1055,11 @@ final class PlayerViewModel {
             // 停手 `Metrics.speedReportDelay` 后再发,值取最后那次。
             // `pushState()` 每次都走,10 秒一次的 Progress 里倍速不会缺。
             scheduleRateChangeReport()
+
+        case .subtitleDelay(let value):
+            // 不上报:5.1 的 `SubtitleOffset` 单位未核实(KNOWN_ISSUES.md Q39),
+            // 发错单位比不发更糟 —— 服务端会把它当成真值转给远程控制端。
+            subtitleDelay = value
 
         case .buffering(let value):
             isBuffering = value

@@ -54,6 +54,7 @@ struct PlayerCommands: Commands {
             Divider()
 
             subtitleMenu
+            subtitleDelayMenu
             audioMenu
 
             Divider()
@@ -110,6 +111,20 @@ struct PlayerCommands: Commands {
             }
         } else {
             Menu("字幕") {}.disabled(true)
+        }
+    }
+
+    /// Z / X 提前 / 延后 0.1 秒,⇧ 为 1 秒(与 mpv 默认键位一致,UI_DESIGN.md 5.3)。
+    /// 按住会连发 —— 和方向键 seek 不同,改 `sub-delay` 是纯本地操作,没有请求开销。
+    @ViewBuilder
+    private var subtitleDelayMenu: some View {
+        if let player {
+            Menu("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(player.subtitleDelay))") {
+                PlayerSubtitleDelayButtons(viewModel: player, withShortcuts: true)
+            }
+            .disabled(!player.canAdjustSubtitleDelay)
+        } else {
+            Menu("字幕延迟") {}.disabled(true)
         }
     }
 

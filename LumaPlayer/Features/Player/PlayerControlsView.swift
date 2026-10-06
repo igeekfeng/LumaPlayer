@@ -391,8 +391,16 @@ struct PlayerSpeedControl: View {
 /// Plex 也是 `S` 字幕 / `A` 音轨分开;合并成一个菜单会让人多找一次。
 ///
 /// 用 `Picker` 而不是手画勾:系统菜单的勾选态 VoiceOver 能读出「已选择」(8.3)。
+///
+/// 轨道下面是**字幕延迟**与「字幕外观…」入口。延迟只给步进按钮、不给滑块:
+/// 菜单里放不了可交互控件(见 `PlayerSpeedControl`),而且延迟要的是 0.1 秒级的微调,
+/// 连续调主要靠 Z / X(菜单栏「播放 › 字幕延迟」,按住可连发),这里是给鼠标用户的入口。
+/// 外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
 struct PlayerSubtitleMenu: View {
     let viewModel: PlayerViewModel
+
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
 
     var body: some View {
         Menu {
@@ -406,6 +414,17 @@ struct PlayerSubtitleMenu: View {
                 }
             }
             .pickerStyle(.inline)
+
+            Section("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(viewModel.subtitleDelay))") {
+                PlayerSubtitleDelayButtons(viewModel: viewModel)
+            }
+
+            Divider()
+
+            Button("字幕外观…") {
+                settingsTab = .subtitles
+                openSettings()
+            }
         } label: {
             Image(systemName: symbol)
                 .font(.title3)
@@ -424,6 +443,46 @@ struct PlayerSubtitleMenu: View {
     /// 有选中轨道时用实心图标,和「关着」区分得开 —— 与音量按钮同一套做法。
     private var symbol: String {
         viewModel.selectedSubtitleTrackID == nil ? "captions.bubble" : "captions.bubble.fill"
+    }
+}
+
+/// 字幕延迟的提前 / 延后 / 重置。控制栏的字幕菜单与菜单栏「播放 › 字幕延迟」共用,
+/// 快捷键只挂在菜单栏那份上(`PlayerCommands`),这里挂会注册第二遍。
+struct PlayerSubtitleDelayButtons: View {
+    let viewModel: PlayerViewModel
+    /// 菜单栏那份要带快捷键;控制栏里的不带
+    var withShortcuts = false
+
+    var body: some View {
+        Group {
+            Button("提前 \(Self.seconds(Metrics.subtitleDelayStep)) 秒") {
+                viewModel.stepSubtitleDelay(later: false)
+            }
+            .keyboardShortcut(shortcut("z", []))
+            Button("延后 \(Self.seconds(Metrics.subtitleDelayStep)) 秒") {
+                viewModel.stepSubtitleDelay(later: true)
+            }
+            .keyboardShortcut(shortcut("x", []))
+            Button("提前 \(Self.seconds(Metrics.subtitleDelayLargeStep)) 秒") {
+                viewModel.stepSubtitleDelay(later: false, step: Metrics.subtitleDelayLargeStep)
+            }
+            .keyboardShortcut(shortcut("z", .shift))
+            Button("延后 \(Self.seconds(Metrics.subtitleDelayLargeStep)) 秒") {
+                viewModel.stepSubtitleDelay(later: true, step: Metrics.subtitleDelayLargeStep)
+            }
+            .keyboardShortcut(shortcut("x", .shift))
+            Button("重置字幕延迟") { viewModel.resetSubtitleDelay() }
+                .disabled(viewModel.subtitleDelay == 0)
+        }
+        .disabled(!viewModel.canAdjustSubtitleDelay)
+    }
+
+    private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
+        withShortcuts ? KeyboardShortcut(key, modifiers: modifiers) : nil
+    }
+
+    private static func seconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...1)))
     }
 }
 

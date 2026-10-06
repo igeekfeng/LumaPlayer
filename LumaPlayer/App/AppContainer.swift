@@ -17,13 +17,22 @@ final class AppContainer {
     /// 放在组合根上是刻意的:换视频 / 换集都会新建 `PlayerViewModel`,
     /// 记在 ViewModel 里跨不过去;而记在这里就恰好是「本次运行」的寿命。
     let playbackSpeeds = PlaybackSpeedStore()
+    /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
+    /// 必须是同一个实例,播放中改设置才能即时生效。
+    let subtitleStyles: SubtitleStyleStore
     /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话
     private let session: URLSession
 
-    init(registry: ServerRegistry, credentials: CredentialStore, session: URLSession = .shared) {
+    init(
+        registry: ServerRegistry,
+        credentials: CredentialStore,
+        session: URLSession = .shared,
+        preferences: UserDefaults = .standard
+    ) {
         self.registry = registry
         self.credentials = credentials
         self.session = session
+        self.subtitleStyles = SubtitleStyleStore(defaults: preferences)
     }
 
     /// 生产组装:沙盒容器里的凭据文件 + UserDefaults(.standard)。

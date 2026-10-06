@@ -139,6 +139,10 @@ struct PlayerWindowView: View {
         .onChange(of: viewModel.floatsOnTop) { _, floats in
             window.setFloating(floats)
         }
+        .onChange(of: container.subtitleStyles.style) {
+            // 设置窗口里改了字幕外观:正在播的这一集立即套用(新建的 mpv 由 ViewModel 自己设)
+            viewModel.applySubtitleStyle()
+        }
         .onChange(of: viewModel.scrubPreviewSeconds) { _, preview in
             // 横滑拖进度时把控制栏叫出来,进度条跟着预览位置走
             if preview != nil { revealControls() }
@@ -182,6 +186,15 @@ struct PlayerWindowView: View {
             return .handled
         }
         .onKeyPress("i") { viewModel.toggleStatistics(); return .handled }
+        // 字幕延迟:Z 提前 / X 延后,⇧ 为大步长。按 characters 匹配,⇧ 时收到的是大写
+        .onKeyPress(characters: CharacterSet(charactersIn: "zxZX"), phases: [.down, .repeat]) { press in
+            guard viewModel.canAdjustSubtitleDelay else { return .ignored }
+            let key = press.characters
+            viewModel.stepSubtitleDelay(
+                later: key.lowercased() == "x",
+                step: key == key.uppercased() ? Metrics.subtitleDelayLargeStep : Metrics.subtitleDelayStep)
+            return .handled
+        }
         .onKeyPress("f") { toggleFullScreen(); return .handled }
         .onKeyPress(.escape) {
             guard window.isFullScreen else { return .ignored }

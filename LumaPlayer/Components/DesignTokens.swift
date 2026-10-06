@@ -46,6 +46,10 @@ enum Metrics {
     /// 设置窗口的尺寸(「服务器」标签页要放得下一行的名称 / 地址 / 账户 / 版本)
     static let settingsWindowWidth: CGFloat = 560
     static let settingsWindowHeight: CGFloat = 420
+    /// 设置页滑块右侧数值标签的最小宽度(「100%」「上移 25%」不随数值宽窄跳动)
+    static let settingsValueWidth: CGFloat = 64
+    /// 设置页颜色色块的直径(字幕颜色预设)
+    static let colorSwatchSize: CGFloat = 22
 
     // MARK: 播放器控制栏
 
@@ -109,6 +113,13 @@ enum Metrics {
     static let speedKeyStep: Double = 0.1
     /// 连续调倍速时的上报合并窗口(见 `PlayerViewModel.scheduleRateChangeReport`)
     static let speedReportDelay: TimeInterval = 0.5
+    /// 字幕延迟区间(秒)。mpv 本身不设限;±60 秒已远超「同一个文件的字幕对不齐」的量级,
+    /// 再大就是字幕配错了版本,调偏移救不回来
+    static let subtitleDelayRange: ClosedRange<Double> = -60...60
+    /// Z / X 的字幕延迟步长(mpv 默认键位也是 0.1 秒)
+    static let subtitleDelayStep: Double = 0.1
+    /// ⇧Z / ⇧X 的大步长:差好几秒时不用连按几十下
+    static let subtitleDelayLargeStep: Double = 1
     /// 播放器图标按钮的点击区域边长(控制栏与菜单按钮一致,避免图标宽窄不一导致跳动)
     static let playerButtonSize: CGFloat = 32
     /// 屏显提示(OSD,如「1.25×」「字幕:中文」)停留时长

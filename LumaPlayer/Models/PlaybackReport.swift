@@ -7,8 +7,10 @@ import Foundation
 /// 这里用可选字段表达:`eventName` 仅在 Progress 请求里非 nil,
 /// 其余端点编码时省略(`encodeIfPresent`)。
 ///
-/// 不使用的字段(`SubtitleOffset` / `LiveStreamId` / `PlaylistIndex` /
-/// `PlaylistLength`)按 5.1 的「不使用」标注直接不建模,而不是发 null。
+/// 不使用的字段(`LiveStreamId` / `PlaylistIndex` / `PlaylistLength`)按 5.1 的
+/// 「不使用」标注直接不建模,而不是发 null。
+/// `SubtitleOffset` 同样不建模,但原因不同:字幕延迟功能已有,只是官方没写这个字段的
+/// **单位**(KNOWN_ISSUES.md Q39)—— 发错单位比不发更糟,核实后再补。
 struct PlaybackReportBody: Encodable, Sendable, Equatable {
     let itemID: String
     let mediaSourceID: String
