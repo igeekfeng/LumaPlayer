@@ -53,21 +53,12 @@ struct BrowseView: View {
         NavigationStack(path: $path) {
             rootPage
         }
-        // 工具栏与搜索框声明在**导航栈**上(而不是各页上):每一页都能搜索;
-        // 服务器切换器不上详情页(见 `toolbarContent`)。
+        // 工具栏声明在**导航栈**上(而不是各页上):每一页共用;
+        // 服务器切换器不上详情页(见 `toolbarContent`)。搜索框不在这里,见 `searchField`。
         .toolbar { toolbarContent }
         // 详情页是一整页 hero(详情页用 `backgroundExtensionEffect` 把背景图铺到标题栏下面):
         // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(UI_DESIGN.md 6.2)。
         .toolbarBackgroundVisibility(isShowingDetail ? .hidden : .automatic, for: .windowToolbar)
-        // 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
-        // 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
-        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索电影与剧集")
-        .onSubmit(of: .search) {
-            searchSubmission += 1
-            // 结果页直接叠在首页上(替换掉栈上原有的页):从详情页里搜索也不会被压在下面,
-            // 返回一次就回到首页
-            path = [.search(term: searchText, submission: searchSubmission)]
-        }
         // 设置窗口里增 / 改 / 删服务器后重读,菜单里的名称跟着变
         .task(id: container.state.serverListRevision) { await reloadServers() }
         .onChange(of: container.state.currentServer?.id) {
@@ -114,8 +105,10 @@ struct BrowseView: View {
                 onOpenLibrary: { path.append(.library($0)) },
                 refreshToken: refreshToken
             )
+            .modifier(searchField)
             .navigationDestination(for: BrowseRoute.self) { route in
                 page(for: route, server: server)
+                    .modifier(searchField)
             }
         } else {
             ContentUnavailableView(
@@ -197,6 +190,19 @@ struct BrowseView: View {
         }
     }
 
+    /// 工具栏搜索框,栈根与每个 push 上来的页都要挂(PITFALLS.md 第 4 节)。
+    ///
+    /// ⚠️ 不能像 `.toolbar` 那样挂在 `NavigationStack` 外面:macOS 27 上那样挂
+    /// 搜索框整个不出现(2026-10-01 从 `NavigationSplitView` 改成 `NavigationStack` 时丢的)。
+    private var searchField: ToolbarSearchField {
+        ToolbarSearchField(text: $searchText) {
+            searchSubmission += 1
+            // 结果页直接叠在首页上(替换掉栈上原有的页):从详情页里搜索也不会被压在下面,
+            // 返回一次就回到首页
+            path = [.search(term: searchText, submission: searchSubmission)]
+        }
+    }
+
     // MARK: - 动作
 
     private func openItem(_ item: EmbyItem) {
@@ -248,5 +254,19 @@ struct BrowseView: View {
 
     private var currentServerName: String {
         container.state.currentServer?.displayName ?? "未选择服务器"
+    }
+}
+
+/// 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
+/// 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
+/// 各页共用同一份 `text`,push / 返回时输入框里的字不丢。
+private struct ToolbarSearchField: ViewModifier {
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .searchable(text: $text, placement: .toolbar, prompt: "搜索电影与剧集")
+            .onSubmit(of: .search, onSubmit)
     }
 }
