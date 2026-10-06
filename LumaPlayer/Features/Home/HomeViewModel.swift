@@ -242,6 +242,18 @@ final class HomeViewModel {
         })
     }
 
+    /// 等已发出的任务全部结束:加载、媒体库列表回来后才追加的「最新」、
+    /// 静默刷新、「移出继续观看」的写请求。`load` 是发出去就返回的,
+    /// 测试据此确定时序,不靠睡一个固定时长去赌请求已经回来。
+    /// 等待期间新追加的任务也会等到;没有在途任务时立即返回。
+    func waitUntilIdle() async {
+        var finished: Set<Task<Void, Never>> = []
+        while let next = tasks.first(where: { !finished.contains($0) }) {
+            await next.value
+            finished.insert(next)
+        }
+    }
+
     /// 所有分区都加载完且都为空。
     ///
     /// 媒体库列表还没回来时不算空:「最新」的行要等它回来才知道有几行。

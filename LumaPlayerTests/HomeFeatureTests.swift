@@ -58,7 +58,7 @@ final class HomeFeatureTests: XCTestCase {
         let (viewModel, server) = try await makeHomeViewModel()
 
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(50))
+        await viewModel.waitUntilIdle()
 
         let views = try XCTUnwrap(viewModel.sections(for: server.id).views.state.value)
         XCTAssertEqual(views.count, 3)
@@ -82,12 +82,12 @@ final class HomeFeatureTests: XCTestCase {
         )
         let (viewModel, server) = try await makeHomeViewModel()
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(50))
+        await viewModel.waitUntilIdle()
         let before = viewModel.sections(for: server.id).latest
         XCTAssertFalse(before.isEmpty)
 
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(50))
+        await viewModel.waitUntilIdle()
 
         let after = viewModel.sections(for: server.id).latest
         XCTAssertEqual(Set(after.keys), Set(before.keys))
@@ -207,7 +207,7 @@ final class HomeFeatureTests: XCTestCase {
         )
         let (viewModel, server) = try await makeHomeViewModel()
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
         XCTAssertEqual(before.count, 3)
 
@@ -215,7 +215,7 @@ final class HomeFeatureTests: XCTestCase {
 
         let after = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
         XCTAssertEqual(after.map(\.id), [before[0].id, before[2].id])
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         XCTAssertNil(viewModel.resumeActionError)
     }
 
@@ -231,11 +231,11 @@ final class HomeFeatureTests: XCTestCase {
         )
         let (viewModel, server) = try await makeHomeViewModel()
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
 
         viewModel.hideFromResume(before[1], server: server)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
 
         let after = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
         XCTAssertEqual(after.map(\.id), before.map(\.id))
@@ -251,7 +251,7 @@ final class HomeFeatureTests: XCTestCase {
         )
         let (viewModel, server) = try await makeHomeViewModel()
         viewModel.load(server: server)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
 
         // 第二次 load:同步返回时状态仍是 loaded(不闪 loading)
@@ -260,7 +260,7 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(try loadedResumeItems(viewModel, server: server).map(\.id), before.map(\.id))
 
         // 刷新失败:保留旧内容,不换成错误态
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         XCTAssertEqual(try loadedResumeItems(viewModel, server: server).map(\.id), before.map(\.id))
     }
 
@@ -279,14 +279,14 @@ final class HomeFeatureTests: XCTestCase {
         let (viewModel, serverA) = try await makeHomeViewModel()
         let serverB = try await makeServer(host: "emby-b.test")
         viewModel.load(server: serverA)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         let before = try XCTUnwrap(loadedResumeItems(viewModel, server: serverA))
 
         viewModel.load(server: serverB)
         guard case .loading = viewModel.sections(for: serverB.id).resume.state else {
             return XCTFail("B 首次加载应是 loading,不能露出 A 的内容")
         }
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         XCTAssertTrue(try loadedResumeItems(viewModel, server: serverB).isEmpty)
 
         // 切回 A:同步返回时就是 A 上次的内容
@@ -302,14 +302,14 @@ final class HomeFeatureTests: XCTestCase {
         let (viewModel, serverA) = try await makeHomeViewModel()
         let serverB = try await makeServer(host: "emby-b.test")
         viewModel.load(server: serverA)
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
         let loadedA = try XCTUnwrap(viewModel.sections(for: serverA.id).views.state.value)
 
         viewModel.load(server: serverB)
         guard case .loading = viewModel.sections(for: serverB.id).views.state else {
             return XCTFail("B 首次加载应是 loading")
         }
-        try await Task.sleep(for: .milliseconds(20))
+        await viewModel.waitUntilIdle()
 
         viewModel.load(server: serverA)
         XCTAssertEqual(viewModel.sections(for: serverA.id).views.state.value?.map(\.id), loadedA.map(\.id))
@@ -321,10 +321,13 @@ final class HomeFeatureTests: XCTestCase {
         let state = viewModel.sections(for: server.id).resume.state
         guard case .loaded(let items) = state else {
             XCTFail("继续观看应在加载完成状态,实际 \(state)")
-            throw CancellationError()
+            // 只为中止当前用例;别用 CancellationError,会被误读成加载任务被取消
+            throw ResumeNotLoaded()
         }
         return items
     }
+
+    private struct ResumeNotLoaded: Error {}
 
     private func makeHomeViewModel() async throws -> (HomeViewModel, ServerProfile) {
         let profile = try await makeServer(host: "emby.test")
