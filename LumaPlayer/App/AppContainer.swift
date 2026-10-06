@@ -13,6 +13,10 @@ final class AppContainer {
     /// 接口响应缓存:所有服务器共用一个实例,按 serverID 隔离。
     /// 注入给每台服务器的 `ServerConnection`,登录重建连接后缓存仍有效。
     let responseCache = EmbyResponseCache()
+    /// 「同一部剧沿用同一个倍速」的内存记录(`PlaybackSpeedStore`)。
+    /// 放在组合根上是刻意的:换视频 / 换集都会新建 `PlayerViewModel`,
+    /// 记在 ViewModel 里跨不过去;而记在这里就恰好是「本次运行」的寿命。
+    let playbackSpeeds = PlaybackSpeedStore()
     /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话
     private let session: URLSession
 

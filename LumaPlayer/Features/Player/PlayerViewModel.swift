@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// `LoadFailure` 也能表示「服务端给了响应但没有可播路径」
 /// (这类失败要可解释,不能只显示“播放失败”)。
@@ -59,8 +60,15 @@ final class PlayerViewModel {
 
     // MARK: - 体验打磨(倍速 / 缓冲 / 播完 / 下一集 / 屏显提示)
 
-    /// 播放速率(mpv `speed` 读回值,不是设置值)
+    /// 播放速率(mpv `speed` 读回值,不是设置值)。
+    /// 「同一部剧沿用同一个倍速」的意图记在 `container.playbackSpeeds` 里,
+    /// 新建 mpv 时由 `applyRememberedSpeed` 设回去。
     private(set) var speed: Double = 1
+
+    /// 本次起播要用的倍速:这部剧记过就用它,没记过就是 1×。
+    /// ⛔ 不落 `UserDefaults` —— 重启 App 从 1× 开始(见 `PlaybackSpeedStore`)。
+    /// 仅供测试与日志观察,播放决策在 `applyRememberedSpeed` 里。
+    var startupSpeed: Double { container.playbackSpeeds.speed(for: item, on: server) ?? 1 }
     /// 播放中因缓存不足暂停(mpv `paused-for-cache`)
     private(set) var isBuffering = false
     /// 已自然播完(`end-file` reason = eof)。重播 / 重试时复位。
@@ -307,7 +315,29 @@ final class PlayerViewModel {
     func setSpeed(_ value: Double) {
         let target = Self.clampedSpeed(value)
         do { try player?.setSpeed(target) } catch { return }
+        // 记住用户的选择:同一部剧的下一集、转码 seek 重新起流都从它起播。
+        // 播放器还没建起来(仍在取播放信息)时照样记 —— 那个值会在新 mpv 上生效。
+        container.playbackSpeeds.remember(target, for: item, on: server)
         flash(Self.speedText(target), systemImage: "gauge.with.dots.needle.67percent")
+    }
+
+    /// 新建的 mpv 一律是 1×,把这部剧记下的倍速设回去(KNOWN_ISSUES 旧条目
+    /// 「倍速在新建播放器后回到 1×」)。换集、重新起流、重试都走这里。
+    ///
+    /// ⛔ 必须在挂事件桥**之前**调用:桥一挂上 mpv 就会推一次当前值,
+    /// 先设好,读回来的就是目标倍速,屏显与上报都不会先闪一下 1×。
+    private func applyRememberedSpeed(to player: MPVPlayer) {
+        let startup = startupSpeed
+        guard startup != 1 else { return }
+        do {
+            try player.setSpeed(startup)
+        } catch {
+            // 设不回去只是本集退回 1×,不影响能不能播,所以不挂到 failure 上;
+            // 但也不能一声不响 —— 记下来,免得以后排障时以为「倍速本来就该保留」。
+            let reason = String(describing: error)
+            Self.logger.error(
+                "倍速 \(startup, privacy: .public)× 设回新建播放器失败,本集按 1× 起播:\(reason, privacy: .public)")
+        }
     }
 
     /// 按步长加 / 减(`[` `]` 与倍速浮层的 ±);已经贴着区间端点就不动。
@@ -706,6 +736,9 @@ final class PlayerViewModel {
                 return
             }
 
+            // 新 mpv 默认 1×:把这部剧记下的倍速设回去,要在挂事件桥之前(见方法注释)。
+            applyRememberedSpeed(to: player)
+
             let generation = self.generation
             let bridge = MPVEventBridge { [weak self] event in
                 self?.handle(event, generation: generation)
@@ -748,6 +781,9 @@ final class PlayerViewModel {
 
     /// GL 渲染上下文的等待上限(2s,与开发期渲染 spike 的实测值一致)。
     private static let glAttachTimeout: TimeInterval = 2
+
+    /// 倍速设不回新建播放器时的排障出口(与 `DisplaySleepAssertion` 同一个子系统)。
+    private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "playback")
 
     /// 转码 seek 的重新起流:结束旧上报会话 → 拆掉 mpv(连接断开即停流)
     /// → 以新的 StartTimeTicks 重新走一遍准备流程(4.5)。

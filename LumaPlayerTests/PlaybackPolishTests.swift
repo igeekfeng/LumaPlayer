@@ -3,6 +3,7 @@ import XCTest
 
 /// 播放打磨(2026-09-24 追加):片头 / 片尾标记、续播回退、触控板横滑预览、
 /// 统计信息格式化、播放偏好持久化、上一集查找。
+/// 2026-10-06 追加:同一部剧沿用的倍速记忆(`PlaybackSpeedStore`)。
 ///
 /// 与 `PlayerExperienceTests` 同一原则:只验不需要 mpv、不需要网络的部分。
 /// ⛔ 按钮位置、倒计时的实际观感、触控板手感、置顶窗口是 UI 行为,
@@ -235,6 +236,77 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertNil(NextEpisodeResolver.item(before: "X", in: episodes))
     }
 
+    // MARK: - 倍速记忆(同一部剧沿用同一个倍速)
+
+    /// 决策(2026-10-06):同一部**剧集**沿用同一个倍速,不同剧集 / 电影各算各的,
+    /// 重启 App 回到 1×。这里只验「记在哪、给谁用」;真正写回 mpv 的那一步要 mpv,
+    /// 不在这里假覆盖(`player` 为 nil 时控制方法本来就是空操作)。
+    func testSpeedIsRememberedPerSeries() throws {
+        let container = try makeContainer()
+        let server = makeServer()
+        let first = try makeViewModel(
+            container: container, server: server, item: try episode("E1", series: "S1"))
+        XCTAssertEqual(first.startupSpeed, 1, "没设过就是 1×")
+
+        first.setSpeed(1.5)
+
+        let nextEpisode = try makeViewModel(
+            container: container, server: server, item: try episode("E2", series: "S1"))
+        XCTAssertEqual(nextEpisode.startupSpeed, 1.5, "同一部剧的下一集沿用")
+
+        let otherSeries = try makeViewModel(
+            container: container, server: server, item: try episode("E9", series: "S2"))
+        XCTAssertEqual(otherSeries.startupSpeed, 1, "换一部剧不带过去")
+
+        let otherMovie = try makeViewModel(
+            container: container, server: server, item: try movie("M1"))
+        XCTAssertEqual(otherMovie.startupSpeed, 1, "电影之间互不影响")
+    }
+
+    /// 电影没有 `SeriesId`,判定键退化成「这一项自己的 `Id`」:同一个 Id 重开仍沿用。
+    func testSpeedScopeFallsBackToItemIDWithoutSeries() throws {
+        let container = try makeContainer()
+        let server = makeServer()
+        XCTAssertEqual(PlaybackSpeedStore.scopeID(for: try episode("E1", series: "S1")), "S1")
+        XCTAssertEqual(PlaybackSpeedStore.scopeID(for: try movie("M1")), "M1")
+
+        try makeViewModel(container: container, server: server, item: try movie("M1")).setSpeed(2)
+        XCTAssertEqual(
+            try makeViewModel(container: container, server: server, item: try movie("M1")).startupSpeed,
+            2)
+    }
+
+    /// 记的是夹取之后的值:滑块越界 / 浮点尾数不该原样带给后面几集。
+    func testRememberedSpeedIsTheClampedValue() throws {
+        let viewModel = try makeViewModel(item: try episode("E1", series: "S1"))
+        viewModel.setSpeed(9)
+        XCTAssertEqual(viewModel.startupSpeed, 4)
+    }
+
+    /// 手动调回 1× = 撤销记忆:后面的集数不该再自己弹回之前设过的高倍速。
+    func testBackToNormalSpeedForgetsTheSeries() throws {
+        let container = try makeContainer()
+        let server = makeServer()
+        let viewModel = try makeViewModel(
+            container: container, server: server, item: try episode("E1", series: "S1"))
+        viewModel.setSpeed(2)
+        viewModel.setSpeed(1)
+        XCTAssertEqual(
+            try makeViewModel(container: container, server: server, item: try episode("E2", series: "S1"))
+                .startupSpeed,
+            1)
+    }
+
+    /// 每台服务器完全隔离:不同服务器上的 Item Id 可能撞车,不隔离会串台。
+    func testRememberedSpeedIsScopedPerServer() throws {
+        let container = try makeContainer()
+        let series = try episode("E1", series: "S1")
+        try makeViewModel(container: container, server: makeServer("a.test"), item: series).setSpeed(1.75)
+        XCTAssertEqual(
+            try makeViewModel(container: container, server: makeServer("b.test"), item: series).startupSpeed,
+            1)
+    }
+
     // MARK: - 辅助
 
     private func chapter(_ seconds: Double, _ marker: String) -> EmbyChapter {
@@ -248,19 +320,40 @@ final class PlaybackPolishTests: XCTestCase {
         try JSONDecoder().decode(EmbyItem.self, from: Data(json.utf8))
     }
 
-    private func makeViewModel(item: EmbyItem? = nil, startFromBeginning: Bool = false) throws -> PlayerViewModel {
+    private func episode(_ id: String, series: String) throws -> EmbyItem {
+        try decodeItem(#"{"Id":"\#(id)","Name":"\#(id)","Type":"Episode","SeriesId":"\#(series)"}"#)
+    }
+
+    private func movie(_ id: String) throws -> EmbyItem {
+        try decodeItem(#"{"Id":"\#(id)","Name":"\#(id)","Type":"Movie"}"#)
+    }
+
+    /// 每次都是新容器 = 新的一次「App 运行」;要验跨集沿用就自己传同一个进来。
+    private func makeContainer() throws -> AppContainer {
         let registry = try ServerRegistry(
             defaults: UserDefaults(suiteName: "test.LumaPlayer.polish.registry.\(UUID().uuidString)")!,
             credentials: credentials
         )
-        let profile = ServerProfile(
-            displayName: "emby.test",
-            baseURL: testURL("https://emby.test"),
+        return AppContainer(registry: registry, credentials: credentials)
+    }
+
+    private func makeServer(_ name: String = "emby.test") -> ServerProfile {
+        ServerProfile(
+            displayName: name,
+            baseURL: testURL("https://\(name)"),
             deviceID: "DEVICE-UUID-1"
         )
-        return PlayerViewModel(
-            container: AppContainer(registry: registry, credentials: credentials),
-            server: profile,
+    }
+
+    private func makeViewModel(
+        container: AppContainer? = nil,
+        server: ServerProfile? = nil,
+        item: EmbyItem? = nil,
+        startFromBeginning: Bool = false
+    ) throws -> PlayerViewModel {
+        PlayerViewModel(
+            container: try container ?? makeContainer(),
+            server: server ?? makeServer(),
             item: try item ?? decodeItem(#"{"Id":"ITEM-1","Name":"测试影片","Type":"Movie"}"#),
             startFromBeginning: startFromBeginning,
             defaults: defaults
