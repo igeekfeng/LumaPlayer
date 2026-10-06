@@ -394,7 +394,7 @@ struct PlayerSpeedControl: View {
 ///
 /// 轨道下面是**字幕延迟**与「字幕外观…」入口。延迟只给步进按钮、不给滑块:
 /// 菜单里放不了可交互控件(见 `PlayerSpeedControl`),而且延迟要的是 0.1 秒级的微调,
-/// 连续调主要靠 Z / X(菜单栏「播放 › 字幕延迟」,按住可连发),这里是给鼠标用户的入口。
+/// 连续调主要靠 Z / X(菜单栏「Playback › Subtitle Delay」,按住可连发),这里是给鼠标用户的入口。
 /// 外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
 struct PlayerSubtitleMenu: View {
     let viewModel: PlayerViewModel
@@ -446,39 +446,48 @@ struct PlayerSubtitleMenu: View {
     }
 }
 
-/// 字幕延迟的提前 / 延后 / 重置。控制栏的字幕菜单与菜单栏「播放 › 字幕延迟」共用,
+/// 字幕延迟的提前 / 延后 / 重置。控制栏的字幕菜单与菜单栏「Playback › Subtitle Delay」共用,
 /// 快捷键只挂在菜单栏那份上(`PlayerCommands`),这里挂会注册第二遍。
+/// 菜单栏那份用英文,与系统菜单一致(见 `PlayerCommands`)。
 struct PlayerSubtitleDelayButtons: View {
     let viewModel: PlayerViewModel
-    /// 菜单栏那份要带快捷键;控制栏里的不带
-    var withShortcuts = false
+    /// 菜单栏那份:带快捷键、英文文案;控制栏里的不带快捷键、中文文案
+    var inMenuBar = false
 
     var body: some View {
         Group {
-            Button("提前 \(Self.seconds(Metrics.subtitleDelayStep)) 秒") {
+            Button(earlier(Metrics.subtitleDelayStep)) {
                 viewModel.stepSubtitleDelay(later: false)
             }
             .keyboardShortcut(shortcut("z", []))
-            Button("延后 \(Self.seconds(Metrics.subtitleDelayStep)) 秒") {
+            Button(later(Metrics.subtitleDelayStep)) {
                 viewModel.stepSubtitleDelay(later: true)
             }
             .keyboardShortcut(shortcut("x", []))
-            Button("提前 \(Self.seconds(Metrics.subtitleDelayLargeStep)) 秒") {
+            Button(earlier(Metrics.subtitleDelayLargeStep)) {
                 viewModel.stepSubtitleDelay(later: false, step: Metrics.subtitleDelayLargeStep)
             }
             .keyboardShortcut(shortcut("z", .shift))
-            Button("延后 \(Self.seconds(Metrics.subtitleDelayLargeStep)) 秒") {
+            Button(later(Metrics.subtitleDelayLargeStep)) {
                 viewModel.stepSubtitleDelay(later: true, step: Metrics.subtitleDelayLargeStep)
             }
             .keyboardShortcut(shortcut("x", .shift))
-            Button("重置字幕延迟") { viewModel.resetSubtitleDelay() }
+            Button(inMenuBar ? "Reset Subtitle Delay" : "重置字幕延迟") { viewModel.resetSubtitleDelay() }
                 .disabled(viewModel.subtitleDelay == 0)
         }
         .disabled(!viewModel.canAdjustSubtitleDelay)
     }
 
+    private func earlier(_ step: Double) -> String {
+        inMenuBar ? "Earlier by \(Self.seconds(step)) s" : "提前 \(Self.seconds(step)) 秒"
+    }
+
+    private func later(_ step: Double) -> String {
+        inMenuBar ? "Later by \(Self.seconds(step)) s" : "延后 \(Self.seconds(step)) 秒"
+    }
+
     private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
-        withShortcuts ? KeyboardShortcut(key, modifiers: modifiers) : nil
+        inMenuBar ? KeyboardShortcut(key, modifiers: modifiers) : nil
     }
 
     private static func seconds(_ value: Double) -> String {
@@ -518,7 +527,7 @@ struct PlayerAudioMenu: View {
 }
 
 /// 低频的播放偏好:自动跳过片头、自动播下一集、置顶、统计信息。
-/// 与菜单栏「播放」菜单里的同名项是同一份状态。
+/// 与菜单栏「Playback」菜单里的对应项是同一份状态。
 struct PlayerOptionsMenu: View {
     @Bindable var viewModel: PlayerViewModel
 

@@ -6,7 +6,10 @@ extension FocusedValues {
     @Entry var playerViewModel: PlayerViewModel?
 }
 
-/// 菜单栏「播放」菜单(播放快捷键和菜单)。
+/// 菜单栏「Playback」菜单(播放快捷键和菜单)。
+///
+/// 文案用英文:App 只声明了 en,系统自带的 File / Edit / View… 都是英文,
+/// 这里跟着它们,菜单栏不中英混排。App 内的界面仍是中文。
 ///
 /// 快捷键与 `PlayerWindowView` 的按键处理一致(UI_DESIGN.md 5.3)。
 /// 方向键 seek 不挂在菜单上:菜单快捷键按住会连发,而转码模式下
@@ -15,8 +18,8 @@ struct PlayerCommands: Commands {
     @FocusedValue(\.playerViewModel) private var player
 
     var body: some Commands {
-        CommandMenu("播放") {
-            Button(player?.isPaused == false ? "暂停" : "播放") {
+        CommandMenu("Playback") {
+            Button(player?.isPaused == false ? "Pause" : "Play") {
                 player?.togglePlayPause()
             }
             .keyboardShortcut(.space, modifiers: [])
@@ -24,30 +27,30 @@ struct PlayerCommands: Commands {
 
             Divider()
 
-            Button("后退 \(Int(Metrics.seekStep)) 秒") { player?.skip(by: -Metrics.seekStep) }
+            Button("Skip Back \(Int(Metrics.seekStep)) Seconds") { player?.skip(by: -Metrics.seekStep) }
                 .disabled(player?.session == nil)
-            Button("前进 \(Int(Metrics.seekStep)) 秒") { player?.skip(by: Metrics.seekStep) }
+            Button("Skip Forward \(Int(Metrics.seekStep)) Seconds") { player?.skip(by: Metrics.seekStep) }
                 .disabled(player?.session == nil)
 
             Divider()
 
-            Button("加快") { player?.stepSpeed(up: true) }
+            Button("Speed Up") { player?.stepSpeed(up: true) }
                 .keyboardShortcut("]", modifiers: [])
                 .disabled(player?.session == nil)
-            Button("减慢") { player?.stepSpeed(up: false) }
+            Button("Slow Down") { player?.stepSpeed(up: false) }
                 .keyboardShortcut("[", modifiers: [])
                 .disabled(player?.session == nil)
-            Button("正常速度") { player?.setSpeed(1) }
+            Button("Normal Speed") { player?.setSpeed(1) }
                 .keyboardShortcut("\\", modifiers: [])
                 .disabled(player?.session == nil)
 
             Divider()
 
-            Button("调高音量") { player?.adjustVolume(by: Metrics.volumeStep) }
+            Button("Volume Up") { player?.adjustVolume(by: Metrics.volumeStep) }
                 .disabled(player?.session == nil)
-            Button("调低音量") { player?.adjustVolume(by: -Metrics.volumeStep) }
+            Button("Volume Down") { player?.adjustVolume(by: -Metrics.volumeStep) }
                 .disabled(player?.session == nil)
-            Button(player?.isMuted == true ? "取消静音" : "静音") { player?.toggleMute() }
+            Button(player?.isMuted == true ? "Unmute" : "Mute") { player?.toggleMute() }
                 .keyboardShortcut("m", modifiers: [])
                 .disabled(player?.session == nil)
 
@@ -59,13 +62,13 @@ struct PlayerCommands: Commands {
 
             Divider()
 
-            Button("跳过片头") { player?.skipIntro() }
+            Button("Skip Intro") { player?.skipIntro() }
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(player?.isSkipIntroAvailable != true)
-            Button("上一集") { player?.playPreviousEpisode() }
+            Button("Previous Episode") { player?.playPreviousEpisode() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
                 .disabled(player?.previousEpisode == nil)
-            Button("下一集") { player?.playNextEpisode() }
+            Button("Next Episode") { player?.playNextEpisode() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
                 .disabled(player?.nextEpisode == nil)
 
@@ -80,37 +83,37 @@ struct PlayerCommands: Commands {
     private var preferenceToggles: some View {
         if let player {
             @Bindable var player = player
-            Toggle("自动跳过片头", isOn: $player.autoSkipIntro)
-            Toggle("自动播放下一集", isOn: $player.autoPlayNext)
-            Toggle("窗口置顶", isOn: $player.floatsOnTop)
+            Toggle("Skip Intro Automatically", isOn: $player.autoSkipIntro)
+            Toggle("Play Next Episode Automatically", isOn: $player.autoPlayNext)
+            Toggle("Float on Top", isOn: $player.floatsOnTop)
                 .keyboardShortcut("t", modifiers: [.command, .option])
-            Toggle("显示统计信息", isOn: Binding(
+            Toggle("Show Statistics", isOn: Binding(
                 get: { player.showsStatistics },
                 set: { _ in player.toggleStatistics() }
             ))
             .keyboardShortcut("i", modifiers: [])
         } else {
-            Toggle("自动跳过片头", isOn: .constant(false)).disabled(true)
-            Toggle("自动播放下一集", isOn: .constant(false)).disabled(true)
-            Toggle("窗口置顶", isOn: .constant(false)).disabled(true)
-            Toggle("显示统计信息", isOn: .constant(false)).disabled(true)
+            Toggle("Skip Intro Automatically", isOn: .constant(false)).disabled(true)
+            Toggle("Play Next Episode Automatically", isOn: .constant(false)).disabled(true)
+            Toggle("Float on Top", isOn: .constant(false)).disabled(true)
+            Toggle("Show Statistics", isOn: .constant(false)).disabled(true)
         }
     }
 
     @ViewBuilder
     private var subtitleMenu: some View {
         if let player, !player.subtitleTracks.isEmpty {
-            Picker("字幕", selection: Binding<Int?>(
+            Picker("Subtitles", selection: Binding<Int?>(
                 get: { player.selectedSubtitleTrackID },
                 set: { player.selectSubtitleTrack($0) }
             )) {
-                Text("关闭").tag(Int?.none)
+                Text("Off").tag(Int?.none)
                 ForEach(player.subtitleTracks) { track in
                     Text(track.displayName).tag(Int?.some(track.id))
                 }
             }
         } else {
-            Menu("字幕") {}.disabled(true)
+            Menu("Subtitles") {}.disabled(true)
         }
     }
 
@@ -119,19 +122,19 @@ struct PlayerCommands: Commands {
     @ViewBuilder
     private var subtitleDelayMenu: some View {
         if let player {
-            Menu("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(player.subtitleDelay))") {
-                PlayerSubtitleDelayButtons(viewModel: player, withShortcuts: true)
+            Menu("Subtitle Delay: \(PlayerViewModel.subtitleDelayValueText(player.subtitleDelay, unit: "s"))") {
+                PlayerSubtitleDelayButtons(viewModel: player, inMenuBar: true)
             }
             .disabled(!player.canAdjustSubtitleDelay)
         } else {
-            Menu("字幕延迟") {}.disabled(true)
+            Menu("Subtitle Delay") {}.disabled(true)
         }
     }
 
     @ViewBuilder
     private var audioMenu: some View {
         if let player, !player.audioTracks.isEmpty {
-            Picker("音轨", selection: Binding<Int?>(
+            Picker("Audio", selection: Binding<Int?>(
                 get: { player.selectedAudioTrackID },
                 set: { id in if let id { player.selectAudioTrack(id) } }
             )) {
@@ -140,7 +143,7 @@ struct PlayerCommands: Commands {
                 }
             }
         } else {
-            Menu("音轨") {}.disabled(true)
+            Menu("Audio") {}.disabled(true)
         }
     }
 }

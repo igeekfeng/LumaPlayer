@@ -224,6 +224,8 @@ final class SubtitleSettingsTests: XCTestCase {
         XCTAssertEqual(PlayerViewModel.subtitleDelayValueText(2), "+2 秒")
         XCTAssertEqual(PlayerViewModel.subtitleDelayValueText(-0.25), "-0.25 秒")
         XCTAssertEqual(PlayerViewModel.subtitleDelayValueText(0), "0 秒")
+        XCTAssertEqual(PlayerViewModel.subtitleDelayValueText(-0.25, unit: "s"), "-0.25 s")
+        XCTAssertEqual(PlayerViewModel.subtitleDelayValueText(0, unit: "s"), "0 s")
     }
 
     /// `sub-delay` 读回事件驱动 `subtitleDelay`,与其他事件一样受代次门约束。

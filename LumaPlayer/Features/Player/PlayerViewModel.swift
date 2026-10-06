@@ -400,9 +400,10 @@ final class PlayerViewModel {
     }
 
     /// 菜单里的当前值:「+0.3 秒」「-1.5 秒」「0 秒」
-    static func subtitleDelayValueText(_ seconds: Double) -> String {
-        guard seconds != 0 else { return "0 秒" }
-        return "\(seconds > 0 ? "+" : "-")\(subtitleDelaySeconds(abs(seconds))) 秒"
+    /// `unit`:App 内界面用「秒」;菜单栏是英文,传 `"s"`(见 `PlayerCommands`)
+    static func subtitleDelayValueText(_ seconds: Double, unit: String = "秒") -> String {
+        guard seconds != 0 else { return "0 \(unit)" }
+        return "\(seconds > 0 ? "+" : "-")\(subtitleDelaySeconds(abs(seconds))) \(unit)"
     }
 
     private static func subtitleDelaySeconds(_ value: Double) -> String {

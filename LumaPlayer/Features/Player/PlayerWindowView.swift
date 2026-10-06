@@ -154,7 +154,7 @@ struct PlayerWindowView: View {
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
         .onChange(of: viewModel.nextEpisode?.id) { nowPlaying.update(from: viewModel) }
         .task(id: viewModel.osd?.id) { await showOSD() }
-        // 快捷键按 UI_DESIGN.md 5.3。Space / M / [ ] / ⌘→ 同时挂在菜单栏「播放」菜单
+        // 快捷键按 UI_DESIGN.md 5.3。Space / M / [ ] / ⌘→ 同时挂在菜单栏「Playback」菜单
         // (PlayerCommands):菜单启用时按键先被菜单吃掉,下面的同名处理不会重复触发;
         // 这里保留它们,是为菜单未就绪(焦点值尚未传到菜单)时按键仍然可用。
         // 方向键只取 .down:按住不放时 .repeat 会连续触发 seek,而转码模式下
