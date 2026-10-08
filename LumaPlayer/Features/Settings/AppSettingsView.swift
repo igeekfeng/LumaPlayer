@@ -112,6 +112,14 @@ private struct PlaybackSettingsView: View {
             }
 
             Section {
+                Toggle("杜比视界 / HDR 兼容渲染", isOn: $preferences.preferGPUNextRenderer)
+            } header: {
+                Text("色彩")
+            } footer: {
+                Text("默认开:用 gpu-next(libplacebo)渲染,杜比视界片源才不会发紫发绿 —— 旧渲染器不处理 DV 的元数据。代价是硬件解码从零拷贝退成 copy-back,4K 高码率下可能更吃资源。关掉退回旧渲染器,只在 gpu-next 让别的片源出问题时才关。下一次开始播放时生效。")
+            }
+
+            Section {
                 Toggle("自动跳过片头", isOn: $preferences.autoSkipIntro)
                 Toggle("自动播放下一集", isOn: $preferences.autoPlayNext)
                 Toggle("窗口置顶", isOn: $preferences.floatsOnTop)

@@ -294,7 +294,7 @@
 					"@executable_path/../Frameworks",
 				);
 				OTHER_LDFLAGS = (
-					"/opt/homebrew/lib/libmpv.dylib",
+					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
 				);
 				OTHER_SWIFT_FLAGS = (
 					"-Xcc",
@@ -329,7 +329,7 @@
 					"@executable_path/../Frameworks",
 				);
 				OTHER_LDFLAGS = (
-					"/opt/homebrew/lib/libmpv.dylib",
+					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
 				);
 				OTHER_SWIFT_FLAGS = (
 					"-Xcc",

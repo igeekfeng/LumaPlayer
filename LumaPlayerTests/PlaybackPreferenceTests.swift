@@ -32,7 +32,19 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertFalse(store.autoSkipIntro, "默认给按钮,不自动跳")
         XCTAssertTrue(store.autoPlayNext, "默认开,可在「下一集」提示上取消")
         XCTAssertFalse(store.floatsOnTop)
+        XCTAssertTrue(store.preferGPUNextRenderer, "默认开:gpu-next 才处理得了 Dolby Vision / HDR")
         XCTAssertTrue(store.isDefault)
+    }
+
+    /// `preferGPUNextRenderer` 默认开,显式关掉要留得住 ——
+    /// ⛔ 读回时不能用 `bool(forKey:)`:没存过会读成 false,把默认值吃掉。
+    func testDisabledGPUNextRendererSurvivesReopening() {
+        let store = PlaybackPreferences(defaults: defaults)
+        store.preferGPUNextRenderer = false
+        XCTAssertFalse(store.isDefault, "关掉渲染后端开关算偏离默认")
+
+        let reopened = PlaybackPreferences(defaults: defaults)
+        XCTAssertFalse(reopened.preferGPUNextRenderer, "关掉后重开必须还是关")
     }
 
     // MARK: - 持久化
@@ -47,6 +59,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
+        store.preferGPUNextRenderer = false
         XCTAssertFalse(store.isDefault)
 
         let reopened = PlaybackPreferences(defaults: defaults)
@@ -57,6 +70,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertTrue(reopened.autoSkipIntro)
         XCTAssertFalse(reopened.autoPlayNext)
         XCTAssertTrue(reopened.floatsOnTop)
+        XCTAssertFalse(reopened.preferGPUNextRenderer)
     }
 
     func testResetRestoresDefaults() {
@@ -68,6 +82,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
+        store.preferGPUNextRenderer = false
 
         store.reset()
         XCTAssertTrue(store.isDefault)

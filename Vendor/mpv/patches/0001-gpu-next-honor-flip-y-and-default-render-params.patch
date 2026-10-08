@@ -1,0 +1,73 @@
+diff --git a/video/out/gpu_next/libmpv_gpu_next.c b/video/out/gpu_next/libmpv_gpu_next.c
+index 31c0cb5..3023bf7 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -136,7 +136,9 @@ static int render(struct render_backend *ctx, mpv_render_param *params,
+     if (!target_tex) return MPV_ERROR_GENERIC;
+ 
+     // Render the video frame.
+-    pl_video_render(p->video_engine, frame, target_tex);
++    bool flip = *(int *)get_mpv_render_param(params, MPV_RENDER_PARAM_FLIP_Y,
++                                             &(int){0});
++    pl_video_render(p->video_engine, frame, target_tex, flip);
+ 
+     // Destroy the temporary wrapper texture via the RA.
+     ra_next_tex_destroy(p->context->ra, &target_tex);
+diff --git a/video/out/gpu_next/video.c b/video/out/gpu_next/video.c
+index bb2e15e..7efdaf4 100644
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -318,12 +318,17 @@ static void update_overlays(struct pl_video *p, struct mp_osd_res res,
+  * @param frame The mpv frame to render, containing the current image.
+  * @param target_tex The destination GPU texture to render to.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     bool flip_y)
+ {
+     // Describe the target surface for libplacebo.
+     struct pl_frame target_frame = {
+         .num_planes = 1,
+-        .planes[0] = { .texture = target_tex, .components = 4, .component_mapping = {0,1,2,3} },
++        // MPV_RENDER_PARAM_FLIP_Y: OpenGL FBOs have a bottom-left origin. Flip the
++        // whole target plane (not the crop) so OSD overlays are flipped too, the
++        // same way vo_gpu_next handles flipped swapchain framebuffers.
++        .planes[0] = { .texture = target_tex, .components = 4, .component_mapping = {0,1,2,3},
++                       .flipped = flip_y },
+         .crop = { .x0 = p->current_dst.x0, .y0 = p->current_dst.y0, .x1 = p->current_dst.x1, .y1 = p->current_dst.y1 },
+         .color = pl_color_space_srgb,
+         .repr = pl_color_repr_rgb,
+@@ -389,10 +394,15 @@ void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_t
+     mix.vsync_duration = 1.0f;
+ 
+     // Prepare the rendering parameters for libplacebo
+-    struct pl_render_params params = {
+-        .upscaler = &pl_filter_nearest,
+-        .downscaler = &pl_filter_nearest,
+-    };
++    // Start from libplacebo's recommended defaults. Nearest-neighbour scaling
++    // shimmers badly on motion when e.g. 4K is downscaled to window size, and a
++    // zero-initialized struct also disables dithering and peak smoothing.
++    struct pl_render_params params = pl_render_default_params;
++    // ...but no frame mixer: the defaults enable `oversample`, while this backend
++    // feeds a hard-coded vsync_duration and pointer-based signatures that are
++    // not valid for temporal mixing. vo_gpu_next likewise only sets a mixer
++    // with --interpolation (off by default).
++    params.frame_mixer = NULL;
+ 
+     // Declare a local struct to hold the color adjustment values.
+     struct pl_color_adjustment color_adj;
+diff --git a/video/out/gpu_next/video.h b/video/out/gpu_next/video.h
+index 0f62ee2..fda6a33 100644
+--- a/video/out/gpu_next/video.h
++++ b/video/out/gpu_next/video.h
+@@ -26,7 +26,8 @@ void pl_video_uninit(struct pl_video **p_ptr);
+ /**
+  * Synchronously renders a video frame to a display target using libplacebo.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     bool flip_y);
+ 
+ /**
+  * Synchronously renders `frame` into an sRGB temporary and returns a newly

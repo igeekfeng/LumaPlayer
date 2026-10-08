@@ -49,6 +49,21 @@ final class PlaybackPreferences {
         didSet { persist(floatsOnTop, Key.floatsOnTop) }
     }
 
+    // MARK: - 色彩渲染
+
+    /// 优先用 `gpu-next` 渲染后端(libplacebo)。默认开。
+    ///
+    /// 开:能正确处理 Dolby Vision(Profile 5)与 HDR —— 关掉的话 DV 片源会
+    /// 发紫发绿(mpv 的 legacy `gpu` 渲染器不处理 DV 的 RPU)。
+    /// 关:退回 legacy `gpu` 渲染器。留这个开关是因为 gpu-next 走的是上游
+    /// **未合并的 draft PR**,万一它让别的片源出问题,用户能自己退回去。
+    /// 详见 docs/DECISIONS/gpu-next-render-backend.md。
+    ///
+    /// 起播时读一次(建 `MPVPlayer` 时),**下一次起播才生效**。
+    var preferGPUNextRenderer: Bool {
+        didSet { persist(preferGPUNextRenderer, Key.preferGPUNextRenderer) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.defaultSpeed = Self.speed(from: defaults)
@@ -58,6 +73,8 @@ final class PlaybackPreferences {
         self.autoSkipIntro = defaults.bool(forKey: Key.autoSkipIntro)
         self.autoPlayNext = defaults.object(forKey: Key.autoPlayNext) as? Bool ?? true
         self.floatsOnTop = defaults.bool(forKey: Key.floatsOnTop)
+        // ⛔ 不用 bool(forKey:):没存过时会读成 false,把默认值(开)吃掉。
+        self.preferGPUNextRenderer = defaults.object(forKey: Key.preferGPUNextRenderer) as? Bool ?? true
     }
 
     /// 全部回到出厂值。设置页「恢复默认」用。
@@ -69,13 +86,14 @@ final class PlaybackPreferences {
         autoSkipIntro = false
         autoPlayNext = true
         floatsOnTop = false
+        preferGPUNextRenderer = true
     }
 
     /// 是否有任何一项偏离默认(设置页「恢复默认」按钮的禁用判据)
     var isDefault: Bool {
         defaultSpeed == Self.defaultSpeed && seekStep == Metrics.seekStep
             && defaultVolume == Metrics.defaultVolume && subtitleMode == Self.defaultSubtitleMode
-            && !autoSkipIntro && autoPlayNext && !floatsOnTop
+            && !autoSkipIntro && autoPlayNext && !floatsOnTop && preferGPUNextRenderer
     }
 
     // MARK: - 默认值与夹取
@@ -94,6 +112,7 @@ final class PlaybackPreferences {
         static let autoSkipIntro = "player.autoSkipIntro"
         static let autoPlayNext = "player.autoPlayNext"
         static let floatsOnTop = "player.floatsOnTop"
+        static let preferGPUNextRenderer = "player.preferGPUNextRenderer"
     }
 
     @ObservationIgnored private let defaults: UserDefaults

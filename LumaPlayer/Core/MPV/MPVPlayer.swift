@@ -43,6 +43,12 @@ struct MPVPlayerStatistics: Sendable, Equatable {
     var updateFrameFlags = 0
     /// attachGLContext 是否成功创建过 GL 渲染上下文
     var glAttached = false
+    /// 实际使用的渲染后端：`"gpu-next"` / `"gpu"`(legacy 或回退)。
+    /// ⚠️ 这是**请求并成功建起**的后端名，不等于 mpv 内部一定用了它：
+    /// 实测后端名不被识别时 mpv 会静默退回默认 gpu 渲染器而不报错
+    /// (见 `createRenderContext` 注释)。要确证得看 mpv 日志里的
+    /// `Using gpu-next backend.` 行。
+    var renderBackend: String?
 }
 
 /// libmpv 的薄 Swift 封装(业务代码不得直接调 C API,MPV_INTEGRATION.md §1)。
@@ -205,9 +211,14 @@ final class MPVPlayer: @unchecked Sendable {
         return dlsym(frameworkHandle, name)
     }
 
+    /// 是否优先用 `gpu-next` 渲染后端(设置里的开关,见 `createRenderContext`)。
+    /// 关掉 = 只传 mpv 默认的 legacy `gpu` 渲染器(DV 会发紫发绿)。
+    private let preferGPUNextBackend: Bool
+
     // MARK: - 生命周期
 
-    init() {
+    init(preferGPUNextBackend: Bool = true) {
+        self.preferGPUNextBackend = preferGPUNextBackend
         _ = Self.loggedClientAPIVersion
 
         guard let handle = mpv_create() else {
@@ -478,6 +489,75 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
+    /// 渲染后端名(render.h 的 `MPV_RENDER_PARAM_BACKEND`)。
+    /// `gpu-next` 走 libplacebo,能正确处理 Dolby Vision(Profile 5)/ HDR;
+    /// legacy `gpu` 不行(DV 会发紫发绿)。详见
+    /// docs/DECISIONS/gpu-next-render-backend.md。
+    private static let gpuNextBackend = "gpu-next"
+    /// 走 mpv 默认渲染器(不传 BACKEND 参数)时统计里记的名字。
+    private static let legacyBackend = "gpu"
+
+    /// 用指定后端建 mpv 渲染上下文。`backend` 为 nil = 不传该参数,用 mpv 默认。
+    ///
+    /// ⚠️ 实测(mpv 0.41 + #16818):**后端名不认识时 mpv 不报错**,静默退回默认
+    /// gpu 渲染器并返回成功。所以「create 成功」不等于「gpu-next 真的生效」,
+    /// 回退逻辑不能只靠返回值判断。要确证得看 mpv 日志的
+    /// `Using gpu-next backend.` / `Using default gpu backend.` 行。
+    /// 调用方必须已持有 `renderMutex` 且该 GL context 在调用线程 current。
+    private func createRenderContext(
+        handle: OpaquePointer,
+        framework: UnsafeMutableRawPointer,
+        backend: String?
+    ) -> Result<OpaquePointer, MPVError> {
+        var initParams = mpv_opengl_init_params(
+            get_proc_address: getProcAddress,
+            get_proc_address_ctx: framework)
+        var renderContext: OpaquePointer?
+        var failure: MPVError?
+        withUnsafeMutableBytes(of: &initParams) { paramsPtr in
+            // MPV_RENDER_API_TYPE_OPENGL 是 #define 宏(render.h:468),
+            // Swift 不可见,值即 "opengl"
+            "opengl".withCString { typePtr in
+                // backend 的 C 字符串只需在 create 调用期间有效 —— mpv 在
+                // create 内即做 strcmp,withCString 的作用域已足够。
+                func makeParams(_ backendPtr: UnsafePointer<CChar>?) -> [mpv_render_param] {
+                    var params: [mpv_render_param] = [
+                        mpv_render_param(
+                            type: MPV_RENDER_PARAM_API_TYPE,
+                            data: UnsafeMutableRawPointer(mutating: typePtr)),
+                        mpv_render_param(
+                            type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                            data: paramsPtr.baseAddress),
+                    ]
+                    if let backendPtr {
+                        params.append(mpv_render_param(
+                            type: MPV_RENDER_PARAM_BACKEND,
+                            data: UnsafeMutableRawPointer(mutating: backendPtr)))
+                    }
+                    // 参数数组必须以 MPV_RENDER_PARAM_INVALID(=0)收尾
+                    params.append(mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil))
+                    return params
+                }
+                let err: Int32
+                if let backend {
+                    err = backend.withCString { ptr in
+                        var params = makeParams(ptr)
+                        return mpv_render_context_create(&renderContext, handle, &params)
+                    }
+                } else {
+                    var params = makeParams(nil)
+                    err = mpv_render_context_create(&renderContext, handle, &params)
+                }
+                if err < 0 {
+                    failure = mpvFailure(err, "mpv_render_context_create")
+                }
+            }
+        }
+        if let failure { return .failure(failure) }
+        guard let renderContext else { return .failure(.renderContextFailed("渲染上下文为空")) }
+        return .success(renderContext)
+    }
+
     /// 挂载 GL 渲染上下文(由 MPVGLLayer 在拿到自己的 CGL context 后调用)。
     /// 非抛出:失败置 failed 并记日志(layer 的 override 里不能抛)。
     ///
@@ -521,37 +601,26 @@ final class MPVPlayer: @unchecked Sendable {
                 state.cglContext = nil
             }
 
-            var initParams = mpv_opengl_init_params(
-                get_proc_address: getProcAddress,
-                get_proc_address_ctx: framework)
-            var renderContext: OpaquePointer?
-            var failure: MPVError?
-            withUnsafeMutableBytes(of: &initParams) { paramsPtr in
-                // MPV_RENDER_API_TYPE_OPENGL 是 #define 宏(render.h:468),
-                // Swift 不可见,值即 "opengl"
-                "opengl".withCString { typePtr in
-                    var params: [mpv_render_param] = [
-                        mpv_render_param(
-                            type: MPV_RENDER_PARAM_API_TYPE,
-                            data: UnsafeMutableRawPointer(mutating: typePtr)),
-                        mpv_render_param(
-                            type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
-                            data: paramsPtr.baseAddress),
-                        mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
-                    ]
-                    let err = mpv_render_context_create(&renderContext, handle.raw, &params)
-                    if err < 0 {
-                        failure = mpvFailure(err, "mpv_render_context_create")
-                    }
-                }
+            // 渲染后端:优先 gpu-next(libplacebo,DV/HDR 正确),建不起来就回退
+            // 到 mpv 默认的 legacy gpu —— 宁可 DV 发紫发绿也不能黑屏。
+            // ⚠️ 后端名不被识别时 mpv 静默退回默认 gpu 且返回成功(实测),
+            // 所以这里的回退只覆盖「create 真失败」,见 createRenderContext。
+            var backendUsed = preferGPUNextBackend ? Self.gpuNextBackend : Self.legacyBackend
+            var created = createRenderContext(
+                handle: handle.raw, framework: framework,
+                backend: preferGPUNextBackend ? Self.gpuNextBackend : nil)
+            if preferGPUNextBackend, case .failure(let error) = created {
+                logLine("[MPV] gpu-next 后端创建失败(\(error)),回退 legacy gpu 渲染器")
+                backendUsed = Self.legacyBackend
+                created = createRenderContext(handle: handle.raw, framework: framework, backend: nil)
             }
-            if let failure {
-                return .failure(failure)
-            }
-            guard let renderContext else {
-                return .failure(.renderContextFailed("渲染上下文为空"))
+            let renderContext: OpaquePointer
+            switch created {
+            case .success(let context): renderContext = context
+            case .failure(let error): return .failure(error)
             }
             state.renderContext = LockedPointer(renderContext)
+            state.stats.renderBackend = backendUsed
             // retain:layer 随时可能通过 releaseCGLContext: 还掉它自己那份
             // 引用(重建上下文、layer dealloc),而 shutdown 还要用它去
             // CGLSetCurrentContext。不 retain 就是 use-after-free。
