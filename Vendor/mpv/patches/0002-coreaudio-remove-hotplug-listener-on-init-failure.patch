@@ -1,0 +1,63 @@
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 4b4bf1d..60808f6 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -174,7 +174,7 @@ static int init(struct ao *ao)
+         init_physical_format(ao);
+ 
+     if (!ca_init_chmap(ao, p->device))
+-        goto coreaudio_error;
++        goto coreaudio_error_hotplug;
+ 
+     AudioStreamBasicDescription asbd;
+     ca_fill_asbd(ao, &asbd);
+@@ -185,7 +185,7 @@ static int init(struct ao *ao)
+     talloc_free(layout);
+ 
+     if (!r)
+-        goto coreaudio_error;
++        goto coreaudio_error_hotplug;
+ 
+     reinit_latency(ao);
+     ao->device_buffer = av_rescale(p->hw_latency_ns, ao->samplerate, 1000000000) * 2;
+@@ -195,6 +195,11 @@ static int init(struct ao *ao)
+ 
+     return CONTROL_OK;
+ 
++coreaudio_error_hotplug:
++    // A failed init() is never followed by uninit(): the core frees the ao
++    // right away (and may fall back to another driver). The listener must be
++    // removed here, or the next device change calls hotplug_cb on freed memory.
++    unregister_hotplug_cb(ao);
+ coreaudio_error:
+     return CONTROL_ERROR;
+ }
+@@ -498,7 +503,8 @@ static bool register_hotplug_cb(struct ao *ao)
+         return true;
+ 
+     OSStatus err = noErr;
+-    for (int i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
++    int i;
++    for (i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
+         AudioObjectPropertyAddress addr = {
+             hotplug_properties[i],
+             kAudioObjectPropertyScopeGlobal,
+@@ -517,6 +523,18 @@ static bool register_hotplug_cb(struct ao *ao)
+     return true;
+ 
+ coreaudio_error:
++    // Roll back the listeners already added, so a failed registration leaves
++    // nothing behind that points at this ao.
++    for (int j = i - 1; j >= 0; j--) {
++        AudioObjectPropertyAddress addr = {
++            hotplug_properties[j],
++            kAudioObjectPropertyScopeGlobal,
++            kAudioObjectPropertyElementMain
++        };
++        AudioObjectRemovePropertyListener(
++            kAudioObjectSystemObject, &addr, hotplug_cb, (void *)ao);
++    }
++    p->hotplug_cb_registration_times--;
+     return false;
+ }
+ 

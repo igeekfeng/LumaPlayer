@@ -89,6 +89,9 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 #   0001：gpu-next 后端无视 MPV_RENDER_PARAM_FLIP_Y（画面上下颠倒）；
 #         渲染参数写死最近邻缩放且零初始化（4K 缩到窗口时运动画面闪烁、无抖动）；
 #         改用 libplacebo 默认参数，但关掉帧混合（与 vo_gpu_next 默认一致）。
+#   0002：ao_coreaudio 的 init() 在注册设备热插拔监听之后失败时（如 5.1 片源 + 立体声设备，
+#         设声道布局报 -50，回退 avfoundation）不注销监听，ao 却被释放；之后任何音频设备
+#         变化（连蓝牙耳机）都会回调到野指针 → 崩溃。非 #16818 引入，上游代码本身的缺陷。
 # 上游修好后删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue
