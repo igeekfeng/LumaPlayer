@@ -206,7 +206,7 @@ final class PlayerViewModelTests: XCTestCase {
         title: String? = nil, selected: Bool = false
     ) -> MPVTrack {
         MPVTrack(id: id, type: type, selected: selected, title: title, lang: lang,
-                 codec: nil, isExternal: false)
+                 codec: nil, isExternal: false, isForced: false)
     }
 
     private func makeViewModel() throws -> PlayerViewModel {
@@ -224,7 +224,11 @@ final class PlayerViewModelTests: XCTestCase {
             from: Data(#"{"Id":"ITEM-1","Name":"测试影片","Type":"Movie"}"#.utf8)
         )
         return PlayerViewModel(
-            container: AppContainer(registry: registry, credentials: credentials),
+            container: AppContainer(
+                registry: registry,
+                credentials: credentials,
+                preferences: UserDefaults(suiteName: "test.LumaPlayer.player.prefs.\(UUID().uuidString)")!
+            ),
             server: profile,
             item: item,
             displaySleep: displaySleep

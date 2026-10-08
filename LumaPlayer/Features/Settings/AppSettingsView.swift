@@ -5,15 +5,17 @@ import SwiftUI
 /// 播放器字幕菜单的「字幕外观…」要先把它切到「字幕」再打开设置窗口。
 enum SettingsTab: String {
     case general
+    case playback
     case subtitles
     case servers
 
     static let storageKey = "settings.selectedTab"
 }
 
-/// 设置窗口(⌘,)。三个标签页:
+/// 设置窗口(⌘,)。四个标签页:
 ///
 /// - **通用**:网络(自定义 User-Agent);
+/// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
 /// - **服务器**:服务器管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`)。
 ///
@@ -29,6 +31,9 @@ struct AppSettingsView: View {
             GeneralSettingsView()
                 .tabItem { Label("通用", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
+            PlaybackSettingsView(preferences: container.preferences)
+                .tabItem { Label("播放", systemImage: "play.circle") }
+                .tag(SettingsTab.playback)
             SubtitleSettingsView(store: container.subtitleStyles)
                 .tabItem { Label("字幕", systemImage: "captions.bubble") }
                 .tag(SettingsTab.subtitles)
@@ -64,6 +69,97 @@ private struct GeneralSettingsView: View {
     }
 }
 
+/// 播放偏好(`PlaybackPreferences`):起播默认值 + 播放期开关,全部服务器共用。
+///
+/// 起播类的偏好(倍速 / 音量 / 字幕)**下一次起播才生效**,不追溯正在播放的那一集:
+/// 半途把画面上的倍速或音量改掉,比「我调了默认值,当前这集却跟着变」更难解释。
+/// 三个开关是同一份状态,在播放窗口的「播放选项」菜单里改也一样。
+private struct PlaybackSettingsView: View {
+    @Bindable var preferences: PlaybackPreferences
+
+    var body: some View {
+        Form {
+            Section {
+                SettingsValueSlider(
+                    title: "默认倍速", value: $preferences.defaultSpeed,
+                    range: Metrics.speedRange, step: Metrics.speedStep,
+                    text: PlayerViewModel.speedText(preferences.defaultSpeed))
+                Picker("跳转步长", selection: $preferences.seekStep) {
+                    ForEach(Metrics.seekStepOptions, id: \.self) { step in
+                        Text("\(Int(step)) 秒").tag(step)
+                    }
+                }
+                SettingsValueSlider(
+                    title: "默认音量", value: $preferences.defaultVolume,
+                    range: Metrics.volumeRange, step: Metrics.volumeStep,
+                    text: "\(Int(preferences.defaultVolume.rounded()))")
+            } header: {
+                Text("起播")
+            } footer: {
+                Text("下一次开始播放时生效,不影响正在播放的视频。倍速还有一个更高的优先级:同一部剧本次运行里调过倍速,下一集沿用调过的那个值。跳转步长同时是方向键、控制栏前后跳按钮与菜单栏里的步长。")
+            }
+
+            Section {
+                Picker("起播字幕", selection: $preferences.subtitleMode) {
+                    ForEach(SubtitleMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+            } header: {
+                Text("字幕")
+            } footer: {
+                Text(preferences.subtitleMode.detail + "只决定起播时自动选哪条轨,播放中手动选过之后以手动的为准。字幕外观在「字幕」页。")
+            }
+
+            Section {
+                Toggle("自动跳过片头", isOn: $preferences.autoSkipIntro)
+                Toggle("自动播放下一集", isOn: $preferences.autoPlayNext)
+                Toggle("窗口置顶", isOn: $preferences.floatsOnTop)
+            } header: {
+                Text("片头与连播")
+            } footer: {
+                Text("自动跳过片头默认关:片头标记不准时自动跳会直接吃掉正片开头,所以先给「跳过片头」按钮。这三项与播放窗口「播放选项」菜单里的是同一份状态。")
+            }
+
+            Section {
+                HStack {
+                    Text("下次开始播放时生效。")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("恢复默认") { preferences.reset() }
+                        .disabled(preferences.isDefault)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// 设置页的数值滑杆:标题在左,滑块与等宽数值在右(数值宽度固定,不随位数跳动)。
+private struct SettingsValueSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let text: String
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: Metrics.spacingS) {
+                Slider(value: $value, in: range, step: step)
+                    .labelsHidden()
+                    .accessibilityLabel(title)
+                    .accessibilityValue(text)
+                Text(text)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: Metrics.settingsValueWidth, alignment: .trailing)
+            }
+        }
+    }
+}
+
 /// 字幕外观(`SubtitleStyle`):全部服务器共用,改完对正在播放的视频立即生效。
 ///
 /// ⛔ 不做「预览字幕」:SwiftUI 画出来的样子和 libass 的渲染(描边算法、字体回退、
@@ -74,8 +170,9 @@ private struct SubtitleSettingsView: View {
     var body: some View {
         Form {
             Section("文字") {
-                valueSlider(
-                    "字号", value: $store.style.scale, in: SubtitleStyle.scaleRange, step: 0.05,
+                SettingsValueSlider(
+                    title: "字号", value: $store.style.scale,
+                    range: SubtitleStyle.scaleRange, step: 0.05,
                     text: Self.percent(store.style.scale))
                 LabeledContent("颜色") { colorRow }
                 Toggle("粗体", isOn: $store.style.isBold)
@@ -89,14 +186,14 @@ private struct SubtitleSettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 if store.style.edge == .box {
-                    valueSlider(
-                        "底框不透明度", value: $store.style.boxOpacity,
-                        in: SubtitleStyle.boxOpacityRange, step: 0.05,
+                    SettingsValueSlider(
+                        title: "底框不透明度", value: $store.style.boxOpacity,
+                        range: SubtitleStyle.boxOpacityRange, step: 0.05,
                         text: Self.percent(store.style.boxOpacity))
                 } else {
-                    valueSlider(
-                        "描边粗细", value: $store.style.outlineSize,
-                        in: SubtitleStyle.outlineRange, step: 0.25,
+                    SettingsValueSlider(
+                        title: "描边粗细", value: $store.style.outlineSize,
+                        range: SubtitleStyle.outlineRange, step: 0.25,
                         text: store.style.outlineSize == 0
                             ? "无" : store.style.outlineSize.formatted(.number.precision(.fractionLength(0...2))))
                 }
@@ -107,8 +204,9 @@ private struct SubtitleSettingsView: View {
             }
 
             Section {
-                valueSlider(
-                    "垂直位置", value: $store.style.position, in: SubtitleStyle.positionRange, step: 1,
+                SettingsValueSlider(
+                    title: "垂直位置", value: $store.style.position,
+                    range: SubtitleStyle.positionRange, step: 1,
                     text: store.style.position == SubtitleStyle.positionRange.upperBound
                         ? "底部" : "上移 \(Int((SubtitleStyle.positionRange.upperBound - store.style.position).rounded()))%")
             } header: {
@@ -178,27 +276,6 @@ private struct SubtitleSettingsView: View {
                 ).clamped
             }
         )
-    }
-
-    private func valueSlider(
-        _ title: String,
-        value: Binding<Double>,
-        in range: ClosedRange<Double>,
-        step: Double,
-        text: String
-    ) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: Metrics.spacingS) {
-                Slider(value: value, in: range, step: step)
-                    .labelsHidden()
-                    .accessibilityLabel(title)
-                    .accessibilityValue(text)
-                Text(text)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: Metrics.settingsValueWidth, alignment: .trailing)
-            }
-        }
     }
 
     private static func color(_ color: SubtitleColor) -> Color {

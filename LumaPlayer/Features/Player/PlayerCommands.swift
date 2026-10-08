@@ -17,6 +17,9 @@ extension FocusedValues {
 struct PlayerCommands: Commands {
     @FocusedValue(\.playerViewModel) private var player
 
+    /// 没有播放页时用默认步长(设置页改了也只影响下一次播放的菜单文案)
+    private var seekStep: Double { player?.seekStep ?? Metrics.seekStep }
+
     var body: some Commands {
         CommandMenu("Playback") {
             Button(player?.isPaused == false ? "Pause" : "Play") {
@@ -27,9 +30,9 @@ struct PlayerCommands: Commands {
 
             Divider()
 
-            Button("Skip Back \(Int(Metrics.seekStep)) Seconds") { player?.skip(by: -Metrics.seekStep) }
+            Button("Skip Back \(Int(seekStep)) Seconds") { player?.skip(by: -seekStep) }
                 .disabled(player?.session == nil)
-            Button("Skip Forward \(Int(Metrics.seekStep)) Seconds") { player?.skip(by: Metrics.seekStep) }
+            Button("Skip Forward \(Int(seekStep)) Seconds") { player?.skip(by: seekStep) }
                 .disabled(player?.session == nil)
 
             Divider()

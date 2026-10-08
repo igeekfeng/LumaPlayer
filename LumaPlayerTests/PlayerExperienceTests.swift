@@ -301,7 +301,11 @@ final class PlayerExperienceTests: XCTestCase {
     }
 
     private func makeContainer() throws -> AppContainer {
-        AppContainer(registry: try makeRegistry(), credentials: credentials)
+        AppContainer(
+            registry: try makeRegistry(),
+            credentials: credentials,
+            preferences: UserDefaults(suiteName: "test.LumaPlayer.experience.prefs.\(UUID().uuidString)")!
+        )
     }
 
     private func makeProfile(name: String = "emby.test") -> ServerProfile {

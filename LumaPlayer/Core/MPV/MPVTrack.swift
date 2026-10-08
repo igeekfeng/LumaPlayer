@@ -5,7 +5,11 @@ import mpv
 ///
 /// 只解 LumaPlayer 真正要用的字段:`id` 用于 `aid`/`sid` 设值,
 /// `type` / `isExternal` 用于换算上报的 Emby 流索引(`StreamIndexMapper`),
+/// `isForced` 用于「只开强制字幕」的起播偏好(`SubtitleMode.forcedOnly`),
 /// 其余用于菜单显示。
+///
+/// ⛔ 不解 `default`:mpv 的默认轨标记与 Emby 的 `IsDefault` 不是一回事,
+/// 至今没有用到它的地方,不先解出来占着。
 ///
 /// ⛔ 不解 `src-id`:它是容器轨道号(从 1 起),**不是** Emby 的
 /// `MediaStream.Index`(从 0 起),曾因直接透传导致轨道上报整体偏一位
@@ -19,6 +23,8 @@ struct MPVTrack: Sendable, Equatable, Identifiable {
     let lang: String?
     let codec: String?
     let isExternal: Bool
+    /// 容器里标了「强制」的字幕(MPV_INTEGRATION.md 第 7 节 `track-list/N/forced`)
+    let isForced: Bool
 
     /// 菜单显示名:title → lang →「轨道 N」(MPV_INTEGRATION.md 第 7 节的优先级)。
     /// ⛔ 没有 title 也没有 lang 时不得显示空串。
@@ -120,7 +126,8 @@ enum MPVTrackListParser {
             title: string("title"),
             lang: string("lang"),
             codec: string("codec"),
-            isExternal: flag("external")
+            isExternal: flag("external"),
+            isForced: flag("forced")
         )
     }
 }

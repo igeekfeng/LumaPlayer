@@ -162,12 +162,12 @@ struct PlayerWindowView: View {
         .onKeyPress(.space) { viewModel.togglePlayPause(); return .handled }
         .onKeyPress(.leftArrow, phases: .down) { press in
             viewModel.skip(by: press.modifiers.contains(.shift)
-                ? -Metrics.seekStepLarge : -Metrics.seekStep)
+                ? -Metrics.seekStepLarge : -viewModel.seekStep)
             return .handled
         }
         .onKeyPress(.rightArrow, phases: .down) { press in
             viewModel.skip(by: press.modifiers.contains(.shift)
-                ? Metrics.seekStepLarge : Metrics.seekStep)
+                ? Metrics.seekStepLarge : viewModel.seekStep)
             return .handled
         }
         .onKeyPress(.upArrow, phases: [.down, .repeat]) { _ in

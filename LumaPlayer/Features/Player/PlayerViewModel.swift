@@ -77,10 +77,16 @@ final class PlayerViewModel {
     /// 新建 mpv 时由 `applyRememberedSpeed` 设回去。
     private(set) var speed: Double = 1
 
-    /// 本次起播要用的倍速:这部剧记过就用它,没记过就是 1×。
-    /// ⛔ 不落 `UserDefaults` —— 重启 App 从 1× 开始(见 `PlaybackSpeedStore`)。
+    /// 本次起播要用的倍速:这部剧记过就用它(优先级最高),没记过用设置页的
+    /// 「默认倍速」,再没有才是 1×。
+    ///
+    /// 记的那个值跨集沿用、⛔ 不落 `UserDefaults`(见 `PlaybackSpeedStore`);
+    /// 「默认倍速」是用户显式设的长期偏好,所以要留得住。
     /// 仅供测试与日志观察,播放决策在 `applyRememberedSpeed` 里。
-    var startupSpeed: Double { container.playbackSpeeds.speed(for: item, on: server) ?? 1 }
+    var startupSpeed: Double {
+        container.playbackSpeeds.speed(for: item, on: server)
+            ?? container.preferences.defaultSpeed
+    }
     /// 播放中因缓存不足暂停(mpv `paused-for-cache`)
     private(set) var isBuffering = false
     /// 已自然播完(`end-file` reason = eof)。重播 / 重试时复位。
@@ -118,29 +124,28 @@ final class PlayerViewModel {
     /// 转码模式下一次 seek 就是一次重新起流,不能边滑边 seek。
     private(set) var scrubPreviewSeconds: Double?
 
-    // MARK: - 播放偏好(UserDefaults 持久化)
+    // MARK: - 播放偏好(设置页「播放」页,UserDefaults 持久化)
 
+    /// 状态存在 `container.preferences` 里,这里是转发:
+    /// 设置窗口与播放窗口必须看到同一份,否则菜单里的勾和设置页对不上。
     /// 进入片头区间时自动跳过。默认关:和 Plex / Infuse 一样先给按钮,
     /// 标记不准时自动跳会直接吃掉正片开头。
     var autoSkipIntro: Bool {
-        didSet { defaults.set(autoSkipIntro, forKey: PreferenceKey.autoSkipIntro) }
+        get { container.preferences.autoSkipIntro }
+        set { container.preferences.autoSkipIntro = newValue }
     }
     /// 片尾提示出现后倒计时自动播下一集。默认开(Plex / Netflix 的默认值),可在提示上取消。
     var autoPlayNext: Bool {
-        didSet { defaults.set(autoPlayNext, forKey: PreferenceKey.autoPlayNext) }
+        get { container.preferences.autoPlayNext }
+        set { container.preferences.autoPlayNext = newValue }
     }
     /// 播放窗口置顶(`NSWindow.level = .floating`)
     var floatsOnTop: Bool {
-        didSet { defaults.set(floatsOnTop, forKey: PreferenceKey.floatsOnTop) }
+        get { container.preferences.floatsOnTop }
+        set { container.preferences.floatsOnTop = newValue }
     }
-
-    enum PreferenceKey {
-        static let autoSkipIntro = "player.autoSkipIntro"
-        static let autoPlayNext = "player.autoPlayNext"
-        static let floatsOnTop = "player.floatsOnTop"
-    }
-
-    private let defaults: UserDefaults
+    /// 前后跳转步长(秒),设置页可调
+    var seekStep: Double { container.preferences.seekStep }
     /// 自动跳过片头每次播放只触发一次:用户跳过后又拖回片头,说明就是想看,不能再把人弹走
     /// (Infuse 的已知问题:自动跳转后反复触发,画面在片头终点来回闪)。
     private var didAutoSkipIntro = false
@@ -185,16 +190,11 @@ final class PlayerViewModel {
         item: EmbyItem,
         startFromBeginning: Bool = false,
         reporter: PlaybackProgressReporter? = nil,
-        displaySleep: (any DisplaySleepInhibiting)? = nil,
-        defaults: UserDefaults = .standard
+        displaySleep: (any DisplaySleepInhibiting)? = nil
     ) {
         self.container = container
         self.server = server
         self.item = item
-        self.defaults = defaults
-        self.autoSkipIntro = defaults.bool(forKey: PreferenceKey.autoSkipIntro)
-        self.autoPlayNext = defaults.object(forKey: PreferenceKey.autoPlayNext) as? Bool ?? true
-        self.floatsOnTop = defaults.bool(forKey: PreferenceKey.floatsOnTop)
         // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
         // ⛔ 闭包是 `@Sendable`,**不能**在它里面调 `container.connection(for:)`
         // —— `AppContainer` 是 MainActor 类型,捕获它会过不了 Swift 6 并发检查。
@@ -333,8 +333,9 @@ final class PlayerViewModel {
         flash(Self.speedText(target), systemImage: "gauge.with.dots.needle.67percent")
     }
 
-    /// 新建的 mpv 一律是 1×,把这部剧记下的倍速设回去(KNOWN_ISSUES 旧条目
+    /// 新建的 mpv 一律是 1×,把起播倍速设回去(KNOWN_ISSUES 旧条目
     /// 「倍速在新建播放器后回到 1×」)。换集、重新起流、重试都走这里。
+    /// 值来自 `startupSpeed`:这部剧记过的优先,否则是设置页的默认倍速。
     ///
     /// ⛔ 必须在挂事件桥**之前**调用:桥一挂上 mpv 就会推一次当前值,
     /// 先设好,读回来的就是目标倍速,屏显与上报都不会先闪一下 1×。
@@ -349,6 +350,20 @@ final class PlayerViewModel {
             let reason = String(describing: error)
             Self.logger.error(
                 "倍速 \(startup, privacy: .public)× 设回新建播放器失败,本集按 1× 起播:\(reason, privacy: .public)")
+        }
+    }
+
+    /// 新建的 mpv 音量是 100,把设置页的「默认音量」设上去。
+    /// 理由与时机同 `applyRememberedSpeed`(挂桥之前)。
+    private func applyDefaultVolume(to player: MPVPlayer) {
+        let target = container.preferences.defaultVolume
+        guard target != Metrics.defaultVolume else { return }
+        do {
+            try player.setVolume(target)
+        } catch {
+            let reason = String(describing: error)
+            Self.logger.error(
+                "默认音量 \(target, privacy: .public) 设到新建播放器失败:\(reason, privacy: .public)")
         }
     }
 
@@ -456,14 +471,8 @@ final class PlayerViewModel {
         clampedSpeed(speed + (up ? step : -step))
     }
 
-    /// 夹到 mpv 可用的倍速区间,并把值抹到两位小数 —— 连续拖滑块会拖出
-    /// `1.1500000000000001` 这种浮点尾数,屏显与上报都会跟着抖。
-    /// 非有限值不该出现;真出现时兜在 1×:NaN 进 Slider 的 binding 会直接崩。
-    static func clampedSpeed(_ value: Double) -> Double {
-        guard value.isFinite else { return 1 }
-        let clamped = min(max(value, Metrics.speedRange.lowerBound), Metrics.speedRange.upperBound)
-        return (clamped * 100).rounded() / 100
-    }
+    /// 夹到 mpv 可用的倍速区间(定义见 `Metrics.clampedSpeed`)。
+    static func clampedSpeed(_ value: Double) -> Double { Metrics.clampedSpeed(value) }
 
     static func speedText(_ value: Double) -> String {
         value == value.rounded()
@@ -587,16 +596,28 @@ final class PlayerViewModel {
         flash("字幕:\(name ?? "关闭")", systemImage: "captions.bubble")
     }
 
-    /// 起播后按「简体中文 → 繁体中文 → 保持 mpv 默认」挑一次字幕轨
-    /// (`SubtitlePreference`)。
+    /// 起播后按设置页的字幕模式挑一次字幕轨(`SubtitlePreference.startupChoice`)。
+    /// 默认是「中文优先」:简体 → 繁体 → 未标变体的中文 → 保持 mpv 默认。
     ///
     /// 只在 track-list 首次到达时做,且用户手动选过之后不再介入。
     /// ⛔ 不起 OSD、也不发 `SubtitleTrackChange`:这是起播时的默认值,不是一次
     /// 用户操作;选中的索引会由随后的首次 Progress 上报带上去。
     private func applyPreferredSubtitle() {
         guard !hasUserChosenSubtitle, !hasAppliedPreferredSubtitle else { return }
-        guard let id = SubtitlePreference.preferredTrackID(in: subtitleTracks) else { return }
+        let choice = SubtitlePreference.startupChoice(
+            in: subtitleTracks, mode: container.preferences.subtitleMode)
+        switch choice {
+        case .leaveAlone:
+            return
+        case .off:
+            applyPreferredSubtitle(id: nil)
+        case .track(let id):
+            applyPreferredSubtitle(id: id)
+        }
+    }
 
+    /// 把起播的字幕选择写到 mpv 上;nil = 关字幕。
+    private func applyPreferredSubtitle(id: Int?) {
         // mpv 选中的正好就是想要的:不用写 sid,标记完成即可
         guard id != selectedSubtitleTrackID else {
             hasAppliedPreferredSubtitle = true
@@ -840,8 +861,10 @@ final class PlayerViewModel {
                 return
             }
 
-            // 新 mpv 默认 1×:把这部剧记下的倍速设回去,要在挂事件桥之前(见方法注释)。
+            // 新 mpv 是 mpv 自己的默认(1× / 音量 100 / 无字幕延迟),把起播偏好设回去,
+            // 都要在挂事件桥之前(见各方法注释)。
             applyRememberedSpeed(to: player)
+            applyDefaultVolume(to: player)
             applySubtitleSettings(to: player)
 
             let generation = self.generation

@@ -81,10 +81,13 @@ final class NowPlayingController {
         add(commands.playCommand) { if $0.isPaused { $0.togglePlayPause() } }
         add(commands.pauseCommand) { if !$0.isPaused { $0.togglePlayPause() } }
 
-        commands.skipForwardCommand.preferredIntervals = [NSNumber(value: Metrics.seekStep)]
-        commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: Metrics.seekStep)]
-        add(commands.skipForwardCommand) { $0.skip(by: Metrics.seekStep) }
-        add(commands.skipBackwardCommand) { $0.skip(by: -Metrics.seekStep) }
+        // 系统「正在播放」的跳转间隔跟着设置页的步长走(注册时读一次;改了步长
+        // 要下一次起播才同步 —— 这是低频偏好,不值得为它拆一遍命令注册)。
+        let step = viewModel?.seekStep ?? Metrics.seekStep
+        commands.skipForwardCommand.preferredIntervals = [NSNumber(value: step)]
+        commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: step)]
+        add(commands.skipForwardCommand) { $0.skip(by: $0.seekStep) }
+        add(commands.skipBackwardCommand) { $0.skip(by: -$0.seekStep) }
 
         add(commands.nextTrackCommand) { $0.playNextEpisode() }
         add(commands.previousTrackCommand) { $0.playPreviousEpisode() }

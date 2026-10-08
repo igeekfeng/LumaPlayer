@@ -266,8 +266,7 @@ final class SubtitleSettingsTests: XCTestCase {
             container: container,
             server: ServerProfile(displayName: "emby.test", baseURL: testURL("https://emby.test"), deviceID: "DEVICE-UUID-1"),
             item: item,
-            displaySleep: RecordingDisplaySleepInhibitor(),
-            defaults: defaults
+            displaySleep: RecordingDisplaySleepInhibitor()
         )
     }
 }

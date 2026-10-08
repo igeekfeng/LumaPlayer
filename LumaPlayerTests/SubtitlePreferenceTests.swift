@@ -60,7 +60,7 @@ final class SubtitlePreferenceTests: XCTestCase {
     /// 没有字幕轨(例如字幕被烧进画面)→ nil,不去动音轨
     func testNoSubtitleTrackReturnsNil() {
         let tracks = [MPVTrack(id: 1, type: .audio, selected: true, title: "中文", lang: "chi",
-                               codec: nil, isExternal: false)]
+                               codec: nil, isExternal: false, isForced: false)]
         XCTAssertNil(SubtitlePreference.preferredTrackID(in: tracks))
     }
 
@@ -127,8 +127,55 @@ final class SubtitlePreferenceTests: XCTestCase {
             of: sub(1, lang: lang, title: title))
     }
 
-    private func sub(_ id: Int, lang: String?, title: String? = nil) -> MPVTrack {
+    private func sub(
+        _ id: Int, lang: String?, title: String? = nil, forced: Bool = false
+    ) -> MPVTrack {
         MPVTrack(id: id, type: .sub, selected: false, title: title, lang: lang,
-                 codec: nil, isExternal: false)
+                 codec: nil, isExternal: false, isForced: forced)
+    }
+
+    // MARK: - 起播字幕模式
+
+    /// 默认模式:有中文选中文;一条中文都没有时不动 mpv(⛔ 不猜)
+    func testSmartModeLeavesAloneWithoutChinese() {
+        let tracks = [sub(1, lang: "eng"), sub(2, lang: "jpn")]
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: tracks, mode: .smart), .leaveAlone)
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: [sub(1, lang: "chi")], mode: .smart),
+            .track(id: 1))
+    }
+
+    /// 「总是开」:没有中文字幕时开第一条轨,而不是不动
+    func testAlwaysModeFallsBackToFirstTrack() {
+        let tracks = [sub(3, lang: "eng"), sub(2, lang: "jpn", title: "日本語")]
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: tracks, mode: .always), .track(id: 2),
+            "按 id 取第一条,不是数组里的第一个")
+        // 有中文时仍然优先中文
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: [sub(1, lang: "eng"), sub(2, lang: "chi")], mode: .always),
+            .track(id: 2))
+    }
+
+    /// 一条字幕轨都没有时两种模式都不该凭空造一条出来
+    func testNoSubtitleTrackLeavesAlone() {
+        let audio = [MPVTrack(id: 1, type: .audio, selected: true, title: nil, lang: "eng",
+                              codec: nil, isExternal: false, isForced: false)]
+        XCTAssertEqual(SubtitlePreference.startupChoice(in: audio, mode: .always), .leaveAlone)
+    }
+
+    /// 「只开强制字幕」:有强制轨就选它,没有就关掉(用户只要强制字幕)
+    func testForcedOnlyMode() {
+        let tracks = [sub(1, lang: "chi"), sub(2, lang: "eng", forced: true)]
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: tracks, mode: .forcedOnly), .track(id: 2))
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: [sub(1, lang: "chi")], mode: .forcedOnly), .off)
+    }
+
+    func testNoneModeTurnsSubtitlesOff() {
+        XCTAssertEqual(
+            SubtitlePreference.startupChoice(in: [sub(1, lang: "chi")], mode: .none), .off)
     }
 }

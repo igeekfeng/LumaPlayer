@@ -124,7 +124,7 @@ final class StreamIndexMapperTests: XCTestCase {
         _ id: Int, _ type: MPVTrackType, lang: String? = nil, external: Bool = false
     ) -> MPVTrack {
         MPVTrack(id: id, type: type, selected: false, title: nil, lang: lang,
-                 codec: nil, isExternal: external)
+                 codec: nil, isExternal: external, isForced: false)
     }
 
     private static func stream(_ index: Int, _ type: String, external: Bool = false) -> EmbyMediaStream {

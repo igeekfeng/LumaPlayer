@@ -262,8 +262,8 @@ struct PlayerScrubber: View {
         .accessibilityValue("\(PlayerTime.spokenText(displayed)),剩余 \(PlayerTime.spokenText(max(0, duration - displayed)))")
         .accessibilityAdjustableAction { direction in
             switch direction {
-            case .increment: viewModel.skip(by: Metrics.seekStep)
-            case .decrement: viewModel.skip(by: -Metrics.seekStep)
+            case .increment: viewModel.skip(by: viewModel.seekStep)
+            case .decrement: viewModel.skip(by: -viewModel.seekStep)
             @unknown default: break
             }
         }
@@ -621,8 +621,16 @@ struct PlayerRepeatSkipButton: View {
         case forward
 
         var delta: TimeInterval { self == .forward ? 1 : -1 }
-        var symbol: String { self == .forward ? "goforward.10" : "gobackward.10" }
         var verb: String { self == .forward ? "前进" : "后退" }
+
+        /// 图标:系统只画得出 `Metrics.seekStepOptions` 这几档带数字的样式,
+        /// 其余步长(以及设置页改了但这里还没刷新的一瞬)用不带数字的箭头。
+        func symbol(seconds: Double) -> String {
+            let base = self == .forward ? "goforward" : "gobackward"
+            let value = Int(seconds)
+            guard Metrics.seekStepOptions.contains(where: { Int($0) == value }) else { return base }
+            return "\(base).\(value)"
+        }
     }
 
     let direction: Direction
@@ -631,14 +639,14 @@ struct PlayerRepeatSkipButton: View {
     @State private var skipRepeat = PlayerSkipRepeat()
 
     var body: some View {
-        PlayerIconButton(systemImage: direction.symbol, label: label) {
+        PlayerIconButton(systemImage: direction.symbol(seconds: viewModel.seekStep), label: label) {
             let multiple = skipRepeat.advance(now: Date())
-            viewModel.skip(by: direction.delta * Metrics.seekStep * Double(multiple))
+            viewModel.skip(by: direction.delta * viewModel.seekStep * Double(multiple))
         }
     }
 
     private var label: String {
-        "\(direction.verb) \(Int(Metrics.seekStep) * skipRepeat.upcoming(now: Date())) 秒"
+        "\(direction.verb) \(Int(viewModel.seekStep) * skipRepeat.upcoming(now: Date())) 秒"
     }
 }
 

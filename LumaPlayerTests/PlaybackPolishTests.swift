@@ -177,6 +177,38 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertTrue(second.floatsOnTop)
     }
 
+    /// 播放窗口菜单里的开关与设置页是同一份状态(都在 `container.preferences` 上)
+    func testPreferenceTogglesAreSharedWithContainer() throws {
+        let container = try makeContainer()
+        let viewModel = try makeViewModel(container: container)
+        viewModel.autoSkipIntro = true
+        XCTAssertTrue(container.preferences.autoSkipIntro, "菜单里勾了,设置页也要是勾上的")
+        container.preferences.autoPlayNext = false
+        XCTAssertFalse(viewModel.autoPlayNext)
+    }
+
+    /// 起播倍速:这部剧本次运行调过就用调过的(P0-3),没调过用设置页的默认倍速
+    func testStartupSpeedPrefersRememberedOverDefault() throws {
+        let container = try makeContainer()
+        let server = makeServer()
+        let series = try episode("E1", series: "S1")
+        container.preferences.defaultSpeed = 1.5
+        XCTAssertEqual(
+            try makeViewModel(container: container, server: server, item: series).startupSpeed, 1.5)
+
+        try makeViewModel(container: container, server: server, item: series).setSpeed(2)
+        XCTAssertEqual(
+            try makeViewModel(container: container, server: server, item: series).startupSpeed, 2,
+            "同一部剧沿用调过的倍速,优先于默认倍速")
+    }
+
+    /// 跳转步长跟着设置页走(同一个偏好驱动方向键、控制栏按钮与菜单栏)
+    func testSeekStepComesFromPreferences() throws {
+        let container = try makeContainer()
+        container.preferences.seekStep = 30
+        XCTAssertEqual(try makeViewModel(container: container).seekStep, 30)
+    }
+
     // MARK: - 缓冲 / 统计
 
     func testBufferingEndClearsProgress() throws {
@@ -329,12 +361,19 @@ final class PlaybackPolishTests: XCTestCase {
     }
 
     /// 每次都是新容器 = 新的一次「App 运行」;要验跨集沿用就自己传同一个进来。
+    ///
+    /// `preferences` 用一次性 suite:播放偏好存在 UserDefaults 里,给它 `.standard`
+    /// 会让「偏好默认值」这类用例互相污染(别的用例先跑一步就把默认改掉了)。
     private func makeContainer() throws -> AppContainer {
         let registry = try ServerRegistry(
             defaults: UserDefaults(suiteName: "test.LumaPlayer.polish.registry.\(UUID().uuidString)")!,
             credentials: credentials
         )
-        return AppContainer(registry: registry, credentials: credentials)
+        return AppContainer(
+            registry: registry,
+            credentials: credentials,
+            preferences: try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
+        )
     }
 
     private func makeServer(_ name: String = "emby.test") -> ServerProfile {
@@ -355,8 +394,7 @@ final class PlaybackPolishTests: XCTestCase {
             container: try container ?? makeContainer(),
             server: server ?? makeServer(),
             item: try item ?? decodeItem(#"{"Id":"ITEM-1","Name":"测试影片","Type":"Movie"}"#),
-            startFromBeginning: startFromBeginning,
-            defaults: defaults
+            startFromBeginning: startFromBeginning
         )
     }
 }

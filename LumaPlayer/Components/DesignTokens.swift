@@ -82,9 +82,12 @@ enum Metrics {
     ///
     /// 转码模式下不是 mpv seek,而是停流 + StartTimeTicks 重新起流
     /// (API_CONTRACT.md 4.5);token 值相同,行为由 PlayerViewModel 分派。
+    /// 可在设置页改(`PlaybackPreferences.seekStep`),这个值是默认档。
     static let seekStep: TimeInterval = 10
     /// Shift+方向键单次 seek
     static let seekStepLarge: TimeInterval = 30
+    /// 设置页可选的跳转步长(秒);`seekStep` 必须是其中之一
+    static let seekStepOptions: [TimeInterval] = [5, 10, 15, 30]
     /// 转码 seek 的重新起流合并窗口(秒)
     ///
     /// 连点前进 / 后退时,每次点击都是一次「停流 + 重新起流」——
@@ -105,6 +108,10 @@ enum Metrics {
     static let seekRepeatResetDelay: TimeInterval = 1.2
     /// 音量单次增减(0–100)
     static let volumeStep: Double = 5
+    /// 音量区间(mpv `--volume`)
+    static let volumeRange: ClosedRange<Double> = 0...100
+    /// mpv 自身的默认音量(`--volume` 默认 100),也是「默认音量」偏好的默认值
+    static let defaultVolume: Double = 100
     /// 倍速区间:与 `MPVPlayer.setSpeed` 的夹取一致(超出这个范围音频严重失真)
     static let speedRange: ClosedRange<Double> = 0.25...4
     /// 倍速滑块与浮层 ± 按钮的步长(连续调节,不按档位跳)
@@ -113,6 +120,15 @@ enum Metrics {
     static let speedKeyStep: Double = 0.1
     /// 连续调倍速时的上报合并窗口(见 `PlayerViewModel.scheduleRateChangeReport`)
     static let speedReportDelay: TimeInterval = 0.5
+
+    /// 夹到倍速区间,并把值抹到两位小数 —— 连续拖滑块会拖出 `1.1500000000000001`
+    /// 这种浮点尾数,屏显与上报都会跟着抖。非有限值不该出现;真出现时兜在 1×:
+    /// NaN 进 Slider 的 binding 会直接崩。
+    static func clampedSpeed(_ value: Double) -> Double {
+        guard value.isFinite else { return 1 }
+        let clamped = min(max(value, speedRange.lowerBound), speedRange.upperBound)
+        return (clamped * 100).rounded() / 100
+    }
     /// 字幕延迟区间(秒)。mpv 本身不设限;±60 秒已远超「同一个文件的字幕对不齐」的量级,
     /// 再大就是字幕配错了版本,调偏移救不回来
     static let subtitleDelayRange: ClosedRange<Double> = -60...60
