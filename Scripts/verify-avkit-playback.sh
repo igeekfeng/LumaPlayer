@@ -67,9 +67,11 @@ fi
 # ⛔ 不要在这里复制一份实现:那样验的就不是应用要跑的东西了。
 SOURCES=(
     "${GENERATED_SWIFT}"
-    "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackDecisionEngine.swift"
+    "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackEngine.swift"
+    "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackPlan.swift"
     "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackPlanBuilder.swift"
     "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackRules.swift"
+    "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackTimeBase.swift"
     "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackTrack.swift"
     "${REPO_ROOT}/LumaPlayer/Core/Playback/PlaybackURLBuilder.swift"
     "${REPO_ROOT}/LumaPlayer/Core/Playback/TickConverter.swift"

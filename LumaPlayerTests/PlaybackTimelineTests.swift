@@ -7,7 +7,7 @@ final class PlaybackTimelineTests: XCTestCase {
     func testLineReportsPerStageDeltasAndTotal() {
         var timeline = PlaybackTimeline()
         timeline.mark(.playbackInfo, elapsed: .milliseconds(500))
-        timeline.mark(.glReady, elapsed: .milliseconds(560))
+        timeline.mark(.ready, elapsed: .milliseconds(560))
         timeline.mark(.playing, elapsed: .milliseconds(3160))
         timeline.mark(.firstFrame, elapsed: .milliseconds(3410))
 
@@ -15,7 +15,7 @@ final class PlaybackTimelineTests: XCTestCase {
 
         XCTAssertTrue(timeline.isFinished)
         XCTAssertTrue(line.contains("TIMING method=DirectStream host=emby.test dsu=provided total=3.41s"), line)
-        XCTAssertTrue(line.contains("playbackInfo=0.50s glReady=0.06s playing=2.60s firstFrame=0.25s"), line)
+        XCTAssertTrue(line.contains("playbackInfo=0.50s ready=0.06s playing=2.60s firstFrame=0.25s"), line)
         XCTAssertFalse(line.contains("未出画面"))
     }
 

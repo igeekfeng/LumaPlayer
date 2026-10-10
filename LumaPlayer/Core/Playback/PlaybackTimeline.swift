@@ -2,16 +2,21 @@ import Foundation
 
 /// 起播耗时时间线(只记「花在哪一段」,不含 URL / token)。
 ///
-/// 起播慢时要分清是服务端(PlaybackInfo)、本机(GL 上下文)还是 mpv 拉流探测慢,
-/// 所以按阶段记录相邻两个时间点的间隔。值类型、时钟由调用方传入 → 可以脱离真实时间单测。
+/// 起播慢时要分清是服务端(`PlaybackInfo`)、本机(放流 + 等 `readyToPlay`)
+/// 还是拉流缓冲慢,所以按阶段记录相邻两个时间点的间隔。值类型、时钟由调用方传入
+/// → 可以脱离真实时间单测。
+///
+/// ⚠️ `exp/avkit-rust-core`:原 `glReady` 阶段是 libmpv 的 GL 渲染上下文挂接
+/// (那是 `vo=libmpv` 特有的等待)。换 AVKit 后那一等没有了,取而代之的是
+/// 「内核 `load()` 返回」—— 语义相近(流已就绪、还没起播),改名 `ready`。
 struct PlaybackTimeline: Sendable, Equatable {
     /// 阶段,按发生顺序
     enum Stage: String, Sendable, CaseIterable {
-        /// `PlaybackInfo`(含决策)返回
+        /// `PlaybackInfo`(含 Rust 决策)返回
         case playbackInfo
-        /// mpv 创建完、GL 渲染上下文挂好
-        case glReady
-        /// `loadfile` 已发出 → mpv 报「已开始播放」(拉流 + 探测容器 + 缓冲到能起播)
+        /// 内核放流完成、`AVPlayerItem` 已就绪(尚未 `play()`)
+        case ready
+        /// `play()` 已发出 → 真的在播
         case playing
         /// 收到第一个播放位置(≈ 出第一帧)
         case firstFrame
@@ -44,7 +49,7 @@ struct PlaybackTimeline: Sendable, Equatable {
         (marks.last?.at ?? .zero) >= Self.slowThreshold
     }
 
-    /// `{时间} TIMING method=DirectStream host=… dsu=provided total=3.42s | playbackInfo=0.52s glReady=0.05s playing=2.60s firstFrame=0.25s`
+    /// `{时间} TIMING method=DirectStream host=… dsu=provided total=3.42s | playbackInfo=0.52s ready=0.05s playing=2.60s firstFrame=0.25s`
     /// 各阶段是**相对上一个阶段**的间隔,total 是起点到最后一个阶段。
     func line(method: String, host: String?, directStreamURLProvided: Bool, date: Date = .now) -> String {
         var previous = Duration.zero

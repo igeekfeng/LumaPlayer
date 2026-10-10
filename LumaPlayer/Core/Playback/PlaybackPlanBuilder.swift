@@ -12,17 +12,19 @@ import Foundation
 /// 2. **挂认证头**(第 6 节)—— token 在 Swift 的凭据存储里。
 ///
 /// 这两件事不该散落在播放窗口与自检脚本里各写一遍,所以收在这里:
-/// 播放窗口(P3b)与 `Scripts/verify-avkit-playback.sh` 走同一条路径。
+/// 播放窗口(`PlaybackSessionCoordinator`)与 `Scripts/verify-avkit-playback.sh`
+/// 走同一条路径。
 ///
-/// ⚠️ 与 `PlaybackDecisionEngine`(Swift)的关系:那一份会自己解响应、自己做
-/// 4.4 的六步,是 libmpv 时代的产物。本分支上决策已改由 Rust 承担,本类型是它的
-/// 接替者;旧引擎目前**没有调用点**,等 P3b 接通播放窗口时删除
-/// (文档 8.2「本阶段的诚实边界」已记这一条)。
+/// ⚠️ 与已删除的 `PlaybackDecisionEngine`(Swift)的关系:那一份会自己解响应、
+/// 自己做 4.4 的六步,是 libmpv 时代的产物。本分支上决策已由 Rust 承担
+/// (`luma-emby::decision`),**旧的 Swift 引擎已在 P3c 删除** —— 它当时已经没有
+/// 调用点,留着只会让人以为还有两条判定路径。
 ///
 /// ⚠️ 已知缺口:DirectStream 的 URL **只认服务端给的 `DirectStreamUrl`**,没有
 /// 旧引擎那条「自拼 `/Videos/{Id}/stream.{ext}`」的退路 —— 那条退路需要
-/// `MediaSource.Container`,而 FFI 决策结果里没有这个字段。要不要把它补进决策结果
-/// 留待 P3b 定夺;在那之前,服务端不给 `DirectStreamUrl` 就是如实报错,不猜扩展名。
+/// `MediaSource.Container`,而 FFI 决策结果里没有这个字段,所以本分支上
+/// 服务端不给 `DirectStreamUrl` 就是如实报错,不猜扩展名
+/// (P3c 起由 Rust 侧统一报错,文案在 `PlaybackFailureFfi` 里)。
 enum PlaybackPlanBuilder {
 
     /// - Parameters:

@@ -10,8 +10,16 @@ import Foundation
 /// 放流、报告状态、选轨、seek。**不含**播放决策、URL 构造、进度上报与 UI ——
 /// 那些分别在 `PlaybackPlanBuilder` / `PlaybackProgressReporter` / 播放窗口里。
 ///
-/// 位置与 `main` 上的 `MPVPlayer` 对应:同样把「内核是什么」圈在一个类型里,
+/// ## 位置语义(⚠️ 与 `main` 的 mpv 不同)
+///
+/// `positionSeconds` 是**内核时间原点上的**位置。DirectStream 下它与绝对媒体位置
+/// 相同;转码 / HLS 流的原点在起流点(P3 实测,文档 R13),要补偏移才是绝对位置
+/// —— 换算归播放层(`PlaybackTimeBase`),内核不认识 Emby。
+///
+/// ## 位置与 `main` 上的 `MPVPlayer` 对应:同样把「内核是什么」圈在一个类型里,
 /// 上层依赖的是它的**语义**(`PlaybackPhase` / `PlaybackTrack`),不是 AVFoundation 的类型。
+/// P3c 起这份语义由 `PlaybackEngine` 协议固定下来(`AVKitPlaybackKernel` 是它的唯一实现),
+/// 播放页只认协议,接线测试注入替身。
 ///
 /// ## 三条实测驱动的硬规则(见 `docs/DECISIONS/avkit-rust-rearchitecture.md` 2.1)
 ///
@@ -32,53 +40,12 @@ import Foundation
 /// - Transcode:调用方带 `StartTimeTicks` 重新取一份 `PlaybackInfo` 再 `load`(4.5)。
 ///   这条路径下内核会被拆掉重建 —— 与 mpv 时代一样。
 @MainActor
-final class AVKitPlaybackKernel {
+final class AVKitPlaybackKernel: PlaybackEngine {
 
-    // MARK: - 失败
-
-    /// 内核自己的失败。**不含**服务端错误(那些在决策阶段就已经抛掉了)。
-    enum Failure: Error, Equatable {
-        /// `AVPlayerItem` 在 `readyTimeoutSeconds` 内没进 `readyToPlay`
-        case notReady(detail: String)
-        /// 起播后预期存在的轨没出现(R12 静默删轨)
-        case missingTracks([String])
-        /// 播放过程中失败(`AVPlayerItem.status == .failed` / 播放中断通知)
-        case playback(String)
-
-        var userMessage: String {
-            switch self {
-            case .notReady(let detail):
-                return "播放器准备超时:\(detail)"
-            case .missingTracks(let dimensions):
-                return "播放流里没有\(dimensions.joined(separator: "、"))轨 —— "
-                    + "这个格式本机放不了(系统把不认识的轨静默丢掉了)。"
-            case .playback(let detail):
-                return "播放失败:\(detail)"
-            }
-        }
-    }
-
-    // MARK: - 事件
-
-    /// 状态变化。播放窗口据此把值搬进自己的 `@Observable` 状态并驱动 UI。
-    ///
-    /// ⚠️ 事件里携带的是**变化项**,不是全量快照 —— 快照直接读属性。
-    /// 从任意线程调用都会有,但回调固定在主 actor 上执行。
-    enum Event: Equatable {
-        case phase(PlaybackPhase)
-        case position(Double)
-        case duration(Double)
-        case buffered(Double?)
-        case paused(Bool)
-        case rate(Double)
-        case volume(Double)
-        case muted(Bool)
-        case tracksChanged
-        /// 起播后的轨核验结论(`unverifiable` 与 `satisfied` 都不是失败)
-        case tracksValidated(TrackExpectation.Outcome)
-        case ended
-        case failed(Failure)
-    }
+    /// 失败与事件类型定义在 `PlaybackEngine` 那一侧:播放页只认协议,
+    /// 替身内核与真内核必须给出**同一套**语义(见 `PlaybackEngine.swift`)。
+    typealias Failure = PlaybackEngineFailure
+    typealias Event = PlaybackEngineEvent
 
     // MARK: - 交给播放表面的东西
 
@@ -206,18 +173,23 @@ final class AVKitPlaybackKernel {
     // MARK: - 播放控制
 
     /// 开始 / 继续播放。⛔ 只有这里会把画面放起来。
+    ///
+    /// 已经在播时是空操作(与 `AVPlayer.play()` 一致):⛔ 不重复发 `.paused(false)`,
+    /// 否则播放页会把一次无意义的调用当成「用户恢复播放」再上报一次 Unpause。
     func play() {
-        guard failure == nil, item != nil else { return }
+        guard failure == nil, item != nil, isPaused else { return }
         isPaused = false
         isEnded = false
         player.defaultRate = Float(rate)
         player.play()
+        onEvent?(.paused(false))
     }
 
     func pause() {
-        guard item != nil else { return }
+        guard item != nil, !isPaused else { return }
         isPaused = true
         player.pause()
+        onEvent?(.paused(true))
     }
 
     func togglePlayPause() {

@@ -77,15 +77,17 @@ struct EmbyRequestBuilder: Sendable, Equatable {
         return request
     }
 
-    /// 请求体编码。登录是扁平字符串表;PlaybackInfo / 播放上报走
-    /// `JSONEncoder` —— 它们需要真正的 JSON 布尔值与整数,
-    /// 用字符串表会把 `false` 写成 `"false"`。
+    /// 请求体编码。登录是扁平字符串表;播放上报走 `JSONEncoder` ——
+    /// 它们需要真正的 JSON 布尔值与整数,用字符串表会把 `false` 写成 `"false"`。
+    ///
+    /// PlaybackInfo 也走 `JSONSerialization`,原因是它要**原样嵌入** Rust 派生出来的
+    /// 整份 `DeviceProfile`(见 `PlaybackInfoRequest.bodyData()`)。
     private func encodedBody(_ body: EmbyEndpoint.EmbyRequestBody) throws -> Data {
         switch body {
         case .fields(let fields):
             return try JSONSerialization.data(withJSONObject: fields)
         case .playbackInfo(let request):
-            return try JSONEncoder().encode(request)
+            return try request.bodyData()
         case .playbackReport(let body):
             return try JSONEncoder().encode(body)
         }

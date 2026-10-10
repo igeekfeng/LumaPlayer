@@ -115,36 +115,48 @@ final class PlaybackPolishTests: XCTestCase {
     // MARK: - 统计
 
     func testStatisticsFormatting() {
-        XCTAssertEqual(PlayerStatistics.shortCodecName("H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"), "H.264")
-        XCTAssertEqual(PlayerStatistics.decoderText("no"), "软件解码")
-        XCTAssertEqual(PlayerStatistics.decoderText("videotoolbox"), "硬件解码(videotoolbox)")
-        XCTAssertEqual(PlayerStatistics.bitrateText("8200000"), "8.2 Mbps")
-        XCTAssertEqual(PlayerStatistics.bitrateText("192000"), "192 kbps")
-        XCTAssertNil(PlayerStatistics.bitrateText("0"))
-        XCTAssertNil(PlayerStatistics.bitrateText("abc"))
-        XCTAssertEqual(PlayerStatistics.fpsText("23.976"), "23.976 fps")
+        XCTAssertEqual(PlayerStatistics.bitrateText(8_200_000), "8.2 Mbps")
+        XCTAssertEqual(PlayerStatistics.bitrateText(192_000), "192 kbps")
+        XCTAssertNil(PlayerStatistics.bitrateText(0))
+        XCTAssertNil(PlayerStatistics.bitrateText(.nan))
+        XCTAssertEqual(PlayerStatistics.statusText(0), "未就绪")
+        XCTAssertEqual(PlayerStatistics.statusText(1), "已就绪")
+        XCTAssertEqual(PlayerStatistics.statusText(2), "失败")
+        XCTAssertEqual(PlayerStatistics.statusText(9), "状态 9", "不猜未知取值")
     }
 
-    /// 实测值取自本机 mpv 0.41 播放一段 640×360 H.264 测试片的读数 ——
-    /// 属性名是 mpv 的,但**这里的契约是「读不到的属性不凑『未知』」**,
-    /// 与内核无关(见 `PlayerStatistics` 的注释)。
-    func testStatisticsLinesSkipMissingProperties() {
-        let stats = PlayerStatistics(properties: [
-            "video-codec": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
-            "video-params/w": "640",
-            "video-params/h": "360",
-            "container-fps": "24",
-            "hwdec-current": "no",
-            "audio-codec-name": "aac",
-            "audio-params/samplerate": "44100",
-            "audio-params/channel-count": "1",
-        ], session: nil)
+    /// 契约仍然是「读不到的读数**不凑『未知』**」——与换内核无关。
+    /// 输入从 mpv 属性字典换成 `PlayerStatistics.Readings`(AVKit 侧能拿到什么,
+    /// 见 `PlayerStatistics` 的注释)。
+    func testStatisticsLinesSkipMissingReadings() {
+        let stats = PlayerStatistics(readings: .init(
+            methodDisplayName: "直接串流",
+            container: "mp4",
+            videoWidth: 640,
+            videoHeight: 360,
+            videoTrackCount: 1,
+            audioTrackCount: 1,
+            subtitleTrackCount: 0,
+            droppedFrameCount: nil,
+            observedBitrate: 8_200_000,
+            stallCount: nil,
+            bufferedSeconds: 12.5,
+            rate: 1.25,
+            itemStatusText: "已就绪"
+        ))
         let byLabel = Dictionary(uniqueKeysWithValues: stats.lines.map { ($0.label, $0.value) })
-        XCTAssertEqual(byLabel["视频"], "H.264 · 640×360 · 24 fps")
-        XCTAssertEqual(byLabel["解码"], "软件解码")
-        XCTAssertEqual(byLabel["音频"], "aac · 44.1 kHz · 1 声道")
-        XCTAssertNil(byLabel["丢帧"], "读不到的属性不凑「未知」")
-        XCTAssertNil(byLabel["播放方式"], "没有会话就不显示播放方式")
+        XCTAssertEqual(byLabel["播放方式"], "直接串流 · MP4")
+        XCTAssertEqual(byLabel["画面"], "640×360")
+        XCTAssertEqual(byLabel["轨道"], "视频 1 · 音频 1", "0 条的维度不出现在这一行里")
+        XCTAssertEqual(byLabel["网络"], "8.2 Mbps 实测 · 已缓冲 12.5 秒")
+        XCTAssertEqual(byLabel["倍速"], "1.25×")
+        XCTAssertEqual(byLabel["状态"], "已就绪")
+        XCTAssertNil(byLabel["丢帧"], "读不到的读数不凑「未知」")
+    }
+
+    /// 没有任何读数时整份 overlay 是空的 —— 不留一行占位。
+    func testStatisticsWithoutReadingsHasNoLines() {
+        XCTAssertTrue(PlayerStatistics(readings: .init()).lines.isEmpty)
     }
 
     // MARK: - 上一集

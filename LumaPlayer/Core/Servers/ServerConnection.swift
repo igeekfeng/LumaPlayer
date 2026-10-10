@@ -359,21 +359,31 @@ actor ServerConnection {
 
     /// `POST /Items/{Id}/PlaybackInfo` —— 播放信息(API_CONTRACT.md 4.3)。
     ///
-    /// 不发 `EnableDirectPlay`、带最小 `DeviceProfile`(API_CONTRACT.md 4.3,issue #2)。
+    /// 不发 `EnableDirectPlay`;`DeviceProfile` **由 Rust 派生**(整份 JSON 逐字嵌入)
+    /// —— 声明写宽会让服务端把本机放不了的容器/编码判成可直连且不给转码地址,
+    /// 那是静默失败(文档 4 / 8.2)。⛔ 不要在 Swift 里另写一份白名单。
     ///
     /// - Parameter startTimeTicks: 仅转码 seek 使用(4.5 的 `StartTimeTicks`)。
     ///   DirectStream 路径**不要传**:它是服务端的决策输入之一,贸然传值
     ///   可能让本来能 DirectStream 的文件改成转码。
-    func playbackInfo(itemID: String, startTimeTicks: Int64? = nil) async throws -> EmbyPlaybackInfoResponse {
+    /// - Returns: 响应的**原始字节**。判定已交给 Rust(`decidePlayback(playbackInfoJson:)`),
+    ///   它吃的就是这份 JSON —— 所以这里不先解成 DTO 再重编码
+    ///   (重编码会丢掉 Rust 要看的字段)。
+    func playbackInfoJSON(itemID: String, startTimeTicks: Int64? = nil) async throws -> Data {
         let userID = try await currentUserID()
-        let request = PlaybackInfoRequest(userID: userID, startTimeTicks: startTimeTicks)
-        return try await authenticated(.playbackInfo(itemID: itemID, request: request))
+        let request = PlaybackInfoRequest(
+            userID: userID,
+            deviceProfileJSON: avkitDeviceProfileJson(),
+            startTimeTicks: startTimeTicks
+        )
+        return try await authenticatedData(.playbackInfo(itemID: itemID, request: request))
     }
 
-    /// 交给 mpv 的认证头(API_CONTRACT.md 第 6 节)。
+    /// 交给播放内核的认证头(API_CONTRACT.md 第 6 节)。
     ///
-    /// 播放是 mpv 自己发的 HTTP 请求,不走 `URLSession`,所以认证信息必须
-    /// **显式取出**再交给它;漏了就是 401,而且从 mpv 侧很难定位。
+    /// 串流是 AVPlayer 自己发的 HTTP 请求,不走 `URLSession`,所以认证信息必须
+    /// **显式取出**再交给它(挂在 `AVURLAssetHTTPHeaderFieldsKey` 上);漏了就是 401,
+    /// 而且从播放内核侧很难定位。
     /// ⛔ 返回值含 token,不得进日志 —— 打印前先过 `SecretRedactor`。
     func playbackHeaders() async throws -> [String: String] {
         try await ensureCredentials()

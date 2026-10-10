@@ -99,17 +99,23 @@ enum NetworkDiagnostics {
         append(text)
     }
 
-    /// 记一条播放失败(libmpv 已拿到 URL 但没播起来,如 `Unrecognized file format`)。
+    /// 记一条播放失败(拿到了 URL 但没播起来,如 `Unrecognized file format` /
+    /// AVFoundation 的 `-11850`)。
     ///
-    /// 与 `record(_:...)` 的区别:失败发生在 libmpv 内部,App 看不到 HTTP 状态与响应体,
-    /// 只能留下 mpv 的错误消息与它最近的日志(demuxer / ffmpeg 的探测过程),
-    /// 用来判断收到的是媒体内容还是 HTML / JSON 错误页、有没有重定向。
+    /// 与 `record(_:...)` 的区别:失败发生在播放内核内部,App 看不到 HTTP 状态与响应体,
+    /// 只能留下内核给的错误消息(以及它最近的日志)用来判断收到的是媒体内容还是
+    /// HTML / JSON 错误页、有没有重定向。
+    ///
+    /// - Parameter mpvLog: ⚠️ `exp/avkit-rust-core` 上**没有 mpv 日志**了
+    ///   (AVFoundation 没有等价的分级日志),默认空数组。那一支的诊断看
+    ///   `AVPlayerItem` 的 accessLog / errorLog(统计 overlay 的「网络 / 状态」两行),
+    ///   不从这里补 —— 编造一个空日志段只会让人以为「日志被截断了」。
     static func recordPlaybackFailure(
         message: String,
         url: URL,
         method: String,
         directStreamURLProvided: Bool,
-        mpvLog: [String]
+        mpvLog: [String] = []
     ) {
         let text = playbackFailureLine(
             message: message, url: url, method: method,
