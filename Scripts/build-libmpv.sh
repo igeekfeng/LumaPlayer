@@ -92,6 +92,9 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 #   0002：ao_coreaudio 的 init() 在注册设备热插拔监听之后失败时（如 5.1 片源 + 立体声设备，
 #         设声道布局报 -50，回退 avfoundation）不注销监听，ao 却被释放；之后任何音频设备
 #         变化（连蓝牙耳机）都会回调到野指针 → 崩溃。非 #16818 引入，上游代码本身的缺陷。
+#   0003：gpu-next 后端没注册硬解设备，hwdec=auto 只能退成 videotoolbox-copy（4K 帧每帧
+#         拷回内存 + CPU 重排上传，能耗高）。补上 VideoToolbox 设备，IOSurface 平面在 GPU 上
+#         blit 进 libplacebo 纹理（libplacebo 的 GL 后端采样 sampler2DRect 会生成非法 GLSL）。
 # 上游修好后删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue

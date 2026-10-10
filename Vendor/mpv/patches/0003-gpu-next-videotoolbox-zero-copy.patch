@@ -1,0 +1,231 @@
+diff --git a/video/out/gpu_next/libmpv_gpu_next.c b/video/out/gpu_next/libmpv_gpu_next.c
+index 3023bf7..cd4b8d8 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -15,6 +15,11 @@
+ #include "video/out/libmpv.h"   // for render_backend, get_mpv_render_param
+ #include "video/out/vo.h"       // for vo_frame (ptr only), voctrl_screenshot
+ 
++#if HAVE_VIDEOTOOLBOX_GL
++#include <libavutil/hwcontext.h>
++#include "video/img_format.h"   // for IMGFMT_VIDEOTOOLBOX
++#endif
++
+ /*
+  * Structure for the image parameters.
+  */
+@@ -28,6 +33,12 @@ struct mp_rect;
+ struct priv {
+     struct libmpv_gpu_next_context *context; // Manages the API (e.g., OpenGL)
+     struct pl_video *video_engine;           // Manages synchronous libplacebo rendering
++#if HAVE_VIDEOTOOLBOX_GL
++    // Without a registered device the decoder can only use videotoolbox-copy
++    // (frames copied back to RAM, then re-uploaded every frame). ra.c maps
++    // IMGFMT_VIDEOTOOLBOX frames zero-copy via IOSurface.
++    struct mp_hwdec_ctx vt_hwctx;
++#endif
+ };
+ 
+ /*
+@@ -93,6 +104,18 @@ static int init(struct render_backend *ctx, mpv_render_param *params)
+ 
+     // Create hardware decoder devices.
+     ctx->hwdec_devs = hwdec_devices_create();
++#if HAVE_VIDEOTOOLBOX_GL
++    p->vt_hwctx = (struct mp_hwdec_ctx){
++        .driver_name = "videotoolbox",
++        .hw_imgfmt = IMGFMT_VIDEOTOOLBOX,
++    };
++    if (av_hwdevice_ctx_create(&p->vt_hwctx.av_device_ref,
++                               AV_HWDEVICE_TYPE_VIDEOTOOLBOX, NULL, NULL, 0) == 0) {
++        hwdec_devices_add(ctx->hwdec_devs, &p->vt_hwctx);
++    } else {
++        MP_VERBOSE(ctx, "Failed to create videotoolbox hwdevice, hwdec will copy.\n");
++    }
++#endif
+     ctx->driver_caps = VO_CAP_ROTATE90 | VO_CAP_VFLIP;
+     return 0;
+ }
+@@ -106,6 +129,10 @@ static void destroy(struct render_backend *ctx)
+     struct priv *p = ctx->priv;
+     if (!p) return;
+ 
++#if HAVE_VIDEOTOOLBOX_GL
++    hwdec_devices_remove(ctx->hwdec_devs, &p->vt_hwctx);
++    av_buffer_unref(&p->vt_hwctx.av_device_ref);
++#endif
+     hwdec_devices_destroy(ctx->hwdec_devs);
+     pl_video_uninit(&p->video_engine);
+     if (p->context) {
+diff --git a/video/out/gpu_next/ra.c b/video/out/gpu_next/ra.c
+index c8411dc..1fed410 100644
+--- a/video/out/gpu_next/ra.c
++++ b/video/out/gpu_next/ra.c
+@@ -14,6 +14,21 @@
+ #include "video/img_format.h"              // for mp_imgfmt_comp_desc, mp_im...
+ #include "video/mp_image.h"                // for mp_image, mp_image_params
+ #include "video/out/vo.h"                  // for vo
++#include "config.h"                        // for HAVE_VIDEOTOOLBOX_GL
++
++#if HAVE_VIDEOTOOLBOX_GL
++// VideoToolbox zero-copy: wrap the decoder's IOSurface planes as GL rectangle
++// textures instead of copying every frame back to RAM (hwdec=videotoolbox-copy)
++// and re-uploading it. Same mechanism as the legacy renderer's hwdec_mac_gl.c.
++#define GL_SILENCE_DEPRECATION // OpenGL is the only API this backend has
++#include <CoreVideo/CoreVideo.h>
++#include <IOSurface/IOSurface.h>
++#include <OpenGL/OpenGL.h>
++#include <OpenGL/CGLIOSurface.h>
++#include <OpenGL/gl3.h>
++#include <libplacebo/opengl.h>
++#include "video/mp_image_pool.h"           // for mp_image_hw_download
++#endif
+ 
+ /**
+  * @brief Private state for the libplacebo rendering abstraction.
+@@ -285,6 +300,118 @@ static int plane_data_from_imgfmt(struct pl_plane_data out_data[4],
+     return desc.num_planes;
+ }
+ 
++#if HAVE_VIDEOTOOLBOX_GL
++/**
++ * Maps a hwdec=videotoolbox frame without a CPU round trip: every IOSurface
++ * plane is bound to a GL_TEXTURE_RECTANGLE via CGLTexImageIOSurface2D (as the
++ * legacy renderer's hwdec_mac_gl.c does) and then blitted on the GPU into a
++ * regular 2D texture owned by libplacebo.
++ *
++ * The extra GPU blit is deliberate: libplacebo's GL backend emits invalid GLSL
++ * for sampler2DRect (textureSize(sampler2DRect, int)), so the rectangle
++ * texture cannot be sampled directly. Since the plane is copied, the
++ * rectangle texture is released right away and nothing ties the IOSurface's
++ * lifetime to the pl_frame; ra_pl_cleanup_frame() needs no special case.
++ * @return 1 on success, 0 if the sub-format is not handled here (caller falls
++ *         back to a CPU download), -1 on hard failure.
++ */
++static int map_videotoolbox_frame(struct ra_next *ra, struct pl_frame *out_frame,
++                                  const struct mp_image *img)
++{
++    CGLContextObj cgl = CGLGetCurrentContext();
++    if (!cgl || !pl_opengl_get(ra->gpu))
++        return 0;
++
++    CVPixelBufferRef pbuf = (CVPixelBufferRef)img->planes[3];
++    IOSurfaceRef surface = pbuf ? CVPixelBufferGetIOSurface(pbuf) : NULL;
++    if (!surface)
++        return 0;
++
++    struct pl_plane_data data[4] = {0};
++    int planes = plane_data_from_imgfmt(data, &out_frame->repr.bits,
++                                        img->params.hw_subfmt, false);
++    if (!planes || planes != (int)IOSurfaceGetPlaneCount(surface))
++        return 0;
++
++    // Only plain 8/16-bit UNORM planes with 1 or 2 components (nv12, p010,
++    // p016, ...). Anything else goes through the CPU download fallback.
++    int comps[4], depth[4];
++    for (int n = 0; n < planes; n++) {
++        comps[n] = 0;
++        depth[n] = data[n].component_size[0];
++        for (int c = 0; c < 4 && data[n].component_size[c]; c++) {
++            if (data[n].component_size[c] != depth[n] || data[n].component_pad[c])
++                return 0;
++            comps[n]++;
++        }
++        if ((depth[n] != 8 && depth[n] != 16) || comps[n] < 1 || comps[n] > 2 ||
++            data[n].type != PL_FMT_UNORM ||
++            data[n].pixel_stride * 8 != comps[n] * depth[n])
++            return 0;
++    }
++
++    out_frame->num_planes = 0;
++    for (int n = 0; n < planes; n++) {
++        bool wide = depth[n] == 16;
++        GLint ifmt = comps[n] == 1 ? (wide ? GL_R16 : GL_R8) : (wide ? GL_RG16 : GL_RG8);
++        int w = (int)IOSurfaceGetWidthOfPlane(surface, n);
++        int h = (int)IOSurfaceGetHeightOfPlane(surface, n);
++
++        pl_fmt fmt = pl_find_fmt(ra->gpu, PL_FMT_UNORM, comps[n], depth[n], depth[n],
++                                 PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_LINEAR |
++                                 PL_FMT_CAP_BLITTABLE);
++        pl_tex dst = fmt ? pl_tex_create(ra->gpu, pl_tex_params(
++            .w = w,
++            .h = h,
++            .format = fmt,
++            .sampleable = true,
++            .blit_dst = true,
++        )) : NULL;
++
++        GLuint gl_tex = 0;
++        glGenTextures(1, &gl_tex);
++        glBindTexture(GL_TEXTURE_RECTANGLE, gl_tex);
++        CGLError err = CGLTexImageIOSurface2D(cgl, GL_TEXTURE_RECTANGLE, ifmt, w, h,
++                                              comps[n] == 1 ? GL_RED : GL_RG,
++                                              wide ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE,
++                                              surface, n);
++        glBindTexture(GL_TEXTURE_RECTANGLE, 0);
++        pl_tex src = NULL;
++        if (err == kCGLNoError) {
++            src = pl_opengl_wrap(ra->gpu, pl_opengl_wrap_params(
++                .texture = gl_tex,
++                .width = w,
++                .height = h,
++                .target = GL_TEXTURE_RECTANGLE,
++                .iformat = ifmt,
++            ));
++        }
++        bool ok = dst && src && src->params.blit_src;
++        if (ok)
++            pl_tex_blit(ra->gpu, pl_tex_blit_params(.src = src, .dst = dst));
++        // GL orders the blit before the delete; the source can go right away.
++        pl_tex_destroy(ra->gpu, &src);
++        glDeleteTextures(1, &gl_tex);
++
++        if (!ok) {
++            mp_msg(ra->log, MSGL_ERR, "Failed to map IOSurface plane %d (%s)\n",
++                   n, err == kCGLNoError ? "texture setup" : CGLErrorString(err));
++            pl_tex_destroy(ra->gpu, &dst);
++            ra_pl_cleanup_frame(ra, out_frame);
++            return -1;
++        }
++
++        struct pl_plane *plane = &out_frame->planes[n];
++        plane->texture = dst;
++        plane->components = comps[n];
++        for (int c = 0; c < comps[n]; c++)
++            plane->component_mapping[c] = data[n].component_map[c];
++        out_frame->num_planes = n + 1;
++    }
++    return 1;
++}
++#endif
++
+ /**
+  * Uploads an `mp_image` to a `pl_frame`.
+  * @param ra The rendering abstraction context.
+@@ -305,6 +432,26 @@ bool upload_mp_image_to_pl_frame(struct ra_next *ra, struct pl_frame *out_frame,
+         },
+     };
+ 
++#if HAVE_VIDEOTOOLBOX_GL
++    if (img->imgfmt == IMGFMT_VIDEOTOOLBOX) {
++        int r = map_videotoolbox_frame(ra, out_frame, img);
++        if (r > 0)
++            return true;
++        if (r < 0)
++            return false;
++        // Unhandled sub-format: copy back to RAM and upload like a sw frame.
++        struct mp_image *sw = mp_image_hw_download((struct mp_image *)img, NULL);
++        if (!sw) {
++            mp_msg(ra->log, MSGL_ERR, "Failed to download videotoolbox frame (%s)\n",
++                   mp_imgfmt_to_name(img->params.hw_subfmt));
++            return false;
++        }
++        bool ok = upload_mp_image_to_pl_frame(ra, out_frame, sw);
++        talloc_free(sw);
++        return ok;
++    }
++#endif
++
+     // Convert the mpv format to libplacebo's plane data description.
+     struct pl_plane_data data[4] = {0};
+     int planes = plane_data_from_imgfmt(data, &out_frame->repr.bits, img->imgfmt, false);
