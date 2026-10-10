@@ -89,6 +89,15 @@ final class HomeViewModel {
     private var generation = 0
     private var tasks: [Task<Void, Never>] = []
 
+    /// 在途请求数。只统计首屏加载路径(媒体库列表、继续观看、各「最新」行)——
+    /// 播放后的静默校正与「移出继续观看」不计,那些不该让刷新图标转起来。
+    private var inFlight = 0
+    /// 首屏是否正在加载 / 刷新(工具栏刷新图标据此转圈)。
+    ///
+    /// 不能只看各行的 `state`:刷新时已有内容的行会保持 `.loaded`(不闪加载态),
+    /// 所以需要一个独立标记。
+    private(set) var isLoading = false
+
     init(container: AppContainer) {
         self.container = container
     }
@@ -147,7 +156,9 @@ final class HomeViewModel {
         let parentIDs = latestViews.map(\.id)
         let limit = Self.sectionLimit
         let myGeneration = generation
+        requestStarted()
         tasks.append(Task { [weak self] in
+            defer { self?.requestFinished() }
             await Self.runLimited(
                 count: parentIDs.count,
                 maxConcurrent: Self.latestConcurrency
@@ -283,10 +294,24 @@ final class HomeViewModel {
         apply: @escaping (LoadState<Value>) -> Void
     ) {
         let myGeneration = generation
+        requestStarted()
         tasks.append(Task {
+            defer { requestFinished() }
             guard let state = await Self.fetchState(fetch), myGeneration == generation else { return }
             apply(state)
         })
+    }
+
+    /// 开始 / 结束一个「首屏加载」请求(只由 `track` 与 `loadLatest` 调用)。
+    /// 用计数而不是布尔:一轮 `load` 里有多个并行请求,最后一个回来才算加载完。
+    private func requestStarted() {
+        inFlight += 1
+        isLoading = true
+    }
+
+    private func requestFinished() {
+        inFlight = max(0, inFlight - 1)
+        isLoading = inFlight > 0
     }
 
     /// 取一次数据并折成 `LoadState`。被取消(`.cancelled`)返回 nil:调用方什么都不应用

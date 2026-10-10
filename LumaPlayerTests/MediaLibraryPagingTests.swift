@@ -164,6 +164,65 @@ final class MediaLibraryPagingTests: XCTestCase {
         XCTAssertEqual(calls, 2)
     }
 
+    // MARK: - 手动刷新:保留已显示内容(不闪白屏)
+
+    /// 刷新期间不清空已加载内容、不切回 loading,只置 `isRefreshing`;新结果回来后整页替换。
+    @MainActor
+    func testRefreshKeepsItemsUntilNewPageArrives() async throws {
+        let gate = StallGate()
+        let counter = CallCounter()
+        let list = PagedItemList { _, _ in
+            let call = await counter.next()
+            if call == 1 {
+                return PagedFetchResult(items: [Self.item(id: "old", name: "旧内容")], totalRecordCount: 1)
+            }
+            await gate.wait()
+            return PagedFetchResult(items: [Self.item(id: "new", name: "新内容")], totalRecordCount: 1)
+        }
+        list.reload()
+        try await waitUntil { list.items.map(\.id) == ["old"] }
+
+        list.refresh()
+        // 等新请求挂上闸门(此时它还没回来)
+        for _ in 0..<80 where await gate.waiterCount < 1 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        XCTAssertEqual(list.items.map(\.id), ["old"], "刷新期间不得清空已显示内容")
+        XCTAssertTrue(list.isRefreshing)
+        XCTAssertTrue(list.isLoading, "刷新中也算「在加载」,工具栏图标要转")
+        guard case .loaded = list.state else {
+            return XCTFail("刷新期间 state 应保持 .loaded,不能切回 .loading")
+        }
+
+        await gate.release()
+        try await waitUntil { list.items.map(\.id) == ["new"] }
+        XCTAssertFalse(list.isRefreshing)
+        XCTAssertFalse(list.isLoading)
+    }
+
+    /// 刷新失败保留原内容(与首页 / 详情页的后台刷新同一立场),不换成错误页。
+    @MainActor
+    func testRefreshFailureKeepsExistingItems() async throws {
+        let counter = CallCounter()
+        let list = PagedItemList { _, _ in
+            if await counter.next() == 1 {
+                return PagedFetchResult(items: [Self.item(id: "keep", name: "保留")], totalRecordCount: 1)
+            }
+            throw EmbyAPIError.server(status: 500)
+        }
+        list.reload()
+        try await waitUntil { list.items.map(\.id) == ["keep"] }
+
+        list.refresh()
+        try await waitUntil { !list.isRefreshing }
+
+        XCTAssertEqual(list.items.map(\.id), ["keep"], "刷新失败不得清空已显示内容")
+        if case .failed = list.state {
+            XCTFail("刷新失败不该把整页换成错误态")
+        }
+    }
+
     // MARK: - 取消与失败
 
     @MainActor

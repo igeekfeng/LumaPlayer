@@ -15,6 +15,8 @@ struct MediaDetailView: View {
     let item: EmbyItem
     /// 打开另一项(相似推荐):主窗口往导航栈上再 push 一页,返回栈可逐级退回。
     var onOpenItem: (EmbyItem) -> Void = { _ in }
+    /// 变化即重新加载(工具栏「刷新」)。同一项再次加载是原地刷新,保留已有内容。
+    var refreshToken: Int = 0
 
     /// 每个 push 出来的详情页自带一份:栈上同时存在多页时各读各的项,
     /// 共用一个 ViewModel 会让上层页面显示下层那一项的内容。
@@ -26,12 +28,14 @@ struct MediaDetailView: View {
         container: AppContainer,
         server: ServerProfile,
         item: EmbyItem,
-        onOpenItem: @escaping (EmbyItem) -> Void = { _ in }
+        onOpenItem: @escaping (EmbyItem) -> Void = { _ in },
+        refreshToken: Int = 0
     ) {
         self.container = container
         self.server = server
         self.item = item
         self.onOpenItem = onOpenItem
+        self.refreshToken = refreshToken
         self._viewModel = State(initialValue: MediaDetailViewModel(container: container))
     }
 
@@ -39,7 +43,8 @@ struct MediaDetailView: View {
         Group {
             switch viewModel.detailState {
             case .idle, .loading:
-                LoadingStateView(title: "正在加载详情…")
+                // 首屏还没有内容:灰色骨架占位,不闪白屏(刷新时 detailState 仍是 .loaded)
+                SkeletonDetail()
             case .failed(let failure):
                 ErrorStateView(
                     failure: failure,
@@ -52,10 +57,12 @@ struct MediaDetailView: View {
         }
         // 栈顶再 push 一页(相似推荐)时,返回按钮要有个名字可显示
         .navigationTitle(item.name)
-        .task(id: "\(server.id.uuidString)-\(item.id)") {
-            isOverviewExpanded = false
+        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        .allowsHitTesting(!viewModel.isLoading)
+        .task(id: "\(server.id.uuidString)-\(item.id)-\(refreshToken)") {
             viewModel.load(item: item, server: server)
         }
+        .reportsPageLoading(viewModel.isLoading, page: .detail, to: container.state)
         // Q22:续播位置、已看状态以服务端为准。播放器在独立窗口里,
         // 收尾上报发完后经 AppState 广播;只要是这台服务器上的播放就重读一次
         // (播的可能是本页的某一集,也可能是从播放器里连播过去的下一集)。
@@ -157,8 +164,8 @@ struct MediaDetailView: View {
                         .controlSize(.large)
                     }
                 } else if detail.kind == .series {
-                    ProgressView()
-                        .controlSize(.small)
+                    SkeletonBlock(cornerRadius: Radius.card)
+                        .frame(width: Metrics.spacingXL, height: Metrics.spacingXL)
                     Text("正在定位要播放的那一集…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -274,12 +281,7 @@ struct MediaDetailView: View {
     private var seriesSections: some View {
         switch viewModel.seasonsState {
         case .idle, .loading:
-            HStack(spacing: Metrics.spacingM) {
-                ProgressView()
-                Text("正在加载季…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            SkeletonEpisodeStrip()
         case .failed(let failure):
             ErrorStateView(
                 failure: failure,
@@ -331,12 +333,7 @@ struct MediaDetailView: View {
     private var episodesSection: some View {
         switch viewModel.episodesState {
         case .idle, .loading:
-            HStack(spacing: Metrics.spacingM) {
-                ProgressView()
-                Text("正在加载分集…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            SkeletonEpisodeStrip()
         case .failed(let failure):
             ErrorStateView(
                 failure: failure,

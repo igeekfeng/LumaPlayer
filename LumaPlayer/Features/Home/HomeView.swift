@@ -67,9 +67,12 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("首页")
+        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        .allowsHitTesting(!viewModel.isLoading)
         .task(id: "\(server.id.uuidString)-\(refreshToken)") {
             viewModel.load(server: server)
         }
+        .reportsPageLoading(viewModel.isLoading, page: .home, to: container.state)
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
             guard finished?.serverID == server.id else { return }
             viewModel.refreshProgress(server: server)
@@ -113,7 +116,13 @@ private struct HomeLibrariesRow: View {
     var body: some View {
         switch row.state {
         case .idle, .loading:
-            HomeSectionPlaceholder(title: Self.title)
+            // 首屏还没有内容:灰色骨架占位(横版块),不闪白屏
+            SkeletonShelf(
+                title: Self.title,
+                cardWidth: Metrics.libraryTileWidth,
+                aspectRatio: Metrics.landscapeAspectRatio,
+                count: 4
+            )
         case .failed(let failure):
             HomeSectionError(title: Self.title, failure: failure, context: context)
         case .loaded(let views):
@@ -157,7 +166,12 @@ private struct HomeResumeRow: View {
         case .idle:
             EmptyView()
         case .loading:
-            HomeSectionPlaceholder(title: title)
+            SkeletonShelf(
+                title: title,
+                cardWidth: Metrics.landscapeCardWidth,
+                aspectRatio: Metrics.landscapeAspectRatio,
+                count: 4
+            )
         case .failed(let failure):
             HomeSectionError(title: title, failure: failure, context: context)
         case .loaded(let items):
@@ -197,7 +211,7 @@ private struct HomeLatestRow: View {
         case .idle:
             EmptyView()
         case .loading:
-            HomeSectionPlaceholder(title: title)
+            SkeletonShelf(title: title, count: 6)
         case .failed(let failure):
             HomeSectionError(title: title, failure: failure, context: context)
         case .loaded(let items):
@@ -272,25 +286,6 @@ private struct HomeItemMenu: View {
                 context.viewModel.hideFromResume(item, server: context.server)
             }
             .disabled(context.viewModel.updatingResumeIDs.contains(item.id))
-        }
-    }
-}
-
-private struct HomeSectionPlaceholder: View {
-    let title: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacingS) {
-            Text(title)
-                .font(.title3.bold())
-            HStack(spacing: Metrics.spacingM) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("加载中…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, Metrics.spacingL)
         }
     }
 }

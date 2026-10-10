@@ -144,7 +144,8 @@ struct BrowseView: View {
                 container: container,
                 server: server,
                 item: detail.item,
-                onOpenItem: openItem
+                onOpenItem: openItem,
+                refreshToken: refreshToken
             )
         }
     }
@@ -181,12 +182,10 @@ struct BrowseView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            Button {
+            // 加载 / 刷新中图标转圈并禁用;状态由当前内容页经 `AppState.isPageLoading` 上报
+            RefreshToolbarButton(isLoading: container.state.isPageLoading) {
                 refresh()
-            } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
             }
-            .help("刷新当前页面")
         }
     }
 

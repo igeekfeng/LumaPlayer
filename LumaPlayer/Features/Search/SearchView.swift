@@ -34,11 +34,14 @@ struct SearchView: View {
 
     var body: some View {
         results
+            // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧结果做操作
+            .allowsHitTesting(!viewModel.isLoading)
             .navigationTitle(term.isEmpty ? "搜索" : "搜索「\(term)」")
             // 换服务器后旧结果属于别的服务器:按新服务器重搜(不串台)
             .task(id: "\(server.id.uuidString)-\(submission)-\(term)") {
                 viewModel.search(term, server: server)
             }
+            .reportsPageLoading(viewModel.isLoading, page: .search, to: container.state)
     }
 
     @ViewBuilder
@@ -46,7 +49,8 @@ struct SearchView: View {
         if let list = viewModel.list {
             switch list.state {
             case .idle, .loading:
-                LoadingStateView(title: "正在搜索…")
+                // 首屏还没有结果:灰色骨架占位,不闪白屏(重新搜索时 state 仍是 .loaded)
+                SkeletonGrid()
             case .failed(let failure):
                 ErrorStateView(
                     failure: failure,

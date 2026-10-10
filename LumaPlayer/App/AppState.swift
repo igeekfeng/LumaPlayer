@@ -19,6 +19,24 @@ final class AppState {
     /// 会话恢复只做一次(防 task 重入)
     var didRestoreSession = false
 
+    /// 正在加载 / 刷新的内容页。工具栏的「刷新」按钮据此把图标转起来并禁用。
+    ///
+    /// 用集合而不是一个布尔:栈上多页同时存在时,布尔会受「push 时旧页 `onDisappear`
+    /// 与新页上报的先后顺序」影响而抖一下;集合只按每页自己的状态增删,与顺序无关。
+    private var loadingPages: Set<ContentPage> = []
+
+    /// 有任意内容页在加载 / 刷新。
+    var isPageLoading: Bool { !loadingPages.isEmpty }
+
+    /// 内容页上报自己的加载状态(见 `reportsPageLoading(_:page:to:)`)。
+    func setPageLoading(_ isLoading: Bool, page: ContentPage) {
+        if isLoading {
+            loadingPages.insert(page)
+        } else {
+            loadingPages.remove(page)
+        }
+    }
+
     // MARK: - 播放器窗口
 
     /// 播放器窗口当前要播的内容。nil = 没在播(窗口应关闭)。

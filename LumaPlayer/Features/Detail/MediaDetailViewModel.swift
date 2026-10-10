@@ -28,6 +28,14 @@ final class MediaDetailViewModel {
     /// 正在写入 UserData 的条目 Id(按钮据此禁用,防止连点发出相反的两次请求)
     private(set) var updatingItemIDs: Set<String> = []
 
+    /// 详情页整体是否正在加载 / 刷新(工具栏刷新图标据此转圈)。
+    /// 刷新时 `detailState` 仍是 `.loaded`(保留旧内容),所以单看 `detailState` 不够。
+    var isLoading: Bool {
+        detailState.isLoading || seasonsState.isLoading || episodesState.isLoading || isRefreshing
+    }
+    /// 原地刷新(同一项、已有内容)进行中。首次加载由 `detailState == .loading` 表达。
+    private var isRefreshing = false
+
     private var seriesID: String?
     /// 当前内容对应的「服务器 + 打开的条目」。同一个键再次 `load` 是原地刷新:
     /// 保留已有内容、不切回加载态(已有缓存时不该闪 loading)
@@ -81,9 +89,16 @@ final class MediaDetailViewModel {
             focusedEpisode = nil
             focusEpisodeID = nil
             didPickEpisodeManually = false
+        } else {
+            // 已有内容:保留,只标记「在刷新」,让工具栏图标转起来
+            isRefreshing = true
         }
 
         detailTask = Task {
+            defer {
+                // 期间又发起了一轮(切条目 / 再刷新)就不动标记,交给新的一轮管
+                if isRefresh, myGeneration == generation { isRefreshing = false }
+            }
             do {
                 let connection = container.connection(for: server)
                 // 从「继续观看」「下一集」等处点进来的是分集:和 Emby Web 一样打开

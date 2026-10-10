@@ -35,7 +35,8 @@ struct LibraryView: View {
         Group {
             switch viewModel.list?.state ?? .idle {
             case .idle, .loading:
-                LoadingStateView(title: "正在加载媒体库…")
+                // 首屏还没有内容:灰色骨架占位,不闪白屏(刷新时 state 仍是 .loaded,不会走到这)
+                SkeletonGrid()
             case .failed(let failure):
                 ErrorStateView(
                     failure: failure,
@@ -46,6 +47,8 @@ struct LibraryView: View {
                 loadedContent
             }
         }
+        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(view?.name ?? "媒体库")
         .navigationSubtitle(countText)
         .toolbar { toolbarContent }
@@ -60,11 +63,12 @@ struct LibraryView: View {
         } message: {
             Text(viewModel.userDataError ?? "")
         }
-        // 服务器 / 媒体库 / 刷新三者任一变化都重新配置并加载;
-        // `configure` 内部对「参数没变」是幂等的,不会重复请求。
+        // 服务器 / 媒体库 / 刷新三者任一变化都重新配置:
+        // 查询没变(刷新)只重拉第一页、保留已显示内容;查询变了才重建列表。
         .task(id: "\(server.id.uuidString)-\(view?.id ?? "")-\(refreshToken)") {
-            viewModel.configure(server: server, view: view, refreshToken: refreshToken)
+            viewModel.configure(server: server, view: view)
         }
+        .reportsPageLoading(viewModel.isLoading, page: .library, to: container.state)
     }
 
     @ViewBuilder

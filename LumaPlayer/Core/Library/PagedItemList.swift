@@ -31,6 +31,9 @@ final class PagedItemList {
     private(set) var state: LoadState<[EmbyItem]> = .idle
     private(set) var isLoadingMore = false
     private(set) var loadMoreFailure: LoadFailure?
+    /// 手动刷新(保留已显示内容)进行中。与首次加载分开:`state` 仍是 `.loaded`,
+    /// 界面继续显示旧内容,工具栏的刷新图标转圈表示在刷新。
+    private(set) var isRefreshing = false
 
     private var totalRecordCount: Int?
     /// 最近一页是否装满 `pageSize`。只在 `totalRecordCount` 不可信时兜底用。
@@ -59,6 +62,9 @@ final class PagedItemList {
     /// ⚠️ 带 `SearchTerm` 时不可信(Q24,恒为 0),搜索页不要显示它。
     var totalCount: Int? { totalRecordCount }
 
+    /// 首次加载或刷新进行中(工具栏刷新图标据此转圈)。
+    var isLoading: Bool { state.isLoading || isRefreshing }
+
     /// 标记已看 / 收藏成功后,用服务端返回的 UserData 就地替换这一项,不重拉整页。
     func updateUserData(_ userData: EmbyUserData, forItemID itemID: String) {
         guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
@@ -66,7 +72,9 @@ final class PagedItemList {
         if case .loaded = state { state = .loaded(items) }
     }
 
-    /// 重新加载第一页。**会取消**上一轮未完成的请求。
+    /// 重新加载第一页,**清空已显示的内容**并切回加载态。查询条件变了(换服务器 /
+    /// 换媒体库 / 改排序筛选)时用它 —— 旧内容不属于新查询,不该留在屏幕上。
+    /// **会取消**上一轮未完成的请求。
     func reload() {
         loadTask?.cancel()
         generation += 1
@@ -75,59 +83,98 @@ final class PagedItemList {
         lastPageWasFull = false
         isLoadingMore = false
         loadMoreFailure = nil
-        loadPage(startIndex: 0, appending: false)
+        isRefreshing = false
+        loadPage(startIndex: 0, mode: .initial)
     }
 
-    /// 加载下一页。没有更多 / 正在加载时不重复发请求。
+    /// 手动刷新:重新拉第一页,但**保留已显示的内容**。
+    ///
+    /// 与 `reload()` 的区别是查询条件没变,旧内容仍然有效 —— 只是用户按了「刷新」要
+    /// 最新数据。因此不切回 `.loading`、不清空 `items`,只置 `isRefreshing`
+    /// (工具栏刷新图标据此转圈);新结果回来后整页替换,失败则保留旧内容
+    /// (与首页 / 详情页的后台刷新同一立场)。翻过的后续页会丢掉,回到第一页。
+    func refresh() {
+        loadTask?.cancel()
+        generation += 1
+        isLoadingMore = false
+        loadMoreFailure = nil
+        loadPage(startIndex: 0, mode: .refresh)
+    }
+
+    /// 加载下一页。没有更多 / 正在加载 / 正在刷新时不重复发请求。
     func loadMore() {
-        guard hasMore, !isLoadingMore, !state.isLoading else { return }
-        loadPage(startIndex: items.count, appending: true)
+        guard hasMore, !isLoadingMore, !state.isLoading, !isRefreshing else { return }
+        loadPage(startIndex: items.count, mode: .append)
     }
 
     // MARK: - 内部
 
-    private func loadPage(startIndex: Int, appending: Bool) {
+    /// 一次请求的意图:决定进入哪个加载态、结果怎么落地。
+    private enum LoadMode {
+        /// 首次加载 / 查询变化:清空并切回 `.loading`
+        case initial
+        /// 加载下一页:追加
+        case append
+        /// 手动刷新:保留内容,只置 `isRefreshing`
+        case refresh
+    }
+
+    private func loadPage(startIndex: Int, mode: LoadMode) {
         let myGeneration = generation
-        if appending {
+        switch mode {
+        case .append:
             isLoadingMore = true
             loadMoreFailure = nil
-        } else {
+        case .initial:
             state = .loading
+        case .refresh:
+            isRefreshing = true
         }
         loadTask = Task {
             do {
                 let page = try await fetch(startIndex, Self.pageSize)
-                apply(page, generation: myGeneration, appending: appending)
+                apply(page, generation: myGeneration, mode: mode)
             } catch let error as EmbyAPIError {
-                handle(error, generation: myGeneration, appending: appending)
+                handle(error, generation: myGeneration, mode: mode)
             } catch {
-                handle(.transport(.unknown), generation: myGeneration, appending: appending)
+                handle(.transport(.unknown), generation: myGeneration, mode: mode)
             }
         }
     }
 
-    private func apply(_ page: PagedFetchResult, generation: Int, appending: Bool) {
+    private func apply(_ page: PagedFetchResult, generation: Int, mode: LoadMode) {
         guard generation == self.generation else { return }
-        if appending {
+        switch mode {
+        case .append:
             items.append(contentsOf: page.items)
-        } else {
+        case .initial, .refresh:
             items = page.items
         }
         totalRecordCount = page.totalRecordCount
         lastPageWasFull = page.items.count >= Self.pageSize
         isLoadingMore = false
+        isRefreshing = false
         loadMoreFailure = nil
         state = .loaded(items)
     }
 
-    private func handle(_ error: EmbyAPIError, generation: Int, appending: Bool) {
+    private func handle(_ error: EmbyAPIError, generation: Int, mode: LoadMode) {
         guard generation == self.generation else { return }
         isLoadingMore = false
-        // 取消不是错误:静默丢弃,保留当前状态(API_CONTRACT.md 第 7 节)
-        if error == .cancelled { return }
-        if appending {
+        // 取消不是错误:静默丢弃,保留当前状态(API_CONTRACT.md 第 7 节)。
+        // 刷新被取消时清掉标记,免得刷新图标一直转;新的一轮加载会重新决定状态。
+        if error == .cancelled {
+            if mode == .refresh { isRefreshing = false }
+            return
+        }
+        switch mode {
+        case .append:
             loadMoreFailure = LoadFailure(error)
-        } else {
+        case .refresh:
+            // 刷新失败保留原内容(与首页 / 详情页的后台刷新同一立场):旧内容仍可用,
+            // 401 等问题会在用户下一次操作时由正常加载路径暴露。
+            isRefreshing = false
+        case .initial:
             state = .failed(LoadFailure(error))
         }
     }

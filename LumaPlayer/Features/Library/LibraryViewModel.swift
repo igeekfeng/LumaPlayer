@@ -89,10 +89,14 @@ final class LibraryViewModel {
     private let container: AppContainer
 
     private(set) var list: PagedItemList?
-    private var configuredKey: String?
+    /// 当前列表的查询标识(服务器 + 媒体库 + 排序 + 筛选)。**不含**刷新计数 ——
+    /// 手动刷新不改查询,走 `PagedItemList.refresh()` 保留已显示的内容。
+    private var configuredQueryKey: String?
     private var server: ServerProfile?
     private var view: EmbyView?
-    private var refreshToken = 0
+
+    /// 首次加载或刷新进行中(工具栏刷新图标据此转圈)。
+    var isLoading: Bool { list?.isLoading ?? false }
 
     var sort: LibrarySort = .name {
         didSet {
@@ -116,27 +120,30 @@ final class LibraryViewModel {
         self.container = container
     }
 
-    /// 按「服务器 + 媒体库 + 刷新计数」配置列表。
+    /// 按「服务器 + 媒体库」配置列表。
     ///
-    /// key 没变就不重建 —— 否则 SwiftUI 每次重绘视图都会丢掉已加载的分页,
+    /// 查询没变就不重建 —— 否则 SwiftUI 每次重绘视图都会丢掉已加载的分页,
     /// 并向服务器重复发请求(服务器不是我们的,见项目 MEMORY.md 的低频纪律)。
-    /// key 变了(换服务器 / 换媒体库 / 手动刷新 / 改排序筛选)才重建,旧请求由
-    /// `PagedItemList` 取消。
-    func configure(server: ServerProfile, view: EmbyView?, refreshToken: Int = 0) {
+    /// 查询变了(换服务器 / 换媒体库 / 改排序筛选)才重建,旧请求由
+    /// `PagedItemList` 取消;查询没变(手动刷新)只重拉第一页、保留已显示内容。
+    func configure(server: ServerProfile, view: EmbyView?) {
         self.server = server
         self.view = view
-        self.refreshToken = refreshToken
         reconfigure()
     }
 
     private func reconfigure() {
         guard let server else { return }
-        let key = [
-            server.id.uuidString, view?.id ?? "", String(refreshToken),
+        let queryKey = [
+            server.id.uuidString, view?.id ?? "",
             sort.rawValue, String(ascending), filter.rawValue,
         ].joined(separator: "|")
-        guard configuredKey != key else { return }
-        configuredKey = key
+        // 查询没变(手动刷新 / 同一页重新配置):保留已显示的内容,只重拉第一页
+        if configuredQueryKey == queryKey, let list {
+            list.refresh()
+            return
+        }
+        configuredQueryKey = queryKey
 
         let parentID = view?.id
         let collectionType = view?.collectionType

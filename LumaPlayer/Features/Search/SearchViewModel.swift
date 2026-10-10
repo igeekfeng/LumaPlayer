@@ -22,6 +22,9 @@ final class SearchViewModel {
     private var configuredServerID: UUID?
     private var configuredTerm: String?
 
+    /// 首次搜索或重新搜索进行中(工具栏刷新图标据此转圈)。
+    var isLoading: Bool { list?.isLoading ?? false }
+
     init(container: AppContainer) {
         self.container = container
     }
@@ -38,8 +41,9 @@ final class SearchViewModel {
             configuredTerm = nil
             return
         }
+        // 同一服务器、同一关键词再提交 = 重新搜索:保留已显示的结果,只重拉第一页
         if configuredServerID == server.id, configuredTerm == term, let list {
-            list.reload()
+            list.refresh()
             return
         }
         configuredServerID = server.id
