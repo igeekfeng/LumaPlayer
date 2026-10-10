@@ -2,14 +2,28 @@
 //!
 //! 来源:`docs/DECISIONS/avkit-rust-rearchitecture.md` 第 2 节。
 //!
-//! ⚠️ **该表全部为 🔶 多来源一致的二手结论,尚未在本机 AVPlayer 上实测**
-//! (原文档 R7)。分支计划在 P3 阶段逐项实测并回填;实测若推翻某项,
-//! 只需改本文件的常量,决策器与 DeviceProfile 都会跟着变 ——
-//! 两者都从这张表派生,不允许各写一份(`DeviceProfile::avkit` 有断言防漂移)。
+//! **状态(2026-10-10,P3)**:该表已在本机 AVFoundation 上**逐项实测**
+//! (证据:`Scripts/probe-avkit-capability.sh`,31 项断言,3 条原假设被推翻,
+//!  结论写进文档第 2.1 节)。实测推翻的三条已回填到本文件:
+//!
+//! 1. **HEVC 在 MPEG-TS 里 AVFoundation 连视频轨都不暴露** —— 容器维与视频维
+//!    **不是独立的**,见 [`AvkitCapabilities::forbidden_container_video_pairs`]。
+//! 2. MP4 里的 HEVC 必须 fourCC = `hvc1`;`hev1` 直接 `playable=false`。
+//!    这不是我们能控制的(取决于服务端怎么封装),只能记着。
+//! 3. `mp3` 装在 MP4 里会被静默丢弃 → 从原生音频表里摘掉。
+//!
+//! ⚠️ 仍未实测:AV1 / ProRes 的容器组合、位图字幕的烧录效果、HLS 与转码流的
+//! seek 语义(那是 P3 播放内核的题目)。
 //!
 //! 判定的方向性:**宁可多让服务端做一点,也不假装自己能放。**
 //! 服务端被要求重封装/转码时,最坏是多花点 CPU;而客户端自以为能放时,
 //! 表现是黑屏或无声 —— 且能骗过所有计数指标(第 4 节点名的静默失败)。
+//!
+//! ⭐ 实测补充了这条依据的**机制**:AVFoundation 遇到不认识的编码不是报错,
+//! 而是把那条轨**悄悄从 `AVAssetTrack` 列表里删掉**
+//! (实测:MKV 之外,MP4 里的 DTS / TrueHD / MP3,TS 里的 HEVC 都是这个行为;
+//! 一个只剩音轨的 TS 能正常 `play()` 且时间照走,`errorLog` 干干净净)。
+//! 所以指望「拿不到就报错」是不成立的,判定必须发生在建流之前。
 
 use crate::models::{MediaSource, MediaStream};
 
@@ -127,12 +141,22 @@ pub struct AvkitCapabilities {
     pub convertible_subtitle_codecs: &'static [&'static str],
     /// 位图字幕:没有系统渲染通路,只能烧录
     pub bitmap_subtitle_codecs: &'static [&'static str],
+    /// ⭐ **容器 × 视频编码 的例外组合** —— `(容器, 视频编码)`。
+    ///
+    /// 加这一栏的原因是 P3 实测推翻了「容器与视频编码是两个独立维度」这个
+    /// 默认假设:HEVC 装在 MP4 里没问题,装在 MPEG-TS 里 AVFoundation
+    /// **连视频轨都不列出**(实测:TS 里 hevc 轨消失、只剩音轨,而
+    /// `AVPlayerItem` 照样 `readyToPlay` + `play()`,时间照走、`errorLog` 为空
+    /// —— 即「有声音没画面」的静默失败)。
+    ///
+    /// ⛔ 判到这里的组合**不能**当成原生直放;按容器维处理(让服务端重封装)。
+    pub forbidden_container_video_pairs: &'static [(&'static str, &'static str)],
     /// 表的版本号。回填 P3 实测结论时改这里,决策结果里能对上。
     pub revision: &'static str,
 }
 
 impl AvkitCapabilities {
-    /// 当前分支采用的能力表(第 2 节)。
+    /// 当前分支采用的能力表(第 2 节 + 2.1 节实测回填)。
     pub const fn current() -> Self {
         Self {
             // MP4 / MOV / M4V / MPEG-TS。`m2ts` / `mts` 是 Emby 对同族的其它写法。
@@ -142,17 +166,26 @@ impl AvkitCapabilities {
             // HEVC 含 Main/Main10、HDR10、HLG、DV 5/8.1/8.4。
             // ⚠️ VP9 只能经 HLS,容器内直放不成立 → 不算原生。
             native_video_codecs: &["h264", "hevc", "av1", "prores"],
-            // DTS / TrueHD 不支持(HomePod / Apple TV 的「全景声」只走 E-AC-3,与 TrueHD 不是一回事)。
-            native_audio_codecs: &["aac", "ac3", "eac3", "alac", "flac", "mp3"],
-            // WebVTT / TTML / 3GPP 定时文本。
+            // ⚠️ 实测(2026-10-10)把 `mp3` 从这里摘掉:MP4 里的 MP3 轨会被
+            //    AVFoundation **静默丢弃**(轨数对不上,`playable` 仍是 true)。
+            //    裸 `.mp3` 文件本身是支持的(fourCC `.mp3`),但本项目是视频客户端,
+            //    能力表问的是「视频源里的音轨」—— 而把 mp3 音频重封装进 mp4
+            //    正是服务端会做的事(老 AVI 片源)。代价只是服务端 mp3→aac,
+            //    远小于「有画面没声音」。若将来支持音乐库,需重新评估这一条。
+            native_audio_codecs: &["aac", "ac3", "eac3", "alac", "flac"],
+            // WebVTT / TTML / 3GPP 定时文本(实测:`mov_text` 进 MP4 后,
+            // `AVMediaSelectionGroup(.legible)` 里能看到它)。
             native_subtitle_codecs: &["webvtt", "vtt", "ttml", "mov_text", "eia_608"],
             // ⚠️ `subrip`(srt)与 `ass`/`ssa` 都算「文本但需转换」:
-            //    - srt:AVKit 能不能从媒体选择组里直读,二手来源不一致,P3 实测前按需转换处理;
+            //    - srt:实测**没能造出**「MP4 里原样封装 srt」的样本(ffmpeg、
+            //      Emby 都只会把它转成 mov_text 或 vtt),所以「AVKit 能不能直读
+            //      容器里的 srt」这个问题在本机无法证实 → 按需转换处理,方向安全;
             //    - ass/ssa:能读,但样式会被丢弃,不如直接让服务端给纯文本。
-            //    这一条最可能在 P3 被推翻,推翻后把 codec 从本表挪进
-            //    `native_subtitle_codecs` 即可,两侧派生都会跟着变。
+            //    实测把 pos 侧坐实了:`mov_text` **能**进 legible 组,说明
+            //    「服务端转文本」这条出路是通的(这正是本表要求的动作)。
             convertible_subtitle_codecs: &["subrip", "srt", "ass", "ssa", "text", "smi"],
             // PGS / VOBSUB / DVB / XSUB:没有系统渲染通路。
+            // 实测补充:PGS 进 MPEG-TS 后 legible 组为空(且那条轨整条不暴露)。
             bitmap_subtitle_codecs: &[
                 "hdmv_pgs_subtitle",
                 "pgs",
@@ -164,9 +197,50 @@ impl AvkitCapabilities {
                 "dvbsub",
                 "xsub",
             ],
-            revision: "avkit-capability/2026-10-10 (第 2 节 🔶,未在本机实测)",
+            // ⭐ 实测:HEVC 进 MPEG-TS → AVFoundation 只认下音轨(视频轨消失),
+            //    而 `play()` 照样成功。AV1 没有实测样本,按同一族的理由保守排除
+            //    (TS 里 AV1 也不是 Apple 的既有封装形态);ProRes 是 MOV 专属,
+            //    本条对 TS 家族一并覆盖。
+            forbidden_container_video_pairs: &[
+                ("ts", "hevc"),
+                ("m2ts", "hevc"),
+                ("mts", "hevc"),
+                ("mpegts", "hevc"),
+                ("ts", "av1"),
+                ("m2ts", "av1"),
+                ("mts", "av1"),
+                ("mpegts", "av1"),
+                ("ts", "prores"),
+                ("m2ts", "prores"),
+                ("mts", "prores"),
+                ("mpegts", "prores"),
+            ],
+            revision: "avkit-capability/2026-10-10 (第 2 节 + 2.1 本机实测)",
         }
     }
+
+    /// 某个容器里**能原生直放**的视频编码 —— 从总表里减去例外组合。
+    ///
+    /// `DeviceProfile` 用它拆 `DirectPlayProfile` 用:一条 `DirectPlayProfile` 里的
+    /// `Container × VideoCodec` 是**合取**关系,所以「TS 能装 H.264 但不能装 HEVC」
+    /// 这种例外必须拆成两条声明,不能把所有容器和所有编码并成一条。
+    pub fn native_video_codecs_for(&self, container: &str) -> Vec<&'static str> {
+        self.native_video_codecs
+            .iter()
+            .copied()
+            .filter(|codec| !self.is_forbidden_pair(container, codec))
+            .collect()
+    }
+
+    /// 这组「容器 × 视频编码」是不是实测出来的例外组合。
+    pub fn is_forbidden_pair(&self, container: &str, video_codec: &str) -> bool {
+        let container = container.trim().to_ascii_lowercase();
+        let codec = video_codec.trim().to_ascii_lowercase();
+        self.forbidden_container_video_pairs
+            .iter()
+            .any(|(c, v)| *c == container && *v == codec)
+    }
+
 
     /// 逐维度判定一个 MediaSource。
     pub fn audit(&self, source: &MediaSource) -> PlaybackAudit {
@@ -176,13 +250,33 @@ impl AvkitCapabilities {
             None => Dimension::Unverifiable,
             Some(raw) => {
                 let normalized = raw.trim().to_ascii_lowercase();
-                if self.native_containers.contains(&normalized.as_str()) {
-                    Dimension::Native
-                } else {
+                if !self.native_containers.contains(&normalized.as_str()) {
                     notes.push(format!(
                         "容器 {raw} 不是 AVKit 原生支持,需服务端重封装"
                     ));
                     Dimension::Needs(ServerAction::RemuxContainer)
+                } else {
+                    // ⭐ 容器对了还不够:容器 × 视频编码 有实测出来的例外组合。
+                    //    (HEVC 进 MPEG-TS 时 AVFoundation 连视频轨都不列出,
+                    //     而播放照样"成功" —— 只出声音不出画面。)
+                    let offenders: Vec<String> = source
+                        .streams_of("Video")
+                        .into_iter()
+                        .filter_map(|s| s.codec.clone())
+                        .filter(|c| self.is_forbidden_pair(&normalized, c))
+                        .collect();
+                    if offenders.is_empty() {
+                        Dimension::Native
+                    } else {
+                        let mut names = offenders.clone();
+                        names.sort();
+                        names.dedup();
+                        notes.push(format!(
+                            "容器 {raw} 装 {} 时 AVFoundation 认不出视频轨(只能换容器重封装)",
+                            names.join("/")
+                        ));
+                        Dimension::Needs(ServerAction::RemuxContainer)
+                    }
                 }
             }
         };
@@ -469,5 +563,107 @@ mod tests {
         assert_eq!(audit.container, Dimension::Native);
         assert_eq!(audit.video, Dimension::Native);
         assert_eq!(audit.audio, Dimension::Native);
+    }
+
+    // ───────────────────────── P3 实测回填(2026-10-10)新增的断言 ─────────────────────────
+
+    /// ⭐ 本机实测:HEVC 进 MPEG-TS 后 AVFoundation **连视频轨都不列出**
+    /// (文件里确实有,ffprobe 能看见),而 `AVPlayerItem` 照样 readyToPlay +
+    /// `play()`,时间照走、`errorLog` 为空 —— 就是「有声音没画面」。
+    /// 所以这一对组合必须走重封装,不能当原生直放。
+    #[test]
+    fn hevc_in_mpegts_is_not_a_native_combination() {
+        let source = source_with(
+            r#"{
+                "Id": "s", "Container": "mpegts",
+                "MediaStreams": [
+                    {"Index":0,"Type":"Video","Codec":"hevc"},
+                    {"Index":1,"Type":"Audio","Codec":"aac"}
+                ]
+            }"#,
+        );
+        let audit = AvkitCapabilities::current().audit(&source);
+
+        assert_eq!(
+            audit.container,
+            Dimension::Needs(ServerAction::RemuxContainer),
+            "HEVC 装 MPEG-TS 时不能当容器原生"
+        );
+        // 视频编码本身是支持的 —— 问题出在组合上,不是编码上
+        assert_eq!(audit.video, Dimension::Native);
+        assert_eq!(audit.audio, Dimension::Native);
+        assert_eq!(audit.path_actions(), vec![ServerAction::RemuxContainer]);
+        assert!(
+            audit.notes.iter().any(|n| n.contains("视频轨")),
+            "理由要点明「认不出视频轨」,实际:{:?}",
+            audit.notes
+        );
+    }
+
+    /// 对照组:同一容器装 H.264 是**实测通过**的,不能被上面那条规则误伤。
+    #[test]
+    fn h264_in_mpegts_stays_native() {
+        let source = source_with(
+            r#"{
+                "Id": "s", "Container": "mpegts",
+                "MediaStreams": [
+                    {"Index":0,"Type":"Video","Codec":"h264"},
+                    {"Index":1,"Type":"Audio","Codec":"ac3"}
+                ]
+            }"#,
+        );
+        let audit = AvkitCapabilities::current().audit(&source);
+
+        assert_eq!(audit.container, Dimension::Native);
+        assert_eq!(audit.video, Dimension::Native);
+        assert_eq!(audit.audio, Dimension::Native);
+        assert!(audit.path_actions().is_empty());
+    }
+
+    /// 同一个编码换个容器就没事了 —— 说明规则钉的是「组合」而不是编码。
+    #[test]
+    fn hevc_in_mp4_stays_native() {
+        let source = source_with(
+            r#"{
+                "Id": "s", "Container": "mp4",
+                "MediaStreams": [
+                    {"Index":0,"Type":"Video","Codec":"hevc"},
+                    {"Index":1,"Type":"Audio","Codec":"aac"}
+                ]
+            }"#,
+        );
+        let audit = AvkitCapabilities::current().audit(&source);
+        assert_eq!(audit.container, Dimension::Native);
+        assert_eq!(audit.video, Dimension::Native);
+    }
+
+    /// ⭐ 本机实测:MP3 装进 MP4 后音轨被**静默丢弃**(轨数对不上,
+    /// 而 `playable` 仍是 true)→ 从原生音频表里摘掉,让服务端转码。
+    #[test]
+    fn mp3_audio_is_not_native_anymore() {
+        let source = source_with(
+            r#"{
+                "Id": "s", "Container": "mp4",
+                "MediaStreams": [
+                    {"Index":0,"Type":"Video","Codec":"h264"},
+                    {"Index":1,"Type":"Audio","Codec":"mp3"}
+                ]
+            }"#,
+        );
+        let audit = AvkitCapabilities::current().audit(&source);
+
+        assert_eq!(audit.audio, Dimension::Needs(ServerAction::TranscodeAudio));
+        assert_eq!(audit.path_actions(), vec![ServerAction::TranscodeAudio]);
+        // 容器与视频都不该受影响
+        assert_eq!(audit.container, Dimension::Native);
+        assert_eq!(audit.video, Dimension::Native);
+    }
+
+    /// 能力表版本号里必须留下「已实测」这个事实 —— 别让后人以为还是二手推断。
+    #[test]
+    fn revision_records_the_local_measurement() {
+        let revision = AvkitCapabilities::current().revision;
+        assert!(revision.contains("avkit-capability"), "{revision}");
+        assert!(revision.contains("实测"), "版本号应记下已实测,实际:{revision}");
     }
 }

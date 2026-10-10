@@ -108,14 +108,35 @@ impl DeviceProfile {
             }))
             .collect();
 
+        // ⭐ 一条 `DirectPlayProfile` 里的 `Container × VideoCodec` 是**合取**关系,
+        //    所以不能把所有容器和所有编码并成一条。「TS 能装 H.264 却不能装 HEVC」
+        //    (P3 本机实测)这种例外必须拆成两条声明 —— 否则等于告诉服务端
+        //    「HEVC 的 TS 直接给我吧」,而客户端拿到的是**没有画面的流**:
+        //    `AVPlayerItem` 照样 readyToPlay、时间照走、`errorLog` 为空。
+        //
+        //    分组方式是从能力表推的(按「该容器允许的视频编码集合」归并),
+        //    ⛔ 不手写死哪几条 —— 表里加一条例外,这里跟着变。
+        let mut groups: Vec<(Vec<&'static str>, Vec<&'static str>)> = Vec::new();
+        for container in caps.native_containers {
+            let codecs = caps.native_video_codecs_for(container);
+            match groups.iter_mut().find(|(_, existing)| *existing == codecs) {
+                Some((containers, _)) => containers.push(container),
+                None => groups.push((vec![container], codecs)),
+            }
+        }
+        let direct_play_profiles = groups
+            .into_iter()
+            .map(|(containers, video_codecs)| DirectPlayProfile {
+                container: containers.join(","),
+                profile_type: "Video".to_string(),
+                video_codec: video_codecs.join(","),
+                audio_codec: caps.native_audio_codecs.join(","),
+            })
+            .collect();
+
         Self {
             name: "LumaPlayer".to_string(),
-            direct_play_profiles: vec![DirectPlayProfile {
-                container: caps.native_containers.join(","),
-                profile_type: "Video".to_string(),
-                video_codec: caps.native_video_codecs.join(","),
-                audio_codec: caps.native_audio_codecs.join(","),
-            }],
+            direct_play_profiles,
             subtitle_profiles,
             transcoding_profiles: vec![TranscodingProfile {
                 container: "mp4".to_string(),
@@ -140,26 +161,91 @@ mod tests {
     fn direct_play_matches_capability_table() {
         let caps = AvkitCapabilities::current();
         let profile = DeviceProfile::from_capabilities(&caps);
-        let direct = &profile.direct_play_profiles[0];
 
-        for container in direct.container.split(',') {
-            assert!(
-                caps.native_containers.contains(&container),
-                "DirectPlayProfile 声明了能力表里没有的容器 {container} —— 两份白名单已漂移"
-            );
+        for direct in &profile.direct_play_profiles {
+            for container in direct.container.split(',') {
+                assert!(
+                    caps.native_containers.contains(&container),
+                    "DirectPlayProfile 声明了能力表里没有的容器 {container} —— 两份白名单已漂移"
+                );
+                // ⭐ 声明的「容器 × 视频编码」组合,一条都不许是实测出来的例外组合。
+                for codec in direct.video_codec.split(',') {
+                    assert!(
+                        !caps.is_forbidden_pair(container, codec),
+                        "DirectPlayProfile 把实测放不了的组合 {container} × {codec} 声明成了可直放"
+                    );
+                }
+            }
+            for codec in direct.video_codec.split(',') {
+                assert!(
+                    caps.native_video_codecs.contains(&codec),
+                    "DirectPlayProfile 声明了能力表里没有的视频编码 {codec}"
+                );
+            }
+            for codec in direct.audio_codec.split(',') {
+                assert!(
+                    caps.native_audio_codecs.contains(&codec),
+                    "DirectPlayProfile 声明了能力表里没有的音频编码 {codec}"
+                );
+            }
         }
-        for codec in direct.video_codec.split(',') {
-            assert!(
-                caps.native_video_codecs.contains(&codec),
-                "DirectPlayProfile 声明了能力表里没有的视频编码 {codec}"
-            );
+    }
+
+    /// ⭐ P3 实测带出来的性质:HEVC 的容器声明里**不能**出现 TS 家族。
+    /// 这不是「少声明一点更保险」,而是「声明了就静默丢画面」。
+    #[test]
+    fn hevc_is_never_declared_direct_playable_in_the_ts_family() {
+        let caps = AvkitCapabilities::current();
+        let profile = DeviceProfile::from_capabilities(&caps);
+
+        for direct in &profile.direct_play_profiles {
+            let containers: Vec<&str> = direct.container.split(',').collect();
+            let video_codecs: Vec<&str> = direct.video_codec.split(',').collect();
+            if video_codecs.contains(&"hevc") {
+                for ts in ["ts", "m2ts", "mts", "mpegts"] {
+                    assert!(
+                        !containers.contains(&ts),
+                        "HEVC 与 {ts} 出现在同一条 DirectPlayProfile 里:{direct:?}"
+                    );
+                }
+            }
         }
-        for codec in direct.audio_codec.split(',') {
-            assert!(
-                caps.native_audio_codecs.contains(&codec),
-                "DirectPlayProfile 声明了能力表里没有的音频编码 {codec}"
-            );
+        // 反过来也要成立:TS 家族的 H.264 仍然要留在直放白名单里(实测通过)
+        assert!(
+            profile.direct_play_profiles.iter().any(|d| {
+                d.container.contains("mp4") && d.video_codec.contains("hevc")
+            }),
+            "MP4 侧的 HEVC 直放不能被一起误伤掉"
+        );
+    }
+
+    /// 能力表里加一条例外组合,声明侧要自动跟着变 —— 不许手写死。
+    #[test]
+    fn direct_play_profiles_are_derived_not_hard_coded() {
+        let mut caps = AvkitCapabilities::current();
+        // 造一张「MP4 装 hevc 也不行」的表(现实中不成立,只为验证派生关系)
+        let extra: &'static [(&'static str, &'static str)] = &[("mp4", "hevc")];
+        let original = caps.forbidden_container_video_pairs;
+        caps.forbidden_container_video_pairs = extra;
+
+        let profile = DeviceProfile::from_capabilities(&caps);
+        for direct in &profile.direct_play_profiles {
+            if direct.video_codec.split(',').any(|c| c == "hevc") {
+                assert!(
+                    !direct.container.split(',').any(|c| c == "mp4"),
+                    "表改了但声明没跟着改:{direct:?}"
+                );
+            }
         }
+
+        caps.forbidden_container_video_pairs = original;
+        let restored = DeviceProfile::from_capabilities(&caps);
+        assert!(
+            restored.direct_play_profiles.iter().any(|d| {
+                d.container.split(',').any(|c| c == "mp4") && d.video_codec.split(',').any(|c| c == "hevc")
+            }),
+            "恢复原表后 MP4 的 HEVC 直放声明应该回来"
+        );
     }
 
     /// 位图字幕绝不能出现在声明里 —— 声明了就等于告诉服务端
@@ -181,11 +267,12 @@ mod tests {
     #[test]
     fn mkv_is_not_declared_as_direct_playable() {
         let profile = DeviceProfile::avkit();
-        let containers = &profile.direct_play_profiles[0].container;
-        assert!(
-            !containers.split(',').any(|c| c == "mkv" || c == "webm"),
-            "MKV/WebM 不是 AVKit 原生支持,不该出现在声明里:{containers}"
-        );
+        for direct in &profile.direct_play_profiles {
+            assert!(
+                !direct.container.split(',').any(|c| c == "mkv" || c == "webm"),
+                "MKV/WebM 不是 AVKit 原生支持,不该出现在声明里:{direct:?}"
+            );
+        }
     }
 
     #[test]

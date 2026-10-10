@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import LumaPlayer
 
@@ -43,16 +44,111 @@ final class RustPlaybackDecisionTests: XCTestCase {
 
     /// `DeviceProfile` 由 Rust 派生，Swift 只负责把它塞进请求体。
     /// 守住两条：白名单里不能有 MKV；两份白名单只有 Rust 那一份。
+    ///
+    /// ⚠️ P3 起声明是**多条** `DirectPlayProfile`（容器 × 视频编码 有例外组合，
+    /// 见下面的 `testContainerVideoExceptionsFromLocalMeasurement`），所以不能再拿
+    /// 整串 JSON 去 `contains("\"mp4\"")` —— 那样会漏。按容器 token 判。
     func testDeviceProfileComesFromRustAndExcludesMKV() throws {
         let json = avkitDeviceProfileJson()
+        let profiles = try directPlayProfiles(json)
+        let containers = Set(profiles.flatMap { containerTokens($0) })
 
-        XCTAssertTrue(json.contains("DirectPlayProfiles"), "实际：\(json)")
-        XCTAssertTrue(json.contains("\"mp4\""), "mp4 必须在直放白名单里：\(json)")
-        XCTAssertFalse(json.contains("mkv"), "MKV 不是 AVKit 原生支持，不该出现在声明里：\(json)")
+        XCTAssertTrue(containers.contains("mp4"), "mp4 必须在直放白名单里：\(containers)")
+        XCTAssertFalse(containers.contains("mkv"), "MKV 不是 AVKit 原生支持，不该出现在声明里")
+        XCTAssertFalse(containers.contains("webm"), "WebM 同理")
         XCTAssertFalse(
             json.contains("hdmv_pgs_subtitle"),
             "位图字幕不该被声明：声明了等于要求服务端给原样位图轨"
         )
+    }
+
+    /// ⭐ P3 本机实测带出来的**例外组合**：容器维与视频维不是独立的。
+    ///
+    /// 实测：HEVC 装进 MPEG-TS 后 AVFoundation 连视频轨都不列出（文件里确实有），
+    /// 而 `AVPlayerItem` 照样 readyToPlay + play()、时间照走、`errorLog` 为空
+    /// —— 就是「有声音没画面」。所以 HEVC 与 TS 家族绝不能出现在同一条声明里。
+    ///
+    /// 数据是**合成**的 PlaybackInfo（开发实例媒体库里没有 .ts 片源），
+    /// 与 `Scripts/verify-avkit-decision.swift` 第 5 节断言等价。
+    func testContainerVideoExceptionsFromLocalMeasurement() throws {
+        // 声明侧：HEVC 不许跟 TS 家族同条
+        for profile in try directPlayProfiles(avkitDeviceProfileJson()) {
+            guard videoTokens(profile).contains("hevc") else { continue }
+            XCTAssertTrue(
+                containerTokens(profile).isDisjoint(with: ["ts", "m2ts", "mts", "mpegts"]),
+                "HEVC 与 TS 家族出现在同一条 DirectPlayProfile 里：\(profile)"
+            )
+        }
+
+        let tsHeader = "\"PlaySessionId\":\"probe\""
+        // 判定侧一：mpegts + h264 有直连地址 → 接受（实测 h264 在 TS 里能放）
+        let h264TS = """
+            {\(tsHeader),"MediaSources":[{"Id":"ts1","Container":"mpegts",
+              "MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},
+                              {"Index":1,"Type":"Audio","Codec":"ac3"}],
+              "SupportsDirectStream":true,
+              "DirectStreamUrl":"/videos/1/stream.mpegts?api_key=FAKE_TOKEN_0123456789"}]}
+            """
+        let h264Decision = try decidePlayback(playbackInfoJson: h264TS)
+        XCTAssertEqual(h264Decision.audit.pathActions, [], "h264 的 TS 是实测能放的，不该被要求重封装")
+        XCTAssertEqual(h264Decision.method, "DirectStream")
+
+        // 判定侧二：mpegts + hevc 有直连地址却没转码地址 → 静默失败守卫必须拦下
+        let hevcTS = """
+            {\(tsHeader),"MediaSources":[{"Id":"ts2","Container":"mpegts",
+              "MediaStreams":[{"Index":0,"Type":"Video","Codec":"hevc"},
+                              {"Index":1,"Type":"Audio","Codec":"aac"}],
+              "SupportsDirectStream":true,
+              "DirectStreamUrl":"/videos/2/stream.mpegts?api_key=FAKE_TOKEN_0123456789"}]}
+            """
+        do {
+            let decision = try decidePlayback(playbackInfoJson: hevcTS)
+            XCTFail("HEVC 的 TS 本该被拦下，实际给出 \(decision.method)（这会只有声音没有画面）")
+        } catch let failure as PlaybackFailureFfi {
+            guard case let .UnplayableDirectStream(pathActions, _, _) = failure else {
+                return XCTFail("错误类型不对：\(failure)")
+            }
+            XCTAssertEqual(pathActions, ["重封装容器"])
+        }
+
+        // 判定侧三：服务端明确重封装 → 接受重封装
+        let remuxed = """
+            {\(tsHeader),"MediaSources":[{"Id":"ts3","Container":"mpegts",
+              "MediaStreams":[{"Index":0,"Type":"Video","Codec":"hevc"},
+                              {"Index":1,"Type":"Audio","Codec":"aac"}],
+              "SupportsDirectStream":false,
+              "TranscodingUrl":"/videos/3/stream.mp4?api_key=FAKE_TOKEN_0123456789",
+              "TranscodeReasons":"ContainerNotSupported"}]}
+            """
+        XCTAssertEqual(try decidePlayback(playbackInfoJson: remuxed).audit.pathActions, ["重封装容器"])
+
+        // 判定侧四：mp3 音轨 —— 实测 MP4 里的 mp3 轨会被静默丢弃 → 要求转码音频
+        let mp3 = """
+            {\(tsHeader),"MediaSources":[{"Id":"m4","Container":"mp4",
+              "MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},
+                              {"Index":1,"Type":"Audio","Codec":"mp3"}],
+              "SupportsDirectStream":false,
+              "TranscodingUrl":"/videos/4/stream.mp4?api_key=FAKE_TOKEN_0123456789",
+              "TranscodeReasons":"AudioCodecNotSupported"}]}
+            """
+        XCTAssertEqual(try decidePlayback(playbackInfoJson: mp3).audit.pathActions, ["转码音频"])
+    }
+
+    // MARK: - DeviceProfile JSON 的小工具
+
+    private func directPlayProfiles(_ json: String) throws -> [[String: Any]] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try XCTUnwrap(root["DirectPlayProfiles"] as? [[String: Any]])
+    }
+
+    private func containerTokens(_ profile: [String: Any]) -> Set<String> {
+        Set((profile["Container"] as? String)?.split(separator: ",").map(String.init) ?? [])
+    }
+
+    private func videoTokens(_ profile: [String: Any]) -> Set<String> {
+        Set((profile["VideoCodec"] as? String)?.split(separator: ",").map(String.init) ?? [])
     }
 
     /// P2 的核心断言：四类片源的决策结果，与 Rust 侧逐条对齐。
