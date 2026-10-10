@@ -7,3 +7,5 @@ publish.workspace = true
 description = "Emby / Jellyfin API 客户端、DeviceProfile 与播放决策"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

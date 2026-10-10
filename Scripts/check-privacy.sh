@@ -20,7 +20,13 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 # ── 白名单:公开的示例域与官方域,允许出现在仓库里 ──
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|github\.com|.*\.github\.com)$'
+# ⚠️ 只放「本来就是公开的」域名。分成两类:
+#   示例/本地:example.com、*.test、localhost、*.invalid
+#   官方/公开源:emby 官方文档、Apple 官方、github、cargo 注册表、ffmpeg 公开样本
+# ⚠️ 裸域名与带子域的写法**都要列**:正则可能只截到后半截
+#    (例如 `samples.ffmpeg.org` 旁边的 `*.ffmpeg.org` 会被截成 `ffmpeg.org`)。
+# ⛔ 新增真实服务器时**不要**加进白名单 —— 应当把它从代码和文档里删掉,换成示例域。
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|apple\.com|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|github\.com|.*\.github\.com|crates\.io|ffmpeg\.org|.*\.ffmpeg\.org)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。

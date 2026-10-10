@@ -102,7 +102,30 @@ LumaPlayer 用的 17 个端点全是非管理员可访问的,所以正常流程�
 | `01-direct-h264-aac.mp4` | DirectStream | 基线;另配同名 `.zh.srt` 验外挂字幕关联 |
 | `02-multi-track.mkv` | DirectStream | 2 音轨(eng/chi)+ 2 内嵌字幕 → 轨选择 |
 | `03-transcode-hevc.mkv` | 期望转码(见下方「已知结论」) | HEVC 10bit 1080p;也是测转码 seek 的素材 |
+| `04-dts.mkv` | 视客户端能力而定 | H264 + **DTS 5.1**:音频编码这一维的判定 |
+| `05-hevc-pgs.mkv` | 视客户端能力而定 | HEVC 10bit + **PGS 位图字幕**:字幕类型这一维的判定 |
 | `演示长片 (2024)/` | DirectStream | **30 分钟**:进度条拖动、`RunTimeTicks` 换算、断点续播、10 秒定时上报 |
+
+`04` / `05` 是 2026-10-10 为 `exp/avkit-rust-core` 分支的 P2
+(`docs/DECISIONS/avkit-rust-rearchitecture.md` 第 8 节)加的:AVKit 方向的决策器
+要按「容器 / 视频编码 / 音频编码 / 字幕类型」四个维度分别判是否需要服务端介入,
+这两条把「音频编码」与「字幕类型」两维各踩中一次(`01` 四维全原生、`02` 踩容器维)。
+
+### PGS 样本(`assets/sample-pgs.sup`)
+
+`05` 的 PGS 轨**不是 ffmpeg 生成的** —— ffmpeg 没有 PGS 编码器,且它的字幕编码
+只支持「文本→文本」或「位图→位图」(`Subtitle encoding currently only possible
+from text to text or bitmap to bitmap`),文本转位图超出了它的能力。
+
+所以该轨从 `assets/sample-pgs.sup` 以 `-c:s copy` 重封装进来。这个文件:
+
+- 抽取自 ffmpeg 公开测试样本 <https://samples.ffmpeg.org/sub/PGS/supsample.mkv>;
+- 只含一个显示集,video 1280×720,**21,507 字节**;
+- sha256 `f03e72bbd34177046be57da8d760718a078d139126d073e9e28febdd9624b7d9`;
+- **随脚本入库**,让 `gen-media.sh` 不依赖网络就能重建。
+
+`gen-media.sh` 缺这个文件时会**跳过 05 并给出提示**,其余素材照常生成
+(不因为一条素材失败而中断整个重建)。
 
 ### 剧集 —— 媒体库「本地剧集库」→ 容器内 `/mnt/media/TV`
 
@@ -130,6 +153,15 @@ LumaPlayer 用的 17 个端点全是非管理员可访问的,所以正常流程�
 
 标签 PNG 放在 `.labels/`(刻意在 `media/` 之外——Emby 会把媒体目录里的图片当海报收走)。
 没有 Pillow 时脚本降级为不烧标签,素材照样出。
+
+⚠️ **macOS 自带的 `python3` 通常没有 Pillow**,降级会静默发生 —— 素材能出,
+但标签没了,而标签正是「点开 E03 实际播的是 E01」这类错误的唯一举证手段。
+用**另装的一份** venv 显式指给脚本即可(⛔ 别去动系统 python):
+
+```bash
+python3 -m venv ~/.venvs/luma-media && ~/.venvs/luma-media/bin/pip install Pillow
+PYTHON=~/.venvs/luma-media/bin/python ./gen-media.sh
+```
 
 `testsrc2` 左上角**自带时间码与帧号**,那才是判断 seek 是否生效的依据,所以标签只放底部。
 
@@ -178,6 +210,42 @@ SupportsDirectStream: True    TranscodingUrl: (无)
   ⛔ 不能凭想象写一个几百行的 profile。
 - 在那之前,关于转码的验收(转码 seek、转码上报)在本地也**无法覆盖**,
   与本实例无关,是同一个原因。
+
+### ✅ 2026-10-10 补测:给出 AVKit 兼容的 `DeviceProfile` 后转码路径正常触发
+
+`exp/avkit-rust-core` 做 P2 时补上了这一条。对同 4 条素材各打一次 `PlaybackInfo`,
+三种 profile 的对照结果(全部本机 4.9.5.0 实测):
+
+| profile | MP4/H264/AAC | MKV/H264/AAC | MKV/H264/DTS | MKV/HEVC/PGS |
+|---|---|---|---|---|
+| 不限(旧的 libmpv 形态) | `SupportsDirectStream=true`,有 `DirectStreamUrl`,无转码地址 | 同左 | 同左 | 同左 |
+| 只声明 AVKit 直放白名单 | 直连 | `SupportsDirectStream=false` + `TranscodingUrl` | 同左 | 同左 |
+| 白名单 + 字幕 + 转码目标 | 直连 | 同左 | 同左 | 同左 |
+
+⚠️ 两条容易踩的观察:
+
+1. **`DirectStreamUrl` 有值 ≠ 能直连。** MKV 那条源在 `SupportsDirectStream=false` 时
+   照样带 `DirectStreamUrl`,只是它指向 `stream.mp4`(重封装后的地址)。
+   判「能不能直放」必须看 `SupportsDirectStream`。
+2. 服务端在 `TranscodingUrl` 里用 `TranscodeReasons=ContainerNotSupported`
+   说明了理由,排障时很有用。
+
+真实响应已脱敏入库为 fixture:`LumaPlayerTests/Fixtures/Playback/playback_*.json`
+(4 类片源 + 1 条「不限 profile 时 MKV 被判可直连」的反面样本),对应
+`RustCore/crates/luma-emby/tests/playback_fixtures.rs`。抓取脚本与本节的对照表同步维护。
+
+### ⚠️ 素材在 Emby 里的 `Name` 不是文件名
+
+实测:Emby 会把文件名里它认为是「媒体标记」的片段从 `Name` 里洗掉 ——
+
+| 文件 | `Path` | Emby 的 `Name` |
+|---|---|---|
+| `01-direct-h264-aac.mp4` | `/mnt/media/Movies/01-direct-h264-aac.mp4` | `01-direct` |
+| `04-dts.mkv` | `/mnt/media/Movies/04-dts.mkv` | `04` |
+| `05-hevc-pgs.mkv` | `/mnt/media/Movies/05-hevc-pgs.mkv` | `05` |
+
+所以**按 `Name` 找素材会一个都命中不了** —— 要按 `Path` 匹配,而且请求必须带
+`&Fields=Path`(默认不返回 `Path`)。
 
 ## 已知结论:续播门槛必须调成 0
 

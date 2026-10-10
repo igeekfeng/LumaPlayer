@@ -17,6 +17,7 @@ crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
 uniffi = { workspace = true, features = ["cli"] }
+serde_json = { workspace = true }
 luma-emby = { path = "../luma-emby" }
 luma-source = { path = "../luma-source" }
 luma-scrape = { path = "../luma-scrape" }

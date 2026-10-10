@@ -10,6 +10,13 @@ publish = false
 
 [workspace.dependencies]
 uniffi = "0.32"
+# Emby API 的请求体与响应体都是 JSON。P2 起 luma-emby 开始解真实响应
+# (决策器要读 MediaStreams 的编码/字幕类型),所以这里进 serde。
+# ⛔ 不用 serde 的 rename_all 自动转换:Emby 的键是 PascalCase,
+#    而字段名里还有 `DirectStreamUrl` 这种连着写的词,**逐个显式 rename**,
+#    与 Swift 侧显式 CodingKeys 的做法一致(API_CONTRACT 8.2)。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 # 这份静态库要链进 App,编译产物直接进最终二进制:

@@ -9,6 +9,8 @@
 #       01-direct-h264-aac.mp4 (+ .zh.srt)
 #       02-multi-track.mkv
 #       03-transcode-hevc.mkv
+#       04-dts.mkv
+#       05-hevc-pgs.mkv
 #       演示长片 (2024)/演示长片 (2024).mp4 (+ .zh.srt)
 #     TV/                                         ← 媒体库「tvshows」指向这里
 #       演示剧集 (2024)/
@@ -18,6 +20,24 @@
 #
 # 原有 01/02/03 三条短片规格保持不变(720p/2Mbps),覆盖 LumaPlayer 的
 # DirectStream 基线、多音轨多字幕、HEVC 转码判定三件事。
+#
+# 2026-10-10 新增 04/05 两条,专门喂给「AVKit 兼容性决策」的 fixture
+# (`docs/DECISIONS/avkit-rust-rearchitecture.md` P2):决策器要按
+# 「容器 / 视频编码 / 音频编码 / 字幕类型」四个维度分别判是否需要服务端介入,
+# 四条素材刚好把四个维度各踩中一次:
+#
+#   01  MP4/H264/AAC     四维全原生           → 不需要服务端做任何事
+#   02  MKV/H264/AAC     容器需重封装          → 见下方 02 说明
+#   04  MKV/H264/DTS     容器需重封装 + 音轨需转码
+#   05  MKV/HEVC/PGS     容器需重封装 + 位图字幕(文本轨无法承载)
+#
+# ⚠️ 04 的 DTS 用 ffmpeg 自带的 `dca` 编码器(需 -strict -2,它是 experimental)。
+# ⚠️ 05 的 PGS **无法用 ffmpeg 生成** —— ffmpeg 没有 PGS 编码器,
+#    且字幕编码「只能文本→文本或位图→位图」,文本转位图不是它的能力。
+#    所以 PGS 轨从 `assets/sample-pgs.sup` 以 `-c:s copy` 重封装进来:
+#    该 .sup 抽取自 ffmpeg 公开测试样本 `https://samples.ffmpeg.org/sub/PGS/supsample.mkv`
+#    (sha256 f03e72bb…4b7d9,只含一个显示集,21 KB)。样本入库是为了让本脚本
+#    不依赖网络就能重建;来源与校验值见 `Tools/emby-dev/README.md`。
 #
 # 新增的两类是为了解决「只有 60 秒短片测不了的东西」:
 #
@@ -53,6 +73,8 @@ BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIR="$BASE/media"
 # 标签 PNG 放在 media 之外:Emby 会把媒体目录里的图片当海报/背景图收走。
 LABELS="$BASE/.labels"
+# 手工准备、随脚本入库的素材位图(见文件头 05 的说明)。
+ASSETS="$BASE/assets"
 
 WIDTH="${WIDTH:-854}"
 HEIGHT="${HEIGHT:-480}"
@@ -207,6 +229,47 @@ echo "==> 03-transcode-hevc.mkv(1080p10bit,生成较慢)"
   -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le -b:v 6000k -g 60 \
   -c:a aac -b:a 192k -ac 2 \
   "$DIR/Movies/03-transcode-hevc.mkv"
+
+# ================================================================ 决策素材两条(2026-10-10)
+#
+# 只服务「AVKit 兼容性决策」的 fixture,规格不必与 01~03 一致 ——
+# 决策器只读 PlaybackInfo 里的容器/编码/字幕类型,不读画面。
+
+echo
+echo "== 决策素材(容器 / 音频编码 / 字幕类型 各踩一次)"
+
+echo "==> 04-dts.mkv(MKV/H264/DTS 5.1)"
+# `dca` 是 ffmpeg 的 DTS 编码器,标记 experimental,必须 -strict -2 才肯跑。
+# 通道数用 6(5.1),对齐真实蓝光里 DTS 的常见形态。
+"$FFMPEG" -y -hide_banner -loglevel error \
+  -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=60" \
+  -f lavfi -i "sine=frequency=520:duration=60" \
+  -map 0:v -map 1:a \
+  -c:v libx264 -pix_fmt yuv420p -b:v 2000k -g 60 \
+  -c:a dca -strict -2 -ac 6 -b:a 768k \
+  "$DIR/Movies/04-dts.mkv"
+
+echo "==> 05-hevc-pgs.mkv(MKV/HEVC 10bit/AAC + PGS 位图字幕)"
+if [ ! -f "$ASSETS/sample-pgs.sup" ]; then
+  # 降级而不是失败:本机没这条素材时,01/02/03/04 照样能出,
+  # 只是 P2 的四维 fixture 少「位图字幕」那一维。
+  echo "   ⚠️ 缺少 $ASSETS/sample-pgs.sup,跳过 05。" >&2
+  echo "      该文件随脚本入库;来源见 README.md「PGS 样本」一节。" >&2
+else
+  # PGS 轨必须从位图源 copy 进来(ffmpeg 不能文本→位图),先出无字幕底片再重封装。
+  "$FFMPEG" -y -hide_banner -loglevel error \
+    -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=60" \
+    -f lavfi -i "sine=frequency=700:duration=60" \
+    -map 0:v -map 1:a \
+    -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le -b:v 6000k -g 60 \
+    -c:a aac -b:a 192k -ac 2 \
+    "$TMP/05-base.mkv"
+
+  "$FFMPEG" -y -hide_banner -loglevel error \
+    -i "$TMP/05-base.mkv" -i "$ASSETS/sample-pgs.sup" \
+    -map 0 -map 1 -c copy -c:s copy \
+    "$DIR/Movies/05-hevc-pgs.mkv"
+fi
 
 # ================================================================ 长片
 
