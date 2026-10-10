@@ -57,11 +57,23 @@ pub struct SubtitleProfile {
     pub method: String,
 }
 
-/// 服务端该把转码结果做成什么样。AVKit 这边选最稳的 mp4(h264/aac)。
+/// 服务端该把转码结果做成什么样。AVKit 这边选 HLS + MPEG-TS 段(h264/aac)。
 ///
-/// ⚠️ 刻意不用 HLS:P2 只做决策,交付方式(progressive mp4 + `StartTimeTicks`
-/// 重新起流,还是 HLS)是 P3 的实测题目。这里先声明 mp4/http,
-/// 与既有 `API_CONTRACT.md` 4.5 的「转码 seek 靠重新起流」一致。
+/// ⭐ **HLS 不是偏好,是实测出来的唯一可行形态**(2026-10-10,P3)。
+/// P2 曾刻意先声明 progressive mp4/http,把"交付形态"留给 P3 实测。实测结论是:
+///
+/// - 声明 `Protocol: "http"` 时服务端给 `stream.mp4`,响应头是
+///   `Accept-Ranges: none` + `Transfer-Encoding: chunked`(**没有 Content-Length**)——
+///   AVFoundation 认为服务器配置不对,`AVPlayerItem` 直接失败:
+///   `AVFoundationErrorDomain -11850`(`AVErrorServerIncorrectlyConfigured`,SDK 头
+///   `AVError.h:89`)。四个转码样本全军覆没,`Scripts/verify-avkit-playback.sh` 可复现。
+/// - 声明 `Protocol: "hls"` 时服务端给 `master.m3u8` + `TranscodingSubProtocol=hls`,
+///   AVPlayer 原生走 HLS 栈,同样的样本全部能起播。
+///
+/// ⛔ 所以声明里**只有 HLS 这一条**:两条并存时服务端挑哪条不受控,
+/// 挑中 progressive 就等于整片放不了。
+/// 容器取 `ts`:转码目标视频编码是 h264/aac(Apple 的传统 HLS 组合),
+/// 不走 `forbidden_container_video_pairs` 那条例外(那条只约束直放声明)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TranscodingProfile {
     #[serde(rename = "Container")]
@@ -139,11 +151,11 @@ impl DeviceProfile {
             direct_play_profiles,
             subtitle_profiles,
             transcoding_profiles: vec![TranscodingProfile {
-                container: "mp4".to_string(),
+                container: "ts".to_string(),
                 profile_type: "Video".to_string(),
                 video_codec: "h264".to_string(),
                 audio_codec: "aac".to_string(),
-                protocol: "http".to_string(),
+                protocol: "hls".to_string(),
                 context: "Streaming".to_string(),
                 max_audio_channels: "2".to_string(),
                 min_segments: "1".to_string(),
@@ -284,5 +296,37 @@ mod tests {
         let first = &json["DirectPlayProfiles"][0];
         assert_eq!(first["Type"], "Video");
         assert!(first["Container"].as_str().unwrap().contains("mp4"));
+    }
+
+    /// ⭐ P3 实测:转码交付形态**只能是 HLS**。
+    ///
+    /// 声明 `Protocol: "http"` 时服务端给 `stream.mp4`,响应头是
+    /// `Accept-Ranges: none` + `Transfer-Encoding: chunked`,AVFoundation 判
+    /// `-11850 AVErrorServerIncorrectlyConfigured` —— 四个转码样本一个都放不了。
+    /// 声明 HLS 后服务端给 `master.m3u8`,同样的样本全部能起播
+    /// (`Scripts/verify-avkit-playback.sh` 是那条证据)。
+    ///
+    /// 这条测试守的是「别顺手改回 progressive」——那不是口味问题,是能不能播。
+    #[test]
+    fn transcode_delivery_is_hls_only() {
+        let profile = DeviceProfile::avkit();
+        assert_eq!(
+            profile.transcoding_profiles.len(),
+            1,
+            "只能声明一条转码 profile:两条并存时服务端挑哪条不受控"
+        );
+        let transcode = &profile.transcoding_profiles[0];
+        assert_eq!(
+            transcode.protocol, "hls",
+            "转码交付形态必须是 hls;progressive(http)在 AVFoundation 上是 -11850"
+        );
+        // 转码目标是 h264/aac,所以容器是 ts 时不踩 `forbidden_container_video_pairs`
+        // (那条例外约束的是**直放**声明,不是转码输出)
+        assert!(
+            !AvkitCapabilities::current().is_forbidden_pair(&transcode.container, &transcode.video_codec),
+            "转码目标 {} × {} 恰好落在实测放不了的组合里",
+            transcode.container,
+            transcode.video_codec
+        );
     }
 }

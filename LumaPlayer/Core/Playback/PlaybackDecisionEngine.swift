@@ -70,6 +70,9 @@ enum PlaybackError: Error, Equatable, Sendable {
     case urlConstructionFailed
     /// 响应缺少构造播放所必需的字段(API_CONTRACT.md 8.1)
     case missingRequiredField(name: String)
+    /// Rust 决策给出的播放方式不是本分支认识的取值(`PlaybackPlanBuilder`)。
+    /// 走到这里说明 FFI 两侧的字符串漂移了 —— 不是服务端的问题,如实报错。
+    case unknownDecisionMethod(name: String)
 
     var userMessage: String {
         switch self {
@@ -83,6 +86,8 @@ enum PlaybackError: Error, Equatable, Sendable {
             return "播放地址构造失败,请检查服务器地址设置。"
         case .missingRequiredField(let name):
             return "服务器返回的播放信息缺少必需字段 \(name)。"
+        case .unknownDecisionMethod(let name):
+            return "播放决策给出了无法识别的播放方式(\(name))。"
         }
     }
 }
