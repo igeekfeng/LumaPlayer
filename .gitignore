@@ -35,14 +35,6 @@ Tools/emby-dev/config/
 Tools/emby-dev/media/
 Tools/emby-dev/.labels/
 
-# ── 自编 libmpv（Scripts/build-libmpv.sh 产物）──
-# 源码 + 构建目录 + 安装前缀都是几百 MB 的本机产物，不入库。
-# ⚠️ 新克隆的仓库没有 Vendor/mpv/prefix，**必须先跑一次 Scripts/build-libmpv.sh**
-#    才能编译 App（module.modulemap 与 OTHER_LDFLAGS 都指向那里）。
-Vendor/mpv/src/
-Vendor/mpv/build/
-Vendor/mpv/prefix/
-
 # ── Rust 核心（Scripts/build-rust-core.sh 产物）──
 # target/ 是 cargo 的构建目录；prefix/ 是装出来的 .a 与 C 头 / modulemap。
 # LumaPlayer/Generated/ 是 UniFFI 生成的 Swift 绑定 —— 它**故意**放在 App 源码树里，

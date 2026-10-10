@@ -11,8 +11,9 @@
 #
 # 产物：build/LumaPlayer-{版本}-{构建号}.dmg（build/ 已被 .gitignore 忽略）
 #
-# DMG 里的 App 已由 bundle-libmpv.sh 打入 libmpv 及全部依赖（方案 B），
-# 目标机不需要装 Homebrew / mpv。
+# 播放内核是 AVKit（Features/Player/AVKitPlaybackKernel.swift）+ Rust 决策核心，
+# 已无 libmpv。Rust 侧出 staticlib（libluma_core.a）链进主二进制，所以 DMG 里的
+# App 自包含，目标机不需要装 Homebrew / mpv，也不需要任何 dylib 后处理。
 # 但签名是 ad-hoc、未公证：其他机器首次打开要右键「打开」放行一次。
 # 只在自己的 Apple Silicon + macOS 27 机器上用，不是分发包。
 #
@@ -52,12 +53,26 @@ if [[ "${NO_BUILD}" == 0 ]]; then
     BUILD_NUMBER="$(/usr/bin/git rev-list --count HEAD)"
 fi
 
-# --- 1. 构建 -----------------------------------------------------------------
+# --- 1. 编译 Rust 核心 -------------------------------------------------------
+# App 链的是 RustCore/prefix/lib/libluma_core.a，靠 LumaPlayer/Generated/luma_core.swift
+# 拿到类型 —— 两者都由 build-rust-core.sh 产出。必须先于 App 构建，否则 Xcode 找不到
+# luma_core 的类型，直接编不过。增量构建很快（cargo 无改动时秒过）。
+if [[ "${NO_BUILD}" == 0 ]]; then
+    echo "编译 Rust 核心…"
+    "${REPO_ROOT}/Scripts/build-rust-core.sh"
+fi
+
+# --- 2. 构建 -----------------------------------------------------------------
 if [[ "${NO_BUILD}" == 0 ]]; then
     echo "构建 ${SCHEME} (${CONFIG})，构建号 ${BUILD_NUMBER}…"
     LOG="$(/usr/bin/mktemp -t lumaplayer-build)"
+    # -disable-sandbox 是本机绕行（⛔ 不是项目配置，所以走命令行而不写进 project.pbxproj）：
+    # 本机 sandbox-exec 对 deny-default profile 一律失败，而 Xcode 用它跑 swift-plugin-server
+    # → 每个 @Observable 文件报 "produced malformed response"，Release 构建直接挂。
+    # 详见 docs/KNOWN_ISSUES.md Q34。
     if ! /usr/bin/xcodebuild -scheme "${SCHEME}" -configuration "${CONFIG}" \
             -destination "${DESTINATION}" \
+            OTHER_SWIFT_FLAGS='$(inherited) -disable-sandbox' \
             CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" build >"${LOG}" 2>&1; then
         /usr/bin/grep -E 'error:' "${LOG}" >&2 || /usr/bin/tail -30 "${LOG}" >&2
         echo "error: 构建失败，完整日志: ${LOG}" >&2
@@ -66,7 +81,7 @@ if [[ "${NO_BUILD}" == 0 ]]; then
     echo "构建成功。"
 fi
 
-# --- 2. 定位构建产物与版本号 -------------------------------------------------
+# --- 3. 定位构建产物与版本号 -------------------------------------------------
 PRODUCTS_DIR="$(/usr/bin/xcodebuild -scheme "${SCHEME}" -configuration "${CONFIG}" \
         -destination "${DESTINATION}" -showBuildSettings 2>/dev/null \
     | /usr/bin/awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2; exit}')"
@@ -81,15 +96,15 @@ BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${SRC}/Contents/In
 /usr/bin/codesign --verify --strict "${SRC}"
 echo "源: ${SRC}（版本 ${VERSION}，构建号 ${BUILD}）"
 
-# --- 3. 组装 DMG 内容 --------------------------------------------------------
+# --- 4. 组装 DMG 内容 --------------------------------------------------------
+# 拷贝出来的 App 已经自包含，不需要任何后处理。
 STAGE="$(/usr/bin/mktemp -d -t lumaplayer-dmg)"
 trap '/bin/rm -rf "${STAGE}"' EXIT
 # -L 解引用：Release 产物里可能含符号链接，不解开会拷出指向构建目录的坏链接。
 /bin/cp -R -L "${SRC}" "${STAGE}/"
 /bin/ln -s /Applications "${STAGE}/Applications"
-"${REPO_ROOT}/Scripts/bundle-libmpv.sh" "${STAGE}/${APP_NAME}"
 
-# --- 4. 生成、签名、校验 -----------------------------------------------------
+# --- 5. 生成、签名、校验 -----------------------------------------------------
 OUT_DIR="${REPO_ROOT}/build"
 OUT="${OUT_DIR}/${VOLNAME}-${VERSION}-${BUILD}.dmg"
 /bin/mkdir -p "${OUT_DIR}"

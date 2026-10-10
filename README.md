@@ -1,8 +1,8 @@
 # LumaPlayer
 
-一个 macOS 原生 Emby 客户端。SwiftUI 写界面，libmpv 负责解码播放，直接对接你自己（或朋友的）Emby 服务器。
+一个 macOS 原生 Emby 客户端。SwiftUI 写界面，AVKit 负责解码播放，播放路径由一份 Rust 核心的能力表 + 决策器决定，直接对接你自己（或朋友的）Emby 服务器。
 
-> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍：Homebrew 的 libmpv 及其依赖也是按 27.0 编译的，部署目标更低会有链接器 warning 且产物跑不起来。
+> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍。
 
 ## 特性
 
@@ -20,11 +20,7 @@
 | 系统 | macOS 27 或更高 |
 | 芯片 | Apple Silicon（arm64） |
 | Xcode | 16 或更高（工程用同步文件夹，`objectVersion = 77`） |
-| libmpv | Homebrew 的 `mpv`（开发期实测 0.41.0，`MPV_CLIENT_API_VERSION = 2.5`） |
-
-```bash
-brew install mpv
-```
+| Rust | `rustup` 工具链（装在 `~/.cargo`；⛔ 别用 `brew install rust` / `rustup`） |
 
 ## 构建与运行
 
@@ -54,8 +50,10 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' \
 ./Scripts/make-dmg.sh
 ```
 
-两者都会调用 `Scripts/bundle-libmpv.sh`，把 Homebrew 的 libmpv 及 48 个传递依赖打进
-`Contents/Frameworks/`，因此装出来的 App 不再依赖目标机的 Homebrew。
+构建前都会先跑 `Scripts/build-rust-core.sh` 编出 Rust 核心（必须先于 App 构建，否则
+`LumaPlayer/Generated/` 是空的，Xcode 找不到 `luma_core` 的类型）。Rust 侧出的是
+**staticlib**，直接链进主二进制，所以装出来的 App 是自包含的，不依赖目标机的任何库，
+也不再需要往 `Contents/Frameworks/` 塞 dylib 的后处理。
 
 App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 
@@ -70,7 +68,7 @@ LumaPlayer/
 ├── Components/   设计 token 与复用视图
 └── Resources/    Info.plist、entitlements、AppIcon
 LumaPlayerTests/  45 个测试文件 + 全部脱敏 fixture
-Vendor/           libmpv 的 module map
+RustCore/         Rust 决策核心（cargo workspace，UniFFI 生成 Swift 绑定）
 Tools/            图标生成脚本、本地 Emby 开发实例（Docker）
 Scripts/          构建、打包、部署脚本
 ```

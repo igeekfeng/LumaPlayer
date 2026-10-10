@@ -10,8 +10,9 @@
 #   ./Scripts/deploy-to-applications.sh --allow-dirty # 工作区有未提交改动也照样构建
 #   ./Scripts/deploy-to-applications.sh --no-open  # 装完不自动启动
 #
-# 装好的 App 由 bundle-libmpv.sh 打入 libmpv 及全部依赖（方案 B），
-# 之后 brew upgrade mpv 不会影响它。
+# 播放内核是 AVKit（Features/Player/AVKitPlaybackKernel.swift）+ Rust 决策核心，
+# 已无 libmpv。Rust 侧出 staticlib（libluma_core.a）链进主二进制，所以装到
+# /Applications 的 App 是自包含的，不需要「把 48 个 dylib 塞进 Frameworks/」那套后处理。
 #
 set -euo pipefail
 
@@ -50,12 +51,26 @@ if [[ "${NO_BUILD}" == 0 ]]; then
     BUILD_NUMBER="$(/usr/bin/git rev-list --count HEAD)"
 fi
 
-# --- 1. 构建 -----------------------------------------------------------------
+# --- 1. 编译 Rust 核心 -------------------------------------------------------
+# App 链的是 RustCore/prefix/lib/libluma_core.a，靠 LumaPlayer/Generated/luma_core.swift
+# 拿到类型 —— 两者都由 build-rust-core.sh 产出。必须先于 App 构建，否则 Xcode 找不到
+# luma_core 的类型，直接编不过。增量构建很快（cargo 无改动时秒过）。
+if [[ "${NO_BUILD}" == 0 ]]; then
+    echo "编译 Rust 核心…"
+    "${REPO_ROOT}/Scripts/build-rust-core.sh"
+fi
+
+# --- 2. 构建 -----------------------------------------------------------------
 if [[ "${NO_BUILD}" == 0 ]]; then
     echo "构建 ${SCHEME} (${CONFIG})，构建号 ${BUILD_NUMBER}…"
     LOG="$(/usr/bin/mktemp -t lumaplayer-build)"
+    # -disable-sandbox 是本机绕行（⛔ 不是项目配置，所以走命令行而不写进 project.pbxproj）：
+    # 本机 sandbox-exec 对 deny-default profile 一律失败，而 Xcode 用它跑 swift-plugin-server
+    # → 每个 @Observable 文件报 "produced malformed response"，Release 构建直接挂。
+    # 详见 docs/KNOWN_ISSUES.md Q34。
     if ! /usr/bin/xcodebuild -scheme "${SCHEME}" -configuration "${CONFIG}" \
             -destination "${DESTINATION}" \
+            OTHER_SWIFT_FLAGS='$(inherited) -disable-sandbox' \
             CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" build >"${LOG}" 2>&1; then
         /usr/bin/grep -E 'error:' "${LOG}" >&2 || /usr/bin/tail -30 "${LOG}" >&2
         echo "error: 构建失败，完整日志: ${LOG}" >&2
@@ -64,7 +79,7 @@ if [[ "${NO_BUILD}" == 0 ]]; then
     echo "构建成功。"
 fi
 
-# --- 2. 定位构建产物 ---------------------------------------------------------
+# --- 3. 定位构建产物 ---------------------------------------------------------
 PRODUCTS_DIR="$(/usr/bin/xcodebuild -scheme "${SCHEME}" -configuration "${CONFIG}" \
         -destination "${DESTINATION}" -showBuildSettings 2>/dev/null \
     | /usr/bin/awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2; exit}')"
@@ -75,7 +90,7 @@ if [[ ! -d "${SRC}" ]]; then
 fi
 echo "源: ${SRC}"
 
-# --- 3. 退出正在运行的实例 ---------------------------------------------------
+# --- 4. 退出正在运行的实例 ---------------------------------------------------
 /usr/bin/osascript -e 'quit app "LumaPlayer"' >/dev/null 2>&1 || true
 for _ in 1 2 3 4 5; do
     /usr/bin/pgrep -x LumaPlayer >/dev/null 2>&1 || break
@@ -83,14 +98,14 @@ for _ in 1 2 3 4 5; do
 done
 /usr/bin/pkill -x LumaPlayer >/dev/null 2>&1 || true
 
-# --- 4. 拷贝到 /Applications -------------------------------------------------
+# --- 5. 拷贝到 /Applications -------------------------------------------------
 # -L 解引用：Release/Archive 产物里可能含符号链接，不解开会拷出指向构建目录的坏链接。
+# 产物自包含：Rust 核心以 staticlib 链进主二进制，没有任何 dylib 需要打包后处理。
 /bin/rm -rf "${DEST}"
 /bin/cp -R -L "${SRC}" "${DEST}"
 echo "已安装到: ${DEST}"
-"${REPO_ROOT}/Scripts/bundle-libmpv.sh" "${DEST}"
 
-# --- 5. 校验签名，并刷新 LaunchServices（让 Dock / Finder 用上新图标）------
+# --- 6. 校验签名，并刷新 LaunchServices（让 Dock / Finder 用上新图标）------
 /usr/bin/codesign --verify --strict "${DEST}"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -f "${DEST}" >/dev/null 2>&1 || true
@@ -98,8 +113,11 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${DES
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${DEST}/Contents/Info.plist")"
 echo "签名校验通过，安装完成（版本 ${VERSION}，构建号 ${BUILD}）。"
 
-# --- 6. 启动刚装好的 App -----------------------------------------------------
-# 步骤 3 已经把旧实例退出，这里直接打开新版本，省得手动去 /Applications 点一次。
+# --- 7. 启动刚装好的 App -----------------------------------------------------
+# 步骤 4 已经把旧实例退出，这里直接打开新版本，省得手动去 /Applications 点一次。
+# ⚠️ 本机（2026-10-10）App 带 app-sandbox，启动阶段即 SIGTRAP，所以这一步会「静默失败」：
+#    open 返回 0（LaunchServices 已接手），但进程随后崩在 _libsecinit_appsandbox。
+#    因此本脚本目前只能验收「已安装 + 签名校验通过」，运行验收不靠它（见 docs/KNOWN_ISSUES.md Q34）。
 if [[ "${NO_OPEN}" == 0 ]]; then
     if /usr/bin/open "${DEST}"; then
         echo "已启动 ${DEST}。"
