@@ -193,6 +193,21 @@ enum Metrics {
     /// 网格间距(= spacingL)
     static let gridSpacing: CGFloat = spacingL
 
+    // MARK: 分集货架滚动条
+
+    /// 滑块厚度(与系统覆盖式滚动条同量级;不画轨道,只有这一条)
+    static let shelfScrubberThumbHeight: CGFloat = 8
+    /// 滑块最小宽度。集数极多时按比例算出的滑块会细如发丝,留一个能点中的下限
+    static let shelfScrubberThumbMinWidth: CGFloat = 28
+    /// 滚动条的可点击高度(含上下留白,比可见的滑块高,拖起来不费劲)
+    static let shelfScrubberHitHeight: CGFloat = 20
+    /// 滑块不透明度(贴近系统覆盖式滚动条的浅灰)
+    static let shelfScrubberThumbOpacity: Double = 0.3
+    /// 指针压在滚动条上 / 拖动时的不透明度(深一档,和系统一致)
+    static let shelfScrubberThumbOpacityHover: Double = 0.55
+    /// 停止滚动后滚动条淡出的延迟。与系统覆盖式滚动条一样:滚动时在,停下后隐去
+    static let shelfScrubberHideDelay: TimeInterval = 1.0
+
     // MARK: 动画时长
 
     /// 按钮悬停、按下反馈
