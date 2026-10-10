@@ -20,7 +20,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 # ── 白名单:公开的示例域与官方域,允许出现在仓库里 ──
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example)$'
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|github\.com|.*\.github\.com)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。
@@ -39,7 +39,15 @@ total=$(git ls-files | wc -l | tr -d ' ')
 echo "扫描 $total 个已跟踪文件…"
 
 # ── 1. 真实域名 ──
-dom=$(git grep -hoE '([a-zA-Z0-9][a-zA-Z0-9-]*\.)+(org|com|net|cn|io|tv|cc|xyz|top|info|biz|online|site|club|live|link|space|fun|shop)' -- . 2>/dev/null \
+# ⚠️ 两端必须加 POSIX 词边界 `[[:<:]]` / `[[:>:]]`。
+#    不加的话 Swift 的成员访问会被整片误判成域名:变量名紧跟 `.combine(x)`
+#    或 `.compactMap` 时,前半截恰好拼出一个 TLD,于是报出一个不存在的域名
+#    (2026-10-10 实测,当时命中 `BrowseView.swift` 与 `HomeViewModel.swift` 各一处)。
+#    ⚠️ 写这段注释时也顺手踩了同一个坑:注释里若出现「单词 + 点 + 顶级域」的字样,
+#       它自己就会被扫出来 —— 描述这个 bug 时不要照抄那几个字面量。
+#    ⛔ 别改成 `\b`:那是 GNU 扩展,`/usr/bin/grep -E` 认,但 **`git grep` 不认**
+#    (POSIX ERE 未定义),加了等于把整条检查变成永不命中。
+dom=$(git grep -hoE '[[:<:]]([a-zA-Z0-9][a-zA-Z0-9-]*\.)+(org|com|net|cn|io|tv|cc|xyz|top|info|biz|online|site|club|live|link|space|fun|shop)[[:>:]]' -- . 2>/dev/null \
       | sort -u | grep -vE "$ALLOWED_DOMAINS" | grep -vE "$SWIFT_NOISE")
 if [ -n "$dom" ]; then
   report "发现白名单外的域名(确认是否为真实服务器):" "$dom"
