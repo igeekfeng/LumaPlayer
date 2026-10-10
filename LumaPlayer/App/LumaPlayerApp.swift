@@ -10,7 +10,8 @@ struct LumaPlayerApp: App {
             RootView(container: container)
         }
         .defaultSize(width: Metrics.mainWindowWidth, height: Metrics.mainWindowHeight)
-        .commands { PlayerCommands() }
+        // `exp/avkit-rust-core`:`Playback` 菜单(`PlayerCommands`)随播放层一起摘掉了,
+        // 它整个建在 `PlayerViewModel` 上。接 AVKit 时与播放页一起回来。
 
         // 播放器:单实例独立窗口(ARCHITECTURE.md 7.5)。内容由
         // `AppState.nowPlaying` 决定;不参与窗口恢复 —— 重启后没有播放请求,

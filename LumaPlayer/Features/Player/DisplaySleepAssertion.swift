@@ -3,9 +3,9 @@ import IOKit
 import IOKit.pwr_mgt
 import os
 
-/// `PlayerViewModel` 依赖的电源断言注入点。
+/// 播放层依赖的电源断言注入点。
 ///
-/// 与 `PlaybackProgressReporter` 的注入同源:ViewModel 只认这个协议,
+/// 与 `PlaybackProgressReporter` 的注入同源:播放层只认这个协议,
 /// 单测用替身验「什么时候持有、什么时候释放」,不必真的占住显示器。
 @MainActor
 protocol DisplaySleepInhibiting: AnyObject {
@@ -19,21 +19,23 @@ protocol DisplaySleepInhibiting: AnyObject {
 ///
 /// ## 为什么必须由宿主自己做
 ///
-/// mpv 自带 `--stop-screensaver`(默认 `yes`),但它是**经 video output** 实现的:
+/// `main` 上走的是 mpv 的 render API(`vo=libmpv`)。mpv 自带有
+/// `--stop-screensaver`(默认 `yes`),但它是**经 video output** 实现的:
 /// `player/playloop.c` 的 `update_screensaver_state()` 只把状态算成
 /// `VOCTRL_KILL_SCREENSAVER` / `VOCTRL_RESTORE_SCREENSAVER` 发给 VO,真正调
 /// `IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep)`
-/// 的是 macOS 的 VO 层(`video/out/mac/common.swift`)。
-///
-/// 本项目走 render API 并显式设了 `vo=libmpv`(`MPVPlayer.startupOptions`),
-/// 而 `video/out/vo_libmpv.c` 的 `control()` 里**没有**这两个 VOCTRL ——
-/// 没有 mac VO,就没有人持断言。所以这条只能由 App 自己补
+/// 的是 macOS 的 VO 层(`video/out/mac/common.swift`)。而 `vo_libmpv` 的
+/// `control()` 里**没有**这两个 VOCTRL —— 没有 mac VO,就没有人持断言
 /// (GitHub issue #1;`docs/PITFALLS.md` Q34、`docs/MPV_INTEGRATION.md` 3.2)。
 ///
-/// ## 语义(对齐 mpv 的 `stop-screensaver=yes`,⛔ 不是 `=2` 的「始终抑制」)
+/// `exp/avkit-rust-core` 换成 AVFoundation 后**结论不变、理由更直接**:
+/// AVFoundation 从不代 App 申请电源断言,息屏策略完全由宿主负责。
+/// 也就是说这一类无论如何都要留在 App 侧,不随内核更换而消失。
+///
+/// ## 语义(只在播放时抑制,⛔ 不是「始终抑制」)
 ///
 /// 只在**正在播放**时持有;暂停 / 播完 / 失败 / 拆播放器立即释放,把休眠策略还给系统。
-/// 判据本身在 `PlayerViewModel.shouldPreventDisplaySleep`(纯函数,可单测)。
+/// 判据本身在 `PlaybackRules.shouldPreventDisplaySleep`(纯函数,可单测)。
 ///
 /// 只阻止**显示器**休眠,不碰整机 idle sleep:后者会把音频一起掐掉,
 /// 不是播放器该替用户做的决定。
@@ -89,7 +91,7 @@ final class DisplaySleepAssertion: DisplaySleepInhibiting {
 
     /// deinit 兜底:走到这里说明持有者被丢掉了却没调 `setActive(false)`。
     ///
-    /// 主要出口仍是 `PlayerViewModel.stop()`(关窗、切媒体、转码重新起流都走它),
+    /// 主要出口仍是播放层的 stop()(关窗、切媒体、转码重新起流都走它),
     /// 但断言是**进程级**资源:漏一个的表现是「用户的 Mac 再也不息屏」,直到 App 退出,
     /// 而且这种泄漏在功能测试里基本看不出来 —— 值得多一道保险。
     ///

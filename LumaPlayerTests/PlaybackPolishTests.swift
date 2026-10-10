@@ -1,35 +1,18 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 播放打磨(2026-09-24 追加):片头 / 片尾标记、续播回退、触控板横滑预览、
-/// 统计信息格式化、播放偏好持久化、上一集查找。
-/// 2026-10-06 追加:同一部剧沿用的倍速记忆(`PlaybackSpeedStore`)。
+/// 播放打磨里**与播放内核无关**的那部分:章节解码、片头 / 片尾标记、
+/// 续播回退规则、统计信息格式化、上一集查找、倍速记忆的作用域。
 ///
-/// 与 `PlayerExperienceTests` 同一原则:只验不需要 mpv、不需要网络的部分。
+/// ⚠️ `exp/avkit-rust-core` 摘掉 libmpv 后本文件做过一次收缩:凡是要建
+/// `PlayerViewModel` 实例(即需要播放内核)的用例都随 ViewModel 一起删了
+/// —— 触控板横滑预览、偏好开关联动、起播倍速、缓冲 / 统计开关、跨集的倍速记忆。
+/// 那些是**接线**行为,接 AVKit 时在播放层那边重新覆盖;留下来的都是原注释里
+/// 就写明「只验不需要 mpv、不需要网络的部分」的规则本身。
+///
 /// ⛔ 按钮位置、倒计时的实际观感、触控板手感、置顶窗口是 UI 行为,
 /// 本机无屏幕录制权限,不在这里假装覆盖。
-@MainActor
 final class PlaybackPolishTests: XCTestCase {
-
-    private var storage: CredentialFileStore!
-    private var credentials: CredentialStore!
-    private var defaults: UserDefaults!
-    private var defaultsSuite: String!
-
-    override func setUp() async throws {
-        storage = CredentialFileStore(fileURL: .temporaryCredentialsFile())
-        credentials = CredentialStore(storage: storage)
-        defaultsSuite = "test.LumaPlayer.polish.prefs.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: defaultsSuite)
-    }
-
-    override func tearDown() async throws {
-        try await storage.removeAll()
-        defaults.removePersistentDomain(forName: defaultsSuite)
-        storage = nil
-        credentials = nil
-        defaults = nil
-    }
 
     // MARK: - 章节解码
 
@@ -115,118 +98,21 @@ final class PlaybackPolishTests: XCTestCase {
     // MARK: - 续播回退
 
     func testResumePositionRewindsButNeverBelowZero() {
-        XCTAssertEqual(PlayerViewModel.resumePosition(from: 0), 0)
-        XCTAssertEqual(PlayerViewModel.resumePosition(from: 3), 0)
-        XCTAssertEqual(PlayerViewModel.resumePosition(from: 100), 100 - Metrics.resumeRewind)
+        XCTAssertEqual(PlaybackRules.resumePosition(from: 0), 0)
+        XCTAssertEqual(PlaybackRules.resumePosition(from: 3), 0)
+        XCTAssertEqual(PlaybackRules.resumePosition(from: 100), 100 - Metrics.resumeRewind)
     }
 
-    func testViewModelAppliesRewindToServerPosition() throws {
-        // 600 秒 = 6_000_000_000 ticks
-        let item = try decodeItem(#"{"Id":"M","Name":"M","Type":"Movie","UserData":{"PlaybackPositionTicks":6000000000}}"#)
-        let resumed = try makeViewModel(item: item)
-        XCTAssertEqual(resumed.resumeStartSeconds, 600 - Metrics.resumeRewind)
-
-        let fromStart = try makeViewModel(item: item, startFromBeginning: true)
-        XCTAssertEqual(fromStart.resumeStartSeconds, 0)
-    }
-
-    /// DirectStream 续播时,到达续播点之前的 time-pos(文件开头)不可信。
+    /// DirectStream 续播时,到达续播点之前的位置(文件开头)不可信 ——
+    /// 此时上报会把服务端进度改回 0。
     func testSettledPositionOnlyWaitsForDirectStreamResume() {
-        XCTAssertFalse(PlayerViewModel.isSettledPosition(0, startSeconds: 595, method: .directStream))
-        XCTAssertTrue(PlayerViewModel.isSettledPosition(594, startSeconds: 595, method: .directStream))
-        XCTAssertTrue(PlayerViewModel.isSettledPosition(0, startSeconds: 0, method: .directStream))
-        XCTAssertTrue(PlayerViewModel.isSettledPosition(0, startSeconds: 595, method: .transcode))
+        XCTAssertFalse(PlaybackRules.isSettledPosition(0, startSeconds: 595, method: .directStream))
+        XCTAssertTrue(PlaybackRules.isSettledPosition(594, startSeconds: 595, method: .directStream))
+        XCTAssertTrue(PlaybackRules.isSettledPosition(0, startSeconds: 0, method: .directStream))
+        XCTAssertTrue(PlaybackRules.isSettledPosition(0, startSeconds: 595, method: .transcode))
     }
 
-    // MARK: - 触控板横滑预览
-
-    func testScrubPreviewAccumulatesAndClamps() throws {
-        let viewModel = try makeViewModel()
-        viewModel.previewScrub(by: 30)
-        XCTAssertNil(viewModel.scrubPreviewSeconds, "时长未知时不响应")
-
-        viewModel.handle(.duration(100), generation: 0)
-        viewModel.handle(.timePos(50), generation: 0)
-        viewModel.previewScrub(by: 20)
-        viewModel.previewScrub(by: 5)
-        XCTAssertEqual(viewModel.scrubPreviewSeconds, 75, "从当前位置起累加,而不是每次都从当前位置重算")
-        viewModel.previewScrub(by: 500)
-        XCTAssertEqual(viewModel.scrubPreviewSeconds, 100)
-        viewModel.previewScrub(by: -1000)
-        XCTAssertEqual(viewModel.scrubPreviewSeconds, 0)
-
-        viewModel.commitScrub()
-        XCTAssertNil(viewModel.scrubPreviewSeconds, "松手后预览清空")
-    }
-
-    // MARK: - 偏好
-
-    func testPreferencesDefaultAndPersist() throws {
-        let first = try makeViewModel()
-        XCTAssertFalse(first.autoSkipIntro, "默认给按钮,不自动跳")
-        XCTAssertTrue(first.autoPlayNext)
-        XCTAssertFalse(first.floatsOnTop)
-
-        first.autoSkipIntro = true
-        first.autoPlayNext = false
-        first.floatsOnTop = true
-
-        let second = try makeViewModel()
-        XCTAssertTrue(second.autoSkipIntro)
-        XCTAssertFalse(second.autoPlayNext)
-        XCTAssertTrue(second.floatsOnTop)
-    }
-
-    /// 播放窗口菜单里的开关与设置页是同一份状态(都在 `container.preferences` 上)
-    func testPreferenceTogglesAreSharedWithContainer() throws {
-        let container = try makeContainer()
-        let viewModel = try makeViewModel(container: container)
-        viewModel.autoSkipIntro = true
-        XCTAssertTrue(container.preferences.autoSkipIntro, "菜单里勾了,设置页也要是勾上的")
-        container.preferences.autoPlayNext = false
-        XCTAssertFalse(viewModel.autoPlayNext)
-    }
-
-    /// 起播倍速:这部剧本次运行调过就用调过的(P0-3),没调过用设置页的默认倍速
-    func testStartupSpeedPrefersRememberedOverDefault() throws {
-        let container = try makeContainer()
-        let server = makeServer()
-        let series = try episode("E1", series: "S1")
-        container.preferences.defaultSpeed = 1.5
-        XCTAssertEqual(
-            try makeViewModel(container: container, server: server, item: series).startupSpeed, 1.5)
-
-        try makeViewModel(container: container, server: server, item: series).setSpeed(2)
-        XCTAssertEqual(
-            try makeViewModel(container: container, server: server, item: series).startupSpeed, 2,
-            "同一部剧沿用调过的倍速,优先于默认倍速")
-    }
-
-    /// 跳转步长跟着设置页走(同一个偏好驱动方向键、控制栏按钮与菜单栏)
-    func testSeekStepComesFromPreferences() throws {
-        let container = try makeContainer()
-        container.preferences.seekStep = 30
-        XCTAssertEqual(try makeViewModel(container: container).seekStep, 30)
-    }
-
-    // MARK: - 缓冲 / 统计
-
-    func testBufferingEndClearsProgress() throws {
-        let viewModel = try makeViewModel()
-        viewModel.handle(.buffering(true), generation: 0)
-        viewModel.handle(.buffering(false), generation: 0)
-        XCTAssertNil(viewModel.bufferingPercent)
-        XCTAssertNil(viewModel.cacheSpeedBytesPerSecond)
-    }
-
-    func testStatisticsToggle() throws {
-        let viewModel = try makeViewModel()
-        viewModel.toggleStatistics()
-        XCTAssertTrue(viewModel.showsStatistics)
-        viewModel.toggleStatistics()
-        XCTAssertFalse(viewModel.showsStatistics)
-        XCTAssertNil(viewModel.statistics)
-    }
+    // MARK: - 统计
 
     func testStatisticsFormatting() {
         XCTAssertEqual(PlayerStatistics.shortCodecName("H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"), "H.264")
@@ -239,7 +125,9 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(PlayerStatistics.fpsText("23.976"), "23.976 fps")
     }
 
-    /// 实测值取自本机 mpv 0.41 播放一段 640×360 H.264 测试片的读数。
+    /// 实测值取自本机 mpv 0.41 播放一段 640×360 H.264 测试片的读数 ——
+    /// 属性名是 mpv 的,但**这里的契约是「读不到的属性不凑『未知』」**,
+    /// 与内核无关(见 `PlayerStatistics` 的注释)。
     func testStatisticsLinesSkipMissingProperties() {
         let stats = PlayerStatistics(properties: [
             "video-codec": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
@@ -268,75 +156,14 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertNil(NextEpisodeResolver.item(before: "X", in: episodes))
     }
 
-    // MARK: - 倍速记忆(同一部剧沿用同一个倍速)
+    // MARK: - 倍速记忆(只验作用域判定,不需要播放器)
 
-    /// 决策(2026-10-06):同一部**剧集**沿用同一个倍速,不同剧集 / 电影各算各的,
-    /// 重启 App 回到 1×。这里只验「记在哪、给谁用」;真正写回 mpv 的那一步要 mpv,
-    /// 不在这里假覆盖(`player` 为 nil 时控制方法本来就是空操作)。
-    func testSpeedIsRememberedPerSeries() throws {
-        let container = try makeContainer()
-        let server = makeServer()
-        let first = try makeViewModel(
-            container: container, server: server, item: try episode("E1", series: "S1"))
-        XCTAssertEqual(first.startupSpeed, 1, "没设过就是 1×")
-
-        first.setSpeed(1.5)
-
-        let nextEpisode = try makeViewModel(
-            container: container, server: server, item: try episode("E2", series: "S1"))
-        XCTAssertEqual(nextEpisode.startupSpeed, 1.5, "同一部剧的下一集沿用")
-
-        let otherSeries = try makeViewModel(
-            container: container, server: server, item: try episode("E9", series: "S2"))
-        XCTAssertEqual(otherSeries.startupSpeed, 1, "换一部剧不带过去")
-
-        let otherMovie = try makeViewModel(
-            container: container, server: server, item: try movie("M1"))
-        XCTAssertEqual(otherMovie.startupSpeed, 1, "电影之间互不影响")
-    }
-
-    /// 电影没有 `SeriesId`,判定键退化成「这一项自己的 `Id`」:同一个 Id 重开仍沿用。
-    func testSpeedScopeFallsBackToItemIDWithoutSeries() throws {
-        let container = try makeContainer()
-        let server = makeServer()
+    /// 电影没有 `SeriesId`,判定键退化成「这一项自己的 `Id`」。
+    /// ⚠️ 真正「记在哪 / 给谁用」的接线覆盖随 `PlayerViewModel` 一起删了。
+    @MainActor
+    func testSpeedScopeIDFallsBackToItemIDWithoutSeries() throws {
         XCTAssertEqual(PlaybackSpeedStore.scopeID(for: try episode("E1", series: "S1")), "S1")
         XCTAssertEqual(PlaybackSpeedStore.scopeID(for: try movie("M1")), "M1")
-
-        try makeViewModel(container: container, server: server, item: try movie("M1")).setSpeed(2)
-        XCTAssertEqual(
-            try makeViewModel(container: container, server: server, item: try movie("M1")).startupSpeed,
-            2)
-    }
-
-    /// 记的是夹取之后的值:滑块越界 / 浮点尾数不该原样带给后面几集。
-    func testRememberedSpeedIsTheClampedValue() throws {
-        let viewModel = try makeViewModel(item: try episode("E1", series: "S1"))
-        viewModel.setSpeed(9)
-        XCTAssertEqual(viewModel.startupSpeed, 4)
-    }
-
-    /// 手动调回 1× = 撤销记忆:后面的集数不该再自己弹回之前设过的高倍速。
-    func testBackToNormalSpeedForgetsTheSeries() throws {
-        let container = try makeContainer()
-        let server = makeServer()
-        let viewModel = try makeViewModel(
-            container: container, server: server, item: try episode("E1", series: "S1"))
-        viewModel.setSpeed(2)
-        viewModel.setSpeed(1)
-        XCTAssertEqual(
-            try makeViewModel(container: container, server: server, item: try episode("E2", series: "S1"))
-                .startupSpeed,
-            1)
-    }
-
-    /// 每台服务器完全隔离:不同服务器上的 Item Id 可能撞车,不隔离会串台。
-    func testRememberedSpeedIsScopedPerServer() throws {
-        let container = try makeContainer()
-        let series = try episode("E1", series: "S1")
-        try makeViewModel(container: container, server: makeServer("a.test"), item: series).setSpeed(1.75)
-        XCTAssertEqual(
-            try makeViewModel(container: container, server: makeServer("b.test"), item: series).startupSpeed,
-            1)
     }
 
     // MARK: - 辅助
@@ -358,43 +185,5 @@ final class PlaybackPolishTests: XCTestCase {
 
     private func movie(_ id: String) throws -> EmbyItem {
         try decodeItem(#"{"Id":"\#(id)","Name":"\#(id)","Type":"Movie"}"#)
-    }
-
-    /// 每次都是新容器 = 新的一次「App 运行」;要验跨集沿用就自己传同一个进来。
-    ///
-    /// `preferences` 用一次性 suite:播放偏好存在 UserDefaults 里,给它 `.standard`
-    /// 会让「偏好默认值」这类用例互相污染(别的用例先跑一步就把默认改掉了)。
-    private func makeContainer() throws -> AppContainer {
-        let registry = try ServerRegistry(
-            defaults: UserDefaults(suiteName: "test.LumaPlayer.polish.registry.\(UUID().uuidString)")!,
-            credentials: credentials
-        )
-        return AppContainer(
-            registry: registry,
-            credentials: credentials,
-            preferences: try XCTUnwrap(UserDefaults(suiteName: defaultsSuite))
-        )
-    }
-
-    private func makeServer(_ name: String = "emby.test") -> ServerProfile {
-        ServerProfile(
-            displayName: name,
-            baseURL: testURL("https://\(name)"),
-            deviceID: "DEVICE-UUID-1"
-        )
-    }
-
-    private func makeViewModel(
-        container: AppContainer? = nil,
-        server: ServerProfile? = nil,
-        item: EmbyItem? = nil,
-        startFromBeginning: Bool = false
-    ) throws -> PlayerViewModel {
-        PlayerViewModel(
-            container: try container ?? makeContainer(),
-            server: server ?? makeServer(),
-            item: try item ?? decodeItem(#"{"Id":"ITEM-1","Name":"测试影片","Type":"Movie"}"#),
-            startFromBeginning: startFromBeginning
-        )
     }
 }

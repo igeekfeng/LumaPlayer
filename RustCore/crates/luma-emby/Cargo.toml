@@ -1,0 +1,9 @@
+[package]
+name = "luma-emby"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Emby / Jellyfin API 客户端、DeviceProfile 与播放决策"
+
+[dependencies]

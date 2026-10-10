@@ -2,9 +2,14 @@ import Foundation
 
 /// 播放统计信息 overlay 的内容(按 I 键开关)。
 ///
-/// 数据全部来自 mpv 属性的字符串读数(`MPVPlayer.stringProperties`),
-/// 再加上 Emby 侧的播放方式与容器。本类型只做格式化,是纯函数,便于测试。
-/// 某个属性读不到(mpv 返回 NULL)时对应的行直接不显示,不填「未知」凑数。
+/// 输入是**播放器内核的属性读数**(`[属性名: 字符串]`),再加上 Emby 侧的播放方式
+/// 与容器。本类型只做格式化,是纯函数,便于测试。
+/// 某个属性读不到(内核返回空)时对应的行直接不显示,不填「未知」凑数。
+///
+/// ⚠️ `exp/avkit-rust-core`:`main` 上这些属性来自 mpv 的
+/// `MPVPlayer.stringProperties`,换成 AVKit 后要另找数据源(AVFoundation 没有等价的
+/// 属性字典)。但**格式化规则本身与内核对无关、且是产品行为**(哪些行、缺失怎么处理),
+/// 所以类型与单测照旧留着,只换喂数据的生产者。属性名见 `propertyNames`。
 struct PlayerStatistics: Equatable {
     struct Line: Equatable, Identifiable {
         let label: String
@@ -14,7 +19,9 @@ struct PlayerStatistics: Equatable {
 
     let lines: [Line]
 
-    /// 需要轮询的 mpv 属性。名字均已对照本机 mpv 0.41 的 `--list-properties` 核实。
+    /// 需要轮询的属性名。⚠️ 这批名字是 mpv 的,均已对照本机 mpv 0.41 的
+    /// `--list-properties` 核实;换成 AVKit 后本节要整体重写(键名对不上),
+    /// 但 `lines` 的格式化契约不变。
     static let propertyNames = [
         "video-codec", "video-params/w", "video-params/h", "video-params/pixelformat",
         "video-params/primaries", "video-params/gamma", "container-fps", "estimated-vf-fps",

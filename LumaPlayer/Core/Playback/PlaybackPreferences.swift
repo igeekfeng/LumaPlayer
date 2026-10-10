@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 全 App 一份、存 UserDefaults、全部服务器共用 —— 与 `SubtitleStyleStore` 同一个理由:
 /// 设置窗口改、播放窗口读,两边必须是同一个实例,改完下一集 / 新建播放器就生效。
-/// 挂在 `AppContainer` 上而不是 `PlayerViewModel` 里:换一集就新建一个 ViewModel,
+/// 挂在 `AppContainer` 上而不是播放页的状态里:换一集就新建一个状态对象,
 /// 记在里面只能在本次播放内活下来。
 ///
 /// ⛔ 偏好是从 UserDefaults 读回来的,不能假设没被手改过 —— 读进来一律夹回合法范围
@@ -59,7 +59,7 @@ final class PlaybackPreferences {
     /// **未合并的 draft PR**,万一它让别的片源出问题,用户能自己退回去。
     /// 详见 docs/DECISIONS/gpu-next-render-backend.md。
     ///
-    /// 起播时读一次(建 `MPVPlayer` 时),**下一次起播才生效**。
+    /// 起播时读一次(建播放会话时),**下一次起播才生效**。
     var preferGPUNextRenderer: Bool {
         didSet { persist(preferGPUNextRenderer, Key.preferGPUNextRenderer) }
     }

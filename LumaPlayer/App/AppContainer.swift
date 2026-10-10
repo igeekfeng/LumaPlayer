@@ -14,8 +14,8 @@ final class AppContainer {
     /// 注入给每台服务器的 `ServerConnection`,登录重建连接后缓存仍有效。
     let responseCache = EmbyResponseCache()
     /// 「同一部剧沿用同一个倍速」的内存记录(`PlaybackSpeedStore`)。
-    /// 放在组合根上是刻意的:换视频 / 换集都会新建 `PlayerViewModel`,
-    /// 记在 ViewModel 里跨不过去;而记在这里就恰好是「本次运行」的寿命。
+    /// 放在组合根上是刻意的:换视频 / 换集都会新建播放页的状态对象,
+    /// 记在那里面跨不过去;而记在这里就恰好是「本次运行」的寿命。
     let playbackSpeeds = PlaybackSpeedStore()
     /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
     /// 必须是同一个实例,播放中改设置才能即时生效。

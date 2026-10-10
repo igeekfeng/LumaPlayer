@@ -1,0 +1,9 @@
+[package]
+name = "luma-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "SQLite 媒体库:进度、收藏、索引、接口缓存"
+
+[dependencies]

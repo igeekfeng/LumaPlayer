@@ -80,8 +80,8 @@ enum Metrics {
     static let autoHideResumeDelay: TimeInterval = 5
     /// 方向键单次 seek
     ///
-    /// 转码模式下不是 mpv seek,而是停流 + StartTimeTicks 重新起流
-    /// (API_CONTRACT.md 4.5);token 值相同,行为由 PlayerViewModel 分派。
+    /// 转码模式下不是客户端 seek,而是停流 + StartTimeTicks 重新起流
+    /// (API_CONTRACT.md 4.5);token 值相同,由播放层按 `PlaybackMethod` 分派。
     /// 可在设置页改(`PlaybackPreferences.seekStep`),这个值是默认档。
     static let seekStep: TimeInterval = 10
     /// Shift+方向键单次 seek
@@ -112,13 +112,13 @@ enum Metrics {
     static let volumeRange: ClosedRange<Double> = 0...100
     /// mpv 自身的默认音量(`--volume` 默认 100),也是「默认音量」偏好的默认值
     static let defaultVolume: Double = 100
-    /// 倍速区间:与 `MPVPlayer.setSpeed` 的夹取一致(超出这个范围音频严重失真)
+    /// 倍速区间(超出这个范围音频严重失真)
     static let speedRange: ClosedRange<Double> = 0.25...4
     /// 倍速滑块与浮层 ± 按钮的步长(连续调节,不按档位跳)
     static let speedStep: Double = 0.05
     /// `[` `]` 的步长:比滑块粗一档,一次按键要有明显变化
     static let speedKeyStep: Double = 0.1
-    /// 连续调倍速时的上报合并窗口(见 `PlayerViewModel.scheduleRateChangeReport`)
+    /// 连续调倍速时的上报合并窗口(见 API_CONTRACT.md 5.1 的 rate 上报)
     static let speedReportDelay: TimeInterval = 0.5
 
     /// 夹到倍速区间,并把值抹到两位小数 —— 连续拖滑块会拖出 `1.1500000000000001`
@@ -129,6 +129,33 @@ enum Metrics {
         let clamped = min(max(value, speedRange.lowerBound), speedRange.upperBound)
         return (clamped * 100).rounded() / 100
     }
+
+    /// 倍速的屏显文案:`1×` / `1.25×`(整数不带小数点)。
+    ///
+    /// ⚠️ 原在 `PlayerViewModel.speedText`;`exp/avkit-rust-core` 摘掉 libmpv 时
+    /// 随 ViewModel 一起删了,但它是纯格式化、与内核无关,搬到这里 ——
+    /// 与 `clampedSpeed` 做邻居,两者的取值域本来就是同一个。
+    static func speedText(_ value: Double) -> String {
+        value == value.rounded()
+            ? "\(Int(value))×"
+            : "\(value.formatted(.number.precision(.fractionLength(0...2))))×"
+    }
+
+    /// 走一步之后的倍速:加减 `step` 再夹到区间(端点处返回原值)。
+    /// ⚠️ 同 `speedText`,原在 `PlayerViewModel.steppedSpeed`。
+    static func steppedSpeed(from speed: Double, up: Bool, step: Double) -> Double {
+        clampedSpeed(speed + (up ? step : -step))
+    }
+
+    /// 音量图标。⛔ 静音与音量 0 用同一个图标:两者对用户的含义一样(没声音)。
+    /// ⚠️ 同 `speedText`,原在 `PlayerViewModel.volumeSymbol`。
+    static func volumeSymbol(_ volume: Double, muted: Bool) -> String {
+        if muted || volume <= 0 { return "speaker.slash.fill" }
+        if volume < 34 { return "speaker.wave.1.fill" }
+        if volume < 67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+
     /// 字幕延迟区间(秒)。mpv 本身不设限;±60 秒已远超「同一个文件的字幕对不齐」的量级,
     /// 再大就是字幕配错了版本,调偏移救不回来
     static let subtitleDelayRange: ClosedRange<Double> = -60...60

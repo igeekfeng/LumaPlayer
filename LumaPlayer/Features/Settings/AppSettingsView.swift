@@ -83,7 +83,7 @@ private struct PlaybackSettingsView: View {
                 SettingsValueSlider(
                     title: "默认倍速", value: $preferences.defaultSpeed,
                     range: Metrics.speedRange, step: Metrics.speedStep,
-                    text: PlayerViewModel.speedText(preferences.defaultSpeed))
+                    text: Metrics.speedText(preferences.defaultSpeed))
                 Picker("跳转步长", selection: $preferences.seekStep) {
                     ForEach(Metrics.seekStepOptions, id: \.self) { step in
                         Text("\(Int(step)) 秒").tag(step)

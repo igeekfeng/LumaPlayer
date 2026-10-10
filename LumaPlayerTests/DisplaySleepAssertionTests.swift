@@ -5,7 +5,7 @@ import XCTest
 
 /// `DisplaySleepInhibiting` 的替身:记录调用,不真的占住显示器。
 ///
-/// `PlayerViewModelTests` 用它验「播放状态 → 断言」的接线,真实 IOKit 断言的行为
+/// 播放层的接线测试用它验「播放状态 → 断言」,真实 IOKit 断言的行为
 /// 由下面 `DisplaySleepAssertionTests` 单独验。
 @MainActor
 final class RecordingDisplaySleepInhibitor: DisplaySleepInhibiting {
@@ -60,7 +60,7 @@ final class DisplaySleepAssertionTests: XCTestCase {
 
     /// 兜底:持有者被丢掉却没调 `setActive(false)` 时,deinit 必须把断言还给系统。
     ///
-    /// 主要出口是 `PlayerViewModel.stop()`;这条保险针对的是「以后有人加了不经过 stop()
+    /// 主要出口是播放层的 stop();这条保险针对的是「以后有人加了不经过 stop()
     /// 的销毁路径」——断言是进程级资源,漏了就是用户的 Mac 一直不睡,功能测试看不出来。
     func testDroppingWithoutReleaseStillReleasesAssertion() throws {
         guard let baseline = systemAssertionCount() else {
@@ -96,33 +96,33 @@ final class DisplaySleepAssertionTests: XCTestCase {
         return count
     }
 
-    /// 判据本身是纯函数,这里把所有分支钉住。
+    /// 判据本身是纯函数(`PlaybackRules`),这里把所有分支钉住。
     func testShouldPreventDisplaySleepOnlyWhilePlaying() {
-        // 正在播放(含 mpv 报 paused-for-cache 的缓冲期:那时 isPaused 仍是 false,
+        // 正在播放(含「等缓冲」的阶段:那时 isPaused 仍是 false,
         // 画面等着网络回来,屏不能睡)
-        XCTAssertTrue(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertTrue(PlaybackRules.shouldPreventDisplaySleep(
             phase: .playing, isPaused: false, isEnded: false))
 
-        // 暂停:mpv 把 phase 置 .paused
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        // 暂停
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .paused, isPaused: true, isEnded: false))
-        // 起播前就按了暂停:FILE_LOADED 仍会把 phase 推到 .playing
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        // 起播前就按了暂停:文件就绪仍会把 phase 推到 .playing
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .playing, isPaused: true, isEnded: false))
         // 播完:phase 停在 .playing,只能靠 isEnded 判(docs/PITFALLS.md Q7)
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .playing, isPaused: false, isEnded: true))
 
         // 起播准备中 / 失败 / 已拆:都不该占着断言
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .loading, isPaused: false, isEnded: false))
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .failed, isPaused: false, isEnded: false))
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .tearingDown, isPaused: false, isEnded: false))
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .destroyed, isPaused: false, isEnded: false))
-        XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
+        XCTAssertFalse(PlaybackRules.shouldPreventDisplaySleep(
             phase: .idle, isPaused: false, isEnded: false))
     }
 }

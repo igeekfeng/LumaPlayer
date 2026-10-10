@@ -1,15 +1,19 @@
 import XCTest
 @testable import LumaPlayer
 
-/// mpv 轨道 → Emby `MediaStream.Index` 的换算(docs/PITFALLS.md Q21)。
+/// 播放层轨道 → Emby `MediaStream.Index` 的换算(docs/PITFALLS.md Q21)。
 ///
 /// 用例数据取自本地 Emby 4.9.5.0 实例上 `02-multi-track.mkv` 的实测:
-/// mpv 的 `src-id` 从 1 起,Emby 的 `Index` 从 0 起,早先直接透传 `src-id`
-/// 导致上报整体偏一位。这里断言的是**换算后的 Emby 索引**,不是 mpv 编号。
+/// 容器里的轨道号从 1 起,Emby 的 `Index` 从 0 起,早先直接透传导致上报整体
+/// 偏一位。这里断言的是**换算后的 Emby 索引**,不是容器轨道号。
+///
+/// ⚠️ `exp/avkit-rust-core`:轨道类型从 `MPVTrack` 改名成 `PlaybackTrack`
+/// (生产者在 mpv 与 `AVMediaSelectionGroup` 之间换了,字段语义没变)。
+/// 换算规则本身与内核无关,用例的逻辑一行都没改,只换了类型名。
 final class StreamIndexMapperTests: XCTestCase {
 
-    /// mpv 的轨道号按类型各自从 1 编号
-    private static let tracks: [MPVTrack] = [
+    /// 轨道号按类型各自从 1 编号
+    private static let tracks: [PlaybackTrack] = [
         track(1, .video),
         track(1, .audio, lang: "eng"),
         track(2, .audio, lang: "chi"),
@@ -27,7 +31,7 @@ final class StreamIndexMapperTests: XCTestCase {
 
     // MARK: - 对应规则
 
-    /// 实测场景:mpv 播 English(aid=1)时,服务端必须收到 1(不是 src-id 的 2)。
+    /// 实测场景:播 English(aid=1)时,服务端必须收到 1(不是容器轨道号的 2)。
     func testAudioTracksMapByOrderWithinType() {
         XCTAssertEqual(map(1, .audio), 1)
         XCTAssertEqual(map(2, .audio), 2)
@@ -66,8 +70,8 @@ final class StreamIndexMapperTests: XCTestCase {
         XCTAssertNil(map(1, .audio, streams: streams))
     }
 
-    /// mpv 侧的外挂轨不参与对应;它也不能挤占内嵌轨的序号
-    func testExternalMPVTrackIsExcluded() {
+    /// 外挂轨不参与对应;它也不能挤占内嵌轨的序号
+    func testExternalTrackIsExcluded() {
         let tracks = Self.tracks + [Self.track(3, .sub, lang: "zh", external: true)]
         XCTAssertNil(map(3, .sub, tracks: tracks))
         XCTAssertEqual(map(2, .sub, tracks: tracks), 4)
@@ -104,11 +108,11 @@ final class StreamIndexMapperTests: XCTestCase {
 
     // MARK: - 辅助
 
-    /// 与 `PlayerViewModel` 一致:只把同类型的 mpv 轨道传进来
+    /// 与播放层一致:只把同类型的轨道传进来
     private func map(
         _ id: Int,
-        _ type: MPVTrackType,
-        tracks: [MPVTrack] = StreamIndexMapperTests.tracks,
+        _ type: PlaybackTrackType,
+        tracks: [PlaybackTrack] = StreamIndexMapperTests.tracks,
         streams: [EmbyMediaStream] = StreamIndexMapperTests.streams,
         method: PlaybackMethod = .directStream
     ) -> Int? {
@@ -121,10 +125,10 @@ final class StreamIndexMapperTests: XCTestCase {
     }
 
     private static func track(
-        _ id: Int, _ type: MPVTrackType, lang: String? = nil, external: Bool = false
-    ) -> MPVTrack {
-        MPVTrack(id: id, type: type, selected: false, title: nil, lang: lang,
-                 codec: nil, isExternal: external, isForced: false)
+        _ id: Int, _ type: PlaybackTrackType, lang: String? = nil, external: Bool = false
+    ) -> PlaybackTrack {
+        PlaybackTrack(id: id, type: type, selected: false, title: nil, lang: lang,
+                      codec: nil, isExternal: external, isForced: false)
     }
 
     private static func stream(_ index: Int, _ type: String, external: Bool = false) -> EmbyMediaStream {

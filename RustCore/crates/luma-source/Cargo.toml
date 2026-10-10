@@ -1,0 +1,9 @@
+[package]
+name = "luma-source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "多源接入:WebDAV / SMB / 网盘"
+
+[dependencies]

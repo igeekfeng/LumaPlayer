@@ -8,7 +8,7 @@ import XCTest
 /// 间隔是断言出来的,不是等出来的(注入的 sleeper 立即返回,只记录时长)。
 ///
 /// ⚠️ 所有 actor 读取都要先取到局部常量再断言:`await` 不能出现在
-/// `XCTAssert` 的 autoclosure 里(与 `PlaybackSessionCoordinatorTests` 同因)。
+/// `XCTAssert` 的 autoclosure 里。
 final class PlaybackProgressReporterTests: XCTestCase {
 
     /// 记录「发了什么」与「睡了多久」。用 actor 而不是 `@unchecked Sendable`

@@ -1,10 +1,14 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 播放体验:下一集查找、连续倍速、事件落地、独立窗口的播放请求。
+/// 播放体验里**与播放内核无关**的那部分:下一集查找、倍速换算、时间文案、
+/// 连点累加、独立窗口的播放请求。
 ///
-/// 与 `PlayerViewModelTests` 同一原则:只验**不需要 mpv、不需要网络**的部分
-/// (`player` 为 nil 时控制方法都是空操作,`handle` 不碰 libmpv)。
+/// ⚠️ `exp/avkit-rust-core` 摘掉 libmpv 后,本文件做过一次收缩:凡是需要
+/// `PlayerViewModel` 实例(也就是需要播放内核)的用例都随 ViewModel 一起删了,
+/// 接 AVKit 时在播放层那边重新覆盖。**留下来的是原注释里就写明「不需要 mpv、
+/// 不需要网络」的那些** —— 它们本来就与内核无关,只是当时把函数挂在了 ViewModel 上。
+///
 /// ⛔ 窗口、自动隐藏、菜单与媒体键是 UI 行为,本机无屏幕录制权限,
 /// 不在这里假装覆盖。
 @MainActor
@@ -42,89 +46,40 @@ final class PlayerExperienceTests: XCTestCase {
     // MARK: - 倍速
 
     func testSpeedTextDropsTrailingZeros() {
-        XCTAssertEqual(PlayerViewModel.speedText(1), "1×")
-        XCTAssertEqual(PlayerViewModel.speedText(2), "2×")
-        XCTAssertEqual(PlayerViewModel.speedText(1.25), "1.25×")
-        XCTAssertEqual(PlayerViewModel.speedText(0.5), "0.5×")
+        XCTAssertEqual(Metrics.speedText(1), "1×")
+        XCTAssertEqual(Metrics.speedText(2), "2×")
+        XCTAssertEqual(Metrics.speedText(1.25), "1.25×")
+        XCTAssertEqual(Metrics.speedText(0.5), "0.5×")
         // 连续调节会出到两位小数:1.35×,不是四舍五入成 1.4×
-        XCTAssertEqual(PlayerViewModel.speedText(1.35), "1.35×")
-        XCTAssertEqual(PlayerViewModel.speedText(1.1), "1.1×")
+        XCTAssertEqual(Metrics.speedText(1.35), "1.35×")
+        XCTAssertEqual(Metrics.speedText(1.1), "1.1×")
     }
 
-    /// 连续调节:值必须夹在 mpv 的可用区间内,且不带浮点尾数
+    /// 连续调节:值必须夹在可用区间内,且不带浮点尾数
     /// (滑块拖出来的 `1.1500000000000001` 会让屏显与上报抖动)。
-    func testClampedSpeedStaysInMpvsRange() {
-        XCTAssertEqual(PlayerViewModel.clampedSpeed(0.1), 0.25)
-        XCTAssertEqual(PlayerViewModel.clampedSpeed(9), 4)
-        XCTAssertEqual(PlayerViewModel.clampedSpeed(1.1500000000000001), 1.15)
+    func testClampedSpeedStaysInRange() {
+        XCTAssertEqual(Metrics.clampedSpeed(0.1), 0.25)
+        XCTAssertEqual(Metrics.clampedSpeed(9), 4)
+        XCTAssertEqual(Metrics.clampedSpeed(1.1500000000000001), 1.15)
     }
 
     /// 不再是「跳到下一档」:从任意值出发都只走一个固定步长,端点处不动。
     func testStepSpeedMovesByFixedStepNotPreset() {
-        XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 1, up: true, step: 0.1), 1.1)
-        XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 1.35, up: true, step: 0.05), 1.4)
-        XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 1.35, up: false, step: 0.05), 1.3)
-        XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 4, up: true, step: 0.1), 4)
-        XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 0.25, up: false, step: 0.1), 0.25)
-    }
-
-    /// 连续拖滑块(0.05 一跳)不能每跳都发一次 `PlaybackRateChange` ——
-    /// 一次拖动十几个请求,违反真实服务器「低频」纪律。合并后只发最后一次的值。
-    func testContinuousSpeedChangeReportsOnce() async throws {
-        let recorder = RateChangeRecorder()
-        let reporter = PlaybackProgressReporter { endpoint in
-            await recorder.record(endpoint)
-        }
-        let viewModel = try makeViewModel(reporter: reporter)
-        await reporter.begin(context: Self.reportContext, state: Self.reportState)
-
-        for value in [1.05, 1.1, 1.15, 1.2, 1.25] {
-            viewModel.handle(.speed(value), generation: 0)
-        }
-        let duringDrag = await recorder.snapshot()
-        XCTAssertTrue(duringDrag.isEmpty, "合并窗口内不应发请求")
-
-        try await Task.sleep(for: .milliseconds(800))
-        await reporter.drain()
-        let sent = await recorder.snapshot()
-        XCTAssertEqual(sent.count, 1)
-        XCTAssertEqual(sent.first?.eventName, "PlaybackRateChange")
-        XCTAssertEqual(sent.first?.playbackRate, 1.25)
-        XCTAssertEqual(viewModel.speed, 1.25)
-        viewModel.stop()
-    }
-
-    func testSpeedEventUpdatesReadBackValue() throws {
-        let viewModel = try makeViewModel()
-        viewModel.handle(.speed(1.5), generation: 0)
-        XCTAssertEqual(viewModel.speed, 1.5)
-    }
-
-    func testBufferingAndEndOfFileEventsApply() throws {
-        let viewModel = try makeViewModel()
-        viewModel.handle(.buffering(true), generation: 0)
-        XCTAssertTrue(viewModel.isBuffering)
-        viewModel.handle(.endFile(.eof), generation: 0)
-        XCTAssertTrue(viewModel.isEnded)
-    }
-
-    /// 播完后重试 / 重播:「已播完」必须复位,否则播完卡片会盖在新一轮播放上。
-    func testRetryClearsEndedState() throws {
-        let viewModel = try makeViewModel()
-        viewModel.handle(.endFile(.eof), generation: 0)
-        viewModel.retry()
-        XCTAssertFalse(viewModel.isEnded)
-        viewModel.stop()
+        XCTAssertEqual(Metrics.steppedSpeed(from: 1, up: true, step: 0.1), 1.1)
+        XCTAssertEqual(Metrics.steppedSpeed(from: 1.35, up: true, step: 0.05), 1.4)
+        XCTAssertEqual(Metrics.steppedSpeed(from: 1.35, up: false, step: 0.05), 1.3)
+        XCTAssertEqual(Metrics.steppedSpeed(from: 4, up: true, step: 0.1), 4)
+        XCTAssertEqual(Metrics.steppedSpeed(from: 0.25, up: false, step: 0.1), 0.25)
     }
 
     // MARK: - 音量图标
 
     func testVolumeSymbolReflectsLevelAndMute() {
-        XCTAssertEqual(PlayerViewModel.volumeSymbol(80, muted: true), "speaker.slash.fill")
-        XCTAssertEqual(PlayerViewModel.volumeSymbol(0, muted: false), "speaker.slash.fill")
-        XCTAssertEqual(PlayerViewModel.volumeSymbol(20, muted: false), "speaker.wave.1.fill")
-        XCTAssertEqual(PlayerViewModel.volumeSymbol(50, muted: false), "speaker.wave.2.fill")
-        XCTAssertEqual(PlayerViewModel.volumeSymbol(100, muted: false), "speaker.wave.3.fill")
+        XCTAssertEqual(Metrics.volumeSymbol(80, muted: true), "speaker.slash.fill")
+        XCTAssertEqual(Metrics.volumeSymbol(0, muted: false), "speaker.slash.fill")
+        XCTAssertEqual(Metrics.volumeSymbol(20, muted: false), "speaker.wave.1.fill")
+        XCTAssertEqual(Metrics.volumeSymbol(50, muted: false), "speaker.wave.2.fill")
+        XCTAssertEqual(Metrics.volumeSymbol(100, muted: false), "speaker.wave.3.fill")
     }
 
     // MARK: - 时间文案
@@ -315,46 +270,4 @@ final class PlayerExperienceTests: XCTestCase {
             deviceID: "DEVICE-UUID-1"
         )
     }
-
-    private func makeViewModel(reporter: PlaybackProgressReporter? = nil) throws -> PlayerViewModel {
-        PlayerViewModel(
-            container: try makeContainer(),
-            server: makeProfile(),
-            item: try item("ITEM-1", type: "Movie"),
-            reporter: reporter
-        )
-    }
-
-    /// 只记 Progress 上报里的 `eventName` 与倍速。用 actor 而不是
-    /// `@unchecked Sendable` 的盒子(ARCHITECTURE.md 3.1.2,测试代码也不例外)。
-    private actor RateChangeRecorder {
-        struct Entry: Sendable {
-            let eventName: String?
-            let playbackRate: Double?
-        }
-
-        private var entries: [Entry] = []
-
-        func record(_ endpoint: EmbyEndpoint) {
-            guard case .sessionsPlayingProgress(let body) = endpoint else { return }
-            entries.append(Entry(eventName: body.eventName, playbackRate: body.playbackRate))
-        }
-
-        func snapshot() -> [Entry] { entries }
-    }
-
-    private static let reportContext = PlaybackReportContext(
-        itemID: "ITEM-1",
-        mediaSourceID: "SOURCE-1",
-        playSessionID: "SESSION-1",
-        method: .directStream
-    )
-    private static let reportState = PlaybackReportState(
-        positionSeconds: 60,
-        isPaused: false,
-        isMuted: false,
-        volume: 80,
-        audioStreamIndex: nil,
-        subtitleStreamIndex: nil
-    )
 }

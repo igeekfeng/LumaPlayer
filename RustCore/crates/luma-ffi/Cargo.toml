@@ -1,0 +1,27 @@
+[package]
+name = "luma-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "UniFFI 接口层 —— Rust 核心唯一对外暴露的面"
+
+# 库名与 namespace 都叫 luma_core,与 crate 名(luma-ffi)分开:
+# 生成的绑定文件名跟着 namespace 走(luma_core.swift / luma_coreFFI.h / luma_coreFFI.modulemap),
+# 用 crate 名会生成 luma_ffi.* ,读代码时对不上「核心」这个概念。
+[lib]
+name = "luma_core"
+# staticlib:链进 App 的主二进制,不需要像 libmpv 那样往 Frameworks/ 里塞 dylib。
+# cdylib:只为给 uniffi-bindgen 的 --library 模式读元数据用,不参与分发。
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+uniffi = { workspace = true, features = ["cli"] }
+luma-emby = { path = "../luma-emby" }
+luma-source = { path = "../luma-source" }
+luma-scrape = { path = "../luma-scrape" }
+luma-store = { path = "../luma-store" }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

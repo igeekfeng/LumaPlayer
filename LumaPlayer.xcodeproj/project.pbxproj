@@ -285,6 +285,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/RustCore/prefix/include";
 				INFOPLIST_FILE = LumaPlayer/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumaPlayer;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
@@ -294,7 +295,7 @@
 					"@executable_path/../Frameworks",
 				);
 				OTHER_LDFLAGS = (
-					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
+					"$(SRCROOT)/RustCore/prefix/lib/libluma_core.a",
 				);
 				OTHER_SWIFT_FLAGS = (
 					"-Xcc",
@@ -304,7 +305,9 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
+				SWIFT_INCLUDE_PATHS = (
+					"$(SRCROOT)/RustCore/prefix/include",
+				);
 			};
 			name = Debug;
 		};
@@ -320,6 +323,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/RustCore/prefix/include";
 				INFOPLIST_FILE = LumaPlayer/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumaPlayer;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
@@ -329,7 +333,7 @@
 					"@executable_path/../Frameworks",
 				);
 				OTHER_LDFLAGS = (
-					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
+					"$(SRCROOT)/RustCore/prefix/lib/libluma_core.a",
 				);
 				OTHER_SWIFT_FLAGS = (
 					"-Xcc",
@@ -339,7 +343,9 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
+				SWIFT_INCLUDE_PATHS = (
+					"$(SRCROOT)/RustCore/prefix/include",
+				);
 			};
 			name = Release;
 		};
@@ -351,11 +357,14 @@
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/RustCore/prefix/include";
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.LumaPlayer.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
+				SWIFT_INCLUDE_PATHS = (
+					"$(SRCROOT)/RustCore/prefix/include",
+				);
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LumaPlayer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LumaPlayer";
 			};
 			name = Debug;
@@ -368,11 +377,14 @@
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/RustCore/prefix/include";
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.LumaPlayer.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
+				SWIFT_INCLUDE_PATHS = (
+					"$(SRCROOT)/RustCore/prefix/include",
+				);
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LumaPlayer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LumaPlayer";
 			};
 			name = Release;

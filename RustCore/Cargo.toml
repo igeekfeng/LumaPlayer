@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+uniffi = "0.32"
+
+[profile.release]
+# 这份静态库要链进 App,编译产物直接进最终二进制:
+# LTO + 单 CGU 换体积与运行期性能,构建慢一点无所谓。
+lto = true
+codegen-units = 1
+strip = "debuginfo"

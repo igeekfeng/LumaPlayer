@@ -194,7 +194,7 @@ struct SubtitleColor: Codable, Equatable, Hashable, Sendable {
 /// 字幕外观偏好的存取(UserDefaults,全 App 一份)。
 ///
 /// 挂在 `AppContainer` 上:设置窗口改、播放窗口读,两边看到的是同一个实例;
-/// `@Observable` 让播放窗口在播放中即时套用新外观(`PlayerWindowView` 的 onChange)。
+/// `@Observable` 让播放窗口在播放中即时套用新外观(播放页监听它的变化)。
 @MainActor
 @Observable
 final class SubtitleStyleStore {

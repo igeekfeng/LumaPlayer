@@ -11,7 +11,7 @@ struct PlaybackReportContext: Sendable, Equatable {
     var canSeek: Bool { method == .directStream }
 }
 
-/// 上报那一刻的播放状态快照(由 `PlayerViewModel` 在每次 time-pos 等事件后推入)。
+/// 上报那一刻的播放状态快照(由播放层在每次位置 / 暂停等状态变化后推入)。
 struct PlaybackReportState: Sendable, Equatable {
     var positionSeconds: Double
     var isPaused: Bool

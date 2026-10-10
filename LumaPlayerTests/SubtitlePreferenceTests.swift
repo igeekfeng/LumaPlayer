@@ -3,9 +3,12 @@ import XCTest
 
 /// `SubtitlePreference` 的简繁判定与优先级。
 ///
-/// 纯函数,不需要 mpv、不需要网络 —— 中文资源的字幕标记千奇百怪
+/// 纯函数,与播放内核、网络都无关 —— 中文资源的字幕标记千奇百怪
 /// (语言码有 `chi` / `zho` / `zh-Hans` / `chs`,变体常写进 title),
 /// 判定规则只能靠这类用例钉住。
+///
+/// ⚠️ `exp/avkit-rust-core`:轨道类型从 `MPVTrack` 改名成 `PlaybackTrack`,
+/// 判定逻辑一行未改。
 final class SubtitlePreferenceTests: XCTestCase {
 
     // MARK: - 优先级
@@ -26,7 +29,7 @@ final class SubtitlePreferenceTests: XCTestCase {
         XCTAssertEqual(SubtitlePreference.preferredTrackID(in: tracks), 2)
     }
 
-    /// 一条中文都没有 → nil(= 保持 mpv 的 default 轨)
+    /// 一条中文都没有 → nil(= 保持内核的默认轨)
     func testNoChineseTrackReturnsNil() {
         let tracks = [sub(1, lang: "eng"), sub(2, lang: "jpn", title: "Japanese")]
         XCTAssertNil(SubtitlePreference.preferredTrackID(in: tracks))
@@ -59,8 +62,8 @@ final class SubtitlePreferenceTests: XCTestCase {
 
     /// 没有字幕轨(例如字幕被烧进画面)→ nil,不去动音轨
     func testNoSubtitleTrackReturnsNil() {
-        let tracks = [MPVTrack(id: 1, type: .audio, selected: true, title: "中文", lang: "chi",
-                               codec: nil, isExternal: false, isForced: false)]
+        let tracks = [PlaybackTrack(id: 1, type: .audio, selected: true, title: "中文", lang: "chi",
+                                    codec: nil, isExternal: false, isForced: false)]
         XCTAssertNil(SubtitlePreference.preferredTrackID(in: tracks))
     }
 
@@ -129,14 +132,14 @@ final class SubtitlePreferenceTests: XCTestCase {
 
     private func sub(
         _ id: Int, lang: String?, title: String? = nil, forced: Bool = false
-    ) -> MPVTrack {
-        MPVTrack(id: id, type: .sub, selected: false, title: title, lang: lang,
-                 codec: nil, isExternal: false, isForced: forced)
+    ) -> PlaybackTrack {
+        PlaybackTrack(id: id, type: .sub, selected: false, title: title, lang: lang,
+                      codec: nil, isExternal: false, isForced: forced)
     }
 
     // MARK: - 起播字幕模式
 
-    /// 默认模式:有中文选中文;一条中文都没有时不动 mpv(⛔ 不猜)
+    /// 默认模式:有中文选中文;一条中文都没有时不动内核选的轨(⛔ 不猜)
     func testSmartModeLeavesAloneWithoutChinese() {
         let tracks = [sub(1, lang: "eng"), sub(2, lang: "jpn")]
         XCTAssertEqual(
@@ -160,8 +163,8 @@ final class SubtitlePreferenceTests: XCTestCase {
 
     /// 一条字幕轨都没有时两种模式都不该凭空造一条出来
     func testNoSubtitleTrackLeavesAlone() {
-        let audio = [MPVTrack(id: 1, type: .audio, selected: true, title: nil, lang: "eng",
-                              codec: nil, isExternal: false, isForced: false)]
+        let audio = [PlaybackTrack(id: 1, type: .audio, selected: true, title: nil, lang: "eng",
+                                   codec: nil, isExternal: false, isForced: false)]
         XCTAssertEqual(SubtitlePreference.startupChoice(in: audio, mode: .always), .leaveAlone)
     }
 

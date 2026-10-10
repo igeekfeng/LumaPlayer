@@ -43,6 +43,15 @@ Vendor/mpv/src/
 Vendor/mpv/build/
 Vendor/mpv/prefix/
 
+# ── Rust 核心（Scripts/build-rust-core.sh 产物）──
+# target/ 是 cargo 的构建目录；prefix/ 是装出来的 .a 与 C 头 / modulemap。
+# LumaPlayer/Generated/ 是 UniFFI 生成的 Swift 绑定 —— 它**故意**放在 App 源码树里，
+# 好让 project.pbxproj 的「同步文件夹」机制自动把它纳入编译（不必改 pbxproj）。
+# ⚠️ 新克隆的仓库必须先跑一次 Scripts/build-rust-core.sh，否则这个目录是空的、App 编不过。
+RustCore/target/
+RustCore/prefix/
+LumaPlayer/Generated/
+
 
 docs/
 CLAUDE.md
