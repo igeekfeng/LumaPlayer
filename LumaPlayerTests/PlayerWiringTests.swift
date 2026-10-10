@@ -618,8 +618,7 @@ final class PlayerWiringTests: XCTestCase {
         let reporter = RecordingReporter()
         let viewModel = PlayerViewModel(
             container: container,
-            server: server,
-            item: item,
+            source: .emby(server: server, item: item),
             startFromBeginning: startFromBeginning,
             engine: engine,
             sessionPreparer: preparer,
@@ -722,7 +721,10 @@ final class PlayerWiringTests: XCTestCase {
                 ? .directStream(url: url, headers: [:], playSessionID: "ps1", mediaSourceID: "ms1")
                 : .transcode(url: url, headers: [:], playSessionID: "ps1", mediaSourceID: "ms1"),
             mediaSource: source,
-            decision: decision
+            decision: decision,
+            // 与 `PlaybackSessionCoordinator` 同一条规则:Emby 的直连是客户端
+            // seek,转码是停流 + StartTimeTicks 重新起流。
+            seekStrategy: method == .directStream ? .clientSeek : .restartStream
         )
     }
 

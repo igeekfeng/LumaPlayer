@@ -24,6 +24,13 @@ struct PlaybackReportState: Sendable, Equatable {
     var subtitleStreamIndex: Int?
     /// 倍速(mpv `speed` 读回值,1 = 正常速度)
     var playbackRate: Double = 1
+    /// 本次会话已知的总时长(秒);未知为 nil。
+    ///
+    /// ⚠️ Emby 侧**不用**它:服务端自己知道片长,5.1 的上报字段里也没有它,
+    /// 所以 `PlaybackProgressReporter.body(...)` 不读这个字段。
+    /// 它是给本地续播(`LocalResumeReporting`)用的 —— 判「已看完」要有总时长,
+    /// 而百度源上这个信息只有播放层手上有。
+    var durationSeconds: Double? = nil
 
     var positionTicks: Int64? {
         TickConverter.ticks(fromSeconds: positionSeconds)

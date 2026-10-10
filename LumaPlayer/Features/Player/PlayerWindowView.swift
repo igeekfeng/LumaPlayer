@@ -40,8 +40,7 @@ struct PlayerWindowView: View {
         self._viewModel = State(
             initialValue: PlayerViewModel(
                 container: container,
-                server: request.server,
-                item: request.item,
+                source: request.source,
                 startFromBeginning: request.startFromBeginning
             )
         )
@@ -323,13 +322,9 @@ struct PlayerWindowView: View {
         return "正在缓冲…"
     }
 
-    private var windowTitle: String {
-        let item = viewModel.playingItem
-        if item.kind == .episode, let series = item.seriesName {
-            return [series, item.episodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
-        }
-        return item.name
-    }
+    /// ⛔ 不再直接读 `EmbyItem`:百度源没有 Item,标题一律走
+    /// `viewModel.windowTitle`(它按源分派)。
+    private var windowTitle: String { viewModel.windowTitle }
 
     // MARK: - 自动隐藏
 
@@ -391,10 +386,13 @@ struct PlayerWindowView: View {
     }
 
     /// 401 才给重新登录入口;其它失败重试就够了(API_CONTRACT.md 2.5)。
+    ///
+    /// ⚠️ 百度源没有「重新登录」这回事(它的授权不在 Emby 服务器上),
+    /// 所以只对 Emby 源给这个按钮。
     private func loginAction(for failure: LoadFailure) -> (() -> Void)? {
-        guard failure.needsLogin else { return nil }
+        guard failure.needsLogin, let server = request.embyServer else { return nil }
         return {
-            container.state.serverNeedingLogin = request.server
+            container.state.serverNeedingLogin = server
             close()
         }
     }
@@ -416,10 +414,16 @@ struct PlayerWindowView: View {
         let viewModel = viewModel
         Task {
             await viewModel.waitUntilReportingFinished()
+            // 「收尾上报已发完」只对 Emby 有意义:首页 / 详情页据此向**服务端**
+            // 重读续播位置(Q22)。百度源没有服务端进度,广播它只会让别的页面
+            // 去做一次必然返回旧值的请求。
+            guard let serverID = request.embyServer?.id, let itemID = request.embyItem?.id else {
+                return
+            }
             state.lastFinishedPlayback = FinishedPlayback(
                 requestID: request.id,
-                serverID: request.server.id,
-                itemID: request.item.id
+                serverID: serverID,
+                itemID: itemID
             )
         }
     }
@@ -465,10 +469,11 @@ struct PlayerTitleBar: View {
     var body: some View {
         // 剧集是两级排版(剧名 / 集号集名),电影只有一级 —— 用 `HStack` 的
         // baseline 对齐,⛔ 不要改成 `VStack` 上下两行。
+        // 标题与副标题由 ViewModel 按**源**给出(百度源没有 `EmbyItem`)。
         HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingS) {
-            Text(title)
+            Text(viewModel.playingTitle)
                 .font(.headline)
-            if let subtitle {
+            if let subtitle = viewModel.playingSubtitle {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -486,19 +491,6 @@ struct PlayerTitleBar: View {
         .allowsHitTesting(false)
     }
 
-    private var item: EmbyItem { viewModel.playingItem }
-
-    private var title: String {
-        item.kind == .episode ? (item.seriesName ?? item.name) : item.name
-    }
-
-    private var subtitle: String? {
-        guard item.kind == .episode else { return nil }
-        return [item.episodeLabel, item.seriesName == nil ? nil : item.name]
-            .compactMap { $0 }
-            .joined(separator: " · ")
-            .nilIfEmpty
-    }
 }
 
 /// 屏显提示:小型非交互玻璃胶囊(UI_DESIGN.md 4.1)。

@@ -251,8 +251,10 @@ struct PlayerScrubber: View {
             )
         }
         .frame(height: Metrics.spacingL)
-        .disabled(duration <= 0)
-        .help("拖动调整进度")
+        // ⛔ 拖不动的片源(百度云端转码流)直接把进度条置灰,而不是留一条
+        // 「拖了没反应」的进度条 —— 那种控件只会让人以为 App 坏了。
+        .disabled(duration <= 0 || !viewModel.allowsSeeking)
+        .help(viewModel.allowsSeeking ? "拖动调整进度" : "这个片源不支持拖动进度")
         .accessibilityElement()
         .accessibilityLabel("播放进度")
         .accessibilityValue("\(PlayerTime.spokenText(displayed)),剩余 \(PlayerTime.spokenText(max(0, duration - displayed)))")

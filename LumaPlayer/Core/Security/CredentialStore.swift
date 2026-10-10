@@ -100,4 +100,82 @@ actor CredentialStore {
         }
         return id
     }
+
+    // MARK: - 百度网盘(docs/BAIDU_NETDISK_INTEGRATION.md §6)
+
+    /// 百度源只有**一份**凭据,不像 Emby 那样按服务器分 ——
+    /// 一个 App 只对应开放平台上的一个应用,一个用户只授权一次。
+    /// 所以 account 是固定名字,不带 id。
+    private enum BaiduAccount {
+        /// AppKey / SecretKey / 应用目录名 的 JSON(一次写完,见下)
+        static let appCredentials = "baidu-app-credentials"
+        /// `BaiduPanTokenBundle` 的 JSON
+        static let token = "baidu-token"
+        /// 片库根(用户在应用目录里选定的起点)
+        static let libraryRoot = "baidu-library-root"
+    }
+
+    /// AppKey / SecretKey / 应用目录名。整体作为一个 JSON 落盘:
+    /// 分三个 account 写的话,中途失败会留下「有 AppKey 没 SecretKey」的半截配置,
+    /// 而那种状态只会让人反复撞「授权失败」却看不出哪里缺。
+    struct BaiduPanAppConfiguration: Codable, Sendable, Equatable {
+        var appKey: String
+        var secretKey: String
+        /// 应用目录名:第三方应用只能访问 `/apps/{这个值}`(§2.1)
+        var folderName: String
+    }
+
+    func baiduPanAppConfiguration() async throws -> BaiduPanAppConfiguration? {
+        guard let data = try await storage.value(forAccount: BaiduAccount.appCredentials) else {
+            return nil
+        }
+        return try JSONDecoder().decode(BaiduPanAppConfiguration.self, from: data)
+    }
+
+    func saveBaiduPanAppConfiguration(_ configuration: BaiduPanAppConfiguration) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(configuration), forAccount: BaiduAccount.appCredentials)
+    }
+
+    /// 片库根:用户在 `/apps/{应用目录名}` **内部**选定的一个子目录,作为进来时的起点。
+    ///
+    /// ⛔ 它**不是**应用凭据,所以不塞进 `BaiduPanAppConfiguration`:
+    /// 改片库根不该碰 AppKey / token,而改 AppKey 会连带作废 token
+    /// (见 `BaiduPanConnection.saveConfiguration`)。两件事的生命周期不同。
+    struct BaiduPanLibraryRoot: Codable, Sendable, Equatable {
+        var path: String
+    }
+
+    func baiduPanLibraryRoot() async throws -> BaiduPanLibraryRoot? {
+        guard let data = try await storage.value(forAccount: BaiduAccount.libraryRoot) else {
+            return nil
+        }
+        return try JSONDecoder().decode(BaiduPanLibraryRoot.self, from: data)
+    }
+
+    func saveBaiduPanLibraryRoot(_ root: BaiduPanLibraryRoot) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(root), forAccount: BaiduAccount.libraryRoot)
+    }
+
+    func deleteBaiduPanLibraryRoot() async throws {
+        try await storage.removeValue(forAccount: BaiduAccount.libraryRoot)
+    }
+
+    func baiduPanToken() async throws -> BaiduPanTokenBundle? {
+        guard let data = try await storage.value(forAccount: BaiduAccount.token) else {
+            return nil
+        }
+        return try JSONDecoder().decode(BaiduPanTokenBundle.self, from: data)
+    }
+
+    func saveBaiduPanToken(_ bundle: BaiduPanTokenBundle) async throws {
+        try await storage.setValue(JSONEncoder().encode(bundle), forAccount: BaiduAccount.token)
+    }
+
+    /// 解绑:删 token,**保留** AppKey / SecretKey / 目录名
+    /// —— 重新授权不该逼用户再填一遍密钥。
+    func deleteBaiduPanToken() async throws {
+        try await storage.removeValue(forAccount: BaiduAccount.token)
+    }
 }

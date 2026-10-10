@@ -1,5 +1,40 @@
 import Foundation
 
+/// 一次播放请求要播的**是哪一路来源**上的内容。
+///
+/// ⚠️ 为什么是枚举而不是「给 `PlaybackRequest` 加两个可选字段」:
+/// Emby 与百度网盘**没有共同的语义** —— Emby 有服务器 / Item / 服务端进度,
+/// 百度只有一条文件与 `fs_id`。做成两个可选字段就会出现「既没服务器也没文件」
+/// 这种不可能的状态,而每个调用点都要先判一遍。
+enum PlaybackSource: Sendable, Equatable {
+    case emby(server: ServerProfile, item: EmbyItem)
+    case baiduPan(file: BaiduPanFile)
+
+    /// Emby 源才有(其它源返回 nil)
+    var embyServer: ServerProfile? {
+        if case .emby(let server, _) = self { return server }
+        return nil
+    }
+
+    var embyItem: EmbyItem? {
+        if case .emby(_, let item) = self { return item }
+        return nil
+    }
+
+    var baiduFile: BaiduPanFile? {
+        if case .baiduPan(let file) = self { return file }
+        return nil
+    }
+
+    /// 上报 / 日志用的内容标识。Emby 是 Item Id,百度是 `fs_id`。
+    var contentID: String {
+        switch self {
+        case .emby(_, let item): return item.id
+        case .baiduPan(let file): return String(file.fsID)
+        }
+    }
+}
+
 /// 一次「请播放器窗口播这一项」的请求(`AppState.nowPlaying`)。
 ///
 /// 播放器是**单实例的独立窗口**(ARCHITECTURE.md 7.5):详情页只负责
@@ -8,10 +43,29 @@ import Foundation
 /// 再点一次播放也会得到一个新会话,而不是被当成「没变」忽略。
 struct PlaybackRequest: Identifiable, Equatable {
     let id = UUID()
-    let server: ServerProfile
-    let item: EmbyItem
-    /// 「从头播放」:忽略服务端记录的续播位置
+    let source: PlaybackSource
+    /// 「从头播放」:忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
     var startFromBeginning = false
+
+    init(source: PlaybackSource, startFromBeginning: Bool = false) {
+        self.source = source
+        self.startFromBeginning = startFromBeginning
+    }
+
+    /// 既有 Emby 调用点的形状(首页 / 媒体库 / 详情 / 搜索)。
+    init(server: ServerProfile, item: EmbyItem, startFromBeginning: Bool = false) {
+        self.source = .emby(server: server, item: item)
+        self.startFromBeginning = startFromBeginning
+    }
+
+    init(baiduFile: BaiduPanFile, startFromBeginning: Bool = false) {
+        self.source = .baiduPan(file: baiduFile)
+        self.startFromBeginning = startFromBeginning
+    }
+
+    var embyServer: ServerProfile? { source.embyServer }
+    var embyItem: EmbyItem? { source.embyItem }
+    var baiduFile: BaiduPanFile? { source.baiduFile }
 }
 
 /// 一次播放的收尾上报(最终 Progress + Stopped)**已经发完**。

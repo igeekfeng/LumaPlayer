@@ -13,6 +13,11 @@ struct AddServerView: View {
     @State private var saveTask: Task<Void, Never>?
 
     private let showsCancelButton: Bool
+    private let container: AppContainer
+    /// 百度网盘那一页。⛔ 入口放在这里而不是主窗口:首次启动时还没有任何
+    /// Emby 服务器,而百度源与服务器无关 —— 不挂一个入口的话,
+    /// 「只想播网盘里的片子」的人根本进不来。
+    @State private var showsBaiduPan = false
 
     private enum Field: Hashable {
         case address, displayName, username, password
@@ -21,6 +26,7 @@ struct AddServerView: View {
     @MainActor
     init(container: AppContainer, showsCancelButton: Bool = false) {
         self.showsCancelButton = showsCancelButton
+        self.container = container
         _viewModel = State(initialValue: AddServerViewModel(container: container))
     }
 
@@ -97,6 +103,14 @@ struct AddServerView: View {
                 onCancel: showsCancelButton ? { cancel() } : nil,
                 onSubmit: submit
             )
+
+            Button("改用百度网盘…") { showsBaiduPan = true }
+                .font(.callout)
+                .padding(.bottom, Metrics.spacingL)
+                .help("不连 Emby 服务器,直接播百度网盘「我的应用数据」目录里的视频")
+        }
+        .sheet(isPresented: $showsBaiduPan) {
+            BaiduPanSourceView(container: container)
         }
         .frame(width: Metrics.onboardingFormWidth)
         .fixedSize(horizontal: false, vertical: true)

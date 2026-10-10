@@ -122,7 +122,8 @@ final class AVKitPlaybackKernel: PlaybackEngine {
         trackRequirement = TrackExpectation.requirement(forStreams: sourceStreams)
         setPhase(.loading)
 
-        let item = AVPlayerItem(asset: Self.makeAsset(plan))
+        let asset = Self.makeAsset(plan)
+        let item = AVPlayerItem(asset: asset)
         // mpv 那边靠 scaletempo 变速不变调;AVFoundation 的对应物是
         // `audioTimePitchAlgorithm`(.timeDomain 就是时域变速,与 scaletempo 同类)。
         // ⚠️ 听感未核对,已记 `docs/KNOWN_ISSUES.md`。

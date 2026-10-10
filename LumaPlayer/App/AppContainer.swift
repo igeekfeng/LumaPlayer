@@ -17,6 +17,18 @@ final class AppContainer {
     /// 放在组合根上是刻意的:换视频 / 换集都会新建播放页的状态对象,
     /// 记在那里面跨不过去;而记在这里就恰好是「本次运行」的寿命。
     let playbackSpeeds = PlaybackSpeedStore()
+    /// 本地续播库。**只有百度源用它**:百度没有播放进度上报接口
+    /// (文档 §5.2),进度只能记在本地;Emby 源仍然上报到服务端。
+    let watchProgress = WatchProgressStore(fileURL: WatchProgressStore.defaultFileURL)
+    /// 百度网盘源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
+    /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
+    private var baiduConnectionInstance: BaiduPanConnection?
+    func baiduConnection() -> BaiduPanConnection {
+        if let existing = baiduConnectionInstance { return existing }
+        let fresh = BaiduPanConnection(credentials: credentials)
+        baiduConnectionInstance = fresh
+        return fresh
+    }
     /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
     /// 必须是同一个实例,播放中改设置才能即时生效。
     let subtitleStyles: SubtitleStyleStore
@@ -213,11 +225,27 @@ final class AppContainer {
         state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
     }
 
+    /// 播百度网盘里的一个文件。
+    ///
+    /// ⚠️ 百度源与「当前 Emby 服务器」无关,所以切服务器**不会**打断它
+    /// (见 `stopPlayback(unlessOn:)`):它的播放地址里不出现 Emby 服务器。
+    ///
+    /// ⛔ 与 Emby 那条一样:**调用方(视图)必须自己 `openWindow`**。这里只写请求,
+    /// 窗口不会因为 `nowPlaying` 有值自己出现 —— 漏了它表现为「点了播放没反应」。
+    func play(_ file: BaiduPanFile, fromBeginning: Bool = false) {
+        state.nowPlaying = PlaybackRequest(baiduFile: file, startFromBeginning: fromBeginning)
+    }
+
     /// 结束属于 `serverID` 的播放(切换 / 删除服务器时)。
     /// UI_DESIGN.md 7.1:正在播放时切服务器,先结束旧播放会话再切换 ——
     /// 否则播放器窗口里还是上一台的内容,上报也继续打到上一台。
     private func stopPlayback(unlessOn serverID: UUID) {
-        guard let playing = state.nowPlaying, playing.server.id != serverID else { return }
+        guard let playing = state.nowPlaying else { return }
+        // 百度源不属于任何 Emby 服务器:切服务器不该打断它。
+        // ⛔ 不能写成 `playing.embyServer?.id != serverID` —— 那会把
+        // 「正在播百度」也当成「该停掉」(可选项与 nil 不相等)。
+        guard case .emby(let server, _) = playing.source else { return }
+        guard server.id != serverID else { return }
         state.nowPlaying = nil
     }
 
@@ -279,7 +307,8 @@ final class AppContainer {
     /// 删除服务器(含其本地 token);若删的是当前服务器,
     /// 切到剩余里最近使用的一台;一台不剩则回引导页。
     func removeServer(id: UUID) async throws {
-        if state.nowPlaying?.server.id == id {
+        // 同上:只有 Emby 源才跟着服务器一起走
+        if state.nowPlaying?.embyServer?.id == id {
             state.nowPlaying = nil
         }
         try await registry.remove(id: id)

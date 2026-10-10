@@ -59,17 +59,23 @@ extension PlaybackFailureFfi {
 @Observable
 final class PlayerViewModel {
     private let container: AppContainer
-    private let server: ServerProfile
-    private let item: EmbyItem
+    /// 这次播放的来源(Emby 还是百度网盘)。
+    ///
+    /// 播放页对源的依赖全部经 `source` 分派,而不是「两个可选字段各判一遍」:
+    /// 见 `PlaybackSource` 的注释。
+    private let source: PlaybackSource
+    /// Emby 源才有(转发自 `source`,省得每个调用点都解一次枚举)
+    private var embyServer: ServerProfile? { source.embyServer }
+    private var embyItem: EmbyItem? { source.embyItem }
     /// 播放内核。经 init 注入(单测给替身),视图只拿 `playablePlayer` ——
     /// 上层不接触内核类型,也不会误用它别的成员。
     private let engine: PlaybackEngine
-    /// 上报出口(API_CONTRACT.md 5.4:所有上报经这一个 actor 串行)。
-    private let reporter: PlaybackProgressReporter
+    /// 进度出口。Emby 走服务端上报,百度走本地续播库(百度没有上报接口)。
+    private let reporter: any PlaybackReporting
     /// 播放期的显示器休眠断言。⛔ AVFoundation 同样不代 App 申请断言,
     /// 完全由宿主负责(判据见 `PlaybackRules.shouldPreventDisplaySleep`)。
     private let displaySleep: any DisplaySleepInhibiting
-    /// 会话准备(取 PlaybackInfo → Rust 决策 → 地址 + 认证头)
+    /// 会话准备(取播放信息 → Rust 决策 → 地址 + 认证头)
     private let sessionPreparer: any PlaybackSessionPreparing
 
     private(set) var session: PlaybackSession?
@@ -111,8 +117,14 @@ final class PlayerViewModel {
 
     /// 本次起播要用的倍速:这部剧记过就用它(优先级最高),没记过用设置页的
     /// 「默认倍速」,再没有才是 1×。
+    ///
+    /// ⚠️ 「同一部剧沿用同一个倍速」是**按 Emby Item 记的**(它的 key 需要
+    /// Item Id + 服务器 Id)。百度源没有等价的分组依据,所以不参与记忆。
     var startupSpeed: Double {
-        container.playbackSpeeds.speed(for: item, on: server)
+        guard let item = embyItem, let server = embyServer else {
+            return container.preferences.defaultSpeed
+        }
+        return container.playbackSpeeds.speed(for: item, on: server)
             ?? container.preferences.defaultSpeed
     }
 
@@ -164,12 +176,43 @@ final class PlayerViewModel {
     /// 拿它判片头会把续播位置覆盖掉 = `PlaybackRules.isSettledPosition`)。
     private var isPositionSettled = false
 
-    /// 正在播的项(标题栏 / 窗口标题用)
-    var playingItem: EmbyItem { item }
-    var playingServer: ServerProfile { server }
+    /// 标题栏 / 窗口标题用的标题。
+    ///
+    /// ⛔ 不做成 `playingItem: EmbyItem`:百度源没有 `EmbyItem`,
+    /// 编一个假 Item 出来比多两个字符串危险得多 —— 任何一处误用它都会
+    /// 拿一条百度文件去发 Emby 请求。
+    var playingTitle: String {
+        switch source {
+        case .emby(_, let item):
+            return item.kind == .episode ? (item.seriesName ?? item.name) : item.name
+        case .baiduPan(let file):
+            return file.name
+        }
+    }
+
+    /// 标题栏的副标题(剧集的「S1E2 · 集名」;电影与其它源为 nil)
+    var playingSubtitle: String? {
+        guard case .emby(_, let item) = source, item.kind == .episode else { return nil }
+        let text = [item.episodeLabel, item.seriesName == nil ? nil : item.name]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+        return text.isEmpty ? nil : text
+    }
+
+    /// 窗口标题
+    var windowTitle: String {
+        [playingTitle, playingSubtitle].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 当前这次播放能不能拖进度(见 `PlaybackSeekStrategy`)
+    var allowsSeeking: Bool { session?.seekStrategy.allowsSeeking ?? true }
 
     // MARK: - 私有状态
 
+    /// 「从头播放」:忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
+    private let startFromBeginning: Bool
+    /// 百度源的续播位置是否已从本地续播库读过(见 `loadResumePositionIfNeeded`)
+    private var didLoadResumePosition = false
     /// 起播位置(秒,绝对)。来源有两个:打开时的续播位置,以及转码 seek 的目标。
     private var startSeconds: Double
     /// 本次会话的时间基(内核位置 ↔ 绝对位置)。会话就绪前是 DirectStream 语义(偏移 0)。
@@ -208,40 +251,54 @@ final class PlayerViewModel {
 
     init(
         container: AppContainer,
-        server: ServerProfile,
-        item: EmbyItem,
+        source: PlaybackSource,
         startFromBeginning: Bool = false,
         engine: PlaybackEngine? = nil,
         sessionPreparer: (any PlaybackSessionPreparing)? = nil,
-        reporter: PlaybackProgressReporter? = nil,
+        reporter: (any PlaybackReporting)? = nil,
         displaySleep: (any DisplaySleepInhibiting)? = nil
     ) {
         self.container = container
-        self.server = server
-        self.item = item
-        // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
-        // ⛔ 闭包是 `@Sendable`,**不能**在它里面调 `container.connection(for:)`
-        // —— `AppContainer` 是 MainActor 类型,捕获它会过不了 Swift 6 并发检查。
-        // 连接实例本身是 actor(Sendable),在 init(MainActor)里取出来再捕获。
-        let connection = container.connection(for: server)
-        self.reporter = reporter ?? PlaybackProgressReporter { endpoint in
-            try await connection.reportPlayback(endpoint)
-        }
-        self.sessionPreparer = sessionPreparer
-            ?? PlaybackSessionCoordinator(connection: connection, itemID: item.id)
+        self.source = source
+        self.startFromBeginning = startFromBeginning
         // 显示器休眠断言:App 里用真的 IOKit 断言,单测注入替身
         self.displaySleep = displaySleep ?? DisplaySleepAssertion()
         // 内核:App 里是真的 AVKit 内核,单测注入替身
         self.engine = engine ?? AVKitPlaybackKernel()
-        // 恢复播放位置:`UserData.PlaybackPositionTicks` 是服务端记录的进度。
-        // 为 nil / 为 0 即从 0 开始 —— 不猜「看过了多少」(8.1 禁止填假默认值)。
-        // 「从头播放」显式忽略它。
-        let resume = startFromBeginning
-            ? 0
-            : item.userData?.playbackPositionTicks.flatMap { TickConverter.seconds(fromTicks: $0) } ?? 0
-        self.startSeconds = PlaybackRules.resumePosition(from: resume)
-        // 服务端时长是权威值(`EmbyItem.RunTimeTicks`),拿不到才退回内核时长(见 `PlaybackTimeBase`)
-        self.serverDuration = item.runTimeTicks.flatMap { TickConverter.seconds(fromTicks: $0) }
+
+        switch source {
+        case .emby(let server, let item):
+            // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
+            // ⛔ 闭包是 `@Sendable`,**不能**在它里面调 `container.connection(for:)`
+            // —— `AppContainer` 是 MainActor 类型,捕获它会过不了 Swift 6 并发检查。
+            // 连接实例本身是 actor(Sendable),在 init(MainActor)里取出来再捕获。
+            let connection = container.connection(for: server)
+            self.reporter = reporter ?? PlaybackProgressReporter { endpoint in
+                try await connection.reportPlayback(endpoint)
+            }
+            self.sessionPreparer = sessionPreparer
+                ?? PlaybackSessionCoordinator(connection: connection, itemID: item.id)
+            // 续播位置:`UserData.PlaybackPositionTicks` 是服务端记录的进度。
+            // 为 nil / 为 0 即从 0 开始 —— 不猜「看过了多少」(8.1 禁止填假默认值)。
+            // 「从头播放」显式忽略它。
+            let resume = startFromBeginning
+                ? 0
+                : item.userData?.playbackPositionTicks.map(TickConverter.seconds(fromTicks:)) ?? 0
+            self.startSeconds = PlaybackRules.resumePosition(from: resume)
+            // 服务端时长是权威值(`EmbyItem.RunTimeTicks`),拿不到才退回内核时长(见 `PlaybackTimeBase`)
+            self.serverDuration = item.runTimeTicks.map(TickConverter.seconds(fromTicks:))
+
+        case .baiduPan(let file):
+            // 百度没有播放上报接口 → 进度写本地续播库(文档 §5.2)
+            self.reporter = reporter ?? LocalResumeReporting(store: container.watchProgress)
+            self.sessionPreparer = sessionPreparer
+                ?? BaiduPanSessionPreparer(
+                    connection: container.baiduConnection(), file: file)
+            // 续播位置在续播库里(actor),而 init 不能挂起 → 推迟到
+            // `prepareAndLoad` 开头补(见 `loadResumePositionIfNeeded`)。
+            self.startSeconds = 0
+            self.serverDuration = nil
+        }
     }
 
     /// 起播位置(秒);仅供测试与日志观察,不参与播放决策。
@@ -269,8 +326,8 @@ final class PlayerViewModel {
         timeline = PlaybackTimeline()
         timelineStart = ContinuousClock.now
         startTask = Task { await prepareAndLoad() }
-        // 上一集 / 下一集与播放本身无关,单独查、只查一次(转码 seek 重新起流也走 start())
-        if nextEpisodeTask == nil, item.kind == .episode {
+        // 上一集 / 下一集**只有 Emby 源有**(百度源没有剧集结构),单独查、只查一次
+        if nextEpisodeTask == nil, embyItem?.kind == .episode {
             nextEpisodeTask = Task { [weak self] in await self?.loadAdjacentEpisodes() }
         }
     }
@@ -355,7 +412,10 @@ final class PlayerViewModel {
         engine.setRate(target)
         // 记住用户的选择:同一部剧的下一集、转码重新起流都从它起播。
         // 内核还没放流时照样记 —— 那个值会在新内核上生效(`applyStartupPreferences`)。
-        container.playbackSpeeds.remember(target, for: item, on: server)
+        // ⚠️ 只有 Emby 源参与记忆(见 `startupSpeed` 的注释)。
+        if let item = embyItem, let server = embyServer {
+            container.playbackSpeeds.remember(target, for: item, on: server)
+        }
         flash(Metrics.speedText(target), systemImage: "gauge.with.dots.needle.67percent")
     }
 
@@ -379,8 +439,9 @@ final class PlayerViewModel {
     func seek(to seconds: Double) {
         guard let session else { return }
         let target = max(0, min(seconds, durationSeconds > 0 ? durationSeconds : seconds))
-        positionSeconds = target
-        if session.plan.method == .directStream {
+        switch session.seekStrategy {
+        case .clientSeek:
+            positionSeconds = target
             let kernelTarget = timeBase.kernel(fromAbsolute: target)
             let previous = seekTask
             seekTask = Task { [weak self] in
@@ -391,13 +452,27 @@ final class PlayerViewModel {
             // 5.2:拖动结束立即上报,不等 10 秒定时器
             pushState()
             reportNow(.timeUpdate)
-        } else {
+
+        case .restartStream:
+            positionSeconds = target
             scheduleRestartStream(at: target)
+
+        case .unsupported(let reason):
+            // ⛔ 既不动 `positionSeconds` 也不起流:那会变成「拖到 30 分钟、
+            // 画面回到 0:00,进度还被写成 30 分钟」。如实说一句为什么不行。
+            flash(reason, systemImage: "nosign")
         }
     }
 
     /// 方向键:相对当前位置快进 / 快退(UI_DESIGN.md 5.3)。
     func skip(by delta: Double) {
+        guard allowsSeeking else {
+            // 连点方向键不该每次都弹一个屏显,但也不能默默吃掉按键 ——
+            // 与 `seek(to:)` 同一句理由,用户至少看得见一次。
+            flash(session?.seekStrategy.unavailableReason ?? "这个片源不支持拖动进度",
+                  systemImage: "nosign")
+            return
+        }
         seek(to: positionSeconds + delta)
         let seconds = Int(abs(delta))
         flash(delta < 0 ? "后退 \(seconds) 秒" : "前进 \(seconds) 秒",
@@ -450,14 +525,16 @@ final class PlayerViewModel {
 
     /// 换到下一集:写一个新的播放请求,播放窗口据此重建播放页,
     /// 本页随之拆除并走完收尾上报(与关窗同一条路径)。
+    ///
+    /// ⚠️ 只有 Emby 源有剧集结构;百度源 `nextEpisode` 恒为 nil,这里是空操作。
     func playNextEpisode() {
-        guard let nextEpisode else { return }
+        guard let nextEpisode, let server = embyServer else { return }
         stopUpNextCountdown()
         container.play(nextEpisode, on: server)
     }
 
     func playPreviousEpisode() {
-        guard let previousEpisode else { return }
+        guard let previousEpisode, let server = embyServer else { return }
         container.play(previousEpisode, on: server)
     }
 
@@ -580,22 +657,38 @@ final class PlayerViewModel {
 
     private func prepareAndLoad() async {
         do {
+            await loadResumePositionIfNeeded()
             var prepared = try await sessionPreparer.makeSession(startTimeTicks: nil)
             try Task.checkCancellation()
             // 转码 + 非零起播:4.5 规定服务端从 StartTimeTicks 处起流。
             // 之所以「先取一次再带参数重取」,是因为 StartTimeTicks 同时是
             // 服务端的决策输入 —— 一上来就带值可能把本来能 DirectStream 的
             // 文件推去转码;确认为转码之后重取就没有这个顾虑。
-            if prepared.plan.method == .transcode, startSeconds > 0 {
+            //
+            // ⛔ 判据是 `seekStrategy == .restartStream`,不是
+            // 「method == .transcode」:百度源的转码流**重不开**
+            // (`method=streaming` 没有起流位置参数,§5.4),问它只会白费一次请求。
+            if prepared.seekStrategy == .restartStream, startSeconds > 0 {
                 prepared = try await sessionPreparer.makeSession(
                     startTimeTicks: TickConverter.ticks(fromSeconds: startSeconds))
                 try Task.checkCancellation()
             }
             session = prepared
+            // 源自己给的权威总时长(百度转码流在未转完时只有它能给出真实总长);
+            // Emby 侧为 nil → 沿用 `EmbyItem.RunTimeTicks`(既有行为,本轮不改)。
+            if let authoritative = await sessionPreparer.authoritativeDurationSeconds {
+                serverDuration = authoritative
+            }
+            if !prepared.seekStrategy.allowsSeeking, startSeconds > 0 {
+                // 拖不动 = 起播点也落不下去:没有起流位置参数,重取只会从头开始。
+                // ⛔ 不能保留 startSeconds:进度条会停在 30:00 而画面在 0:00,
+                //    上报也会把进度写成那个没播到的位置。
+                startSeconds = 0
+            }
             timeBase = PlaybackTimeBase(
                 method: prepared.plan.method,
-                // 只有转码的起流点才是时间原点;DirectStream 的续播靠客户端 seek
-                startSeconds: prepared.plan.method == .transcode ? startSeconds : 0
+                // 只有「能重新起流」时起流点才是时间原点;DirectStream 的续播靠客户端 seek
+                startSeconds: prepared.seekStrategy == .restartStream ? startSeconds : 0
             )
             durationSeconds = timeBase.absoluteDuration(
                 kernelDuration: 0, serverDuration: serverDuration)
@@ -637,6 +730,21 @@ final class PlayerViewModel {
         }
     }
 
+    /// 百度源:起播位置在**本地续播库**里(actor),init 取不到,在这里补。
+    ///
+    /// 只做一次:`retry()` / 重新起流都会重新走 `prepareAndLoad`,而读盘一次就够
+    /// (续播位置在本次播放里是常量)。
+    private func loadResumePositionIfNeeded() async {
+        guard !didLoadResumePosition else { return }
+        didLoadResumePosition = true
+        guard case .baiduPan(let file) = source, !startFromBeginning else { return }
+        guard let saved = await container.watchProgress.resumeSeconds(forFileID: String(file.fsID)) else {
+            return
+        }
+        // 与 Emby 源同一个回退规则(接上前情)
+        startSeconds = PlaybackRules.resumePosition(from: saved)
+    }
+
     /// 新内核一律是 1× / 音量 100 / 未静音,把起播偏好设回去。
     ///
     /// ⛔ 必须在 `load` **之前**调用:一开始放流内核就会推一次当前值,
@@ -667,7 +775,12 @@ final class PlayerViewModel {
             isPositionSettled = true
             return
         }
-        guard session?.plan.method == .directStream else { return }
+        // ⛔ 判据不是「是不是 directStream」:百度转码流既不能客户端 seek
+        // 也不能重新起流,这时 `startSeconds` 已被 `prepareAndLoad` 清成 0。
+        guard session?.seekStrategy == .clientSeek else {
+            isPositionSettled = true
+            return
+        }
         await engine.seek(to: timeBase.kernel(fromAbsolute: startSeconds))
     }
 
@@ -899,6 +1012,7 @@ final class PlayerViewModel {
     /// 上一季的最后一集 / 下一季的第一集。
     /// 只用 ✅ 端点 `Shows/{Id}/Episodes` 与 `Shows/{Id}/Seasons`(API_CONTRACT.md 3.2)。
     private func loadAdjacentEpisodes() async {
+        guard let item = embyItem, let server = embyServer else { return }
         guard let seriesID = item.seriesID, let seasonID = item.seasonID else { return }
         let connection = container.connection(for: server)
         do {
@@ -963,7 +1077,9 @@ final class PlayerViewModel {
             volume: volume,
             audioStreamIndex: selectedAudioTrackID.flatMap { embyStreamIndex(for: $0, in: audioTracks) },
             subtitleStreamIndex: selectedSubtitleTrackID.flatMap { embyStreamIndex(for: $0, in: subtitleTracks) },
-            playbackRate: speed
+            playbackRate: speed,
+            // 本地续播要用它判「已看完」;上报到 Emby 时这个字段不进请求体
+            durationSeconds: serverDuration
         )
     }
 
@@ -1000,7 +1116,8 @@ final class PlayerViewModel {
         guard let session, !didBeginReporting else { return }
         didBeginReporting = true
         let context = PlaybackReportContext(
-            itemID: item.id,
+            // Emby 是 Item Id,百度是 `fs_id`(百度用 `itemID` 当本地续播的 key)
+            itemID: source.contentID,
             mediaSourceID: session.plan.mediaSourceID,
             playSessionID: session.plan.playSessionID,
             method: session.plan.method

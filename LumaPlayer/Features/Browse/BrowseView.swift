@@ -42,6 +42,9 @@ struct BrowseView: View {
     @State private var searchText = ""
     /// 搜索提交次数(见 `BrowseRoute.search`)
     @State private var searchSubmission = 0
+    /// 百度网盘那一页(sheet)。它是**独立的一页**,不进导航栈 ——
+    /// 百度源与当前 Emby 服务器无关,进栈会被「切服务器清空栈」误伤。
+    @State private var showsBaiduPan = false
     /// 工具栏服务器菜单里的「管理服务器…」——打开设置窗口(⌘,)
     @Environment(\.openSettings) private var openSettings
 
@@ -89,6 +92,9 @@ struct BrowseView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(actionErrorMessage ?? "")
+        }
+        .sheet(isPresented: $showsBaiduPan) {
+            BaiduPanSourceView(container: container)
         }
     }
 
@@ -179,6 +185,14 @@ struct BrowseView: View {
                 }
                 .help("切换服务器;「管理服务器…」在设置窗口(⌘,)")
             }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showsBaiduPan = true
+            } label: {
+                Label("百度网盘", systemImage: "cloud")
+            }
+            .help("播百度网盘「我的应用数据」目录里的视频(与 Emby 服务器无关)")
         }
         ToolbarItem(placement: .primaryAction) {
             Button {

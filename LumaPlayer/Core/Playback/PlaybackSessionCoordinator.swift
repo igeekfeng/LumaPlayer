@@ -10,6 +10,19 @@ import Foundation
 protocol PlaybackSessionPreparing: Sendable {
     /// - Parameter startTimeTicks: 转码起流位置(4.5);`nil` = 从头取一次会话
     func makeSession(startTimeTicks: Int64?) async throws -> PlaybackSession
+
+    /// 源自己知道的**权威总时长**(秒);`nil` = 这个源没有这个信息,
+    /// 播放页沿用自己已有的。
+    ///
+    /// ⚠️ 为什么要有它:转码流在未转完时,内核看到的时长只是已转码那一段
+    /// (百度 `method=streaming` 的生长式 m3u8,文档 §5.4),所以总时长必须由源给。
+    /// Emby 侧的权威时长在上层 `EmbyItem.RunTimeTicks` 上(既有行为,本轮不动),
+    /// 所以走默认实现返回 nil。
+    var authoritativeDurationSeconds: Double? { get async }
+}
+
+extension PlaybackSessionPreparing {
+    var authoritativeDurationSeconds: Double? { nil }
 }
 
 /// 一次播放会话的编排:取 `PlaybackInfo` → **Rust 决策** → 拼地址 + 挂认证头
@@ -75,6 +88,12 @@ actor PlaybackSessionCoordinator: PlaybackSessionPreparing {
             throw PlaybackError.mediaSourceNotFound(id: decision.mediaSourceId)
         }
 
-        return PlaybackSession(plan: plan, mediaSource: source, decision: decision)
+        return PlaybackSession(
+            plan: plan,
+            mediaSource: source,
+            decision: decision,
+            // DirectStream 是整份文件 → 客户端 seek;转码 → 停流 + StartTimeTicks 重新起流
+            seekStrategy: plan.method == .directStream ? .clientSeek : .restartStream
+        )
     }
 }

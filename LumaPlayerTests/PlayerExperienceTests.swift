@@ -207,7 +207,8 @@ final class PlayerExperienceTests: XCTestCase {
         container.play(movie, on: server)
         let second = try XCTUnwrap(container.state.nowPlaying)
         XCTAssertNotEqual(first.id, second.id)
-        XCTAssertEqual(second.item.id, "M1")
+        // `PlaybackRequest.item` 已换成按源分派的 `source`:Emby 源才有 Item
+        XCTAssertEqual(second.embyItem?.id, "M1")
     }
 
     /// UI_DESIGN.md 7.1:切到另一台服务器时结束旧播放,不能让播放器
