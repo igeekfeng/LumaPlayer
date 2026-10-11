@@ -40,7 +40,7 @@ struct PlayerStatistics: Equatable {
         add("视频码率", [s.videoBitRate.flatMap(Self.bitrateText)])
 
         let sampleRate = s.audioSampleRate.map {
-            "\(($0 / 1000).formatted(.number.precision(.fractionLength(0...1)))) kHz"
+            "\((Double($0) / 1000).formatted(.number.precision(.fractionLength(0...1)))) kHz"
         }
         let channels = s.audioChannels.map { "\($0) 声道" }
         add("音频", [s.audioCodec, sampleRate, channels, s.audioBitRate.flatMap(Self.bitrateText)])
