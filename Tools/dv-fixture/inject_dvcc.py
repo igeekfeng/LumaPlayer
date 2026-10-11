@@ -5,7 +5,7 @@
 
 重新生成 LumaPlayerTests/Fixtures/Media/ 下的两个文件(仓库根执行):
   ffmpeg -y -f lavfi -i testsrc2=size=160x90:rate=24:duration=1 -c:v libx265 -pix_fmt yuv420p10le \
-    -tag:v hvc1 -x265-params log-level=error -map_metadata -1 -fflags +bitexact -flags:v +bitexact \
+    -tag:v hvc1 -x265-params log-level=error:info=0 -map_metadata -1 -fflags +bitexact -flags:v +bitexact \
     LumaPlayerTests/Fixtures/Media/sdr_hevc_synthetic.mp4
   python3 -I Tools/dv-fixture/inject_dvcc.py LumaPlayerTests/Fixtures/Media/sdr_hevc_synthetic.mp4 \
     LumaPlayerTests/Fixtures/Media/dv_profile8_synthetic.mp4
