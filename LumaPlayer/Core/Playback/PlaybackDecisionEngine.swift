@@ -87,24 +87,38 @@ enum PlaybackError: Error, Equatable, Sendable {
     }
 }
 
+/// 决策结论:**走哪条路 + 选中哪条源**。不含地址 —— 地址怎么拼是每个来源自己的事。
+///
+/// 拆出它是为了让**非 Emby 来源**也能用同一张判定表,而不必经过
+/// `PlaybackURLBuilder`(那是 Emby 的地址规则,见 `PlaybackDecisionEngine.decision(for:)`)。
+struct PlaybackDecision: Sendable, Equatable {
+    let method: PlaybackMethod
+    /// **被选中**的那条源(不是响应里的第一条)
+    let source: EmbyMediaSource
+    let playSessionID: String
+}
+
 /// 播放决策引擎(API_CONTRACT.md 4.4)。
 ///
 /// **纯函数**:不持有状态、不做网络请求、不读本地凭据 —— 输入一份
-/// `PlaybackInfo` 响应,输出一个 `PlaybackPlan` 或抛错。这样「仅转码可用」
-/// 「无可播路径」这类分支可以完全用 fixture 覆盖,不需要真实服务器
-/// (API_CONTRACT.md 4.4)。
+/// `PlaybackInfo` 响应,输出一个 `PlaybackDecision`(或再拼成 `PlaybackSession`)。
+/// 这样「仅转码可用」「无可播路径」这类分支可以完全用 fixture 覆盖,
+/// 不需要真实服务器(API_CONTRACT.md 4.4)。
+///
+/// 分两层:
+/// - `decision(for:)` —— 4.4 的第 1–3 步 + 走哪条路。**唯一判定入口**,
+///   百度源也走它(把 `BaiduPanFile` 映射成一份响应形状喂进来);
+/// - `session(for:itemID:urlBuilder:headers:)` —— 在决策之上按 Emby 的地址规则
+///   拼出可播会话。
 ///
 /// 算法严格照 4.4 的六步;唯一补充是第 2 步之后校验 `PlaySessionId`
 /// —— 4.5 把它列为串流 URL 的必填参数,而官方 schema 并未保证它一定出现
 /// (服务端拒绝播放时可能只给 `ErrorCode`),所以缺值时报
 /// `missingRequiredField` 而不是让它悄悄变成空串。
 enum PlaybackDecisionEngine {
-    static func session(
-        for response: EmbyPlaybackInfoResponse,
-        itemID: String,
-        urlBuilder: PlaybackURLBuilder,
-        headers: [String: String]
-    ) throws -> PlaybackSession {
+
+    /// 判定「走哪条路、播哪条源」。⛔ 不碰地址。
+    static func decision(for response: EmbyPlaybackInfoResponse) throws -> PlaybackDecision {
         // 1. ErrorCode 非空 → 服务端拒绝播放
         if let code = response.errorCode {
             throw PlaybackError.serverRejected(code: code)
@@ -115,25 +129,53 @@ enum PlaybackDecisionEngine {
             throw PlaybackError.noMediaSource
         }
 
-        // 2b. PlaySessionId:4.5 把列为串流 URL 的必填参数,后续停止/上报
-        //     也靠它。缺了不能靠猜,也不能拿空串顶替(8.1 禁止填假默认值)。
+        // 3. PlaySessionId:4.5 把它列为串流 URL 的必填参数,后续停止/上报
+        //    也靠它。缺了不能靠猜,也不能拿空串顶替(8.1 禁止填假默认值)。
         guard let playSessionID = response.playSessionID, !playSessionID.isEmpty else {
             throw PlaybackError.missingRequiredField(name: "PlaySessionId")
         }
 
-        // 3. 选定 MediaSource:多个时取第一个支持 DirectStream 的,
+        // 4. 选定 MediaSource:多个时取第一个支持 DirectStream 的,
         //    都不支持则取第一个(4.4 第 3 步)
         let selected = sources.first { $0.supportsDirectStream == true } ?? sources[0]
 
-        // 4. 支持 DirectStream → static=true 原样拉流
+        // 5. 支持 DirectStream → 直连
         if selected.supportsDirectStream == true {
+            return PlaybackDecision(
+                method: .directStream, source: selected, playSessionID: playSessionID)
+        }
+
+        // 6. 退到转码。空字符串与缺失同义:**没有**可用的转码地址,
+        //    ⛔ 不让一个空地址往后走到拼 URL 那一步再报另一种错。
+        guard let relative = selected.transcodingUrl, !relative.isEmpty else {
+            throw PlaybackError.noPlayablePath
+        }
+        return PlaybackDecision(
+            method: .transcode, source: selected, playSessionID: playSessionID)
+    }
+
+    /// 决策 + 按 Emby 的地址规则拼出可播会话。
+    ///
+    /// 失败来源:决策本身(`PlaybackError`)与本地拼 URL 失败
+    /// (`urlConstructionFailed`,不是服务端的问题)。
+    static func session(
+        for response: EmbyPlaybackInfoResponse,
+        itemID: String,
+        urlBuilder: PlaybackURLBuilder,
+        headers: [String: String]
+    ) throws -> PlaybackSession {
+        let decision = try decision(for: response)
+        let selected = decision.source
+
+        switch decision.method {
+        case .directStream:
             // 优先用服务端给的 DirectStreamUrl(Emby Web 的做法);没有或解析不了才自拼
             guard let url = selected.directStreamUrl.flatMap({ urlBuilder.directStreamURL(serverProvided: $0) })
                 ?? urlBuilder.directStreamURL(
                     itemID: itemID,
                     container: selected.container,
                     mediaSourceID: selected.id,
-                    playSessionID: playSessionID
+                    playSessionID: decision.playSessionID
                 ) else {
                 throw PlaybackError.urlConstructionFailed
             }
@@ -141,28 +183,31 @@ enum PlaybackDecisionEngine {
                 plan: .directStream(
                     url: url,
                     headers: headers,
-                    playSessionID: playSessionID,
+                    playSessionID: decision.playSessionID,
                     mediaSourceID: selected.id
                 ),
-                mediaSource: selected
+                mediaSource: selected,
+                // 整份文件 → 交给内核 seek
+                seekStrategy: .clientSeek
             )
-        }
 
-        // 5. 退到转码
-        if let relative = selected.transcodingUrl,
-           let url = urlBuilder.transcodeURL(relativePath: relative) {
+        case .transcode:
+            // `decision` 已保证 `transcodingUrl` 非空
+            guard let relative = selected.transcodingUrl,
+                  let url = urlBuilder.transcodeURL(relativePath: relative) else {
+                throw PlaybackError.urlConstructionFailed
+            }
             return PlaybackSession(
                 plan: .transcode(
                     url: url,
                     headers: headers,
-                    playSessionID: playSessionID,
+                    playSessionID: decision.playSessionID,
                     mediaSourceID: selected.id
                 ),
-                mediaSource: selected
+                mediaSource: selected,
+                // 转码流不能客户端 seek:必须停流 + StartTimeTicks 重新起流(4.5)
+                seekStrategy: .restartStream
             )
         }
-
-        // 6. 都没有 → 报错。⛔ 不得自己拼一个「猜的」URL 去试。
-        throw PlaybackError.noPlayablePath
     }
 }

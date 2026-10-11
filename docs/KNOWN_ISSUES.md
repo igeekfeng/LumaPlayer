@@ -62,6 +62,16 @@
 
 本地实例不发 `DeviceProfile` 时对 HEVC 10bit 也给 DirectStream,所以**转码路径在本地也跑不起来**。
 
+### 百度网盘来源(本机无开发者账号,全部只有 mock 覆盖)
+
+接口事实见 `docs/BAIDU_PAN_API.md`,落地见 `docs/SOURCE_ABSTRACTION_PLAN.md`。结案要一个已审核的开放平台应用:
+
+- [ ] 设备码授权轮询(`BaiduPanConnection.awaitAuthorization`)真实走通
+- [ ] 真实目录列表 + `filemetas` 批量换封面地址
+- [ ] `dlink` 直连播放、`method=streaming` 转码出口的实际响应
+- [ ] `133`(要看广告)+ `adToken` 重试
+- [ ] 来源页「继续观看」区:播一半退出再进,卡片出现、封面出得来(磁盘缓存命中或 `dlink` 未过期)
+
 ### Q29 打包了 libmpv 的 App 在没有 Homebrew 的 Mac 上是否正常
 
 本机确认 0 次从 `/opt/homebrew` 加载 dylib,但没有第二台机器。fontconfig / OpenSSL 运行时仍按编译期路径读数据文件。

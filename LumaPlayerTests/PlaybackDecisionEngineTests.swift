@@ -29,6 +29,10 @@ final class PlaybackDecisionEngineTests: XCTestCase {
         XCTAssertEqual(session.plan.playSessionID, "PLAYSESSION-DIRECT-1")
         XCTAssertEqual(session.plan.mediaSourceID, "MEDIASOURCE-DIRECT-1")
         XCTAssertEqual(session.plan.headers, headers)
+        // 整份文件 → 交给内核 seek(与「是不是转码」不是一回事,见 PlaybackSeekStrategy)
+        XCTAssertEqual(session.seekStrategy, .clientSeek)
+        XCTAssertTrue(session.seekStrategy.allowsSeeking)
+        XCTAssertNil(session.seekStrategy.unavailableReason)
         // 4.5:static=true + 输出格式扩展名(DirectStream 输出 == 输入容器)
         XCTAssertEqual(
             session.plan.url.absoluteString,
@@ -77,6 +81,53 @@ final class PlaybackDecisionEngineTests: XCTestCase {
             + "?VideoCodec=h264&AudioCodec=aac"
         )
         XCTAssertEqual(session.plan.mediaSourceID, "MEDIASOURCE-TRANSCODE-1")
+        // Emby 的转码有解:停流 + StartTimeTicks 重新起流(4.5)
+        XCTAssertEqual(session.seekStrategy, .restartStream)
+        XCTAssertTrue(session.seekStrategy.allowsSeeking)
+    }
+
+    // MARK: - 决策与地址分离(非 Emby 来源靠它复用同一张表)
+
+    /// `decision(for:)` 只管「走哪条路、播哪条源」,**不碰地址** ——
+    /// 百度源就是拿它的结论、用自己的地址规则拼会话
+    /// (`BaiduPanPlaybackPlanner`,百度 `dlink` 不能过 `PlaybackURLBuilder`)。
+    func testDecisionIsAddressFreeAndMatchesSession() throws {
+        let response = try decode("playback_direct_stream_synthetic.json")
+
+        let decision = try PlaybackDecisionEngine.decision(for: response)
+
+        XCTAssertEqual(decision.method, .directStream)
+        XCTAssertEqual(decision.playSessionID, "PLAYSESSION-DIRECT-1")
+        XCTAssertEqual(decision.source.id, "MEDIASOURCE-DIRECT-1")
+
+        // 同一份响应,`session(...)` 的媒体源与决策必须一致 ——
+        // 「播的是 A、判的是 B」这类错都出在这里
+        let session = try PlaybackDecisionEngine.session(
+            for: response, itemID: "ITEM-1", urlBuilder: urlBuilder, headers: headers)
+        XCTAssertEqual(session.mediaSource.id, decision.source.id)
+    }
+
+    /// 空字符串的 `TranscodingUrl` 与缺失同义:都报「没有可播路径」,
+    /// ⛔ 不让它往后走到拼地址那一步再报成另一种错(8.1)。
+    func testEmptyTranscodingURLIsNoPlayablePathNotURLError() throws {
+        let response = EmbyPlaybackInfoResponse(
+            mediaSources: [
+                EmbyMediaSource(
+                    id: "MS-EMPTY", container: "mkv", supportsDirectStream: false,
+                    supportsTranscoding: true, transcodingUrl: "", mediaStreams: nil)
+            ],
+            playSessionID: "PS", errorCode: nil
+        )
+
+        assertThrows(
+            try PlaybackDecisionEngine.decision(for: response),
+            PlaybackError.noPlayablePath
+        )
+        assertThrows(
+            try PlaybackDecisionEngine.session(
+                for: response, itemID: "ITEM", urlBuilder: urlBuilder, headers: headers),
+            PlaybackError.noPlayablePath
+        )
     }
 
     func testMultipleSourcesPrefersDirectStreamCapableOne() throws {

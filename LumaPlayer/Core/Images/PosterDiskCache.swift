@@ -37,20 +37,23 @@ actor PosterDiskCache {
             .appendingPathComponent("Images", isDirectory: true)
     }
 
-    /// 读缓存。无 Tag(不进磁盘缓存,3.3)、未命中、损坏一律返回 nil。
-    func data(for spec: ImageSpec) -> Data? {
-        guard spec.tag != nil else { return nil }
-        let fileURL = Self.fileURL(directory: directory, serverID: spec.serverID, cacheKey: spec.cacheKey)
+    /// 读缓存。无版本标识(不进磁盘缓存,3.3)、未命中、损坏一律返回 nil。
+    func data(for descriptor: ImageDescriptor) -> Data? {
+        guard descriptor.isDiskCacheable else { return nil }
+        let fileURL = Self.fileURL(
+            directory: directory, ownerID: descriptor.ownerID, cacheKey: descriptor.cacheKey)
         return try? Data(contentsOf: fileURL)
     }
 
-    /// 写缓存。无 Tag 直接拒存(3.3:没有 Tag 的图片不进磁盘缓存)。
-    func store(_ data: Data, for spec: ImageSpec) {
-        guard spec.tag != nil else { return }
-        let serverDir = directory.appendingPathComponent(spec.serverID.uuidString, isDirectory: true)
+    /// 写缓存。无版本标识直接拒存(3.3:没有版本标识的图片不进磁盘缓存)。
+    func store(_ data: Data, for descriptor: ImageDescriptor) {
+        guard descriptor.isDiskCacheable else { return }
+        let ownerDir = directory.appendingPathComponent(
+            descriptor.ownerID.uuidString, isDirectory: true)
         do {
-            try FileManager.default.createDirectory(at: serverDir, withIntermediateDirectories: true)
-            let fileURL = Self.fileURL(directory: directory, serverID: spec.serverID, cacheKey: spec.cacheKey)
+            try FileManager.default.createDirectory(at: ownerDir, withIntermediateDirectories: true)
+            let fileURL = Self.fileURL(
+                directory: directory, ownerID: descriptor.ownerID, cacheKey: descriptor.cacheKey)
             // 同 key 重写(内存淘汰后重新走网络):旧文件的字节必须从簿记里扣掉
             let oldSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             try? FileManager.default.removeItem(at: fileURL)
@@ -62,18 +65,23 @@ actor PosterDiskCache {
         }
     }
 
-    /// 删除这台服务器的全部图片(删服务器时调用)。内存层由 LRU 自行淘汰,不必清。
-    func purge(serverID: UUID) {
-        let serverDir = directory.appendingPathComponent(serverID.uuidString, isDirectory: true)
+    /// `ImageSpec` 便利入口(等价于 `.emby(spec)`)。
+    func data(for spec: ImageSpec) -> Data? { data(for: .emby(spec)) }
+
+    func store(_ data: Data, for spec: ImageSpec) { store(data, for: .emby(spec)) }
+
+    /// 删除某个来源的全部图片(删来源时调用)。内存层由 LRU 自行淘汰,不必清。
+    func purge(ownerID: UUID) {
+        let ownerDir = directory.appendingPathComponent(ownerID.uuidString, isDirectory: true)
         var removed = 0
         if let files = try? FileManager.default.contentsOfDirectory(
-            at: serverDir, includingPropertiesForKeys: [.fileSizeKey]
+            at: ownerDir, includingPropertiesForKeys: [.fileSizeKey]
         ) {
             for file in files {
                 removed += (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             }
         }
-        try? FileManager.default.removeItem(at: serverDir)
+        try? FileManager.default.removeItem(at: ownerDir)
         trackBytes(-removed)
     }
 
@@ -132,13 +140,13 @@ actor PosterDiskCache {
         return total
     }
 
-    /// 文件名 = sha256(cacheKey)。cacheKey 已含 serverID 等,hash 后仍互不碰撞。
-    private static func fileURL(directory: URL, serverID: UUID, cacheKey: String) -> URL {
+    /// 文件名 = sha256(cacheKey)。cacheKey 已含来源 id 等,hash 后仍互不碰撞。
+    private static func fileURL(directory: URL, ownerID: UUID, cacheKey: String) -> URL {
         let name = SHA256.hash(data: Data(cacheKey.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         return directory
-            .appendingPathComponent(serverID.uuidString, isDirectory: true)
+            .appendingPathComponent(ownerID.uuidString, isDirectory: true)
             .appendingPathComponent(name + ".img")
     }
 }

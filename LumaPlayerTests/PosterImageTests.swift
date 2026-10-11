@@ -194,7 +194,7 @@ final class PosterImageTests: XCTestCase {
         // 清掉内存,只留磁盘层
         store.clearCache()
 
-        await store.purgeDisk(serverID: serverA)
+        await store.purgeDisk(ownerID: serverA)
 
         _ = try await store.image(for: spec)
         let calls = await loader.callCount

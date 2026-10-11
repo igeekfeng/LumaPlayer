@@ -67,7 +67,7 @@ struct MediaDetailView: View {
         // 收尾上报发完后经 AppState 广播;只要是这台服务器上的播放就重读一次
         // (播的可能是本页的某一集,也可能是从播放器里连播过去的下一集)。
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
-            guard finished?.serverID == server.id else { return }
+            guard let finished, finished.serverID == server.id else { return }
             viewModel.refreshAfterPlayback(server: server)
         }
         .alert(

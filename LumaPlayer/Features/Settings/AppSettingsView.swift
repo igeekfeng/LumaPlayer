@@ -17,9 +17,9 @@ enum SettingsTab: String {
 /// - **通用**:网络(自定义 User-Agent);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
-/// - **服务器**:服务器管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`)。
+/// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`)。
 ///
-/// 服务器管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
+/// 来源管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
 /// (DesignTokens.swift「界面规则」)。
 struct AppSettingsView: View {
     let container: AppContainer
@@ -38,7 +38,7 @@ struct AppSettingsView: View {
                 .tabItem { Label("字幕", systemImage: "captions.bubble") }
                 .tag(SettingsTab.subtitles)
             ServerListView(container: container)
-                .tabItem { Label("服务器", systemImage: "server.rack") }
+                .tabItem { Label("来源", systemImage: "rectangle.stack.badge.plus") }
                 .tag(SettingsTab.servers)
         }
         .frame(width: Metrics.settingsWindowWidth, height: Metrics.settingsWindowHeight)

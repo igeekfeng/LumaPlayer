@@ -63,12 +63,7 @@ struct PlayerWindowView: View {
         self.container = container
         self.request = request
         self._viewModel = State(
-            initialValue: PlayerViewModel(
-                container: container,
-                server: request.server,
-                item: request.item,
-                startFromBeginning: request.startFromBeginning
-            )
+            initialValue: PlayerViewModel(container: container, request: request)
         )
     }
 
@@ -380,7 +375,8 @@ struct PlayerWindowView: View {
     }
 
     private var windowTitle: String {
-        let item = viewModel.playingItem
+        // 百度来源没有 Emby 的剧集结构,标题就是文件名(`playingTitle`)
+        guard let item = viewModel.playingItem else { return viewModel.playingTitle }
         if item.kind == .episode, let series = item.seriesName {
             return [series, item.episodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
         }
@@ -449,11 +445,12 @@ struct PlayerWindowView: View {
 
     /// 系统「正在播放」的封面:分集用剧照,电影用横版图 / 海报(`EmbyItem.coverImage`)。
     /// 走 `PosterImageStore`(带认证头,与海报墙共用缓存);没有图或加载失败就不设封面。
+    /// ⚠️ 百度来源当前没有封面通路,直接跳过(见 `docs/SOURCE_ABSTRACTION_PLAN.md` P5)。
     private func loadNowPlayingArtwork() async {
-        let item = request.item
-        guard let source = item.coverImage else { return }
+        guard let item = request.embyItem, let server = request.embyServer,
+              let source = item.coverImage else { return }
         let spec = ImageSpec(
-            serverID: request.server.id,
+            serverID: server.id,
             itemID: source.itemID,
             type: source.type,
             tag: source.tag,
@@ -473,9 +470,9 @@ struct PlayerWindowView: View {
 
     /// 401 才给重新登录入口;其它失败重试就够了(API_CONTRACT.md 2.5)。
     private func loginAction(for failure: LoadFailure) -> (() -> Void)? {
-        guard failure.needsLogin else { return nil }
+        guard failure.needsLogin, let server = request.embyServer else { return nil }
         return {
-            container.state.serverNeedingLogin = request.server
+            container.state.serverNeedingLogin = server
             close()
         }
     }
@@ -502,8 +499,8 @@ struct PlayerWindowView: View {
             await viewModel.waitUntilReportingFinished()
             state.lastFinishedPlayback = FinishedPlayback(
                 requestID: request.id,
-                serverID: request.server.id,
-                itemID: request.item.id
+                serverID: request.embyServer?.id,
+                itemID: request.source.contentID
             )
         }
     }
@@ -554,14 +551,15 @@ struct PlayerTitleBar: View {
         .allowsHitTesting(false)
     }
 
-    private var item: EmbyItem { viewModel.playingItem }
+    private var item: EmbyItem? { viewModel.playingItem }
 
     private var title: String {
-        item.kind == .episode ? (item.seriesName ?? item.name) : item.name
+        guard let item else { return viewModel.playingTitle }
+        return item.kind == .episode ? (item.seriesName ?? item.name) : item.name
     }
 
     private var subtitle: String? {
-        guard item.kind == .episode else { return nil }
+        guard let item, item.kind == .episode else { return nil }
         return [item.episodeLabel, item.seriesName == nil ? nil : item.name]
             .compactMap { $0 }
             .joined(separator: " · ")

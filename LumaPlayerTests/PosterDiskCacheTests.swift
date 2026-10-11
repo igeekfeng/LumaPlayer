@@ -79,12 +79,12 @@ final class PosterDiskCacheTests: XCTestCase {
         await cache.store(Data("a".utf8), for: onA)
         await cache.store(Data("b".utf8), for: onB)
 
-        await cache.purge(serverID: serverA)
+        await cache.purge(ownerID: serverA)
 
         let hitA = await cache.data(for: onA)
         let hitB = await cache.data(for: onB)
-        XCTAssertNil(hitA, "被 purge 的服务器必须清空")
-        XCTAssertNotNil(hitB, "其他服务器不得陪葬")
+        XCTAssertNil(hitA, "被 purge 的来源必须清空")
+        XCTAssertNotNil(hitB, "其他来源不得陪葬")
     }
 
     // MARK: - 容量淘汰

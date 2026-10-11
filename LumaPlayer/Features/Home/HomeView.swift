@@ -74,7 +74,7 @@ struct HomeView: View {
         }
         .reportsPageLoading(viewModel.isLoading, page: .home, to: container.state)
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
-            guard finished?.serverID == server.id else { return }
+            guard let finished, finished.serverID == server.id else { return }
             viewModel.refreshProgress(server: server)
         }
         .alert("移出继续观看", isPresented: Binding(

@@ -30,8 +30,8 @@ final class PosterImageStore {
     }
 
     /// 取图片:内存 → 磁盘 → 网络三层,同一 key 的并发请求合并为一次网络请求。
-    func image(for spec: ImageSpec) async throws -> NSImage {
-        let key = spec.cacheKey
+    func image(for descriptor: ImageDescriptor) async throws -> NSImage {
+        let key = descriptor.cacheKey
         if let cached = cache[key] {
             touchAccessOrder(key)
             return cached
@@ -45,15 +45,15 @@ final class PosterImageStore {
         let disk = self.disk
         let task = Task { () -> NSImage in
             // 磁盘层:命中后由下面回填内存,下次连磁盘都不用读
-            if let disk, let data = await disk.data(for: spec),
+            if let disk, let data = await disk.data(for: descriptor),
                let image = NSImage(data: data) {
                 return image
             }
-            let data = try await loader.data(for: spec)
+            let data = try await loader.data(for: descriptor)
             guard let image = NSImage(data: data) else {
                 throw PosterImageError.undecodableImage
             }
-            await disk?.store(data, for: spec)
+            await disk?.store(data, for: descriptor)
             return image
         }
         inFlight[key] = task
@@ -68,20 +68,29 @@ final class PosterImageStore {
         }
     }
 
-    /// 清空内存缓存(测试用)。磁盘层不动 —— 它按服务器隔离、按容量自淘汰。
+    /// `ImageSpec` 便利入口(等价于 `.emby(spec)`)。
+    func image(for spec: ImageSpec) async throws -> NSImage {
+        try await image(for: .emby(spec))
+    }
+
+    /// 清空内存缓存(测试用)。磁盘层不动 —— 它按来源隔离、按容量自淘汰。
     func clearCache() {
         cache.removeAll()
         accessOrder.removeAll()
     }
 
-    /// 删除这台服务器在磁盘上的全部图片(删服务器时)。
-    func purgeDisk(serverID: UUID) async {
-        await disk?.purge(serverID: serverID)
+    /// 删除某个来源在磁盘上的全部图片(删来源时)。
+    func purgeDisk(ownerID: UUID) async {
+        await disk?.purge(ownerID: ownerID)
     }
 
     /// 该 key 是否已在内存中(测试断言缓存命中用)。
+    func isCached(_ descriptor: ImageDescriptor) -> Bool {
+        cache[descriptor.cacheKey] != nil
+    }
+
     func isCached(_ spec: ImageSpec) -> Bool {
-        cache[spec.cacheKey] != nil
+        isCached(.emby(spec))
     }
 
     // MARK: - 内部
@@ -104,4 +113,8 @@ final class PosterImageStore {
 enum PosterImageError: Error, Equatable {
     /// 服务端返回的字节解不出 `NSImage`(不是图片,或已损坏)
     case undecodableImage
+    /// 远端地址返回了非 2xx(百度 `dlink` 过期后是 403,见 `docs/BAIDU_PAN_API.md`)
+    case badResponse(status: Int)
+    /// 这个加载器不认识该 origin(只有测试替身会走到:它们默认只支持 Emby 端点)
+    case unsupportedOrigin
 }

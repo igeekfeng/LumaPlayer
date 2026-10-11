@@ -35,15 +35,19 @@ final class NowPlayingController {
         }
         let item = viewModel.playingItem
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: item.kind == .episode
-                ? [item.episodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
-                : item.name,
+            // 标题走来源无关的口径:Emby 是剧集 / 电影名,百度是文件名
+            MPMediaItemPropertyTitle: item.map { emby in
+                emby.kind == .episode
+                    ? [emby.episodeLabel, emby.name].compactMap { $0 }.joined(separator: " · ")
+                    : emby.name
+            } ?? viewModel.playingTitle,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: viewModel.positionSeconds,
             MPNowPlayingInfoPropertyPlaybackRate: viewModel.isPaused || viewModel.isEnded ? 0 : viewModel.speed,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
         ]
-        if let series = item.seriesName {
+        // 副标题(剧名)只有 Emby 有
+        if let series = item?.seriesName {
             info[MPMediaItemPropertyArtist] = series
         }
         if viewModel.durationSeconds > 0 {

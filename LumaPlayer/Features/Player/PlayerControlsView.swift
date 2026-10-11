@@ -255,8 +255,10 @@ struct PlayerScrubber: View {
             )
         }
         .frame(height: Metrics.spacingL)
-        .disabled(duration <= 0)
-        .help("拖动调整进度")
+        // 拖不动的源不给拖动交互(判据见 `PlaybackSeekStrategy`):让进度条
+        // 看起来能拖、拖了才弹一句「不支持」,不如一开始就别给这个手势。
+        .disabled(duration <= 0 || !viewModel.allowsSeeking)
+        .help(viewModel.seekUnavailableReason ?? "拖动调整进度")
         .accessibilityElement()
         .accessibilityLabel("播放进度")
         .accessibilityValue("\(PlayerTime.spokenText(displayed)),剩余 \(PlayerTime.spokenText(max(0, duration - displayed)))")

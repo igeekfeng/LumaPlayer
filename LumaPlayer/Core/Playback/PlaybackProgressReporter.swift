@@ -25,6 +25,13 @@ struct PlaybackReportState: Sendable, Equatable {
     /// 倍速(mpv `speed` 读回值,1 = 正常速度)
     var playbackRate: Double = 1
 
+    /// 已知总时长(秒);未知为 nil。
+    ///
+    /// ⚠️ Emby 上报**不需要**它(时长在服务端就有),但**本地续播库需要** ——
+    /// 「已看完」那一档就是按 `位置 / 时长` 比出来的(见 `WatchProgressStore`)。
+    /// 放在末尾是为了不打扰既有的 memberwise 调用点。
+    var durationSeconds: Double?
+
     var positionTicks: Int64? {
         TickConverter.ticks(fromSeconds: positionSeconds)
     }
@@ -229,3 +236,7 @@ actor PlaybackProgressReporter {
         )
     }
 }
+
+/// 服务端上报出口符合 `PlaybackReporting`(见该协议的注释:actor 隔离的同步方法
+/// 天然满足 `async` 要求,所以这里不需要动实现)。
+extension PlaybackProgressReporter: PlaybackReporting {}

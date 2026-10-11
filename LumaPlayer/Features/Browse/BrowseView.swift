@@ -26,15 +26,15 @@ private struct DetailItem: Hashable {
     }
 }
 
-/// 主窗口:单个 `NavigationStack`,首页是根,媒体库 / 搜索结果 / 详情都 push 上来,
-/// 返回由系统处理(工具栏返回按钮 / ⌘[)(DesignTokens.swift「界面规则」)。
+/// 主窗口:单个 `NavigationStack`,根页随**当前来源**变化
+/// (Emby → 首页;百度网盘 → 它的授权/浏览页),媒体库 / 搜索结果 / 详情 push 上来。
 ///
-/// 服务器管理在设置窗口的「服务器」标签页,切换在工具栏的服务器菜单。
+/// 来源管理在设置窗口的「来源」标签页,切换在工具栏的来源菜单。
 struct BrowseView: View {
     let container: AppContainer
 
     @State private var path: [BrowseRoute] = []
-    @State private var servers: [ServerProfile] = []
+    @State private var sources: [SourceProfile] = []
     @State private var actionErrorMessage: String?
     /// 手动刷新计数器:变化即触发各页重新加载
     @State private var refreshToken = 0
@@ -42,7 +42,7 @@ struct BrowseView: View {
     @State private var searchText = ""
     /// 搜索提交次数(见 `BrowseRoute.search`)
     @State private var searchSubmission = 0
-    /// 工具栏服务器菜单里的「管理服务器…」——打开设置窗口(⌘,)
+    /// 工具栏来源菜单里的「管理来源…」——打开设置窗口(⌘,)
     @Environment(\.openSettings) private var openSettings
 
     init(container: AppContainer) {
@@ -54,18 +54,18 @@ struct BrowseView: View {
             rootPage
         }
         // 工具栏声明在**导航栈**上(而不是各页上):每一页共用;
-        // 服务器切换器不上详情页(见 `toolbarContent`)。搜索框不在这里,见 `searchField`。
+        // 来源切换器不上详情页(见 `toolbarContent`)。搜索框不在这里,见 `searchField`。
         .toolbar { toolbarContent }
         // 详情页是一整页 hero(详情页用 `backgroundExtensionEffect` 把背景图铺到标题栏下面):
         // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(DesignTokens.swift「界面规则」)。
         .toolbarBackgroundVisibility(isShowingDetail ? .hidden : .automatic, for: .windowToolbar)
-        // 设置窗口里增 / 改 / 删服务器后重读,菜单里的名称跟着变
-        .task(id: container.state.serverListRevision) { await reloadServers() }
-        .onChange(of: container.state.currentServer?.id) {
-            // 栈上的页属于上一台服务器,换服务器必须清掉(不串台)
+        // 设置窗口里增 / 改 / 删来源后重读,菜单里的名称跟着变
+        .task(id: container.state.serverListRevision) { await reloadSources() }
+        .onChange(of: container.state.currentSource?.id) {
+            // 栈上的页属于上一个来源,换来源必须清掉(不串台)
             path.removeAll()
             searchText = ""
-            Task { await reloadServers() }
+            Task { await reloadSources() }
         }
         // 列表/详情里的 401 会标出「需要重新登录的服务器」;这里给登录面板,
         // 否则「重新登录」按钮点了没反应。
@@ -94,10 +94,11 @@ struct BrowseView: View {
 
     // MARK: - 页面
 
-    /// 导航栈的根:首页,以及其余各页的 `navigationDestination`
+    /// 导航栈的根:**按当前来源分派**。Emby 是首页,百度网盘是它自己的页。
     @ViewBuilder
     private var rootPage: some View {
-        if let server = container.state.currentServer {
+        switch container.state.currentSource {
+        case .some(.emby(let server)):
             HomeView(
                 container: container,
                 server: server,
@@ -110,11 +111,15 @@ struct BrowseView: View {
                 page(for: route, server: server)
                     .modifier(searchField)
             }
-        } else {
+        case .some(.baiduPan(let source)):
+            // ⛔ 百度来源没有 Emby 那套库 / 搜索 / 详情,所以不挂搜索框;
+            // 刷新走 `refreshToken`,由它自己重读授权状态与目录。
+            BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
+        case .none:
             ContentUnavailableView(
-                "没有选中的服务器",
-                systemImage: "server.rack",
-                description: Text("先添加并选中一台 Emby 服务器。")
+                "没有选中的来源",
+                systemImage: "rectangle.stack.badge.plus",
+                description: Text("先在设置里添加一个 Emby 服务器或百度网盘。")
             )
         }
     }
@@ -154,31 +159,32 @@ struct BrowseView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // 服务器切换器不上详情页:详情页属于当前这台服务器,而切换会清掉
-        // 整个导航栈(见 `onChange(of: container.state.currentServer?.id)`),
-        // 在一页详情上切服务器没有意义。
+        // 来源切换器不上详情页:详情页属于当前这台服务器,而切换会清掉
+        // 整个导航栈(见 `onChange(of: container.state.currentSource?.id)`),
+        // 在一页详情上切来源没有意义。
         if !isShowingDetail {
             ToolbarItem(placement: .navigation) {
                 Menu {
-                    // inline Picker:系统在当前服务器那一项前画原生勾选标记
-                    Picker("服务器", selection: currentServerSelection) {
-                        ForEach(servers) { server in
-                            Text(server.displayName).tag(Optional(server.id))
+                    // inline Picker:系统在当前来源那一项前画原生勾选标记
+                    Picker("来源", selection: currentSourceSelection) {
+                        ForEach(sources) { source in
+                            Text("\(source.displayName) · \(source.kindDescription)")
+                                .tag(Optional(source.id))
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
                     Divider()
-                    // 服务器管理(增 / 改 / 删 / 登录)在设置窗口的「服务器」标签页
+                    // 来源管理(增 / 改 / 删 / 登录)在设置窗口的「来源」标签页
                     Button {
                         openSettings()
                     } label: {
-                        Label("管理服务器…", systemImage: "gearshape")
+                        Label("管理来源…", systemImage: "gearshape")
                     }
                 } label: {
-                    Label(currentServerName, systemImage: "server.rack")
+                    Label(currentSourceName, systemImage: currentSourceSymbol)
                 }
-                .help("切换服务器;「管理服务器…」在设置窗口(⌘,)")
+                .help("切换来源;「管理来源…」在设置窗口(⌘,)")
             }
         }
         ToolbarItem(placement: .primaryAction) {
@@ -208,29 +214,30 @@ struct BrowseView: View {
         path.append(.detail(DetailItem(item: item)))
     }
 
-    private func switchTo(_ server: ServerProfile) async {
+    private func switchTo(_ source: SourceProfile) async {
         do {
-            try await container.switchCurrent(to: server)
-            await reloadServers()
+            try await container.switchCurrent(to: source)
+            await reloadSources()
         } catch {
-            actionErrorMessage = "切换服务器失败,请重试。"
+            actionErrorMessage = "切换来源失败,请重试。"
         }
     }
 
     private func refresh() {
-        guard let server = container.state.currentServer else { return }
-        // 刷新 = 用户要最新数据:先作废接口缓存再触发各页重载,
-        // 否则 TTL 内的缓存命中会让刷新看起来「没反应」
         Task {
-            await container.invalidateResponses(for: server)
+            // Emby 来源:刷新 = 用户要最新数据,先作废接口缓存,
+            // 否则 TTL 内的缓存命中会让刷新看起来「没反应」
+            if case .emby(let server)? = container.state.currentSource {
+                await container.invalidateResponses(for: server)
+            }
             // 各页的 ViewModel 由各页自己持有,用 refreshToken 触发它们的
             // `.task(id:)` 重新加载,而不是把内部结构暴露到这里。
             refreshToken += 1
         }
     }
 
-    private func reloadServers() async {
-        servers = await container.registry.all()
+    private func reloadSources() async {
+        sources = await container.sources()
     }
 
     // MARK: - 辅助
@@ -240,19 +247,27 @@ struct BrowseView: View {
         return false
     }
 
-    /// 服务器菜单里 Picker 的选中值:读当前服务器,选中别的服务器即切换
-    private var currentServerSelection: Binding<UUID?> {
+    /// 来源菜单里 Picker 的选中值:读当前来源,选中别的即切换
+    private var currentSourceSelection: Binding<UUID?> {
         Binding(
-            get: { container.state.currentServer?.id },
+            get: { container.state.currentSource?.id },
             set: { id in
-                guard let server = servers.first(where: { $0.id == id }) else { return }
-                Task { await switchTo(server) }
+                guard let source = sources.first(where: { $0.id == id }) else { return }
+                Task { await switchTo(source) }
             }
         )
     }
 
-    private var currentServerName: String {
-        container.state.currentServer?.displayName ?? "未选择服务器"
+    private var currentSourceName: String {
+        container.state.currentSource?.displayName ?? "未选择来源"
+    }
+
+    private var currentSourceSymbol: String {
+        switch container.state.currentSource {
+        case .some(.emby): return "server.rack"
+        case .some(.baiduPan): return "cloud.fill"
+        case .none: return "rectangle.stack.badge.plus"
+        }
     }
 }
 

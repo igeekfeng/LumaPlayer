@@ -7,7 +7,20 @@ import Observation
 @Observable
 final class AppState {
     var route: AppRoute = .launching
-    var currentServer: ServerProfile?
+    /// 当前**播放来源**(Emby / 百度网盘 / 未来的其它来源)。这是权威字段。
+    var currentSource: SourceProfile?
+    /// Emby 兼容访问器:当前来源是 Emby 时的服务器档案,否则 `nil`。
+    ///
+    /// 保留它是刻意的 —— `ServerProfile` 出现在 39 个文件里,让既有 Emby 侧代码
+    /// 继续按这个名字读写,改造就不必碰它们(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.2)。
+    /// 写入时会同步写成 `.emby(_)`,所以 `currentSource` 始终是唯一真相。
+    var currentServer: ServerProfile? {
+        get {
+            if case .emby(let profile) = currentSource { return profile }
+            return nil
+        }
+        set { currentSource = newValue.map(SourceProfile.emby) }
+    }
     /// 需要重新登录的服务器(token 缺失或已失效)。
     /// 只标这一台,其他服务器不受影响(API_CONTRACT.md 2.5)
     var serverNeedingLogin: ServerProfile?

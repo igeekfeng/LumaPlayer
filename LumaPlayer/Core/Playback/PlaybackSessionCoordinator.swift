@@ -9,7 +9,7 @@ import Foundation
 ///
 /// ⛔ 决策本身不在这里 —— 那是 `PlaybackDecisionEngine` 的纯函数,
 /// 这样「仅转码可用」这类分支可以脱离网络单测。
-actor PlaybackSessionCoordinator {
+actor PlaybackSessionCoordinator: PlaybackSessionPreparing {
     private let connection: ServerConnection
     private let itemID: String
 

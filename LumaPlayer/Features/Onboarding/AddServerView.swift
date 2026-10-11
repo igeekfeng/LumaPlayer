@@ -13,19 +13,41 @@ struct AddServerView: View {
     @State private var saveTask: Task<Void, Never>?
 
     private let showsCancelButton: Bool
+    /// 非 nil = 这是「添加来源」流程里的一步,顶部给一条回到「选来源类型」的路。
+    private let onBack: (() -> Void)?
 
     private enum Field: Hashable {
         case address, displayName, username, password
     }
 
     @MainActor
-    init(container: AppContainer, showsCancelButton: Bool = false) {
+    init(
+        container: AppContainer,
+        showsCancelButton: Bool = false,
+        onBack: (() -> Void)? = nil
+    ) {
         self.showsCancelButton = showsCancelButton
+        self.onBack = onBack
         _viewModel = State(initialValue: AddServerViewModel(container: container))
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            if let onBack {
+                HStack {
+                    Button {
+                        onBack()
+                    } label: {
+                        Label("选择其它来源", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.horizontal, Metrics.spacingL)
+                .padding(.vertical, Metrics.spacingS)
+                Divider()
+            }
+
             OnboardingFormHeader(
                 systemImage: "server.rack",
                 title: "添加 Emby 服务器",

@@ -17,6 +17,12 @@ final class AppContainer {
     /// 放在组合根上是刻意的:换视频 / 换集都会新建 `PlayerViewModel`,
     /// 记在 ViewModel 里跨不过去;而记在这里就恰好是「本次运行」的寿命。
     let playbackSpeeds = PlaybackSpeedStore()
+    /// 本地续播库。**百度来源用它**:百度没有播放进度上报接口
+    /// (`docs/BAIDU_PAN_API.md`),进度只能记在本地;Emby 来源仍然上报到服务端。
+    let watchProgress: WatchProgressStore
+    /// 百度网盘来源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
+    /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
+    private var baiduConnectionInstance: BaiduPanConnection?
     /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
     /// 必须是同一个实例,播放中改设置才能即时生效。
     let subtitleStyles: SubtitleStyleStore
@@ -31,13 +37,16 @@ final class AppContainer {
         registry: ServerRegistry,
         credentials: CredentialStore,
         session: URLSession = .shared,
-        preferences: UserDefaults = .standard
+        preferences: UserDefaults = .standard,
+        watchProgress: WatchProgressStore? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
         self.session = session
         self.subtitleStyles = SubtitleStyleStore(defaults: preferences)
         self.preferences = PlaybackPreferences(defaults: preferences)
+        self.watchProgress = watchProgress
+            ?? WatchProgressStore(fileURL: WatchProgressStore.defaultFileURL)
     }
 
     /// 生产组装:沙盒容器里的凭据文件 + UserDefaults(.standard)。
@@ -70,6 +79,93 @@ final class AppContainer {
         }
         self.init(registry: registry, credentials: credentials)
         state.startupError = startupError
+    }
+
+    // MARK: - 来源(来源无关)
+
+    /// 全部来源(Emby / 百度网盘 / …)。来源列表与工具栏切换菜单用它。
+    func sources() async -> [SourceProfile] {
+        await registry.allSources()
+    }
+
+    func source(id: UUID) async -> SourceProfile? {
+        await registry.allSources().first { $0.id == id }
+    }
+
+    /// 百度网盘连接(全 App 一份,见属性注释)。
+    func baiduConnection() -> BaiduPanConnection {
+        if let existing = baiduConnectionInstance { return existing }
+        let fresh = BaiduPanConnection(credentials: credentials)
+        baiduConnectionInstance = fresh
+        return fresh
+    }
+
+    /// 添加百度网盘来源:先存配置 → 再落库。
+    ///
+    /// 一个 App 只对应开放平台上一份应用与一次授权,所以已存在百度来源时是
+    /// **更新它**,而不是再插一条 —— 否则来源列表会出现两条指向同一份授权的百度。
+    ///
+    /// 抛 `BaiduPanError`(配置不全等)与 `ServerRegistryError`。
+    @discardableResult
+    func addBaiduSource(
+        displayName: String = "百度网盘",
+        appKey: String,
+        secretKey: String,
+        folderName: String
+    ) async throws -> BaiduPanSource {
+        try await baiduConnection().saveConfiguration(
+            appKey: appKey, secretKey: secretKey, folderName: folderName)
+        let existing = try await existingBaiduSource()
+        let source: BaiduPanSource
+        if let existing {
+            source = BaiduPanSource(
+                id: existing.id,
+                displayName: displayName.isEmpty ? existing.displayName : displayName,
+                folderName: folderName,
+                lastUsedAt: existing.lastUsedAt
+            )
+            try await registry.update(.baiduPan(source))
+        } else {
+            source = BaiduPanSource(displayName: displayName, folderName: folderName)
+            try await registry.add(.baiduPan(source))
+        }
+        state.serverListRevision += 1
+        // ⛔ 不要再写 `state.currentServer = nil` —— 那个 setter 会把 currentSource
+        // 一并置空(它就是 currentSource 的派生访问器),刚设好的来源立刻被抹掉。
+        state.currentSource = .baiduPan(source)
+        state.route = .browse
+        return source
+    }
+
+    /// 百度来源的添加收尾:配置在扫码前已经存过了,这里只按现值落库并切换过去。
+    ///
+    /// 之所以不复用 `addBaiduSource(appKey:secretKey:folderName:)`:那条路要求调用方
+    /// 手上还攥着三串明文,而扫码屏只有加密后的凭据文件 —— 从文件回读才是唯一真相。
+    @discardableResult
+    func registerBaiduSource() async throws -> BaiduPanSource {
+        let configuration = try await baiduConnection().appConfiguration()
+        return try await addBaiduSource(
+            appKey: configuration.appKey,
+            secretKey: configuration.secretKey,
+            folderName: configuration.folderName)
+    }
+
+    /// 库里已有的百度来源(没有则为 nil)。`try?` 不在这里:读不出来就当成没有,
+    /// 让 `add` 那条路去撞 `duplicateServer`,而不是在这里静默吞掉读失败。
+    private func existingBaiduSource() async throws -> BaiduPanSource? {
+        await registry.allSources().compactMap { source in
+            if case .baiduPan(let baidu) = source { return baidu }
+            return nil
+        }.first
+    }
+
+    /// 切换当前来源。切换时清除旧来源的临时内容与播放器状态(CLAUDE.md「架构主线」)。
+    func switchCurrent(to source: SourceProfile) async throws {
+        stopPlayback(unlessOn: source.id)
+        try await registry.markUsed(id: source.id, at: Date())
+        // 回读库内现值:传进来的可能是列表视图的旧快照,
+        // 直接赋值会让 lastUsedAt 停在切换之前
+        state.currentSource = await registry.allSources().first { $0.id == source.id } ?? source
     }
 
     // MARK: - 服务器连接
@@ -115,9 +211,11 @@ final class AppContainer {
         await registry.all().first { $0.id == id }
     }
 
-    /// 海报图片的内存 + 磁盘缓存与加载器(图片请求带认证头,见 `PosterImageStore`)。
+    /// 海报图片的内存 + 磁盘缓存与加载器(Emby 图带认证头、百度图走 `dlink`,
+    /// 见 `ImageDescriptor`)。会话与接口请求共用同一个 —— 测试注入的
+    /// `MockEmbyURLProtocol` 才能把图片请求也拦住。
     private(set) lazy var posters = PosterImageStore(
-        loader: PosterImageLoader(container: self),
+        loader: PosterImageLoader(container: self, session: session),
         disk: PosterDiskCache()
     )
 
@@ -212,21 +310,102 @@ final class AppContainer {
         state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
     }
 
-    /// 结束属于 `serverID` 的播放(切换 / 删除服务器时)。
+    /// 播百度网盘里的一个文件。
+    ///
+    /// ⚠️ 百度来源与「当前 Emby 服务器」无关,所以切 Emby 服务器**不会**打断它
+    /// (见 `stopPlayback(unlessOn:)`)。
+    ///
+    /// ⛔ 与 Emby 那条一样:**调用方(视图)必须自己 `openWindow`**。这里只写请求,
+    /// 窗口不会因为 `nowPlaying` 有值自己出现 —— 漏了它表现为「点了播放没反应」。
+    func play(_ file: BaiduPanFile, fromBeginning: Bool = false) {
+        state.nowPlaying = PlaybackRequest(baiduFile: file, startFromBeginning: fromBeginning)
+    }
+
+    /// 记下「这条百度内容在「继续观看」里长什么样」:标题 + 定位 + 封面快照。
+    ///
+    /// 由浏览页在**起播那一刻**调用 —— 此刻 `SourceItem` 刚合成过,标题与封面
+    /// 都在手上。⛔ 不要在渲染续播区时回头再列一遍网盘:未审核应用配额 10 次/小时
+    /// (`docs/BAIDU_PAN_API.md`)。
+    ///
+    /// 写盘失败不抛给调用方:展示信息是**尽力而为**,失败不该打断播放 ——
+    /// 与进度上报同一处置(见 `LocalResumeReporting`)。两者写同一个文件,
+    /// 真正的写失败会由上报器的 `lastFailureDescription` 如实留下。
+    func rememberResumeCard(item: SourceItem, file: BaiduPanFile) async {
+        do {
+            try await watchProgress.rememberDisplay(
+                fileID: String(file.fsID),
+                display: WatchProgressStore.Display(
+                    sourceID: item.ref.sourceID,
+                    title: item.title,
+                    locator: file.path,
+                    fileName: file.name,
+                    cover: item.poster?.snapshot
+                )
+            )
+        } catch {}
+    }
+
+    /// 结束属于 `sourceID` 的播放(切换 / 删除来源时)。
+    ///
     /// DesignTokens.swift「界面规则」:正在播放时切服务器,先结束旧播放会话再切换 ——
     /// 否则播放器窗口里还是上一台的内容,上报也继续打到上一台。
-    private func stopPlayback(unlessOn serverID: UUID) {
-        guard let playing = state.nowPlaying, playing.server.id != serverID else { return }
+    /// ⛔ 百度来源不属于任何 Emby 服务器:切服务器不该打断它。
+    private func stopPlayback(unlessOn sourceID: UUID) {
+        guard let playing = state.nowPlaying else { return }
+        guard case .emby(let server, _) = playing.source else { return }
+        guard server.id != sourceID else { return }
         state.nowPlaying = nil
     }
 
-    /// 切换当前服务器。切换时清除当前服务器的临时内容与播放器状态。
+    /// 切换当前服务器(Emby 便利入口)。
     func switchCurrent(to server: ServerProfile) async throws {
-        stopPlayback(unlessOn: server.id)
-        try await registry.markUsed(id: server.id, at: Date())
-        // 回读库内现值:传进来的 server 可能是列表视图的旧快照,
-        // 直接赋值会让 currentServer 的 lastUsedAt 停在切换之前
-        state.currentServer = await registry.all().first { $0.id == server.id } ?? server
+        try await switchCurrent(to: .emby(server))
+    }
+
+    // MARK: - 播放会话装配
+
+    /// 按来源装配「会话准备」实现。播放页只认 `PlaybackSessionPreparing`,
+    /// ⛔ 不认 Emby / 百度 —— 新增来源时改的是这里,不是播放页。
+    func makeSessionPreparer(for request: PlaybackRequest) -> any PlaybackSessionPreparing {
+        switch request.source {
+        case .emby(let server, let item):
+            return PlaybackSessionCoordinator(
+                connection: connection(for: server),
+                itemID: item.id
+            )
+        case .baiduPan(let file):
+            return BaiduPanSessionPreparer(connection: baiduConnection(), file: file)
+        }
+    }
+
+    /// 按来源装配「进度出口」:Emby → 服务端上报;百度 → 本地续播库。
+    func makeReporter(for request: PlaybackRequest) -> any PlaybackReporting {
+        switch request.source {
+            // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
+            // ⛔ 闭包是 `@Sendable`,不能在它里面调 `connection(for:)`
+            // (那是 MainActor 方法);连接实例本身是 actor,先取出来再捕获。
+        case .emby(let server, _):
+            let connection = connection(for: server)
+            return PlaybackProgressReporter { endpoint in
+                try await connection.reportPlayback(endpoint)
+            }
+        case .baiduPan:
+            return LocalResumeReporting(store: watchProgress)
+        }
+    }
+
+    /// 起播位置(秒)。Emby 读服务端 `UserData`,百度读本地续播库 ——
+    /// 两边都是「来源自己知道的事」,播放页不关心它从哪来。
+    /// 「从头播放」显式忽略它(返回 0,`API_CONTRACT.md` 8.1 禁止填假默认值)。
+    func resumeSeconds(for request: PlaybackRequest, fromBeginning: Bool) async -> Double {
+        guard !fromBeginning else { return 0 }
+        switch request.source {
+        case .emby(_, let item):
+            return item.userData?.playbackPositionTicks
+                .flatMap { TickConverter.seconds(fromTicks: $0) } ?? 0
+        case .baiduPan(let file):
+            return await watchProgress.resumeSeconds(forFileID: String(file.fsID)) ?? 0
+        }
     }
 
     /// 编辑服务器(显示名 / 地址)。地址变了就先重新探测:`/emby` 前缀与局域网
@@ -274,11 +453,20 @@ final class AppContainer {
         }
     }
 
-    /// 删除服务器(含其本地 token);若删的是当前服务器,
-    /// 切到剩余里最近使用的一台;一台不剩则回引导页。
-    func removeServer(id: UUID) async throws {
-        if state.nowPlaying?.server.id == id {
+    /// 删除来源(含其本地凭据);若删的是当前来源,
+    /// 切到剩余里最近使用的一个;一个不剩则回引导页。
+    func removeSource(id: UUID) async throws {
+        if state.nowPlaying?.source.embyServer?.id == id {
             state.nowPlaying = nil
+        }
+        let target = await registry.allSources().first { $0.id == id }
+        if case .baiduPan = target {
+            // 百度来源:授权与密钥一起清(留着就是孤儿凭据),
+            // 连接实例也一并丢弃 —— 它缓存的账号信息已无意义
+            try? await credentials.deleteBaiduPanToken()
+            try? await credentials.deleteBaiduPanAppConfiguration()
+            try? await credentials.deleteBaiduPanLibraryRoot()
+            baiduConnectionInstance = nil
         }
         try await registry.remove(id: id)
         state.serverListRevision += 1
@@ -286,13 +474,18 @@ final class AppContainer {
         connections.removeValue(forKey: id)
         // 本地缓存也一起走:接口响应与图片磁盘目录都不留在盘上
         await responseCache.invalidate(serverID: id)
-        await posters.purgeDisk(serverID: id)
-        if state.currentServer?.id == id {
-            state.currentServer = await registry.mostRecentlyUsed()
+        await posters.purgeDisk(ownerID: id)
+        if state.currentSource?.id == id {
+            state.currentSource = await registry.mostRecentlyUsedSource()
         }
-        if await registry.all().isEmpty {
+        if await registry.allSources().isEmpty {
             state.route = .onboarding
         }
+    }
+
+    /// 删除服务器(Emby 便利入口)。
+    func removeServer(id: UUID) async throws {
+        try await removeSource(id: id)
     }
 
     // MARK: - 会话恢复
@@ -308,21 +501,24 @@ final class AppContainer {
     func restoreSession() async {
         guard !state.didRestoreSession else { return }
         state.didRestoreSession = true
-        guard let recent = await registry.mostRecentlyUsed() else {
+        guard let recent = await registry.mostRecentlyUsedSource() else {
             state.route = .onboarding
             return
         }
-        state.currentServer = recent
+        state.currentSource = recent
         state.route = .browse
+        // 只有 Emby 来源有「要不要重新登录」这件事 —— 百度来源的授权状态
+        // 由它自己那一页读凭据判断,不在这里预判。
+        guard case .emby(let server) = recent else { return }
         do {
-            if try await !canResumeSession(for: recent) {
-                state.serverNeedingLogin = recent
+            if try await !canResumeSession(for: server) {
+                state.serverNeedingLogin = server
             }
         } catch is KeychainError {
             // 首次访问凭据时才做旧版钥匙串导入,这里是它最早被触发的地方
             state.startupError = .credentialMigrationFailed
         } catch {
-            // 读不到就不知道要不要登录 —— 如实挂到 state 上,不静默放过
+            // 读不到就不知道要不要重新登录 —— 如实挂到 state 上,不静默放过
             state.startupError = .credentialReadFailed
         }
     }

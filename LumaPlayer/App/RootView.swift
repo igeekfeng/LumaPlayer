@@ -11,7 +11,7 @@ struct RootView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .onboarding:
-                AddServerView(container: container)
+                AddSourceView(container: container)
             case .browse:
                 BrowseView(container: container)
             }

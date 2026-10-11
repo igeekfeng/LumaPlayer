@@ -1,0 +1,477 @@
+import Foundation
+import Observation
+
+/// 百度网盘来源那一页的状态(ViewModel)。
+///
+/// 三屏共用一个 ViewModel:填密钥 → 扫码 → 浏览目录。
+/// 因为「保存密钥 → 立刻走扫码 → 授权完立刻列目录」是一条连续的流程,
+/// 拆成三个 View 各自取状态反而要来回传。
+@MainActor
+@Observable
+final class BaiduPanSourceViewModel {
+
+    // MARK: - 授权
+
+    /// 现在该显示哪一屏。nil = 还在判定
+    private(set) var authorization: BaiduPanAuthorization?
+    private(set) var loadFailure: LoadFailure?
+    private(set) var isLoading = false
+
+    /// 正在等扫码(device code 已拿到)
+    private(set) var deviceCode: BaiduPanDeviceCode?
+    private(set) var isWaitingForAuthorization = false
+    /// 二维码渲染失败、片库根存不进去之类的本地提示(不打断当前流程)
+    private(set) var notice: String?
+
+    // MARK: - 目录
+
+    /// 应用目录名(展示用:空状态里要告诉用户把片子放进哪个目录)
+    private(set) var folderName: String?
+    /// 应用根目录 `/apps/{应用目录名}`。第三方应用能访问的**全部范围**
+    private(set) var rootDirectory: String?
+    /// 片库根:用户在应用目录**内部**选定的起点。nil = 就用应用目录
+    private(set) var libraryRoot: String?
+    /// 当前目录
+    private(set) var currentDirectory: String?
+    /// 当前目录的卡片(来源无关条目,带封面)。
+    /// ⚠️ 它**不含播放所需的信息**(`path` / 原始文件名),所以下面还有一份原始索引。
+    private(set) var items: [SourceItem] = []
+    /// `fs_id` → 原始文件。播放与「进目录」都要用它 ——
+    /// 合成后的 `SourceItem` 只保留展示所需字段,`path` 这类定位信息不在里面。
+    private var filesByID: [UInt64: BaiduPanFile] = [:]
+    private(set) var isLoadingFiles = false
+    private(set) var directoryFailure: BaiduPanDirectoryFailure?
+
+    /// 用户主动要改配置时(多半是应用目录名填错了)预填给表单的现值。
+    private(set) var configurationDraft: BaiduPanConfigurationDraft?
+
+    /// 本地续播进度(fs_id → 已看秒数),用于列表上画一行「已看到 12:34」
+    private(set) var resumePositions: [String: Double] = [:]
+
+    /// 「继续观看」区的卡片:本地续播库里有进度、且带展示快照的条目,
+    /// 按最近看排序。⛔ 不限于当前目录 —— 它就是要跨目录把你看过的东西捞出来。
+    private(set) var resumeCards: [BaiduResumeCard] = []
+
+    private let container: AppContainer
+    /// 这个页面属于哪个百度来源(决定 `sourceID`,也就决定了封面缓存 key)
+    private let source: BaiduPanSource
+    /// 进到「已授权」那一屏时要不要顺带列目录。
+    /// 添加流程传 `false`:`authorization()` 一变 `.authorized` 就会落库并切页,
+    /// 此刻还照常列目录的话,那次请求(含封面)会被立刻丢掉 —— 白烧一次配额。
+    private let loadsDirectory: Bool
+    private var authorizationTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
+
+    init(container: AppContainer, source: BaiduPanSource, loadsDirectory: Bool = true) {
+        self.container = container
+        self.source = source
+        self.loadsDirectory = loadsDirectory
+    }
+
+    private var connection: BaiduPanConnection { container.baiduConnection() }
+
+    /// 条目读取走 `BaiduPanSourceProvider` —— 那里把「列目录 → 合成条目 →
+    /// 批量换封面地址」三步收在一起,这一页不必知道封面为什么要另外发请求。
+    private func makeProvider() -> BaiduPanSourceProvider {
+        BaiduPanSourceProvider(
+            connection: connection,
+            sourceID: source.id,
+            folderName: folderName ?? source.folderName
+        )
+    }
+
+    // MARK: - 动作:进入
+
+    func reload() async {
+        loadTask?.cancel()
+        let task = Task { [weak self] in _ = await self?.performReload() }
+        loadTask = task
+        await task.value
+    }
+
+    private func performReload() async {
+        isLoading = true
+        loadFailure = nil
+        defer { isLoading = false }
+        do {
+            authorization = try await connection.authorization()
+            // 目录名只用于展示。⛔ 这里的 `try?` 不是吞错:凭据文件读不出来时
+            // 上面的 `authorization()` 已经抛了同样的错误并进了 `loadFailure`。
+            folderName = try? await connection.appConfiguration().folderName
+            switch authorization {
+            case .authorized:
+                // ⚠️ 进这一屏一律**从片库根重新开始**:`reload()` 只在结构性变化后
+                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权)。路径栏那个
+                // 刷新按钮走的是 `loadFiles()`,**不会**重置当前目录。
+                guard loadsDirectory else { break }
+                currentDirectory = nil
+                await loadFiles()
+            case .needsAuthorization, .unconfigured, nil:
+                break
+            }
+        } catch let error as BaiduPanError {
+            // ⚠️「还没配置」不是失败,是这一页的第一屏 —— 走配置表单,不报错
+            if error == .appCredentialsMissing {
+                authorization = .unconfigured
+            } else {
+                authorization = nil
+                loadFailure = LoadFailure(message: error.userMessage)
+            }
+        } catch {
+            authorization = nil
+            loadFailure = LoadFailure(message: "读取百度网盘授权状态失败:\(error)")
+        }
+    }
+
+    // MARK: - 动作:配置
+
+    func saveConfiguration(appKey: String, secretKey: String, folderName: String) async {
+        do {
+            try await connection.saveConfiguration(
+                appKey: appKey, secretKey: secretKey, folderName: folderName)
+            await reload()
+        } catch let error as BaiduPanError {
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            loadFailure = LoadFailure(message: "保存配置失败:\(error)")
+        }
+    }
+
+    // MARK: - 动作:授权
+
+    func startAuthorization() async {
+        guard !isWaitingForAuthorization else { return }
+        isWaitingForAuthorization = true
+        loadFailure = nil
+        notice = nil
+        do {
+            deviceCode = try await connection.startDeviceAuthorization()
+        } catch let error as BaiduPanError {
+            loadFailure = LoadFailure(message: error.userMessage)
+            isWaitingForAuthorization = false
+            return
+        } catch {
+            loadFailure = LoadFailure(message: "获取授权二维码失败:\(error)")
+            isWaitingForAuthorization = false
+            return
+        }
+        guard let deviceCode else { return }
+        authorizationTask?.cancel()
+        authorizationTask = Task { [weak self] in await self?.poll(deviceCode) }
+    }
+
+    private func poll(_ code: BaiduPanDeviceCode) async {
+        do {
+            _ = try await connection.awaitAuthorization(code)
+            isWaitingForAuthorization = false
+            deviceCode = nil
+            await reload()
+        } catch is CancellationError {
+            // 用户点了取消:回到「需要授权」那一屏,不报错
+            isWaitingForAuthorization = false
+            deviceCode = nil
+        } catch let error as BaiduPanError {
+            isWaitingForAuthorization = false
+            deviceCode = nil
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            isWaitingForAuthorization = false
+            deviceCode = nil
+            loadFailure = LoadFailure(message: "授权失败:\(error)")
+        }
+    }
+
+    func cancelAuthorization() {
+        authorizationTask?.cancel()
+        authorizationTask = nil
+        isWaitingForAuthorization = false
+        deviceCode = nil
+    }
+
+    func signOut() async {
+        do {
+            try await connection.signOut()
+            items = []
+            filesByID = [:]
+            currentDirectory = nil
+            // 片库根**保留**(与 AppKey / SecretKey 同一条理由):
+            // 重新扫码不该逼用户再选一次片库在哪。
+            await reload()
+        } catch {
+            loadFailure = LoadFailure(message: "解除授权失败:\(error)")
+        }
+    }
+
+    /// 用户主动要改配置(典型场景:应用目录名填错,整页空着)。
+    /// ⛔ 只把界面切回表单,**不动 token** —— 改个目录名不该连带重新扫码。
+    func beginConfigurationEdit() async {
+        if let configuration = try? await connection.appConfiguration() {
+            configurationDraft = BaiduPanConfigurationDraft(
+                appKey: configuration.appKey,
+                secretKey: configuration.secretKey,
+                folderName: configuration.folderName
+            )
+        } else {
+            configurationDraft = nil
+        }
+        authorization = .unconfigured
+    }
+
+    /// 改配置改到一半又不想改了:回到授权后的那一屏。
+    func cancelConfigurationEdit() async {
+        configurationDraft = nil
+        await reload()
+    }
+
+    // MARK: - 动作:目录
+
+    func loadFiles() async {
+        await loadFiles(allowingLibraryRootFallback: true)
+    }
+
+    /// `allowingLibraryRootFallback`:片库根读不出来时,允许清掉它并回落到应用目录。
+    /// ⛔ 只回落**一次**。递归时传 false:再失败就是应用目录本身的问题,
+    /// 继续套娃只会把真正的错误(目录名填错)藏在一层层的重试里。
+    private func loadFiles(allowingLibraryRootFallback allowFallback: Bool) async {
+        isLoadingFiles = true
+        directoryFailure = nil
+        defer { isLoadingFiles = false }
+
+        // 「继续观看」独立于当前目录:目录读失败也要看得到它。只在最外层读一次
+        // —— 片库根回落是同一轮的递归,不必重读。
+        if allowFallback { await loadResumeCards() }
+
+        var directory = ""
+        do {
+            let root = try await connection.applicationDirectory()
+            rootDirectory = root
+            let library = try await connection.libraryRoot()
+            libraryRoot = library
+            directory = currentDirectory ?? library ?? root
+            currentDirectory = directory
+            let content = try await makeProvider().content(directory: directory)
+            items = content.items
+            // 原始文件按 `fs_id` 留一份:播放与进目录要 `path` / 真实文件名。
+            // ⚠️ 它来自**同一次**目录读取,不是再列一遍(配额,见 provider 的注释)
+            filesByID = content.filesByID
+            await loadResumePositions()
+            return
+        } catch let error as BaiduPanError {
+            // 片库根在网盘里被删了 / 改了名 → 丢掉这个偏好,回落到应用目录。
+            // ⛔ 不弹错误:它只是个「记住上次在哪」的便利,不值得为此打断浏览。
+            if allowFallback, error.isDirectoryUnavailable,
+               let library = libraryRoot, directory == library, directory != rootDirectory {
+                try? await connection.setLibraryRoot(nil)
+                libraryRoot = nil
+                currentDirectory = nil
+                await loadFiles(allowingLibraryRootFallback: false)
+                return
+            }
+            directoryFailure = BaiduPanDirectoryFailure(
+                message: error.userMessage,
+                isApplicationRootUnavailable: error.isDirectoryUnavailable
+                    && directory == rootDirectory
+            )
+        } catch {
+            directoryFailure = BaiduPanDirectoryFailure(
+                message: "读取目录失败:\(error)", isApplicationRootUnavailable: false)
+        }
+    }
+
+    /// 进一个目录卡片
+    func enter(_ item: SourceItem) async {
+        guard item.kind.isContainer, let file = file(for: item) else { return }
+        currentDirectory = file.path
+        await loadFiles()
+    }
+
+    func goUp() async {
+        guard let current = currentDirectory, let root = rootDirectory,
+              current != root else { return }
+        let parent = (current as NSString).deletingLastPathComponent
+        // ⛔ 不许退到应用目录之外:那以外的地方第三方应用访问不了
+        currentDirectory = parent.hasPrefix(root) ? parent : root
+        await loadFiles()
+    }
+
+    var canGoUp: Bool {
+        guard let current = currentDirectory, let root = rootDirectory else { return false }
+        return current != root
+    }
+
+    // MARK: - 动作:片库根
+
+    /// 片库根是「进来先落在哪」的选择,不是授权范围 —— 授权范围由
+    /// `/apps/{应用目录名}` 一个值决定,用户改不了,所以百度那边
+    /// **没有**「授权时选文件夹」这一步;能选的只有应用目录**里面**的起点。
+    var isCurrentDirectoryLibraryRoot: Bool {
+        guard let library = libraryRoot, let current = currentDirectory else { return false }
+        return current == library
+    }
+
+    /// 应用目录本身就是默认起点,把它设成片库根没有意义(等于没设)。
+    var canSetLibraryRoot: Bool {
+        guard let current = currentDirectory, let root = rootDirectory, current != root else {
+            return false
+        }
+        return !isCurrentDirectoryLibraryRoot
+    }
+
+    func setLibraryRootToCurrentDirectory() async {
+        guard let current = currentDirectory else { return }
+        do {
+            try await connection.setLibraryRoot(current)
+            libraryRoot = current
+        } catch let error as BaiduPanError {
+            notice = error.userMessage
+        } catch {
+            notice = "设置片库根失败:\(error)"
+        }
+    }
+
+    func clearLibraryRoot() async {
+        do {
+            try await connection.setLibraryRoot(nil)
+            libraryRoot = nil
+            currentDirectory = nil
+            await loadFiles()
+        } catch let error as BaiduPanError {
+            notice = error.userMessage
+        } catch {
+            notice = "清除片库根失败:\(error)"
+        }
+    }
+
+    /// 当前目录相对应用根目录的显示路径
+    var relativePath: String? {
+        guard let current = currentDirectory, let root = rootDirectory else { return nil }
+        if current == root { return "/" }
+        guard current.hasPrefix(root) else { return current }
+        let remainder = String(current.dropFirst(root.count))
+        return remainder.isEmpty ? "/" : remainder
+    }
+
+    func play(_ item: SourceItem) {
+        guard let file = file(for: item) else { return }
+        // 起播这一刻顺手记下展示快照(标题 / 封面),「继续观看」才渲染得出来。
+        // ⛔ 不要等到渲染续播区时回头再列网盘(配额,见 `AppContainer.rememberResumeCard`)。
+        Task { await container.rememberResumeCard(item: item, file: file) }
+        container.play(file)
+    }
+
+    /// 播「继续观看」区的一张卡片。它可能不在当前目录里,所以只能靠快照重建文件 ——
+    /// ⚠️ 这不是「编一个文件」:`fs_id` / `path` / `name` 都是**当初那条文件**的原值,
+    /// 只是把播放用不到的字段(size / category / mtime)留空。
+    func play(_ card: BaiduResumeCard) {
+        guard let file = card.reconstructedFile else { return }
+        container.play(file)
+    }
+
+    /// 把一条移出「继续观看」:删掉本地进度记录(⛔ 不动网盘上的文件)。
+    func removeResumeCard(_ card: BaiduResumeCard) async {
+        do {
+            try await container.watchProgress.remove(fileID: card.fileID)
+            resumeCards = resumeCards.filter { $0.id != card.id }
+        } catch {
+            notice = "移出继续观看失败:\(error)"
+        }
+    }
+
+    func resumeSeconds(for item: SourceItem) -> Double? {
+        resumePositions[item.ref.itemID]
+    }
+
+    /// 读本地续播库里属于这个来源的记录,折成卡片。
+    ///
+    /// 与 `loadResumePositions` 的分工:那个读的是**当前目录**每一条的进度(画在
+    /// 卡片角上);这个读的是**全库**里有进度的条目(撑起顶部的续播区)。
+    private func loadResumeCards() async {
+        let records = await container.watchProgress.resumeEntries(sourceID: source.id)
+        resumeCards = records.compactMap(BaiduResumeCard.init(record:))
+    }
+
+    /// `SourceItem` 只是给 UI 的投影;播放与进目录要原始文件(`path` / 真实文件名)。
+    /// ⛔ 找不到就什么都不做 —— 不拿投影反推一个假 `BaiduPanFile`。
+    private func file(for item: SourceItem) -> BaiduPanFile? {
+        guard let fsID = UInt64(item.ref.itemID) else { return nil }
+        return filesByID[fsID]
+    }
+
+    /// 修改配置时预填给表单的现值。
+    struct BaiduPanConfigurationDraft: Sendable, Equatable {
+        let appKey: String
+        let secretKey: String
+        let folderName: String
+    }
+
+    private func loadResumePositions() async {
+        var result: [String: Double] = [:]
+        for item in items where item.kind.isPlayable {
+            let id = item.ref.itemID
+            if let seconds = await container.watchProgress.resumeSeconds(forFileID: id) {
+                result[id] = seconds
+            }
+        }
+        resumePositions = result
+    }
+}
+
+/// 百度来源「继续观看」区的一张卡片。
+///
+/// 它是**从本地续播库的记录折出来的**(不是从目录列出来的)—— 因为续播区要
+/// 跨目录、甚至要能在目录读失败时也显示。展示所需的一切都来自播放那一刻
+/// 存下的快照(`WatchProgressStore.Display`)。
+struct BaiduResumeCard: Identifiable, Sendable, Equatable {
+    let fileID: String
+    let title: String
+    let positionSeconds: Double
+    /// 已知总时长;未知为 nil(百度不给时长时就没有,进度条也不画)
+    let durationSeconds: Double?
+    let path: String
+    let fileName: String
+    let poster: ImageDescriptor?
+
+    var id: String { fileID }
+
+    /// 折不出可播文件(键不是合法 `fs_id`)就返回 nil —— ⛔ 不端一张点不动的卡片。
+    init?(record: WatchProgressStore.ResumeRecord) {
+        guard UInt64(record.fileID) != nil else { return nil }
+        self.fileID = record.fileID
+        self.title = record.display.title
+        self.positionSeconds = record.positionSeconds
+        self.durationSeconds = record.durationSeconds
+        self.path = record.display.locator
+        self.fileName = record.display.fileName
+        self.poster = record.display.cover.map(ImageDescriptor.init(snapshot:))
+    }
+
+    /// 重建一个够播放用的 `BaiduPanFile`(见 `BaiduPanSourceViewModel.play(_ card:)`)。
+    var reconstructedFile: BaiduPanFile? {
+        guard let fsID = UInt64(fileID) else { return nil }
+        return BaiduPanFile(
+            fsID: fsID,
+            path: path,
+            name: fileName,
+            sizeBytes: nil,
+            isDirectory: false,
+            category: nil,
+            modifiedAt: nil,
+            thumbnailURL: nil
+        )
+    }
+}
+
+/// 目录读失败时的用户可见信息。
+///
+/// ⚠️ 没有复用 `LoadFailure`:那一个是给 Emby 那条的(带 `needsLogin`),
+/// 而这里的分支是百度独有的,塞进去会让两个来源的状态互相污染。
+struct BaiduPanDirectoryFailure: Sendable, Equatable {
+    let message: String
+
+    /// 是不是**应用目录本身**读不出来(`/apps/{应用目录名}` 不在 / 没权限)。
+    ///
+    /// 这一态要给完全不同的处置:重试没用,得让人去核对控制台里的「应用名称」。
+    /// ⛔ 它**不是**「大概是权限问题」的猜测 —— 只有 `errno` 是
+    /// `-7`(无权访问)/ `-9`(不存在)且失败的请求正是应用目录时才置 true。
+    let isApplicationRootUnavailable: Bool
+}

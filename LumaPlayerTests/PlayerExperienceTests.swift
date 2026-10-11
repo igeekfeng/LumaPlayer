@@ -252,7 +252,7 @@ final class PlayerExperienceTests: XCTestCase {
         container.play(movie, on: server)
         let second = try XCTUnwrap(container.state.nowPlaying)
         XCTAssertNotEqual(first.id, second.id)
-        XCTAssertEqual(second.item.id, "M1")
+        XCTAssertEqual(second.embyItem?.id, "M1")
     }
 
     /// DesignTokens.swift「界面规则」:切到另一台服务器时结束旧播放,不能让播放器
