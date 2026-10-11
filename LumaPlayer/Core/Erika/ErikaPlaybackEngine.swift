@@ -56,9 +56,22 @@ final class ErikaPlaybackEngine: PlaybackEngine {
 
     // MARK: - 生命周期与播放控制
 
+    /// HTTP 预读窗口。Erika 传 0 时默认只有 2 MiB(20 Mbps 下不到 1 秒),实测是
+    /// 「按码率现下现播」、暂停也不攒缓冲,网络一抖就卡;取旧内核 `demuxer-max-bytes`
+    /// 的 128 MiB(ERIKA_INTEGRATION.md §6.1)。
+    static let httpReadAheadBytes: UInt64 = 128 * 1024 * 1024
+    /// 已播数据的回看缓存。Erika 默认 16 MiB;回看窗口从「下载头」往回算,不是从播放位置,
+    /// 所以和预读一起放大(§6.1)。
+    static let httpBackBufferBytes: UInt64 = 64 * 1024 * 1024
+
     func open(url: URL, headers: [String: String]) throws {
         do {
-            try player.open(url, httpHeaders: headers)
+            try player.open(
+                url,
+                httpHeaders: headers,
+                httpReadAheadBytes: Self.httpReadAheadBytes,
+                httpBackBufferBytes: Self.httpBackBufferBytes
+            )
         } catch {
             throw Self.playerError(error)
         }
