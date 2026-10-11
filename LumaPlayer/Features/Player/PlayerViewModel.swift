@@ -766,7 +766,9 @@ final class PlayerViewModel {
             cacheSpeedBytesPerSecond = values["cache-speed"].flatMap(Double.init)
         }
         if showsStatistics {
-            statistics = PlayerStatistics(properties: values, session: session)
+            statistics = PlayerStatistics(
+                properties: values, session: session,
+                renderBackend: player.statisticsSnapshot().renderBackend)
         }
     }
 

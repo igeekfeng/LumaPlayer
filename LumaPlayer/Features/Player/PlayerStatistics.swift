@@ -2,7 +2,8 @@ import Foundation
 
 /// 播放统计信息 overlay 的内容(按 I 键开关)。
 ///
-/// 数据全部来自 mpv 属性的字符串读数(`MPVPlayer.stringProperties`),
+/// 数据来自 mpv 属性的字符串读数(`MPVPlayer.stringProperties`)、
+/// 我们自己记的渲染后端(`MPVPlayerStatistics.renderBackend`,mpv 没有对应属性),
 /// 再加上 Emby 侧的播放方式与容器。本类型只做格式化,是纯函数,便于测试。
 /// 某个属性读不到(mpv 返回 NULL)时对应的行直接不显示,不填「未知」凑数。
 struct PlayerStatistics: Equatable {
@@ -24,7 +25,7 @@ struct PlayerStatistics: Equatable {
         "demuxer-cache-duration", "cache-speed",
     ]
 
-    init(properties p: [String: String], session: PlaybackSession?) {
+    init(properties p: [String: String], session: PlaybackSession?, renderBackend: String? = nil) {
         var lines: [Line] = []
         func add(_ label: String, _ parts: [String?]) {
             let value = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
@@ -47,6 +48,7 @@ struct PlayerStatistics: Equatable {
         }()
         add("色彩", [p["video-params/pixelformat"], colour])
         add("解码", [p["hwdec-current"].map(Self.decoderText)])
+        add("渲染", [renderBackend.map(Self.renderBackendText)])
         add("视频码率", [p["video-bitrate"].flatMap(Self.bitrateText)])
 
         let sampleRate = p["audio-params/samplerate"].flatMap(Double.init).map {
@@ -78,6 +80,15 @@ struct PlayerStatistics: Equatable {
     /// mpv 的 `hwdec-current`:`no` 表示软解,其余是硬解接口名(如 `videotoolbox`)。
     static func decoderText(_ raw: String) -> String {
         raw == "no" || raw.isEmpty ? "软件解码" : "硬件解码(\(raw))"
+    }
+
+    /// `MPVRenderBackend.rawValue` → 显示名。认不出的原样显示,不猜。
+    static func renderBackendText(_ raw: String) -> String {
+        switch MPVRenderBackend(rawValue: raw) {
+        case .gpuNext: "gpu-next(libplacebo)"
+        case .legacy: "gpu(旧渲染器)"
+        case nil: raw
+        }
     }
 
     /// bit/s → `8.2 Mbps` / `192 kbps`。0 或不可解析时返回 nil。

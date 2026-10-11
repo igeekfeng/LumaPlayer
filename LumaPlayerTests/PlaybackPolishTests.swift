@@ -257,6 +257,17 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(byLabel["音频"], "aac · 44.1 kHz · 1 声道")
         XCTAssertNil(byLabel["丢帧"], "读不到的属性不凑「未知」")
         XCTAssertNil(byLabel["播放方式"], "没有会话就不显示播放方式")
+        XCTAssertNil(byLabel["渲染"], "没建渲染上下文就不显示")
+    }
+
+    func testStatisticsShowRenderBackend() {
+        func line(_ backend: String) -> String? {
+            PlayerStatistics(properties: [:], session: nil, renderBackend: backend)
+                .lines.first { $0.label == "渲染" }?.value
+        }
+        XCTAssertEqual(line("gpu-next"), "gpu-next(libplacebo)")
+        XCTAssertEqual(line("gpu"), "gpu(旧渲染器)")
+        XCTAssertEqual(line("vulkan"), "vulkan", "认不出的原样显示")
     }
 
     // MARK: - 上一集
