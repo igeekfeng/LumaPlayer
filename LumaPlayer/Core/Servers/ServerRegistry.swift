@@ -11,7 +11,7 @@ enum ServerRegistryError: Error, Equatable {
     case storageCorrupted
 }
 
-/// 多服务器注册表(actor,见 ARCHITECTURE.md 6.1)。
+/// 多服务器注册表(actor,见 CLAUDE.md「每台服务器完全隔离」)。
 ///
 /// - profiles 持久化到 UserDefaults(ServerProfile 不含 token,见模型注释);
 /// - token / DeviceId 的存取语义在 CredentialStore,本类只在

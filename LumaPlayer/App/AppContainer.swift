@@ -4,7 +4,7 @@ import Foundation
 /// 并承载跨视图的服务器管理动作(添加 / 切换 / 编辑 / 删除 / 会话恢复)。
 ///
 /// View 与 ViewModel 不直接拼 URL、不直接碰凭据存储
-/// (ARCHITECTURE.md 6.3 架构约束)。
+/// (CLAUDE.md「架构主线」)。
 @MainActor
 final class AppContainer {
     let credentials: CredentialStore
@@ -75,7 +75,7 @@ final class AppContainer {
     // MARK: - 服务器连接
 
     /// 一台服务器一个连接实例、一个 `EmbyAPIClient`,token 不共享
-    /// (ARCHITECTURE.md 6.3)。
+    /// (CLAUDE.md「架构主线」)。
     func makeConnection(
         for profile: ServerProfile,
         schemeWasInferred: Bool = false
@@ -98,7 +98,7 @@ final class AppContainer {
 
     /// 浏览用的连接实例按服务器缓存:`ServerConnection` 持有该服务器的
     /// token 与 `/emby` 前缀状态,浏览期间必须复用同一个实例
-    /// (ARCHITECTURE.md 6.3:每台服务器一个 `EmbyAPIClient`,token 不共享)。
+    /// (CLAUDE.md「架构主线」:每台服务器一个 `EmbyAPIClient`,token 不共享)。
     ///
     /// 登录 / 探测仍是 `makeConnection` 新建 —— 那条路径要带
     /// `schemeWasInferred`,且失败就不该留下半成品状态。
@@ -123,13 +123,12 @@ final class AppContainer {
 
     /// 手动刷新(工具栏「刷新」按钮)时作废这台服务器的接口缓存:
     /// 用户按刷新就是要最新数据,不吃 TTL 内的缓存
-    /// (浏览路径仍吃缓存,只有显式刷新走这里,见 docs/DECISIONS/local-cache.md)。
+    /// (浏览路径仍吃缓存,只有显式刷新走这里,见 `EmbyResponseCache`)。
     func invalidateResponses(for server: ServerProfile) async {
         await responseCache.invalidate(serverID: server.id)
     }
 
-    /// 已有服务器重新登录(token 失效或未登录)。保留地址与用户名
-    /// (ARCHITECTURE.md 7.3)。
+    /// 已有服务器重新登录(token 失效或未登录)。保留地址与用户名。
     func login(
         to server: ServerProfile,
         username: String,
@@ -159,7 +158,7 @@ final class AppContainer {
     // MARK: - 服务器管理动作
 
     /// 添加服务器:地址规范化 → 探测 → 登录 → **成功后才入库**
-    /// (ARCHITECTURE.md 6.2 的顺序)。
+    /// (API_CONTRACT.md 1.4 的顺序)。
     ///
     /// 登录失败不落库:否则会留下一条「存在但用不了」的服务器。
     /// 抛 ServerURLError / ServerLoginError / EmbyAPIError / CredentialFileError / KeychainError /
@@ -208,21 +207,20 @@ final class AppContainer {
 
     /// 请播放器窗口播放 `item`。窗口由调用方(视图)用 `openWindow` 唤起 ——
     /// 这里只写请求,不碰 AppKit。正在播别的内容时,旧播放页随请求替换而
-    /// 拆除,收尾上报照常发出(ARCHITECTURE.md 6.6)。
+    /// 拆除,收尾上报照常发出(API_CONTRACT.md 5.4)。
     func play(_ item: EmbyItem, on server: ServerProfile, fromBeginning: Bool = false) {
         state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
     }
 
     /// 结束属于 `serverID` 的播放(切换 / 删除服务器时)。
-    /// UI_DESIGN.md 7.1:正在播放时切服务器,先结束旧播放会话再切换 ——
+    /// DesignTokens.swift「界面规则」:正在播放时切服务器,先结束旧播放会话再切换 ——
     /// 否则播放器窗口里还是上一台的内容,上报也继续打到上一台。
     private func stopPlayback(unlessOn serverID: UUID) {
         guard let playing = state.nowPlaying, playing.server.id != serverID else { return }
         state.nowPlaying = nil
     }
 
-    /// 切换当前服务器。切换时清除当前服务器的临时内容与播放器状态
-    /// (ARCHITECTURE.md 7.3)。
+    /// 切换当前服务器。切换时清除当前服务器的临时内容与播放器状态。
     func switchCurrent(to server: ServerProfile) async throws {
         stopPlayback(unlessOn: server.id)
         try await registry.markUsed(id: server.id, at: Date())
@@ -300,11 +298,10 @@ final class AppContainer {
     // MARK: - 会话恢复
 
     /// 启动时恢复最近一次使用的服务器
-    /// (ARCHITECTURE.md 4.1「重新启动后自动恢复最近一次可用会话」;
-    /// 7.3「token 无效时返回登录界面,但保留地址和用户名」)。
+    /// (token 无效时回登录界面,但保留地址和用户名)。
     ///
     /// 有服务器就直接进主窗口的首页;
-    /// 缺 token 时由 `BrowseView` 的登录 sheet 兜住(不静默重登,ARCHITECTURE.md 7.3)。
+    /// 缺 token 时由 `BrowseView` 的登录 sheet 兜住(没记住密码时不静默重登,API_CONTRACT.md 2.5)。
     ///
     /// 这里**不发网络请求**:只判断本地有没有 token。token 是否仍然有效
     /// 由第一次鉴权请求决定,401 时回登录页(API_CONTRACT.md 2.5)。

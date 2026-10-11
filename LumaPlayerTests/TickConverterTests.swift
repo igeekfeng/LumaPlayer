@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// ticks ↔ 秒 的换算(API_CONTRACT.md 8.3;ARCHITECTURE.md 10.1)。
+/// ticks ↔ 秒 的换算(API_CONTRACT.md 8.3)。
 ///
 /// ⛔ 业务代码里出现 `10_000_000` 字面量是违规的(CLAUDE.md 提交前自检第 4 条),
 /// 换算只有这一个出处。

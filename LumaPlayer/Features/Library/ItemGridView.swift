@@ -9,9 +9,9 @@ struct ItemGridActions {
     var updatingIDs: Set<String> = []
 }
 
-/// 海报网格(UI_DESIGN.md 2.1 的网格 token;6.1 的非玻璃卡片要求)。
+/// 海报网格(DesignTokens.swift 的网格 token;卡片不用玻璃)。
 ///
-/// 滚动时不为每个卡片创建玻璃容器(UI_DESIGN.md 9.2)。
+/// 滚动时不为每个卡片创建玻璃容器(DesignTokens.swift「界面规则」)。
 struct ItemGridView: View {
     let items: [EmbyItem]
     let serverID: UUID

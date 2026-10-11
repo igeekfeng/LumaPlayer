@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// 全局 App 状态(ViewModel 层,@MainActor + @Observable,
-/// ARCHITECTURE.md 3.1.2 的分层规则)。
+/// CLAUDE.md「并发分层」的分层规则)。
 @MainActor
 @Observable
 final class AppState {
@@ -40,7 +40,7 @@ final class AppState {
     // MARK: - 播放器窗口
 
     /// 播放器窗口当前要播的内容。nil = 没在播(窗口应关闭)。
-    /// 播放器是单实例独立窗口(ARCHITECTURE.md 7.5),换内容 = 换请求。
+    /// 播放器是单实例独立窗口(CLAUDE.md「架构主线」),换内容 = 换请求。
     var nowPlaying: PlaybackRequest?
     /// 最近一次收尾上报已发完的播放。详情页 / 首页观察它重读服务端进度(Q22)。
     var lastFinishedPlayback: FinishedPlayback?

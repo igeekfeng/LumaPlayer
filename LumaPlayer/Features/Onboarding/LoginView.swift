@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 重新登录一台已存在的服务器。地址只读 —— 只补用户名与密码
-/// (ARCHITECTURE.md 7.3)。
+/// 重新登录一台已存在的服务器。地址只读 —— 只补用户名与密码。
 ///
 /// 记住了密码时 401 会先静默重新登录,走到这里说明静默登录也没成立
 /// (密码在服务端改过、或没勾选记住密码)。
@@ -33,7 +32,7 @@ struct LoginView: View {
                 } footer: {
                     if viewModel.isUnencrypted {
                         // 局域网 http 回退后的服务器也要警告
-                        // (API_CONTRACT.md 1.4、ARCHITECTURE.md 8.2)
+                        // (API_CONTRACT.md 1.4、CLAUDE.md「安全与隐私」)
                         OnboardingNotice(text: "未加密连接(HTTP),密码将以明文发送。", style: .warning)
                     }
                 }

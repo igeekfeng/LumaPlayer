@@ -8,7 +8,7 @@ import Foundation
 /// 记在里面只能在本次播放内活下来。
 ///
 /// ⛔ 偏好是从 UserDefaults 读回来的,不能假设没被手改过 —— 读进来一律夹回合法范围
-/// (`FEATURE_GAP_ANALYSIS.md` P0-4 要求的就是「设置页里能改,且改完留得住」)。
+/// (要求就是「设置页里能改,且改完留得住」)。
 @MainActor
 @Observable
 final class PlaybackPreferences {
@@ -57,7 +57,7 @@ final class PlaybackPreferences {
     /// 发紫发绿(mpv 的 legacy `gpu` 渲染器不处理 DV 的 RPU)。
     /// 关:退回 legacy `gpu` 渲染器。留这个开关是因为 gpu-next 走的是上游
     /// **未合并的 draft PR**,万一它让别的片源出问题,用户能自己退回去。
-    /// 详见 docs/DECISIONS/gpu-next-render-backend.md。
+    /// 详见 docs/MPV_INTEGRATION.md §0、§3.3。
     ///
     /// 起播时读一次(建 `MPVPlayer` 时),**下一次起播才生效**。
     var preferGPUNextRenderer: Bool {

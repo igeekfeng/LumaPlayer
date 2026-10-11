@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 启动会话恢复:
-/// 「重新启动后自动恢复最近一次可用会话」(ARCHITECTURE.md 4.1)。
+/// 「重新启动后自动恢复最近一次可用会话」。
 /// 「重启」= 从同一 defaults / 凭据文件重建 registry + AppContainer。
 ///
 /// 并发说明:UserDefaults(non-Sendable)不能从测试方法的隔离区域发送给

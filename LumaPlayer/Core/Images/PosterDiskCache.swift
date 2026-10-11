@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// 海报图片的磁盘缓存(actor:文件 IO 不进 MainActor,
-/// ARCHITECTURE.md 3.1.2 的 Core 分层)。
+/// CLAUDE.md「并发分层」的 Core 分层)。
 ///
 /// 只有内存缓存时重启即失、超限全清 —— 切回服务器图片全部重拉。
 /// 加这一层后,重启 App 与来回切服务器都能秒出已看过的海报。

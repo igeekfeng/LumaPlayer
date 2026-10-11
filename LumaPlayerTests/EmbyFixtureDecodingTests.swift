@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// fixture 解码:字段缺失不崩、必填缺失报错
-/// (API_CONTRACT.md 8.1 的可选性原则与必填表;ARCHITECTURE.md 10.1)。
+/// (API_CONTRACT.md 8.1 的可选性原则与必填表)。
 ///
 /// `public_info.json` 是**真实响应脱敏**后的 fixture(4.7.11.0,2026-09-22,
 /// 见 CLAUDE.md「真实服务器使用纪律」);

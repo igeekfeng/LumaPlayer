@@ -6,7 +6,7 @@ protocol ImageDataLoading: Sendable {
 }
 
 /// 经 `EmbyAPIClient` 取图片(actor:持有 `ServerConnection`,
-/// ARCHITECTURE.md 3.1.2 的分层规则)。
+/// CLAUDE.md「并发分层」的分层规则)。
 ///
 /// 图片端点要走和 JSON 一样的认证头与状态码映射
 /// (`API_CONTRACT.md` 3.3、第 7 节),这也是它不能交给

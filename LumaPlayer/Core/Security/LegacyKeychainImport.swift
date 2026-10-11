@@ -10,7 +10,7 @@ struct KeychainError: Error, Equatable {
 
 /// 旧版凭据(存在钥匙串 generic-password 里)的**只读**导入。
 ///
-/// 凭据改存文件后(`docs/DECISIONS/credentials-file-storage.md`),钥匙串只在
+/// 凭据改存文件后(见 `CredentialFileStore`),钥匙串只在
 /// 升级后第一次启动时读一次,由 `CredentialFileStore` 调用。
 /// 每读一条条目,系统都会弹一次授权窗:旧条目的 ACL 认的是旧签名。
 ///

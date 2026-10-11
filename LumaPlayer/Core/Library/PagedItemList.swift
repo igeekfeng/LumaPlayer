@@ -8,7 +8,7 @@ struct PagedFetchResult: Sendable, Equatable {
 }
 
 /// 分页列表的加载与状态机(@MainActor + @Observable,
-/// ARCHITECTURE.md 3.1.2 的分层规则)。
+/// CLAUDE.md「并发分层」的分层规则)。
 ///
 /// **generation 检查**是本类型的核心(翻页时快速切换服务器
 /// 不出现旧服务器内容):

@@ -9,7 +9,7 @@
 # ⚠️ 有两个依赖根：
 #   1. /opt/homebrew —— libmpv 的全部传递依赖（ffmpeg / libplacebo / …）；
 #   2. Vendor/mpv/prefix —— **自编**的 libmpv 本体（Scripts/build-libmpv.sh 产物，
-#      带 gpu-next 渲染后端，见 docs/DECISIONS/gpu-next-render-backend.md）。
+#      带 gpu-next 渲染后端，见 docs/MPV_INTEGRATION.md §0、§3.3）。
 #   主程序里 LC_LOAD_DYLIB 指向第 2 个根的绝对路径，其余依赖都在第 1 个根。
 #
 # 用法：

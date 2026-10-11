@@ -59,8 +59,8 @@ struct MPVPlayerStatistics: Sendable, Equatable {
 /// - mpv 句柄一经创建不再更换,只在 `shutdown()` 里销毁并置 nil(锁内);
 /// - 调用方(MainActor)、mpv 事件线程、CAOpenGLLayer 渲染线程三方并发,
 ///   分别经 `state` 锁或 mpv 自身线程安全保证串行;
-/// - Core/MPV/ 是全项目唯一允许并发逃逸的目录(ARCHITECTURE.md 3.1.2),
-///   已登记 docs/DECISIONS/mpv-concurrency.md。
+/// - Core/MPV/ 是全项目唯一允许并发逃逸的目录(CLAUDE.md「并发分层」),
+///   已登记 docs/MPV_INTEGRATION.md §6.3。
 final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 内部状态
@@ -68,7 +68,7 @@ final class MPVPlayer: @unchecked Sendable {
     /// C 指针的 Sendable 包装(Core/MPV/ 允许的并发逃逸点)。
     /// 论证:指针只作为「句柄」跨隔离域传递;所有实际调用 C API 的
     /// 解引用都发生在 `state` 锁内;生命周期(teardown/destroy)同样
-    /// 在锁内串行。已登记 docs/DECISIONS/mpv-concurrency.md。
+    /// 在锁内串行。已登记 docs/MPV_INTEGRATION.md §6.3。
     fileprivate struct LockedPointer<Pointee>: @unchecked Sendable {
         let raw: Pointee
         init(_ raw: Pointee) { self.raw = raw }
@@ -194,7 +194,7 @@ final class MPVPlayer: @unchecked Sendable {
         ("volume", MPV_FORMAT_DOUBLE),
         ("speed", MPV_FORMAT_DOUBLE),
         ("hwdec-current", MPV_FORMAT_STRING),
-        // 轨道菜单(第 7 节)与静音(UI_DESIGN.md 5.3 的 M 键)。
+        // 轨道菜单(第 7 节)与静音(PlayerCommands.swift 的 M 键)。
         // track-list 是 NODE:一次拿到全部轨道,比逐个读 track-list/N/* 便宜。
         ("track-list", MPV_FORMAT_NODE),
         ("mute", MPV_FORMAT_FLAG),
@@ -412,7 +412,7 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
-    /// 静音(§6.1 的 `mute`;UI_DESIGN.md 5.3 的 M 键)。
+    /// 静音(§6.1 的 `mute`;PlayerCommands.swift 的 M 键)。
     /// 与 `volume = 0` 不是一回事:静音要能原样恢复音量。
     func setMuted(_ muted: Bool) throws {
         try setFlagProperty("mute", muted)
@@ -492,7 +492,7 @@ final class MPVPlayer: @unchecked Sendable {
     /// 渲染后端名(render.h 的 `MPV_RENDER_PARAM_BACKEND`)。
     /// `gpu-next` 走 libplacebo,能正确处理 Dolby Vision(Profile 5)/ HDR;
     /// legacy `gpu` 不行(DV 会发紫发绿)。详见
-    /// docs/DECISIONS/gpu-next-render-backend.md。
+    /// docs/MPV_INTEGRATION.md §0、§3.3。
     private static let gpuNextBackend = "gpu-next"
     /// 走 mpv 默认渲染器(不传 BACKEND 参数)时统计里记的名字。
     private static let legacyBackend = "gpu"

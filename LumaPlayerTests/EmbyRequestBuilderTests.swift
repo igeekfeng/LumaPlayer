@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 请求构造:URL 拼接、认证头格式、token 头、body 字段名
-/// (API_CONTRACT.md 1.2、2.1、2.2;ARCHITECTURE.md 10.1)。
+/// (API_CONTRACT.md 1.2、2.1、2.2)。
 final class EmbyRequestBuilderTests: XCTestCase {
     private func makeBuilder(
         baseURL: String = "https://emby.test",

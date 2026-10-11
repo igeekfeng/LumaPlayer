@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// HTTP 状态码映射、解码、取消、以及「token 是实例状态」的隔离性
-/// (API_CONTRACT.md 第 7 节;ARCHITECTURE.md 10.2 的集成测试)。
+/// (API_CONTRACT.md 第 7 节)。
 ///
 /// 全部走 `MockEmbyURLProtocol`,**零真实网络依赖**。
 final class EmbyAPIClientTests: XCTestCase {

@@ -1,12 +1,15 @@
 import CryptoKit
 import Foundation
 
-/// 接口响应的本地缓存(actor,ARCHITECTURE.md 3.1.2 的 Core 有状态类型分层)。
+/// 接口响应的本地缓存(actor,CLAUDE.md「并发分层」的 Core 有状态类型分层)。
 ///
 /// 目标:TTL 内零网络请求,
 /// 切换服务器 / 重进页面 / 重启 App 都秒出内容;过期或未命中时走原有网络路径,无回归。
 ///
-/// 三个关键决定(docs/DECISIONS/local-cache.md 有完整论证):
+/// 选型是**透明 TTL**,不是 SWR(先给旧数据、后台刷新):SWR 会把错的 `UserData`
+/// (已看 / 收藏 / 进度)端给用户。过期后的行为与无缓存完全一致。
+///
+/// 三个关键决定:
 ///
 /// 1. **存原始响应字节,不存解码值**。`Models/` 的 DTO 只有 `Decodable`
 ///    (不是 `Encodable`),把解码值重编码进缓存既要求全量加协议又可能丢字段。
@@ -20,6 +23,22 @@ import Foundation
 ///    作废,但它之前发出的读请求回来时仍会带着旧数据写缓存、白拿一个新 TTL。
 ///    `store` 只接受「取数据时读到的那个 epoch」,不匹配就丢弃 —— 与
 ///    `PlaybackProgressReporter` 的 generation 代次号同一模式(5.4)。
+///
+/// 失效规则(触发点在 `ServerConnection` / `AppContainer`):
+///
+/// | 触发 | 行为 |
+/// |---|---|
+/// | 标记已看 / 收藏 / 移出继续观看 | 整台作废(写操作改了散布在多个列表里的 UserData) |
+/// | 播放上报 Playing / Stopped | 整台作废 |
+/// | 播放上报 Progress | **不失效**:每 10 秒一次,失效会让播放期间的浏览永远打不到缓存 |
+/// | 登录成功 / 登出 | 整台作废 |
+/// | 删除服务器 | 内存 + 磁盘一起清(`purgeDisk`) |
+/// | 工具栏刷新 | 先作废再重载 |
+///
+/// ⛔ 登录时的访问验证(`verifyAccessWithFreshViews`)必须绕过缓存,否则失效 token / 被禁用户会假装登录成功。
+/// 可缓存端点是 allowlist(`EmbyEndpoint.isResponseCacheable`),图片 / 播放上报 / PlaybackInfo / 认证类不在内。
+/// 上限:内存 200 条(FIFO)、磁盘 64 MB(按最旧写入淘汰到 80%);过期文件读到时顺手删(懒清扫)。
+/// 图片缓存另见 `PosterImageStore`(内存 LRU 300 条,磁盘 256 MB;没有 `Tag` 的图不进磁盘)。
 ///
 /// 缓存是尽力而为的:磁盘 IO 失败(盘满、权限)静默降级为不缓存,
 /// 不影响网络路径的正确性。这不是吞错 —— 缓存命中与否都不改变语义。
@@ -75,7 +94,7 @@ actor EmbyResponseCache {
     // MARK: - 读
 
     /// fresh 命中返回原始响应字节;未命中 / 过期 / 损坏返回 nil。
-    /// 过期的磁盘文件顺手删除(懒清扫,见 docs/DECISIONS/local-cache.md)。
+    /// 过期的磁盘文件顺手删除(懒清扫)。
     func freshData(serverID: UUID, endpoint: EmbyEndpoint) -> Data? {
         let key = Self.key(serverID: serverID, endpoint: endpoint)
         if let entry = memory[key] {
@@ -136,7 +155,7 @@ actor EmbyResponseCache {
     }
 
     /// 整台服务器作废:代次 +1、清内存、删磁盘目录。
-    /// 触发点见 docs/DECISIONS/local-cache.md 的失效规则表。
+    /// 触发点见类型注释里的失效规则表。
     func invalidate(serverID: UUID) {
         epochs[serverID, default: 0] += 1
         let prefix = serverID.uuidString + "|"

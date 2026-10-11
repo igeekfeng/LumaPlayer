@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 播放器底部控制栏(UI_DESIGN.md 5.2 的优先级:播放/暂停 → 进度 →
+/// 播放器底部控制栏(DesignTokens.swift「界面规则」的优先级:播放/暂停 → 进度 →
 /// 音量 → 字幕/音轨 → 全屏 → 其他)。
 ///
 /// **形态:全宽底部横条 + 渐变压暗,不是悬浮玻璃药丸。**
@@ -20,7 +20,7 @@ import SwiftUI
 ///
 /// 直接持有 ViewModel 而不是逐个传值:`@Observable` 按属性追踪读取,
 /// 每 0.2s 一次的 `time-pos` 只让读了位置的 `PlayerScrubber` 重算,
-/// 按钮行不跟着重绘(UI_DESIGN.md 第 9 节第 4 条)。
+/// 按钮行不跟着重绘(DesignTokens.swift「界面规则」)。
 struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
     var toggleFullScreen: () -> Void
@@ -386,7 +386,7 @@ struct PlayerSpeedControl: View {
     }
 }
 
-/// 字幕菜单(UI_DESIGN.md 2:临时层,低频操作放浮层不占底栏)。
+/// 字幕菜单(DesignTokens.swift「界面规则」:临时层,低频操作放浮层不占底栏)。
 /// 与音轨**分成两个入口** —— Apple TV 右下角就是独立的 CC 与 Audio 两个按钮,
 /// Plex 也是 `S` 字幕 / `A` 音轨分开;合并成一个菜单会让人多找一次。
 ///
@@ -651,7 +651,7 @@ struct PlayerRepeatSkipButton: View {
 }
 
 /// 播放器里统一的图标按钮:固定点击区域、悬停时画一个淡圆底,
-/// 带 tooltip 与 `accessibilityLabel`(UI_DESIGN.md 5.2 / 8.3)。
+/// 带 tooltip 与 `accessibilityLabel`(DesignTokens.swift「界面规则」)。
 struct PlayerIconButton: View {
     let systemImage: String
     let label: String

@@ -12,11 +12,19 @@ enum CredentialFileError: Error, Equatable {
 }
 
 /// 服务器凭据(token、DeviceId)的本地文件存储。
-/// actor 串行化访问(ARCHITECTURE.md 3.1.2:Core/Security 有状态类型是 actor)。
+/// actor 串行化访问(CLAUDE.md「并发分层」:Core/Security 有状态类型是 actor)。
 ///
-/// 不用 Keychain 的原因见 `docs/DECISIONS/credentials-file-storage.md`:
-/// App 用 ad-hoc 签名,钥匙串 ACL 认 cdhash,每次重新构建都会弹授权窗。
-/// 文件放在沙盒容器里,权限 0600,排除出 Time Machine 备份。
+/// 为什么不用 Keychain:App 用 ad-hoc 签名,钥匙串 ACL 认 cdhash,每次重新构建都会弹授权窗;
+/// 给 ad-hoc 加显式 DR 实测也没用(仍只认 cdhash),data protection keychain 又要 provisioning profile。
+/// 文件放在沙盒容器里,值 base64 编码(不是加密),权限 0600(先写 0600 临时文件再 `rename`,
+/// 不用 `.atomic` —— 它按 umask 建 0644),每次写完重打 `isExcludedFromBackup`(rename 换了 inode)。
+///
+/// 安全取舍:防不住以同一用户身份运行、能读这个容器的进程;ad-hoc 没有稳定代码身份,
+/// 任何不弹窗的加密都防不住它,所以不加密。密码泄露代价最大,只在用户勾了「记住密码」时才存。
+///
+/// 升级迁移:首次访问时若没有「已导入」标记,从旧钥匙串(service `com.local.LumaPlayer`)导入
+/// `deviceId` 与 `server-token:*`(每条弹一次授权窗);全有或全无,失败本进程不重试;
+/// 文件里已有的同名值优先。旧条目不自动删(ad-hoc 删不了别的签名建的条目,且 `deviceId` 那条是兜底)。
 ///
 /// 只做原始键值存取,不含业务语义;token / DeviceId 的语义在 CredentialStore。
 /// 路径可注入:测试用临时目录隔离,不碰真实容器。

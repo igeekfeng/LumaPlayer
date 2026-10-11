@@ -255,7 +255,7 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(second.item.id, "M1")
     }
 
-    /// UI_DESIGN.md 7.1:切到另一台服务器时结束旧播放,不能让播放器
+    /// DesignTokens.swift「界面规则」:切到另一台服务器时结束旧播放,不能让播放器
     /// 继续放上一台的内容、继续往上一台上报。
     func testSwitchingToAnotherServerStopsPlayback() async throws {
         let registry = try makeRegistry()
@@ -326,7 +326,7 @@ final class PlayerExperienceTests: XCTestCase {
     }
 
     /// 只记 Progress 上报里的 `eventName` 与倍速。用 actor 而不是
-    /// `@unchecked Sendable` 的盒子(ARCHITECTURE.md 3.1.2,测试代码也不例外)。
+    /// `@unchecked Sendable` 的盒子(CLAUDE.md「并发分层」,测试代码也不例外)。
     private actor RateChangeRecorder {
         struct Entry: Sendable {
             let eventName: String?

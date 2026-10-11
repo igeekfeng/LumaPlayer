@@ -3,8 +3,7 @@ import os
 
 /// 字幕外观偏好(字号 / 颜色 / 粗体 / 描边 / 阴影或底框 / 垂直位置 / ASS 覆盖)。
 ///
-/// 纯本地偏好:Emby 的 `UserConfiguration` 里没有外观字段,官方说明这部分由客户端自己存
-/// (`FEATURE_GAP_ANALYSIS.md` P0-2),所以不经服务端、全部服务器共用一份。
+/// 纯本地偏好:Emby 的 `UserConfiguration` 里没有外观字段,官方说明这部分由客户端自己存,所以不经服务端、全部服务器共用一份。
 ///
 /// 只描述「用户想要什么」;怎么翻译成 mpv 选项在 `mpvProperties`(纯函数,单测直接验),
 /// 映射依据见 MPV_INTEGRATION.md 7.1。**默认值与 mpv 自身默认一致**:

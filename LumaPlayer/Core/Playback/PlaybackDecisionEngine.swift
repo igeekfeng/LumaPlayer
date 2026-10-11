@@ -92,7 +92,7 @@ enum PlaybackError: Error, Equatable, Sendable {
 /// **纯函数**:不持有状态、不做网络请求、不读本地凭据 —— 输入一份
 /// `PlaybackInfo` 响应,输出一个 `PlaybackPlan` 或抛错。这样「仅转码可用」
 /// 「无可播路径」这类分支可以完全用 fixture 覆盖,不需要真实服务器
-/// (ARCHITECTURE.md 6.4)。
+/// (API_CONTRACT.md 4.4)。
 ///
 /// 算法严格照 4.4 的六步;唯一补充是第 2 步之后校验 `PlaySessionId`
 /// —— 4.5 把它列为串流 URL 的必填参数,而官方 schema 并未保证它一定出现

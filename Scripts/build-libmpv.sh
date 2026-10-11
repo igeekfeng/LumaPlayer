@@ -4,7 +4,7 @@
 #
 # 从上游未合并的 draft PR 自编一份带 `gpu-next` 渲染后端的 libmpv，
 # 装到 Vendor/mpv/prefix/。App 通过 Vendor/mpv/module.modulemap 与
-# OTHER_LDFLAGS 指向它（见 docs/DECISIONS/gpu-next-render-backend.md）。
+# OTHER_LDFLAGS 指向它（见 docs/MPV_INTEGRATION.md §0、§3.3）。
 #
 # 为什么要自编：Dolby Vision（Profile 5）片源在 `vo=libmpv` 的**老 gpu 渲染器**
 # 上会发紫发绿 —— 那个渲染器不处理 DV 的 RPU/IPTPQc2。`gpu-next`（libplacebo）

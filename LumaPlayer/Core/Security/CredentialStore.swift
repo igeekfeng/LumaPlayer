@@ -6,7 +6,7 @@ enum CredentialStoreError: Error {
     case corruptedDeviceID
 }
 
-/// 服务器凭证的存取语义(actor,ARCHITECTURE.md 3.1.2)。
+/// 服务器凭证的存取语义(actor,CLAUDE.md「并发分层」)。
 ///
 /// 三个职责:
 /// - **AccessToken**:按 `ServerProfile.id` 分服务器存,删除服务器时同步删
@@ -16,11 +16,11 @@ enum CredentialStoreError: Error {
 ///   Emby 后台出现一堆重复设备记录)。
 ///
 /// - **密码**:**可选**,仅用户在登录表单勾了「记住密码」的服务器才有;
-///   用于 token 被吊销后静默重新登录(`docs/DECISIONS/remember-password-credentials-file.md`)。
+///   用于 token 被吊销后静默重新登录(`API_CONTRACT.md 2.5`)。
 ///   和 token 一样存凭据文件(base64 只是编码,不是加密),**不进钥匙串**。
 ///
 /// 方法是 `async`:CredentialFileStore 是另一个 actor,跨 actor 调用隐式异步
-/// (`ServerRegistry.remove(id:) async throws` 同理,见 ARCHITECTURE.md 3.1.2)。
+/// (`ServerRegistry.remove(id:) async throws` 同理,见 CLAUDE.md「并发分层」)。
 actor CredentialStore {
     /// DeviceId 的固定 account(API_CONTRACT.md 2.4)
     private static let deviceIDAccount = "deviceId"

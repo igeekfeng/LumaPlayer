@@ -75,7 +75,7 @@ struct PosterImage: View {
         } catch {
             // 首选图失败(404 / 断网)→ 试退路;退路也失败就停在占位图。
             // 图片加载失败不是页面级错误:留占位图即可,不弹窗、不重试风暴
-            // (报告失败但不打断浏览,与 UI_DESIGN.md 7.2 一致)。
+            // (报告失败但不打断浏览,与 DesignTokens.swift「界面规则」一致)。
             await loadFallback()
         }
     }

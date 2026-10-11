@@ -3,12 +3,11 @@ import os
 
 /// 测试用 URLProtocol:按「scheme + path」返回预设响应,并记录收到的请求。
 ///
-/// 目的:让集成测试**零真实网络依赖**
-/// (ARCHITECTURE.md 10.2)。
+/// 目的:让集成测试**零真实网络依赖**。
 ///
 /// 静态状态用 `OSAllocatedUnfairLock` 保护:URLProtocol 的回调在任意线程同步执行,
 /// 进不了 actor(不能 await),也 ⛔ 不允许用 `nonisolated(unsafe)`
-/// (ARCHITECTURE.md 3.1.2 全项目禁止)。
+/// (CLAUDE.md「并发分层」全项目禁止)。
 final class MockEmbyURLProtocol: URLProtocol {
     /// 预设响应
     struct Stub: Sendable {

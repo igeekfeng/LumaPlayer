@@ -69,7 +69,7 @@ final class MediaLibraryBrowsingTests: XCTestCase {
 
     /// ⚠️ `/Items/Resume` **必须带 `MediaTypes=Video` + `Recursive=true`**:本地
     /// Emby 4.9.5.0 不带时恒返回 0 条,继续观看会变成永远空白。这是 Emby Web
-    /// 自己查继续观看的写法。实测见 `docs/DECISIONS/emby-resume-items-endpoint.md`。
+    /// 自己查继续观看的写法。实测见 `PITFALLS.md 第 3 节「继续观看」`。
     func testResumeUsesResumeEndpointWithMediaTypes() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_resume_synthetic.json")),

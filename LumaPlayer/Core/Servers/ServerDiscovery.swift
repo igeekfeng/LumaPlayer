@@ -5,7 +5,7 @@ import Foundation
 // 公开信息端点探测(`/emby` 前缀判定)在 `ServerConnection.probeServer`。
 //
 // 注意:本文件名 ServerDiscovery 指的是「手动添加服务器时的地址处理」,
-// 不包含局域网自动发现(UDP 7359 属非目标,ARCHITECTURE.md 2.4)。
+// 不包含局域网自动发现(UDP 7359 属非目标,CLAUDE.md「非目标」)。
 
 /// `normalizeServerURL` 的返回值。
 ///
@@ -85,7 +85,7 @@ func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
     components.fragment = nil
 
     // 11. 丢弃 userinfo(用户名/密码)。1.3 的十步没写这一条,但
-    // ARCHITECTURE.md 8.1 明确「密码不做本地持久化」,
+    // CLAUDE.md「安全与隐私」明确「密码不做本地持久化」,
     // 若保留 `https://user:pass@host` 会把密码写进 UserDefaults,故剥除。
     components.user = nil
     components.password = nil

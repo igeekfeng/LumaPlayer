@@ -28,7 +28,7 @@ struct OnboardingFormHeader: View {
     }
 }
 
-/// 表单里的警告 / 错误提示。图标 + 文本,不只靠颜色(UI_DESIGN.md 7.2)。
+/// 表单里的警告 / 错误提示。图标 + 文本,不只靠颜色(DesignTokens.swift「界面规则」)。
 struct OnboardingNotice: View {
     enum Style {
         case warning, error

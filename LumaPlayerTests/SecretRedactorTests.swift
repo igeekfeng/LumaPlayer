@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 凭据脱敏(ARCHITECTURE.md 8.1;docs/PITFALLS.md Q9)。
+/// 凭据脱敏(CLAUDE.md「安全与隐私」;docs/PITFALLS.md Q9)。
 ///
 /// 播放地址可能带 `api_key` 退路(API_CONTRACT.md 6.2),
 /// 任何进日志的文本都必须先过 `SecretRedactor`。

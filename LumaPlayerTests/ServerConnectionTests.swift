@@ -5,7 +5,7 @@ import XCTest
 private let fixtureUserID = "00000000-0000-0000-0000-000000000003"
 
 /// 探测(`/emby` 前缀 + 局域网 http 回退)、登录、登出,以及**多服务器隔离**
-/// (API_CONTRACT.md 1.4、2.5;ARCHITECTURE.md 10.2)。
+/// (API_CONTRACT.md 1.4、2.5)。
 ///
 /// 全部走 `MockEmbyURLProtocol`,零真实网络依赖。
 /// `public_info.json` 是**真实响应脱敏**后的 fixture(4.7.11.0,2026-09-22);
@@ -241,7 +241,7 @@ final class ServerConnectionTests: XCTestCase {
         XCTAssertEqual(authRequests(host: "a.test").count - authBefore, 0, "不得静默重新登录")
     }
 
-    // MARK: - 密码不落盘(docs/DECISIONS/credentials-file-storage.md)
+    // MARK: - 密码不落盘(见 `CredentialFileStore`)
 
     func testLoginDoesNotPersistPassword() async throws {
         try stubHappyPath()
@@ -273,7 +273,7 @@ final class ServerConnectionTests: XCTestCase {
         XCTAssertEqual(authRequests(host: "emby.test").count - authBefore, 0)
     }
 
-    // MARK: - 记住密码 → 静默重新登录(docs/DECISIONS/remember-password-credentials-file.md)
+    // MARK: - 记住密码 → 静默重新登录(API_CONTRACT.md 2.5)
 
     private var viewsPath: String { "/emby/Users/\(fixtureUserID)/Views" }
 

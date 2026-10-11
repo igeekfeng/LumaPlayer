@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 字幕延迟与字幕外观(2026-10-06,`FEATURE_GAP_ANALYSIS.md` P0-1 / P0-2)。
+/// 字幕延迟与字幕外观(2026-10-06)。
 ///
 /// 三层分开验:
 /// - `SubtitleStyle` → mpv 属性的映射、夹取、持久化:纯值,直接验;

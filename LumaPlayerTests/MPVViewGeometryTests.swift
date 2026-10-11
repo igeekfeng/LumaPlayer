@@ -55,7 +55,7 @@ final class MPVViewGeometryTests: XCTestCase {
     }
 }
 
-/// 播放窗口必须能自己全屏(UI_DESIGN.md 5.3)
+/// 播放窗口必须能自己全屏(PlayerCommands.swift 的快捷键表)
 @MainActor
 final class PlayerWindowFullScreenTests: XCTestCase {
 

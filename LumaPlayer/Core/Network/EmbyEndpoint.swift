@@ -25,7 +25,7 @@ enum EmbyEndpoint: Sendable, Equatable {
     /// ⚠️ 本地 4.9.5.0 实测:该端点**必须带 `IncludeItemTypes`**,否则恒返回 0 条;
     /// 且类型只能是 Movie / Episode / Video / MusicVideo 这类「可播放叶子类型」,
     /// 掺进 Series / Season / BoxSet / Audio / Book 会重新归零。用户那台 4.7.11.0
-    /// 不带该参数也能返回。详见 `docs/DECISIONS/emby-resume-items-endpoint.md`。
+    /// 不带该参数也能返回。详见 `PITFALLS.md 第 3 节「继续观看」`。
     case resume(userID: String, query: EmbyItemsQuery)
     /// GET /Users/{UserId}/Items/Latest —— 最近添加 ✅
     /// (官方 OpenAPI 核实 2026-09-22;该端点无 StartIndex / SortBy,见 `EmbyLatestQuery`)
@@ -80,7 +80,7 @@ enum EmbyEndpoint: Sendable, Equatable {
     }
 
     /// 诊断用端点名。**不含路径参数与任何凭据**,可安全进日志
-    /// (ARCHITECTURE.md 8.1:日志不得泄露 token/密码)。
+    /// (CLAUDE.md「安全与隐私」:日志不得泄露 token/密码)。
     var name: String {
         switch self {
         case .publicSystemInfo: return "System/Info/Public"
@@ -197,7 +197,7 @@ enum EmbyEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 响应是否可进本地缓存(allowlist,docs/DECISIONS/local-cache.md)。
+    /// 响应是否可进本地缓存(allowlist,见 `EmbyResponseCache`)。
     ///
     /// 只列**浏览类 GET**:这些端点的数据按小时级变化,TTL 内复用即秒出内容。
     /// ⛔ 不在名单里的一律实时:

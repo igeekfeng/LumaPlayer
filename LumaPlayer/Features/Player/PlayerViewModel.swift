@@ -93,7 +93,7 @@ final class PlayerViewModel {
     private(set) var isEnded = false
     /// 剧集的下一集;不是剧集、已是最后一集或查询失败时为 nil。
     private(set) var nextEpisode: EmbyItem?
-    /// 画面上的短暂提示(「1.25×」「字幕:中文」…,UI_DESIGN.md 4.1)。
+    /// 画面上的短暂提示(「1.25×」「字幕:中文」…,DesignTokens.swift「界面规则」)。
     /// 每次都是新 id,视图据此重新计时消失。
     private(set) var osd: PlayerOSD?
 
@@ -277,7 +277,7 @@ final class PlayerViewModel {
         retry()
     }
 
-    /// 收尾:先按 ARCHITECTURE.md 6.6 结束上报会话(最终 Progress +
+    /// 收尾:先按 API_CONTRACT.md 5.4 结束上报会话(最终 Progress +
     /// Stopped),再拆播放器。关窗、切媒体、转码 seek 都走这里。
     func stop() {
         finishReporting(sendFinalProgress: true)
@@ -534,7 +534,7 @@ final class PlayerViewModel {
         }
     }
 
-    /// 方向键:相对当前位置快进 / 快退(UI_DESIGN.md 5.3)。
+    /// 方向键:相对当前位置快进 / 快退(PlayerCommands.swift 的快捷键表)。
     func skip(by delta: Double) {
         seek(to: positionSeconds + delta)
         let seconds = Int(abs(delta))

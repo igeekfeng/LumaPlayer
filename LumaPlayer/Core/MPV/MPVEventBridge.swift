@@ -17,7 +17,7 @@ enum MPVPlayerEvent: Sendable, Equatable {
     /// `hwdec-current` 属性:"no" 表示软解(§3.1,S2 用来验证 hwdec=auto 实际生效情况)
     case hwdecChanged(String)
     case volume(Double)
-    /// 静音状态(`UI_DESIGN.md` 5.3 的 M 键)
+    /// 静音状态(PlayerCommands.swift 的 M 键)
     case muted(Bool)
     case speed(Double)
     /// `sub-delay` 读回值(秒,正 = 字幕延后显示;MPV_INTEGRATION.md 7.1)

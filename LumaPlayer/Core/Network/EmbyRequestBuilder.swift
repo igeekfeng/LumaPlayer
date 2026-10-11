@@ -1,7 +1,7 @@
 import Foundation
 
 /// Emby 请求的唯一构造处:URL 拼接、认证头、token 头、请求体
-/// (ARCHITECTURE.md 6.3;API_CONTRACT.md 1.2、2.1、2.2)。
+/// (CLAUDE.md「架构主线」;API_CONTRACT.md 1.2、2.1、2.2)。
 ///
 /// 值类型、无状态 → 天然 Sendable,可以不经过 actor 直接单测。
 /// ⛔ View / ViewModel 不得自己拼 URL 或读 token —— 一律经由本类型。

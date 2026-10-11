@@ -9,7 +9,7 @@ import OpenGL.GL3
 /// ⚠️ **覆盖边界(照实说)**:
 /// - 这里只验「离屏 GL 上下文下能把渲染上下文建起来,并记录了请求的后端名」。
 /// - ⛔ **验不了画面颜色对不对** —— 那需要真实 DV 片源 + 目检,见
-///   `docs/DECISIONS/gpu-next-render-backend.md` 的验证一节(本机用
+///   `KNOWN_ISSUES.md` Q42 的「已验证」(本机用
 ///   harness 跑过 legacy=gpu 发紫绿 / gpu-next 正常,但那是 harness,不是这个测试)。
 /// - ⛔ **也验不了「mpv 内部真的用了 gpu-next」**:实测后端名不被识别时 mpv 会
 ///   静默退回默认 gpu 渲染器且 `mpv_render_context_create` 仍返回成功。要确证
