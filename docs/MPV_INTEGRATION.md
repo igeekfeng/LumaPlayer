@@ -23,7 +23,7 @@
 | 决策 | 结论 |
 |---|---|
 | 渲染 | **Render API**(`render.h`),`MPV_RENDER_API_TYPE_OPENGL` + `CAOpenGLLayer`。⛔ 不用 opengl-cb(0.33 起失效)、`--wid` |
-| 后端 | 默认 `gpu-next`(DV / HDR 正确);偏好开关可退回 legacy `gpu`(§3.3) |
+| 后端 | 默认按片源:DV 用 `gpu-next`,其余 legacy `gpu`;偏好可固定成任一个(§3.3) |
 | 封装 | 薄 `MPVPlayer`,业务代码不直接调 C API |
 | 实例 | 一个 `MPVPlayer` 只播一个 URL,换台 = 销毁重建(§8) |
 
@@ -55,9 +55,12 @@ options.rst 原文:零拷贝 `videotoolbox` 在 macOS 上只标注支持 `vo=gpu
 
 ### 3.3 渲染后端
 
-`MPVPlayer.attachGLContext` 建 render context 时传 `MPV_RENDER_PARAM_BACKEND = "gpu-next"`;**create 真失败**才回退 legacy
-(不黑屏)。实际后端记进统计 `renderBackend`。偏好 `PlaybackPreferences.preferGPUNextRenderer` 默认开
-(设置 →「播放 → 色彩」),起播读一次。⚠️ 未知后端名会**静默**回退且返回成功,所以检测不了静默回退。
+策略 `MPVRenderBackendPolicy`(设置 →「播放 → 色彩」,起播读一次),默认 `automatic`:`attachGLContext` 先建 legacy;
+`on_preloaded` hook(轨道已加入、选轨与 VO 之前)读 `track-list/N/dolby-vision-profile`,有 DV 就 free 掉重建为
+`MPV_RENDER_PARAM_BACKEND = "gpu-next"` —— VO 还没建,不重开流、不多上报。HDR10 / HLG 不切(legacy 能正确色调映射)。
+hook 任何路径都必须 `mpv_hook_continue`,否则核心永远卡住。gpu-next **create 真失败**才回退 legacy(不黑屏),
+实际后端记进统计 `renderBackend`。⚠️ 未知后端名会**静默**回退且返回成功;确证看 `Using gpu-next backend.`
+(打在 render context create 时,VO 建起是之后的 `VO: [libmpv]`)。测试用 `Tools/dv-fixture/` 合成的只有 `dvcC` 的片源。
 gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 非致命设置。
 
 ## 4. Swift 桥接

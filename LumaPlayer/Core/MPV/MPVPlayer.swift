@@ -43,7 +43,8 @@ struct MPVPlayerStatistics: Sendable, Equatable {
     var updateFrameFlags = 0
     /// attachGLContext 是否成功创建过 GL 渲染上下文
     var glAttached = false
-    /// 实际使用的渲染后端：`"gpu-next"` / `"gpu"`(legacy 或回退)。
+    /// 当前渲染上下文的后端：`"gpu-next"` / `"gpu"`(legacy 或回退)。
+    /// `automatic` 策略下起初是 `"gpu"`,DV 片源会在 `on_preloaded` 时换成 `"gpu-next"`。
     /// ⚠️ 这是**请求并成功建起**的后端名，不等于 mpv 内部一定用了它：
     /// 实测后端名不被识别时 mpv 会静默退回默认 gpu 渲染器而不报错
     /// (见 `createRenderContext` 注释)。要确证得看 mpv 日志里的
@@ -83,6 +84,9 @@ final class MPVPlayer: @unchecked Sendable {
         /// 需要它来恢复 current)
         var cglContext: LockedPointer<CGLContextObj>?
         var bridge: MPVEventBridge?
+        /// 本片源该用的渲染后端。起初是策略的 `initialBackend`,`on_preloaded`
+        /// 按轨道定下来之后改写;layer 重挂 GL context 时按它重建。
+        var targetBackend: MPVRenderBackend = .legacy
         var stats = MPVPlayerStatistics()
         /// init 失败的原因(phase == .failed 时有值)
         var initializationFailure: String?
@@ -211,14 +215,18 @@ final class MPVPlayer: @unchecked Sendable {
         return dlsym(frameworkHandle, name)
     }
 
-    /// 是否优先用 `gpu-next` 渲染后端(设置里的开关,见 `createRenderContext`)。
-    /// 关掉 = 只传 mpv 默认的 legacy `gpu` 渲染器(DV 会发紫发绿)。
-    private let preferGPUNextBackend: Bool
+    /// 渲染后端策略(设置 →「播放 → 色彩」,见 `MPVRenderBackendPolicy`)。
+    private let backendPolicy: MPVRenderBackendPolicy
+
+    /// `automatic` 策略注册的 hook 名。loadfile.c 里它在「demuxer 轨道已加入」之后、
+    /// 「选轨 / 建解码器与 VO」之前运行 —— 轨道的 DV 配置记录已可读,渲染上下文又还没被 VO 用上,
+    /// 换后端不用重开流。
+    private static let preloadedHook = "on_preloaded"
 
     // MARK: - 生命周期
 
-    init(preferGPUNextBackend: Bool = true) {
-        self.preferGPUNextBackend = preferGPUNextBackend
+    init(backendPolicy: MPVRenderBackendPolicy = .automatic) {
+        self.backendPolicy = backendPolicy
         _ = Self.loggedClientAPIVersion
 
         guard let handle = mpv_create() else {
@@ -259,7 +267,20 @@ final class MPVPlayer: @unchecked Sendable {
             _ = mpv_observe_property(handle, 0, name, format)
         }
 
-        mutex.withLock { state.handle = LockedPointer(handle) }
+        // 按片源选后端要在轨道已知、VO 未建时插一脚(见 `handlePreloadedHook`)。
+        // 注册失败不致命:退化为一直用 legacy(DV 会发紫发绿),但要留痕。
+        if backendPolicy == .automatic {
+            let hookStatus = mpv_hook_add(handle, 0, Self.preloadedHook, 0)
+            if hookStatus < 0 {
+                logLine("[MPV] 警告: mpv_hook_add(\(Self.preloadedHook)) 失败,"
+                    + "本次固定用 legacy 渲染器: \(String(cString: mpv_error_string(hookStatus)))")
+            }
+        }
+
+        mutex.withLock {
+            state.handle = LockedPointer(handle)
+            state.targetBackend = backendPolicy.initialBackend
+        }
 
         // Thread 闭包是 @Sendable,句柄经 LockedPointer 捕获传递(见其论证)。
         //
@@ -489,13 +510,29 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
-    /// 渲染后端名(render.h 的 `MPV_RENDER_PARAM_BACKEND`)。
-    /// `gpu-next` 走 libplacebo,能正确处理 Dolby Vision(Profile 5)/ HDR;
-    /// legacy `gpu` 不行(DV 会发紫发绿)。详见
-    /// docs/MPV_INTEGRATION.md §0、§3.3。
-    private static let gpuNextBackend = "gpu-next"
-    /// 走 mpv 默认渲染器(不传 BACKEND 参数)时统计里记的名字。
-    private static let legacyBackend = "gpu"
+    /// 按目标后端建渲染上下文;gpu-next 建不起来就回退 legacy —— 宁可 DV 发紫发绿也不能黑屏。
+    /// ⚠️ 后端名不被识别时 mpv 静默退回默认 gpu 且返回成功(实测),
+    /// 所以这里的回退只覆盖「create 真失败」,见 `createRenderContext`。
+    /// 返回实际建起的后端。调用方必须已持有 `renderMutex` 且该 GL context 在调用线程 current。
+    private func buildRenderContext(
+        handle: OpaquePointer,
+        framework: UnsafeMutableRawPointer,
+        target: MPVRenderBackend
+    ) -> Result<(context: OpaquePointer, backend: MPVRenderBackend), MPVError> {
+        let first = createRenderContext(
+            handle: handle, framework: framework,
+            backend: target == .gpuNext ? MPVRenderBackend.gpuNext.rawValue : nil)
+        switch first {
+        case .success(let context):
+            return .success((context, target))
+        case .failure(let error) where target == .gpuNext:
+            logLine("[MPV] gpu-next 后端创建失败(\(error)),回退 legacy gpu 渲染器")
+            return createRenderContext(handle: handle, framework: framework, backend: nil)
+                .map { ($0, .legacy) }
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
 
     /// 用指定后端建 mpv 渲染上下文。`backend` 为 nil = 不传该参数,用 mpv 默认。
     ///
@@ -601,26 +638,17 @@ final class MPVPlayer: @unchecked Sendable {
                 state.cglContext = nil
             }
 
-            // 渲染后端:优先 gpu-next(libplacebo,DV/HDR 正确),建不起来就回退
-            // 到 mpv 默认的 legacy gpu —— 宁可 DV 发紫发绿也不能黑屏。
-            // ⚠️ 后端名不被识别时 mpv 静默退回默认 gpu 且返回成功(实测),
-            // 所以这里的回退只覆盖「create 真失败」,见 createRenderContext。
-            var backendUsed = preferGPUNextBackend ? Self.gpuNextBackend : Self.legacyBackend
-            var created = createRenderContext(
-                handle: handle.raw, framework: framework,
-                backend: preferGPUNextBackend ? Self.gpuNextBackend : nil)
-            if preferGPUNextBackend, case .failure(let error) = created {
-                logLine("[MPV] gpu-next 后端创建失败(\(error)),回退 legacy gpu 渲染器")
-                backendUsed = Self.legacyBackend
-                created = createRenderContext(handle: handle.raw, framework: framework, backend: nil)
-            }
+            // 后端按 targetBackend:`automatic` 起初是 legacy,片源是 DV 时
+            // `handlePreloadedHook` 会在 VO 建立前换掉(layer 之后重挂也沿用换后的)。
             let renderContext: OpaquePointer
-            switch created {
-            case .success(let context): renderContext = context
-            case .failure(let error): return .failure(error)
+            switch buildRenderContext(handle: handle.raw, framework: framework, target: state.targetBackend) {
+            case .success(let built):
+                renderContext = built.context
+                state.stats.renderBackend = built.backend.rawValue
+            case .failure(let error):
+                return .failure(error)
             }
             state.renderContext = LockedPointer(renderContext)
-            state.stats.renderBackend = backendUsed
             // retain:layer 随时可能通过 releaseCGLContext: 还掉它自己那份
             // 引用(重建上下文、layer dealloc),而 shutdown 还要用它去
             // CGLSetCurrentContext。不 retain 就是 use-after-free。
@@ -825,10 +853,100 @@ final class MPVPlayer: @unchecked Sendable {
             let property = data.assumingMemoryBound(to: mpv_event_property.self).pointee
             processPropertyChange(property)
 
+        case MPV_EVENT_HOOK:
+            guard let data = event.data else { return .continue }
+            let hook = data.assumingMemoryBound(to: mpv_event_hook.self).pointee
+            handlePreloadedHook(id: hook.id, name: hook.name.map { String(cString: $0) })
+
         default:
             break // §6.2:未知/已废弃事件(TICK 等)忽略,不打日志
         }
         return .continue
+    }
+
+    // MARK: - 按片源选渲染后端(automatic 策略)
+
+    /// `on_preloaded`:读轨道 → 按策略定后端 → 需要时换渲染上下文 → 放行播放核心。
+    ///
+    /// 只有 `automatic` 注册了这个 hook。此刻 VO 还没建(loadfile.c:选轨与
+    /// `reinit_video_chain` 都在 hook 之后),换渲染上下文不影响任何已出的画面,
+    /// 也不需要重开流 —— 不多发请求、不多一轮播放上报。
+    private func handlePreloadedHook(id: UInt64, name: String?) {
+        guard let handle = mutex.withLock({ state.handle }) else { return }
+        // ⛔ 任何路径都必须 continue:不放行,播放核心就永远停在 hook 里(黑屏无声、无报错)。
+        defer { mpv_hook_continue(handle.raw, id) }
+        guard name == Self.preloadedHook else { return }
+
+        var node = mpv_node()
+        let err = mpv_get_property(handle.raw, "track-list", MPV_FORMAT_NODE, &node)
+        guard err >= 0 else {
+            // 读不到就不切:保持 legacy,DV 片源会发紫发绿,但能播。留痕,不静默。
+            logLine("[MPV] on_preloaded 读 track-list 失败,保持当前渲染器: "
+                + String(cString: mpv_error_string(err)))
+            return
+        }
+        let tracks = MPVTrackListParser.parse(&node)
+        // 与事件里的节点不同:mpv_get_property 拿到的节点归调用方,必须自己释放(client.h)
+        mpv_free_node_contents(&node)
+
+        let target = backendPolicy.backend(for: tracks)
+        if target == .gpuNext {
+            let profiles = tracks
+                .compactMap { $0.dolbyVisionProfile }
+                .map(String.init).joined(separator: ",")
+            logLine("[MPV] 片源含 Dolby Vision(profile \(profiles)),渲染后端切到 gpu-next")
+        }
+        switchRenderBackend(to: target)
+    }
+
+    /// 把渲染上下文换成目标后端(还没挂 GL 时只记下目标,挂上时按它建)。
+    ///
+    /// 锁序 CGL context 锁 → `renderMutex` → `mutex`:CAOpenGLLayer 在 draw 线程
+    /// 持有 context 时进 `renderIntoBoundFramebuffer`,这里在事件线程借用同一个
+    /// context,先锁它才不会与 draw 交叉使用、也不会与之反序死锁。
+    private func switchRenderBackend(to target: MPVRenderBackend) {
+        let attached: LockedPointer<CGLContextObj>? = mutex.withLock {
+            state.targetBackend = target
+            guard state.renderContext != nil, state.stats.renderBackend != target.rawValue,
+                  let cgl = state.cglContext else { return nil }
+            // 换下来之前 layer 或 shutdown 可能还掉 state 里那份引用,这里自己再持一份
+            return LockedPointer(CGLRetainContext(cgl.raw))
+        }
+        guard let attached else { return }
+        defer { CGLReleaseContext(attached.raw) }
+        CGLLockContext(attached.raw)
+        defer { CGLUnlockContext(attached.raw) }
+
+        let result: Result<MPVRenderBackend, MPVError>? = withRenderAndStateLock {
+            // 拿锁期间 layer 可能已经重挂了别的 context(它会按 targetBackend 建),或已在拆卸
+            guard let handle = state.handle, !state.isStopping,
+                  state.cglContext?.raw == attached.raw,
+                  let stale = state.renderContext,
+                  state.stats.renderBackend != target.rawValue,
+                  let framework = openGLFramework else { return nil }
+            let previous = CGLGetCurrentContext()
+            CGLSetCurrentContext(attached.raw)
+            defer { CGLSetCurrentContext(previous) }
+            // render.h 只允许同时存在一个渲染上下文:先 free 再建
+            mpv_render_context_free(stale.raw)
+            state.renderContext = nil
+            switch buildRenderContext(handle: handle.raw, framework: framework, target: target) {
+            case .success(let built):
+                state.renderContext = LockedPointer(built.context)
+                state.stats.renderBackend = built.backend.rawValue
+                return .success(built.backend)
+            case .failure(let error):
+                state.stats.renderBackend = nil
+                return .failure(error)
+            }
+        }
+        if case .failure(let error) = result {
+            // 连 legacy 都建不回来:VO 马上会因为没有渲染上下文而失败,明确报错而不是只出声音
+            logLine("[MPV] 切换渲染后端失败: \(error)")
+            mutex.withLock { state.initializationFailure = "\(error)" }
+            setPhase(.failed)
+            submitEvent(.endFile(.error("渲染后端切换失败:\(error)")))
+        }
     }
 
     /// 读取 `MPV_FORMAT_FLAG` 的值。

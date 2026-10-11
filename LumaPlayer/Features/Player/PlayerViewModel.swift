@@ -847,10 +847,10 @@ final class PlayerViewModel {
             markTimeline(.playbackInfo)
             markers = PlaybackMarkers(chapters: prepared.mediaSource.chapters)
 
-            // 渲染后端偏好起播时读一次(默认 gpu-next,见 PlaybackPreferences):
-            // gpu-next 才处理得了 Dolby Vision / HDR,关掉就退回 legacy gpu。
+            // 渲染后端策略起播时读一次(默认按片源:DV 用 gpu-next,其余 legacy,
+            // 见 MPVRenderBackendPolicy)。切换在 MPVPlayer 内部、VO 建立前完成,这里不用管。
             let player = MPVPlayer(
-                preferGPUNextBackend: container.preferences.preferGPUNextRenderer)
+                backendPolicy: container.preferences.renderBackendPolicy)
             // 初始化失败只写进 `initializationFailure` 不抛错(MPVPlayer.init
             // 的三条失败路径都是直接 return),不在这里查就会一路走到下面的
             // glAttached 轮询 —— core 根本没建起来,GL 上下文永远挂不上,

@@ -80,4 +80,6 @@
   ⛔ 未验证:真实服务器 DV 片源、`CAOpenGLLayer` 上屏画面、DV P7/P8 与 HDR10/HLG 回归、真实 4K 片源能耗(GPU 仍约为 legacy 的 4–5 倍)。
   ⛔ 未修:PR 的 `map_frame` 上传失败时可能二次释放(查 `pl_queue` 对 map 失败帧是否还回调)。
   上游合并后:改回官方仓库与 sha,核对 `MPV_RENDER_PARAM_BACKEND` 编号,能删的补丁删掉。
-  在此之前,设置 →「播放 → 色彩」的开关是用户唯一能自己退回 legacy 的入口。
+  在此之前,设置 →「播放 → 色彩」选「始终旧渲染器」是用户唯一能自己退回 legacy 的入口。
+  按片源自动切换只在合成 fixture(只有 `dvcC`、无 RPU)上验过 VO 按 gpu-next 建起;⛔ 未验:真实 DV 片源经 DirectStream /
+  转码时 mpv 能否读到配置记录(转码输出大概率不带 DV,会留在 legacy)、自动模式下 SDR 片源的实际能耗下降。

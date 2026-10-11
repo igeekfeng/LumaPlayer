@@ -51,17 +51,15 @@ final class PlaybackPreferences {
 
     // MARK: - 色彩渲染
 
-    /// 优先用 `gpu-next` 渲染后端(libplacebo)。默认开。
-    ///
-    /// 开:能正确处理 Dolby Vision(Profile 5)与 HDR —— 关掉的话 DV 片源会
-    /// 发紫发绿(mpv 的 legacy `gpu` 渲染器不处理 DV 的 RPU)。
-    /// 关:退回 legacy `gpu` 渲染器。留这个开关是因为 gpu-next 走的是上游
-    /// **未合并的 draft PR**,万一它让别的片源出问题,用户能自己退回去。
+    /// 渲染后端策略。默认 `automatic`:只有 Dolby Vision 片源用 gpu-next(libplacebo),
+    /// 其余用省电的 legacy `gpu`(判据与时机见 `MPVRenderBackendPolicy`)。
+    /// 「始终 gpu-next / 始终旧渲染器」是兜底:gpu-next 走的是上游**未合并的 draft PR**,
+    /// 自动判断或 gpu-next 本身让某些片源出问题时,用户能自己固定下来。
     /// 详见 docs/MPV_INTEGRATION.md §0、§3.3。
     ///
     /// 起播时读一次(建 `MPVPlayer` 时),**下一次起播才生效**。
-    var preferGPUNextRenderer: Bool {
-        didSet { persist(preferGPUNextRenderer, Key.preferGPUNextRenderer) }
+    var renderBackendPolicy: MPVRenderBackendPolicy {
+        didSet { persist(renderBackendPolicy.rawValue, Key.renderBackendPolicy) }
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -73,8 +71,7 @@ final class PlaybackPreferences {
         self.autoSkipIntro = defaults.bool(forKey: Key.autoSkipIntro)
         self.autoPlayNext = defaults.object(forKey: Key.autoPlayNext) as? Bool ?? true
         self.floatsOnTop = defaults.bool(forKey: Key.floatsOnTop)
-        // ⛔ 不用 bool(forKey:):没存过时会读成 false,把默认值(开)吃掉。
-        self.preferGPUNextRenderer = defaults.object(forKey: Key.preferGPUNextRenderer) as? Bool ?? true
+        self.renderBackendPolicy = Self.renderBackendPolicy(from: defaults)
     }
 
     /// 全部回到出厂值。设置页「恢复默认」用。
@@ -86,20 +83,22 @@ final class PlaybackPreferences {
         autoSkipIntro = false
         autoPlayNext = true
         floatsOnTop = false
-        preferGPUNextRenderer = true
+        renderBackendPolicy = Self.defaultRenderBackendPolicy
     }
 
     /// 是否有任何一项偏离默认(设置页「恢复默认」按钮的禁用判据)
     var isDefault: Bool {
         defaultSpeed == Self.defaultSpeed && seekStep == Metrics.seekStep
             && defaultVolume == Metrics.defaultVolume && subtitleMode == Self.defaultSubtitleMode
-            && !autoSkipIntro && autoPlayNext && !floatsOnTop && preferGPUNextRenderer
+            && !autoSkipIntro && autoPlayNext && !floatsOnTop
+            && renderBackendPolicy == Self.defaultRenderBackendPolicy
     }
 
     // MARK: - 默认值与夹取
 
     static let defaultSpeed: Double = 1
     static let defaultSubtitleMode: SubtitleMode = .smart
+    static let defaultRenderBackendPolicy: MPVRenderBackendPolicy = .automatic
 
     // MARK: - 持久化
 
@@ -112,7 +111,9 @@ final class PlaybackPreferences {
         static let autoSkipIntro = "player.autoSkipIntro"
         static let autoPlayNext = "player.autoPlayNext"
         static let floatsOnTop = "player.floatsOnTop"
-        static let preferGPUNextRenderer = "player.preferGPUNextRenderer"
+        static let renderBackendPolicy = "player.renderBackendPolicy"
+        /// 旧版的 Bool 开关「杜比视界 / HDR 兼容渲染」,只读不写(迁移见 `renderBackendPolicy(from:)`)
+        static let legacyPreferGPUNextRenderer = "player.preferGPUNextRenderer"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -157,5 +158,18 @@ final class PlaybackPreferences {
     private static func mode(from defaults: UserDefaults) -> SubtitleMode {
         guard let raw = defaults.string(forKey: Key.subtitleMode) else { return defaultSubtitleMode }
         return SubtitleMode(rawValue: raw) ?? defaultSubtitleMode
+    }
+
+    /// 新键优先;没存过新键时看旧版 Bool 开关:显式关过 = 用户要的是 legacy,保留;
+    /// 开着(含「恢复默认」写下的 true)= 当初只是为了 DV 正确,归到 `automatic`。
+    private static func renderBackendPolicy(from defaults: UserDefaults) -> MPVRenderBackendPolicy {
+        if let raw = defaults.string(forKey: Key.renderBackendPolicy) {
+            return MPVRenderBackendPolicy(rawValue: raw) ?? defaultRenderBackendPolicy
+        }
+        // ⛔ 不用 bool(forKey:):没存过时会读成 false,把「没存过」误当成「关过」。
+        if defaults.object(forKey: Key.legacyPreferGPUNextRenderer) as? Bool == false {
+            return .legacy
+        }
+        return defaultRenderBackendPolicy
     }
 }

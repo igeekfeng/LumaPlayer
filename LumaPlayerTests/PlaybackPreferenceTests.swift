@@ -32,19 +32,38 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertFalse(store.autoSkipIntro, "默认给按钮,不自动跳")
         XCTAssertTrue(store.autoPlayNext, "默认开,可在「下一集」提示上取消")
         XCTAssertFalse(store.floatsOnTop)
-        XCTAssertTrue(store.preferGPUNextRenderer, "默认开:gpu-next 才处理得了 Dolby Vision / HDR")
+        XCTAssertEqual(store.renderBackendPolicy, .automatic, "默认按片源:只有 DV 用 gpu-next")
         XCTAssertTrue(store.isDefault)
     }
 
-    /// `preferGPUNextRenderer` 默认开,显式关掉要留得住 ——
-    /// ⛔ 读回时不能用 `bool(forKey:)`:没存过会读成 false,把默认值吃掉。
-    func testDisabledGPUNextRendererSurvivesReopening() {
+    func testRenderBackendPolicySurvivesReopening() {
         let store = PlaybackPreferences(defaults: defaults)
-        store.preferGPUNextRenderer = false
-        XCTAssertFalse(store.isDefault, "关掉渲染后端开关算偏离默认")
+        store.renderBackendPolicy = .gpuNext
+        XCTAssertFalse(store.isDefault, "改渲染后端策略算偏离默认")
 
         let reopened = PlaybackPreferences(defaults: defaults)
-        XCTAssertFalse(reopened.preferGPUNextRenderer, "关掉后重开必须还是关")
+        XCTAssertEqual(reopened.renderBackendPolicy, .gpuNext)
+    }
+
+    /// 旧版 Bool 开关的迁移:显式关过 → legacy;开着(含「恢复默认」写下的 true)→ 自动。
+    /// ⛔ 「没存过」不能被当成「关过」。
+    func testLegacyGPUNextToggleMigrates() {
+        defaults.set(false, forKey: PlaybackPreferences.Key.legacyPreferGPUNextRenderer)
+        XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .legacy)
+
+        defaults.set(true, forKey: PlaybackPreferences.Key.legacyPreferGPUNextRenderer)
+        XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .automatic)
+
+        // 新键一旦写过就以新键为准
+        PlaybackPreferences(defaults: defaults).renderBackendPolicy = .gpuNext
+        defaults.set(false, forKey: PlaybackPreferences.Key.legacyPreferGPUNextRenderer)
+        XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .gpuNext)
+    }
+
+    /// 手改成不认识的值:退回默认,不崩
+    func testUnknownRenderBackendPolicyFallsBackToDefault() {
+        defaults.set("vulkan", forKey: PlaybackPreferences.Key.renderBackendPolicy)
+        XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .automatic)
     }
 
     // MARK: - 持久化
@@ -59,7 +78,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
-        store.preferGPUNextRenderer = false
+        store.renderBackendPolicy = .legacy
         XCTAssertFalse(store.isDefault)
 
         let reopened = PlaybackPreferences(defaults: defaults)
@@ -70,7 +89,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertTrue(reopened.autoSkipIntro)
         XCTAssertFalse(reopened.autoPlayNext)
         XCTAssertTrue(reopened.floatsOnTop)
-        XCTAssertFalse(reopened.preferGPUNextRenderer)
+        XCTAssertEqual(reopened.renderBackendPolicy, .legacy)
     }
 
     func testResetRestoresDefaults() {
@@ -82,7 +101,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
-        store.preferGPUNextRenderer = false
+        store.renderBackendPolicy = .gpuNext
 
         store.reset()
         XCTAssertTrue(store.isDefault)

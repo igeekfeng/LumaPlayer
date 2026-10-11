@@ -6,6 +6,7 @@ import mpv
 /// 只解 LumaPlayer 真正要用的字段:`id` 用于 `aid`/`sid` 设值,
 /// `type` / `isExternal` 用于换算上报的 Emby 流索引(`StreamIndexMapper`),
 /// `isForced` 用于「只开强制字幕」的起播偏好(`SubtitleMode.forcedOnly`),
+/// `isAlbumArt` / `dolbyVisionProfile` 用于按片源选渲染后端(`MPVRenderBackendPolicy`),
 /// 其余用于菜单显示。
 ///
 /// ⛔ 不解 `default`:mpv 的默认轨标记与 Emby 的 `IsDefault` 不是一回事,
@@ -25,6 +26,12 @@ struct MPVTrack: Sendable, Equatable, Identifiable {
     let isExternal: Bool
     /// 容器里标了「强制」的字幕(MPV_INTEGRATION.md 第 7 节 `track-list/N/forced`)
     let isForced: Bool
+    /// 封面图伪装成的视频轨(`track-list/N/albumart`),不算真正的画面
+    var isAlbumArt = false
+    /// 容器里的 Dolby Vision 配置记录(`track-list/N/dolby-vision-profile`,
+    /// demuxer 读出的,mkv / mp4 都有);不是 DV 片源时 mpv 报 unavailable → nil。
+    /// 带默认值是为了让只关心菜单字段的调用点不必逐个补参数。
+    var dolbyVisionProfile: Int? = nil
 
     /// 菜单显示名:title → lang →「轨道 N」(MPV_INTEGRATION.md 第 7 节的优先级)。
     /// ⛔ 没有 title 也没有 lang 时不得显示空串。
@@ -127,7 +134,9 @@ enum MPVTrackListParser {
             lang: string("lang"),
             codec: string("codec"),
             isExternal: flag("external"),
-            isForced: flag("forced")
+            isForced: flag("forced"),
+            isAlbumArt: flag("albumart"),
+            dolbyVisionProfile: integer("dolby-vision-profile")
         )
     }
 }

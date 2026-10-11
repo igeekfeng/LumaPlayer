@@ -112,11 +112,15 @@ private struct PlaybackSettingsView: View {
             }
 
             Section {
-                Toggle("杜比视界 / HDR 兼容渲染", isOn: $preferences.preferGPUNextRenderer)
+                Picker("渲染器", selection: $preferences.renderBackendPolicy) {
+                    ForEach(MPVRenderBackendPolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
             } header: {
                 Text("色彩")
             } footer: {
-                Text("默认开:用 gpu-next(libplacebo)渲染,杜比视界片源才不会发紫发绿 —— 旧渲染器不处理 DV 的元数据。代价是 GPU 负载比旧渲染器高(色调映射与缩放画质更好)。关掉退回旧渲染器,只在 gpu-next 让别的片源出问题时才关。下一次开始播放时生效。")
+                Text(preferences.renderBackendPolicy.detail + "下一次开始播放时生效。")
             }
 
             Section {
