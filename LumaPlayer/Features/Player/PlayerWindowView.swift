@@ -35,7 +35,7 @@ struct PlayerSceneRoot: View {
 
 /// 播放页(画面、控制栏、快捷键、自动隐藏)。
 ///
-/// 视频层走 `MPVView`(libmpv 的 OpenGL 渲染路径,不经过 SwiftUI 管线),
+/// 视频层走 `PlayerSurfaceView`(播放内核自己的 Metal 渲染视图,不经过 SwiftUI 管线),
 /// 其余是覆盖在上面的 SwiftUI 控件层。
 struct PlayerWindowView: View {
     let container: AppContainer
@@ -75,8 +75,8 @@ struct PlayerWindowView: View {
     var body: some View {
         ZStack {
             Color.black
-            if let player = viewModel.player {
-                MPVView(player: player)
+            if let engine = viewModel.engine {
+                PlayerSurfaceView(engine: engine)
             }
             interactionLayer
             overlay
@@ -140,7 +140,7 @@ struct PlayerWindowView: View {
             window.setFloating(floats)
         }
         .onChange(of: container.subtitleStyles.style) {
-            // 设置窗口里改了字幕外观:正在播的这一集立即套用(新建的 mpv 由 ViewModel 自己设)
+            // 设置窗口里改了字幕外观:正在播的这一集立即套用(新建的引擎由 ViewModel 自己设)
             viewModel.applySubtitleStyle()
         }
         .onChange(of: viewModel.scrubPreviewSeconds) { _, preview in
@@ -186,15 +186,6 @@ struct PlayerWindowView: View {
             return .handled
         }
         .onKeyPress("i") { viewModel.toggleStatistics(); return .handled }
-        // 字幕延迟:Z 提前 / X 延后,⇧ 为大步长。按 characters 匹配,⇧ 时收到的是大写
-        .onKeyPress(characters: CharacterSet(charactersIn: "zxZX"), phases: [.down, .repeat]) { press in
-            guard viewModel.canAdjustSubtitleDelay else { return .ignored }
-            let key = press.characters
-            viewModel.stepSubtitleDelay(
-                later: key.lowercased() == "x",
-                step: key == key.uppercased() ? Metrics.subtitleDelayLargeStep : Metrics.subtitleDelayStep)
-            return .handled
-        }
         .onKeyPress("f") { toggleFullScreen(); return .handled }
         .onKeyPress(.escape) {
             guard window.isFullScreen else { return .ignored }
@@ -372,11 +363,7 @@ struct PlayerWindowView: View {
     private var statusText: String {
         if viewModel.isRestarting { return "正在从新位置起流…" }
         if viewModel.isPreparing { return "正在获取播放信息…" }
-        let detail = [
-            viewModel.bufferingPercent.map { "\($0)%" },
-            viewModel.cacheSpeedBytesPerSecond.map(PlayerStatistics.speedText),
-        ].compactMap { $0 }
-        return detail.isEmpty ? "正在缓冲…" : "正在缓冲… " + detail.joined(separator: " · ")
+        return "正在缓冲…"
     }
 
     private var windowTitle: String {
@@ -480,8 +467,8 @@ struct PlayerWindowView: View {
         }
     }
 
-    /// 视图离开(关窗 / 换集 / 切服务器)即拆播放器:MPVView 的
-    /// dismantleNSView 也会触发,两条路径都指向可重入的 shutdown()。
+    /// 视图离开(关窗 / 换集 / 切服务器)即拆引擎:`PlayerSurfaceView` 的
+    /// dismantleNSView 也会触发,两条路径都指向可重入的 shutdown。
     /// stop() 内部会补最后一次 Progress + Stopped(ARCHITECTURE.md 6.6),
     /// 发完后广播给详情页 / 首页重读进度(Q22)。
     private func tearDown() {

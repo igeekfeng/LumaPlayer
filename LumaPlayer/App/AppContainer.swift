@@ -206,6 +206,14 @@ final class AppContainer {
 
     // MARK: - 播放
 
+    /// 建一个播放引擎(当前内核是 Erika)。
+    ///
+    /// **这是 `Core/Erika/` 之外唯一提到具体内核类型名的地方**(经 `PlaybackEngineFactory`),
+    /// 上层只认 `PlaybackEngine` 协议。换内核时改这里与 `Core/Erika/`,其余不动。
+    func makePlaybackEngine(upscaler: PlayerUpscaler) throws -> any PlaybackEngine {
+        try PlaybackEngineFactory.make(upscaler: upscaler)
+    }
+
     /// 请播放器窗口播放 `item`。窗口由调用方(视图)用 `openWindow` 唤起 ——
     /// 这里只写请求,不碰 AppKit。正在播别的内容时,旧播放页随请求替换而
     /// 拆除,收尾上报照常发出(ARCHITECTURE.md 6.6)。

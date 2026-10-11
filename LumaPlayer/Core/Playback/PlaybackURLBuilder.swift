@@ -74,7 +74,7 @@ struct PlaybackURLBuilder: Sendable, Equatable {
     /// 该值是**相对路径**(通常已带 `/emby` 前缀,如
     /// `/emby/videos/{id}/master.m3u8?...`),拼到站点根上即可;
     /// 少数服务器给绝对地址时 `URL(string:relativeTo:)` 会原样采用。
-    /// ⛔ 不在这里补认证参数:认证头由 mpv 携带(第 6 节)。
+    /// ⛔ 不在这里补认证参数:认证头由播放内核携带(第 6 节)。
     ///
     /// ⚠️ **已知局限(docs/KNOWN_ISSUES.md Q17,未验证,行为刻意保持不变)**:
     /// `baseURL` 带子路径时(反代部署,如 `https://example.com/media`),

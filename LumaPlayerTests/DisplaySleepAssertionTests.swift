@@ -98,30 +98,29 @@ final class DisplaySleepAssertionTests: XCTestCase {
 
     /// 判据本身是纯函数,这里把所有分支钉住。
     func testShouldPreventDisplaySleepOnlyWhilePlaying() {
-        // 正在播放(含 mpv 报 paused-for-cache 的缓冲期:那时 isPaused 仍是 false,
-        // 画面等着网络回来,屏不能睡)
+        // 正在播放(含缓冲期:那时 isPaused 仍是 false,画面等着网络回来,屏不能睡)
         XCTAssertTrue(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .playing, isPaused: false, isEnded: false))
 
-        // 暂停:mpv 把 phase 置 .paused
+        // 暂停:引擎把 phase 置 .paused
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .paused, isPaused: true, isEnded: false))
-        // 起播前就按了暂停:FILE_LOADED 仍会把 phase 推到 .playing
+        // 起播前就按了暂停:phase 仍会先被推到 .playing,只能靠 isPaused 判
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .playing, isPaused: true, isEnded: false))
         // 播完:phase 停在 .playing,只能靠 isEnded 判(docs/PITFALLS.md Q7)
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .playing, isPaused: false, isEnded: true))
 
-        // 起播准备中 / 失败 / 已拆:都不该占着断言
+        // 起播准备中 / 失败 / 已停 / 已拆:都不该占着断言
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .loading, isPaused: false, isEnded: false))
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .failed, isPaused: false, isEnded: false))
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
-            phase: .tearingDown, isPaused: false, isEnded: false))
+            phase: .stopped, isPaused: false, isEnded: false))
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
-            phase: .destroyed, isPaused: false, isEnded: false))
+            phase: .closed, isPaused: false, isEnded: false))
         XCTAssertFalse(PlayerViewModel.shouldPreventDisplaySleep(
             phase: .idle, isPaused: false, isEnded: false))
     }

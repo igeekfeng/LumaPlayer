@@ -3,8 +3,8 @@ import XCTest
 
 /// 播放体验:下一集查找、连续倍速、事件落地、独立窗口的播放请求。
 ///
-/// 与 `PlayerViewModelTests` 同一原则:只验**不需要 mpv、不需要网络**的部分
-/// (`player` 为 nil 时控制方法都是空操作,`handle` 不碰 libmpv)。
+/// 与 `PlayerViewModelTests` 同一原则:只验**不需要内核、不需要网络**的部分
+/// (`engine` 为 nil 时控制方法都是空操作,`handle` 不碰引擎)。
 /// ⛔ 窗口、自动隐藏、菜单与媒体键是 UI 行为,本机无屏幕录制权限,
 /// 不在这里假装覆盖。
 @MainActor
@@ -51,9 +51,9 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerViewModel.speedText(1.1), "1.1×")
     }
 
-    /// 连续调节:值必须夹在 mpv 的可用区间内,且不带浮点尾数
+    /// 连续调节:值必须夹在引擎的可用区间内,且不带浮点尾数
     /// (滑块拖出来的 `1.1500000000000001` 会让屏显与上报抖动)。
-    func testClampedSpeedStaysInMpvsRange() {
+    func testClampedSpeedStaysInEnginesRange() {
         XCTAssertEqual(PlayerViewModel.clampedSpeed(0.1), 0.25)
         XCTAssertEqual(PlayerViewModel.clampedSpeed(9), 4)
         XCTAssertEqual(PlayerViewModel.clampedSpeed(1.1500000000000001), 1.15)
@@ -79,7 +79,7 @@ final class PlayerExperienceTests: XCTestCase {
         await reporter.begin(context: Self.reportContext, state: Self.reportState)
 
         for value in [1.05, 1.1, 1.15, 1.2, 1.25] {
-            viewModel.handle(.speed(value), generation: 0)
+            viewModel.setSpeed(value)
         }
         let duringDrag = await recorder.snapshot()
         XCTAssertTrue(duringDrag.isEmpty, "合并窗口内不应发请求")
@@ -94,24 +94,27 @@ final class PlayerExperienceTests: XCTestCase {
         viewModel.stop()
     }
 
-    func testSpeedEventUpdatesReadBackValue() throws {
+    /// 内核不推倍速读回,`setSpeed` 乐观更新自己的状态。
+    func testSetSpeedUpdatesValueOptimistically() throws {
         let viewModel = try makeViewModel()
-        viewModel.handle(.speed(1.5), generation: 0)
+        viewModel.setSpeed(1.5)
         XCTAssertEqual(viewModel.speed, 1.5)
+        viewModel.setSpeed(9)
+        XCTAssertEqual(viewModel.speed, 4, "越界值夹到区间上限")
     }
 
     func testBufferingAndEndOfFileEventsApply() throws {
         let viewModel = try makeViewModel()
         viewModel.handle(.buffering(true), generation: 0)
         XCTAssertTrue(viewModel.isBuffering)
-        viewModel.handle(.endFile(.eof), generation: 0)
+        viewModel.handle(.ended(.eof), generation: 0)
         XCTAssertTrue(viewModel.isEnded)
     }
 
     /// 播完后重试 / 重播:「已播完」必须复位,否则播完卡片会盖在新一轮播放上。
     func testRetryClearsEndedState() throws {
         let viewModel = try makeViewModel()
-        viewModel.handle(.endFile(.eof), generation: 0)
+        viewModel.handle(.ended(.eof), generation: 0)
         viewModel.retry()
         XCTAssertFalse(viewModel.isEnded)
         viewModel.stop()

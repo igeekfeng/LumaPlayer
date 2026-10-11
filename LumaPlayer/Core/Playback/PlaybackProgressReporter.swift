@@ -22,7 +22,7 @@ struct PlaybackReportState: Sendable, Equatable {
     var audioStreamIndex: Int?
     /// 选中字幕轨的 Emby 流索引;字幕关闭时为 nil
     var subtitleStreamIndex: Int?
-    /// 倍速(mpv `speed` 读回值,1 = 正常速度)
+    /// 倍速(1 = 正常速度)
     var playbackRate: Double = 1
 
     var positionTicks: Int64? {

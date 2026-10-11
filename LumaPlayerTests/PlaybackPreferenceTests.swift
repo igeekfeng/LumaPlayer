@@ -32,19 +32,20 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertFalse(store.autoSkipIntro, "默认给按钮,不自动跳")
         XCTAssertTrue(store.autoPlayNext, "默认开,可在「下一集」提示上取消")
         XCTAssertFalse(store.floatsOnTop)
-        XCTAssertTrue(store.preferGPUNextRenderer, "默认开:gpu-next 才处理得了 Dolby Vision / HDR")
+        XCTAssertFalse(store.useNeuralUpscaler, "默认关:超分增加 GPU 负载,由用户按片源自己开")
+        XCTAssertEqual(store.upscaler, .off)
         XCTAssertTrue(store.isDefault)
     }
 
-    /// `preferGPUNextRenderer` 默认开,显式关掉要留得住 ——
-    /// ⛔ 读回时不能用 `bool(forKey:)`:没存过会读成 false,把默认值吃掉。
-    func testDisabledGPUNextRendererSurvivesReopening() {
+    /// `useNeuralUpscaler` 默认关,显式打开要留得住。
+    func testEnabledUpscalerSurvivesReopening() {
         let store = PlaybackPreferences(defaults: defaults)
-        store.preferGPUNextRenderer = false
-        XCTAssertFalse(store.isDefault, "关掉渲染后端开关算偏离默认")
+        store.useNeuralUpscaler = true
+        XCTAssertFalse(store.isDefault, "打开超分算偏离默认")
+        XCTAssertEqual(store.upscaler, .artCNN)
 
         let reopened = PlaybackPreferences(defaults: defaults)
-        XCTAssertFalse(reopened.preferGPUNextRenderer, "关掉后重开必须还是关")
+        XCTAssertTrue(reopened.useNeuralUpscaler, "打开后重开必须还是开")
     }
 
     // MARK: - 持久化
@@ -55,22 +56,22 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.defaultSpeed = 1.5
         store.seekStep = 30
         store.defaultVolume = 40
-        store.subtitleMode = .forcedOnly
+        store.subtitleMode = .always
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
-        store.preferGPUNextRenderer = false
+        store.useNeuralUpscaler = true
         XCTAssertFalse(store.isDefault)
 
         let reopened = PlaybackPreferences(defaults: defaults)
         XCTAssertEqual(reopened.defaultSpeed, 1.5)
         XCTAssertEqual(reopened.seekStep, 30)
         XCTAssertEqual(reopened.defaultVolume, 40)
-        XCTAssertEqual(reopened.subtitleMode, .forcedOnly)
+        XCTAssertEqual(reopened.subtitleMode, .always)
         XCTAssertTrue(reopened.autoSkipIntro)
         XCTAssertFalse(reopened.autoPlayNext)
         XCTAssertTrue(reopened.floatsOnTop)
-        XCTAssertFalse(reopened.preferGPUNextRenderer)
+        XCTAssertTrue(reopened.useNeuralUpscaler)
     }
 
     func testResetRestoresDefaults() {
@@ -82,7 +83,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         store.autoSkipIntro = true
         store.autoPlayNext = false
         store.floatsOnTop = true
-        store.preferGPUNextRenderer = false
+        store.useNeuralUpscaler = true
 
         store.reset()
         XCTAssertTrue(store.isDefault)

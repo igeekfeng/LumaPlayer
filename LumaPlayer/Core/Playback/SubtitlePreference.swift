@@ -1,13 +1,12 @@
 import Foundation
 
-/// 起播时的字幕默认偏好:简体中文 → 繁体中文 → 保持 mpv 的 `sid=auto`。
+/// 起播时的字幕默认偏好:简体中文 → 繁体中文 → 保持内核的自动选轨。
 ///
-/// ## 为什么自己判,不交给 mpv 的 `slang`
+/// ## 为什么自己判,不交给内核
 ///
-/// `slang` 只按语言码匹配(`chi` / `zho` / `zh` 一视同仁),**区分不了简体与繁体**;
+/// 内核的语言匹配只看语言码(`chi` / `zho` / `zh` 一视同仁),**区分不了简体与繁体**;
 /// 而中文资源里简繁常常都标 `chi`,真正区分依据在压制组写进 `title` 的
-/// 「简体」「繁體」「Chinese (Traditional)」。另外 `MPVPlayer` 设了 `config=no`,
-/// 用户自己 mpv.conf 里的 `slang` 也不生效 —— 偏好只能落在客户端。
+/// 「简体」「繁體」「Chinese (Traditional)」。所以偏好只能落在客户端。
 ///
 /// ## 判定结果的四档
 ///
@@ -17,8 +16,8 @@ import Foundation
 ///    但简繁未知,排在明确繁体之后,免得把一条明确的繁体挤掉
 /// 4. 判不出中文 → 返回 nil
 ///
-/// ⛔ 判不出来一律返回 nil(**不动**,保持 mpv 选的 default 轨),不猜:
-/// 宁可让 mpv 自己选,也不能把一条英文字幕当成中文选上。
+/// ⛔ 判不出来一律返回 nil(**不动**,保持内核选的默认轨),不猜:
+/// 宁可让内核自己选,也不能把一条英文字幕当成中文选上。
 ///
 /// 起播时的字幕模式(设置页「播放」页可选)。
 ///
@@ -28,12 +27,10 @@ import Foundation
 enum SubtitleMode: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 
-    /// 中文优先(默认):简中 → 繁中 → 未标变体的中文 → 不动 mpv 默认
+    /// 中文优先(默认):简中 → 繁中 → 未标变体的中文 → 不动内核默认
     case smart
     /// 总是开:没有中文字幕时开第一条字幕轨
     case always
-    /// 只开强制字幕(`track-list/N/forced`);没有强制轨就关字幕
-    case forcedOnly
     /// 起播不开字幕(播放中仍可手动开)
     case none
 
@@ -42,7 +39,6 @@ enum SubtitleMode: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .smart: "中文优先"
         case .always: "总是开字幕"
-        case .forcedOnly: "只开强制字幕"
         case .none: "起播不开字幕"
         }
     }
@@ -50,9 +46,8 @@ enum SubtitleMode: String, Codable, CaseIterable, Identifiable, Sendable {
     /// 设置页 footer 里的一句解释
     var detail: String {
         switch self {
-        case .smart: "有简体中文选简体,没有再找繁体;都没有就交给 mpv 的默认轨。"
+        case .smart: "有简体中文选简体,没有再找繁体;都没有就交给内核的默认轨。"
         case .always: "优先中文字幕,一条中文都没有时打开第一条字幕轨。"
-        case .forcedOnly: "只显示标记为「强制」的字幕(通常是外语对白的那几句);没有强制轨就关掉字幕。"
         case .none: "每次起播都关闭字幕,想看时自己在控制栏的字幕菜单里开。"
         }
     }
@@ -60,24 +55,24 @@ enum SubtitleMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
 /// 起播时对字幕轨的处理结果。
 enum SubtitleStartupChoice: Equatable, Sendable {
-    /// 不要动:保持 mpv 自己选的轨
+    /// 不要动:保持内核自己选的轨
     case leaveAlone
-    /// 关掉字幕(`sid = no`)
+    /// 关掉字幕
     case off
     /// 选这条轨
-    case track(id: Int)
+    case track(id: Int64)
 }
 
-/// 纯函数,无状态,可脱离 mpv 与网络测试。
+/// 纯函数,无状态,可脱离内核与网络测试。
 enum SubtitlePreference {
 
-    /// 默认该选哪条字幕轨;nil = 保持 mpv 的 `sid=auto`,不要动。
+    /// 默认该选哪条字幕轨;nil = 保持内核的自动选轨,不要动。
     /// 同一档内取 `id` 最小的那条(与 `StreamIndexMapper` 一样按轨道顺序)。
-    static func preferredTrackID(in tracks: [MPVTrack]) -> Int? {
-        var traditional: Int?
-        var unspecifiedChinese: Int?
+    static func preferredTrackID(in tracks: [PlayerTrack]) -> Int64? {
+        var traditional: Int64?
+        var unspecifiedChinese: Int64?
 
-        for track in tracks.filter({ $0.type == .sub }).sorted(by: { $0.id < $1.id }) {
+        for track in tracks.filter({ $0.kind == .subtitle }).sorted(by: { $0.id < $1.id }) {
             switch chineseVariant(of: track) {
             case .simplified:
                 return track.id          // 已按 id 升序,第一个简体就是要的
@@ -103,9 +98,9 @@ enum SubtitlePreference {
     /// 起播时该对字幕做什么:在「中文优先」的基础上按模式放宽 / 收紧。
     ///
     /// `.smart` 判不出中文时返回 `.leaveAlone`(⛔ 不猜),`.always` 才退到第一条轨;
-    /// `.forcedOnly` 找不到强制轨时返回 `.off` —— 用户只要强制字幕,那就该关着。
-    static func startupChoice(in tracks: [MPVTrack], mode: SubtitleMode) -> SubtitleStartupChoice {
-        let subtitles = tracks.filter { $0.type == .sub }.sorted { $0.id < $1.id }
+    /// `.none` 直接关。
+    static func startupChoice(in tracks: [PlayerTrack], mode: SubtitleMode) -> SubtitleStartupChoice {
+        let subtitles = tracks.filter { $0.kind == .subtitle }.sorted { $0.id < $1.id }
         switch mode {
         case .smart:
             return preferredTrackID(in: tracks).map { .track(id: $0) } ?? .leaveAlone
@@ -113,18 +108,15 @@ enum SubtitlePreference {
             if let id = preferredTrackID(in: tracks) { return .track(id: id) }
             guard let first = subtitles.first else { return .leaveAlone }
             return .track(id: first.id)
-        case .forcedOnly:
-            guard let forced = subtitles.first(where: { $0.isForced }) else { return .off }
-            return .track(id: forced.id)
         case .none:
             return .off
         }
     }
 
-    /// 判定依据只有 mpv 给的 `lang` 与 `title`(`MPV_INTEGRATION.md` 第 7 节),
+    /// 判定依据只有内核给的 `language` 与 `title`,
     /// ⛔ 没有第三个来源 —— 不读文件名、不读容器元数据。
-    static func chineseVariant(of track: MPVTrack) -> ChineseVariant? {
-        let lang = normalized(track.lang)
+    static func chineseVariant(of track: PlayerTrack) -> ChineseVariant? {
+        let lang = normalized(track.language)
         let title = normalized(track.title)
         let haystack = lang + " " + title
 

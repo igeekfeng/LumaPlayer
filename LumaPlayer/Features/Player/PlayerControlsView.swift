@@ -14,7 +14,7 @@ import SwiftUI
 ///   也不依赖 Reduce Transparency 是否被正确响应。
 ///
 /// 进度条对两种播放方式**行为不同**:
-/// DirectStream 拖动 = mpv seek;转码拖动 = 停流 + `StartTimeTicks` 重新起流
+/// DirectStream 拖动 = 内核 seek;转码拖动 = 停流 + `StartTimeTicks` 重新起流
 /// (API_CONTRACT.md 4.5)。差异在 `PlayerViewModel.seek` 里分派,
 /// 本视图只负责把目标秒数交出去。
 ///
@@ -189,14 +189,6 @@ struct PlayerScrubber: View {
             let fraction = duration > 0 ? min(1, max(0, displayed / duration)) : 0
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(Metrics.scrubberTrackOpacity))
-                // 已缓存到的位置(mpv demuxer-cache-time):比底色亮一档,比已播放暗。
-                // 画在已播放段**下面**,已播放段盖在上面 —— 两段重叠时只有已播放的亮,
-                // 不需要额外算交集。
-                if let buffered = bufferedFraction {
-                    Capsule()
-                        .fill(.white.opacity(Metrics.scrubberBufferedOpacity))
-                        .frame(width: width * buffered)
-                }
                 Capsule()
                     .fill(.white.opacity(Metrics.scrubberPlayedOpacity))
                     .frame(width: width * fraction)
@@ -269,11 +261,6 @@ struct PlayerScrubber: View {
         }
     }
 
-    private var bufferedFraction: Double? {
-        guard duration > 0, let buffered = viewModel.bufferedUntilSeconds, buffered > 0 else { return nil }
-        return min(1, buffered / duration)
-    }
-
     private func seconds(at x: CGFloat, width: CGFloat) -> Double {
         guard width > 0, duration > 0 else { return 0 }
         return Double(min(max(x / width, 0), 1)) * duration
@@ -306,7 +293,7 @@ struct PlayerVolumeControl: View {
 /// 倍速:连续调节(滑块 + 步进),**不是固定档位**。
 ///
 /// 用 `popover` 而不是 `Menu`:macOS 的 SwiftUI 菜单不承载可交互控件
-/// (滑块放进去拖不动),浮层才行。滑块每动一步就直接写 mpv 的 `speed`,
+/// (滑块放进去拖不动),浮层才行。滑块每动一步就直接写引擎的倍速,
 /// 画面上的屏显同步跟着变,松手即停在那儿。
 struct PlayerSpeedControl: View {
     let viewModel: PlayerViewModel
@@ -392,10 +379,7 @@ struct PlayerSpeedControl: View {
 ///
 /// 用 `Picker` 而不是手画勾:系统菜单的勾选态 VoiceOver 能读出「已选择」(8.3)。
 ///
-/// 轨道下面是**字幕延迟**与「字幕外观…」入口。延迟只给步进按钮、不给滑块:
-/// 菜单里放不了可交互控件(见 `PlayerSpeedControl`),而且延迟要的是 0.1 秒级的微调,
-/// 连续调主要靠 Z / X(菜单栏「Playback › Subtitle Delay」,按住可连发),这里是给鼠标用户的入口。
-/// 外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
+/// 轨道下面是「字幕外观…」入口。外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
 struct PlayerSubtitleMenu: View {
     let viewModel: PlayerViewModel
 
@@ -404,20 +388,16 @@ struct PlayerSubtitleMenu: View {
 
     var body: some View {
         Menu {
-            Picker("字幕", selection: Binding<Int?>(
+            Picker("字幕", selection: Binding<Int64?>(
                 get: { viewModel.selectedSubtitleTrackID },
                 set: { viewModel.selectSubtitleTrack($0) }
             )) {
-                Text("关闭").tag(Int?.none)
+                Text("关闭").tag(Int64?.none)
                 ForEach(viewModel.subtitleTracks) { track in
-                    PlayerTrackLabel(track: track).tag(Int?.some(track.id))
+                    PlayerTrackLabel(track: track).tag(Int64?.some(track.id))
                 }
             }
             .pickerStyle(.inline)
-
-            Section("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(viewModel.subtitleDelay))") {
-                PlayerSubtitleDelayButtons(viewModel: viewModel)
-            }
 
             Divider()
 
@@ -446,67 +426,18 @@ struct PlayerSubtitleMenu: View {
     }
 }
 
-/// 字幕延迟的提前 / 延后 / 重置。控制栏的字幕菜单与菜单栏「Playback › Subtitle Delay」共用,
-/// 快捷键只挂在菜单栏那份上(`PlayerCommands`),这里挂会注册第二遍。
-/// 菜单栏那份用英文,与系统菜单一致(见 `PlayerCommands`)。
-struct PlayerSubtitleDelayButtons: View {
-    let viewModel: PlayerViewModel
-    /// 菜单栏那份:带快捷键、英文文案;控制栏里的不带快捷键、中文文案
-    var inMenuBar = false
-
-    var body: some View {
-        Group {
-            Button(earlier(Metrics.subtitleDelayStep)) {
-                viewModel.stepSubtitleDelay(later: false)
-            }
-            .keyboardShortcut(shortcut("z", []))
-            Button(later(Metrics.subtitleDelayStep)) {
-                viewModel.stepSubtitleDelay(later: true)
-            }
-            .keyboardShortcut(shortcut("x", []))
-            Button(earlier(Metrics.subtitleDelayLargeStep)) {
-                viewModel.stepSubtitleDelay(later: false, step: Metrics.subtitleDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("z", .shift))
-            Button(later(Metrics.subtitleDelayLargeStep)) {
-                viewModel.stepSubtitleDelay(later: true, step: Metrics.subtitleDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("x", .shift))
-            Button(inMenuBar ? "Reset Subtitle Delay" : "重置字幕延迟") { viewModel.resetSubtitleDelay() }
-                .disabled(viewModel.subtitleDelay == 0)
-        }
-        .disabled(!viewModel.canAdjustSubtitleDelay)
-    }
-
-    private func earlier(_ step: Double) -> String {
-        inMenuBar ? "Earlier by \(Self.seconds(step)) s" : "提前 \(Self.seconds(step)) 秒"
-    }
-
-    private func later(_ step: Double) -> String {
-        inMenuBar ? "Later by \(Self.seconds(step)) s" : "延后 \(Self.seconds(step)) 秒"
-    }
-
-    private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
-        inMenuBar ? KeyboardShortcut(key, modifiers: modifiers) : nil
-    }
-
-    private static func seconds(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...1)))
-    }
-}
-
 /// 音轨菜单。与字幕分开一个入口,理由同 `PlayerSubtitleMenu`。
 struct PlayerAudioMenu: View {
     let viewModel: PlayerViewModel
 
     var body: some View {
         Menu {
-            Picker("音轨", selection: Binding<Int?>(
+            Picker("音轨", selection: Binding<Int64?>(
                 get: { viewModel.selectedAudioTrackID },
                 set: { id in if let id { viewModel.selectAudioTrack(id) } }
             )) {
                 ForEach(viewModel.audioTracks) { track in
-                    PlayerTrackLabel(track: track).tag(Int?.some(track.id))
+                    PlayerTrackLabel(track: track).tag(Int64?.some(track.id))
                 }
             }
             .pickerStyle(.inline)
@@ -560,7 +491,7 @@ struct PlayerOptionsMenu: View {
 
 /// 轨道菜单里的一项:名称 + 语言 / 编码等补充信息(补充信息用次级色)。
 struct PlayerTrackLabel: View {
-    let track: MPVTrack
+    let track: PlayerTrack
 
     var body: some View {
         if let detail = track.detail {

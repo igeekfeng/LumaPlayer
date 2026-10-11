@@ -9,7 +9,7 @@ enum PlaybackPlan: Sendable, Equatable {
     /// `static=true`:服务端原样吐原始文件,客户端可自由 seek
     case directStream(url: URL, headers: [String: String], playSessionID: String, mediaSourceID: String)
     /// 服务端转码(地址来自 `MediaSource.TranscodingUrl`)。
-    /// ⚠️ 转码模式下**不能**用 mpv 的 seek:必须停流 + `StartTimeTicks` 重新起流(4.5)。
+    /// ⚠️ 转码模式下**不能**用客户端 seek:必须停流 + `StartTimeTicks` 重新起流(4.5)。
     case transcode(url: URL, headers: [String: String], playSessionID: String, mediaSourceID: String)
 
     var url: URL {

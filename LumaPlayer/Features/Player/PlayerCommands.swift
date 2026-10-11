@@ -60,7 +60,6 @@ struct PlayerCommands: Commands {
             Divider()
 
             subtitleMenu
-            subtitleDelayMenu
             audioMenu
 
             Divider()
@@ -106,13 +105,13 @@ struct PlayerCommands: Commands {
     @ViewBuilder
     private var subtitleMenu: some View {
         if let player, !player.subtitleTracks.isEmpty {
-            Picker("Subtitles", selection: Binding<Int?>(
+            Picker("Subtitles", selection: Binding<Int64?>(
                 get: { player.selectedSubtitleTrackID },
                 set: { player.selectSubtitleTrack($0) }
             )) {
-                Text("Off").tag(Int?.none)
+                Text("Off").tag(Int64?.none)
                 ForEach(player.subtitleTracks) { track in
-                    Text(track.displayName).tag(Int?.some(track.id))
+                    Text(track.displayName).tag(Int64?.some(track.id))
                 }
             }
         } else {
@@ -120,29 +119,15 @@ struct PlayerCommands: Commands {
         }
     }
 
-    /// Z / X 提前 / 延后 0.1 秒,⇧ 为 1 秒(与 mpv 默认键位一致,UI_DESIGN.md 5.3)。
-    /// 按住会连发 —— 和方向键 seek 不同,改 `sub-delay` 是纯本地操作,没有请求开销。
-    @ViewBuilder
-    private var subtitleDelayMenu: some View {
-        if let player {
-            Menu("Subtitle Delay: \(PlayerViewModel.subtitleDelayValueText(player.subtitleDelay, unit: "s"))") {
-                PlayerSubtitleDelayButtons(viewModel: player, inMenuBar: true)
-            }
-            .disabled(!player.canAdjustSubtitleDelay)
-        } else {
-            Menu("Subtitle Delay") {}.disabled(true)
-        }
-    }
-
     @ViewBuilder
     private var audioMenu: some View {
         if let player, !player.audioTracks.isEmpty {
-            Picker("Audio", selection: Binding<Int?>(
+            Picker("Audio", selection: Binding<Int64?>(
                 get: { player.selectedAudioTrackID },
                 set: { id in if let id { player.selectAudioTrack(id) } }
             )) {
                 ForEach(player.audioTracks) { track in
-                    Text(track.displayName).tag(Int?.some(track.id))
+                    Text(track.displayName).tag(Int64?.some(track.id))
                 }
             }
         } else {

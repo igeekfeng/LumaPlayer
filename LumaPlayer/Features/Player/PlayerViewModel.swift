@@ -11,12 +11,14 @@ extension LoadFailure {
 
 /// 播放页的状态机(会话、进度同步、轨道、seek 分派)。
 ///
-/// 流程:`PlaybackSessionCoordinator` 取会话 → 建 `MPVPlayer` →
-/// **等 GL 渲染上下文挂接** → `load(url:headers:)` → 首帧后开始上报。
+/// 流程:`PlaybackSessionCoordinator` 取会话 → 经 `engineFactory` 建 `PlaybackEngine`
+/// → 起事件泵 → `open` → `play` → 首帧后开始上报。
 ///
-/// 最后一步的等待不是可选的:render.h:32-34 / 113-115 要求渲染上下文
-/// 先于播放建立,否则 `vo=libmpv` 的视频初始化会失败或退化成自建窗口的 VO。
-/// 开发期的渲染 spike 就吃过这个亏(抢在 VO 初始化之前 loadfile)。
+/// ⚠️ 与旧内核(libmpv)的两处结构性差别:
+/// - **不再等「渲染上下文挂好」**:当前内核(Erika)的视频表面由 SDK 视图自驱,
+///   `makeVideoSurface()` 返回现成视图交给 `PlayerSurfaceView` 上屏即可;
+/// - **倍速 / 音量 / 静音没有读回事件**:内核不推这些值,`PlayerViewModel` 改为
+///   乐观更新自己的状态(设了就是那个值),不再依赖读回校正。
 @MainActor
 @Observable
 final class PlayerViewModel {
@@ -25,32 +27,35 @@ final class PlayerViewModel {
     private let item: EmbyItem
     /// 上报出口(API_CONTRACT.md 5.4:所有上报经这一个 actor 串行)。
     private let reporter: PlaybackProgressReporter
-    /// 播放期的显示器休眠断言。⛔ 不能指望 mpv 的 `stop-screensaver`:
-    /// `vo=libmpv` 下它不生效,必须宿主自己持(手段见 `DisplaySleepAssertion`,
-    /// 判据见 `shouldPreventDisplaySleep`;GitHub issue #1)。
+    /// 播放期的显示器休眠断言。⛔ 不能指望播放器自己管:必须宿主自己持
+    /// (手段见 `DisplaySleepAssertion`,判据见 `shouldPreventDisplaySleep`;GitHub issue #1)。
     private let displaySleep: any DisplaySleepInhibiting
+    /// 建播放引擎的工厂。默认取组合根的 `makePlaybackEngine(upscaler:)`;测试注入假引擎。
+    /// 超分档位由本类按设置页偏好决定后传入(与倍速 / 音量 / 字幕外观同一个来源)。
+    /// `@MainActor`:`PlaybackEngine` 全程主线程,工厂也要在主线程上跑。
+    private let engineFactory: @MainActor (PlayerUpscaler) throws -> any PlaybackEngine
 
-    /// 视频层绑定用;为 nil 表示还没到建播放器的阶段(仍在取播放信息)
-    private(set) var player: MPVPlayer?
+    /// 视频层绑定用;为 nil 表示还没到建引擎的阶段(仍在取播放信息)
+    private(set) var engine: (any PlaybackEngine)?
     private(set) var session: PlaybackSession?
     private(set) var failure: LoadFailure?
-    /// 正在取 PlaybackInfo / 等 GL 挂接 / 重新起流
+    /// 正在取 PlaybackInfo / 重新起流
     private(set) var isPreparing = true
-    private(set) var phase: MPVPlayerPhase = .idle
+    private(set) var phase: PlayerPhase = .idle
     private(set) var isPaused = false
 
     // MARK: - 进度与轨道
 
     private(set) var positionSeconds: Double = 0
     private(set) var durationSeconds: Double = 0
-    /// 0–100(mpv 的 `volume`)
+    /// 0–100(交给引擎时 /100 转成 0–1)
     private(set) var volume: Double = 100
     private(set) var isMuted = false
-    private(set) var audioTracks: [MPVTrack] = []
-    private(set) var subtitleTracks: [MPVTrack] = []
-    private(set) var selectedAudioTrackID: Int?
-    /// nil = 字幕关闭(mpv 的 `sid = no`)
-    private(set) var selectedSubtitleTrackID: Int?
+    private(set) var audioTracks: [PlayerTrack] = []
+    private(set) var subtitleTracks: [PlayerTrack] = []
+    private(set) var selectedAudioTrackID: Int64?
+    /// nil = 字幕关闭
+    private(set) var selectedSubtitleTrackID: Int64?
     /// 用户在本次播放里手动选过字幕:默认偏好不再介入
     private var hasUserChosenSubtitle = false
     /// 默认偏好已应用过(track-list 会被推多次,只挑一次)
@@ -58,23 +63,11 @@ final class PlayerViewModel {
     /// 转码 seek 正在重新起流(4.5):与首次取播放信息区分开,便于 UI 给准话
     private(set) var isRestarting = false
 
-    // MARK: - 字幕延迟(MPV_INTEGRATION.md 7.1)
-
-    /// 字幕延迟(秒,mpv `sub-delay` 读回值):正 = 字幕延后出现,负 = 提前。
-    private(set) var subtitleDelay: Double = 0
-    /// 用户要的字幕延迟。与 `subtitleDelay` 分开存,原因有二:
-    /// - 新建的 mpv 一律是 0,转码 seek 重新起流 / 重试都要把它设回去;
-    /// - 连按 Z / X 时读回值还没回来,按读回值步进会丢步。
-    ///
-    /// 只活在这一集里:延迟是「这个文件的字幕和画面差多少」,换一集(新 ViewModel)
-    /// 就是另一个文件,⛔ 不跨集沿用、不持久化 —— 与倍速的「同一部剧沿用」不同。
-    private var requestedSubtitleDelay: Double = 0
-
     // MARK: - 体验打磨(倍速 / 缓冲 / 播完 / 下一集 / 屏显提示)
 
-    /// 播放速率(mpv `speed` 读回值,不是设置值)。
+    /// 播放速率(乐观更新:内核不推倍速读回,设了就是那个值)。
     /// 「同一部剧沿用同一个倍速」的意图记在 `container.playbackSpeeds` 里,
-    /// 新建 mpv 时由 `applyRememberedSpeed` 设回去。
+    /// 新建引擎时由 `applyRememberedSpeed` 设回去。
     private(set) var speed: Double = 1
 
     /// 本次起播要用的倍速:这部剧记过就用它(优先级最高),没记过用设置页的
@@ -87,9 +80,9 @@ final class PlayerViewModel {
         container.playbackSpeeds.speed(for: item, on: server)
             ?? container.preferences.defaultSpeed
     }
-    /// 播放中因缓存不足暂停(mpv `paused-for-cache`)
+    /// 播放中因缓存不足暂停(内核 `bufferingChanged`)
     private(set) var isBuffering = false
-    /// 已自然播完(`end-file` reason = eof)。重播 / 重试时复位。
+    /// 已自然播完(内核报 `.ended(.eof)`)。重播 / 重试时复位。
     private(set) var isEnded = false
     /// 剧集的下一集;不是剧集、已是最后一集或查询失败时为 nil。
     private(set) var nextEpisode: EmbyItem?
@@ -101,7 +94,7 @@ final class PlayerViewModel {
     /// 播放器内是连续调节(滑块 + 步进,`Metrics.speedRange`),不落在这几个值上。
     static let speedPresets: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]
 
-    // MARK: - 片头 / 下一集 / 缓冲 / 统计 / 触控板拖动
+    // MARK: - 片头 / 下一集 / 统计 / 触控板拖动
 
     /// 剧集的上一集(系统「正在播放」的上一曲、⌘←);查找规则与下一集对称。
     private(set) var previousEpisode: EmbyItem?
@@ -111,12 +104,6 @@ final class PlayerViewModel {
     private(set) var upNextCountdown: Int?
     /// 本次播放里用户点过「取消」:不再提示、不再自动播下一集
     private(set) var isUpNextDismissed = false
-    /// 已缓存到的位置(秒,mpv `demuxer-cache-time`),进度条上画浅色段用
-    private(set) var bufferedUntilSeconds: Double?
-    /// 缓冲进度 0–100(mpv `cache-buffering-state`),只在缓冲中轮询
-    private(set) var bufferingPercent: Int?
-    /// 下载速度(字节/秒,mpv `cache-speed`),只在缓冲中轮询
-    private(set) var cacheSpeedBytesPerSecond: Double?
     /// 统计信息 overlay 是否打开(按 I 切换;只在本次播放内有效,不持久化)
     private(set) var showsStatistics = false
     private(set) var statistics: PlayerStatistics?
@@ -149,12 +136,12 @@ final class PlayerViewModel {
     /// 自动跳过片头每次播放只触发一次:用户跳过后又拖回片头,说明就是想看,不能再把人弹走
     /// (Infuse 的已知问题:自动跳转后反复触发,画面在片头终点来回闪)。
     private var didAutoSkipIntro = false
-    /// 首个「可信」的 time-pos 是否已到达。DirectStream 续播时,mpv 在我们 seek 到
+    /// 首个「可信」的位置是否已到达。DirectStream 续播时,内核在我们 seek 到
     /// 续播点之前会先报一次 0 附近的位置;若片头从 0 开始,拿这个值判片头会触发
     /// 自动跳过,把续播位置覆盖掉。到达续播点附近之前不评估片头 / 下一集。
     private var isPositionSettled = false
     private var upNextTask: Task<Void, Never>?
-    private var monitorTask: Task<Void, Never>?
+    private var statisticsTask: Task<Void, Never>?
 
     /// 起播位置(秒)。来源有两个:打开时的恢复位置,以及转码 seek 的目标。
     private var startSeconds: Double
@@ -172,15 +159,14 @@ final class PlayerViewModel {
     /// 每次「重新起流 / 收尾」自增。合并任务用它判断自己是否已被作废。
     private var restartEpoch = 0
 
-    /// 播放会话代次。每次 `stop()` +1,用来丢弃上一轮播放器的迟到事件。
+    /// 事件泵:把引擎的 pull 事件按节奏排空并投递给 `handle(_:generation:)`。
+    private let pump = PlaybackEventPump()
+
+    /// 播放会话代次。每次 `stop()` +1,用来丢弃上一轮引擎的迟到事件。
     ///
-    /// `MPVEventBridge` 一律经 `Task { @MainActor }` 投递,所以旧实例在
-    /// shutdown 前后提交的事件**必然**晚于同步执行的 `retry()` 到达:
-    /// `shutdown()` 自己会发 `.phaseChanged(.tearingDown/.destroyed)`,
-    /// 事件线程在 `mpv_wakeup` 后还会多处理一轮(`runEventLoop` 是先
-    /// `process` 再查 `isStopping`),期间可能发出 `.endFile(.error)`。
-    /// 不带代次号就会把上一轮的错误写到刚起来的新会话上 —— 新的播放尝试
-    /// 还没发出任何请求就直接显示错误页,再点重试会重复这个循环。
+    /// 事件泵在 `Task` 里轮询引擎,旧实例在 `stop()` 前后提交的事件**必然**
+    /// 晚于同步执行的 `retry()` 到达,不带代次号就会把上一轮的错误写到刚起来的
+    /// 新会话上 —— 新的播放尝试还没发出任何请求就直接显示错误页。
     /// 与 CLAUDE.md 对播放上报的要求同源:异步乱序到达必须靠代次号丢弃。
     private var generation = 0
 
@@ -190,7 +176,8 @@ final class PlayerViewModel {
         item: EmbyItem,
         startFromBeginning: Bool = false,
         reporter: PlaybackProgressReporter? = nil,
-        displaySleep: (any DisplaySleepInhibiting)? = nil
+        displaySleep: (any DisplaySleepInhibiting)? = nil,
+        engineFactory: (@MainActor (PlayerUpscaler) throws -> any PlaybackEngine)? = nil
     ) {
         self.container = container
         self.server = server
@@ -206,6 +193,11 @@ final class PlayerViewModel {
         // 显示器休眠断言:App 里用真的 IOKit 断言,单测注入替身
         // (与 reporter 同一个理由:被测逻辑不该依赖系统资源的可用性)。
         self.displaySleep = displaySleep ?? DisplaySleepAssertion()
+        // 引擎工厂:默认按设置页的超分偏好建真引擎;测试注入假引擎。
+        // 闭包捕获 `container`,在**调用时**读偏好 —— 起播前改了设置能生效。
+        self.engineFactory = engineFactory ?? { upscaler in
+            try container.makePlaybackEngine(upscaler: upscaler)
+        }
         // 恢复播放位置:`UserData.PlaybackPositionTicks` 是服务端记录的进度。
         // 为 nil / 为 0 即从 0 开始 —— 不猜「看过了多少」(8.1 禁止填假默认值)。
         // 「从头播放」显式忽略它。
@@ -247,8 +239,7 @@ final class PlayerViewModel {
         }
     }
 
-    /// 重试:播放器实例不可复用(MPV_INTEGRATION.md §8 一实例一 URL),
-    /// 所以必须整体重建,不能只是再 load 一次。
+    /// 重试:引擎实例不可复用(一实例一 URL),所以必须整体重建,不能只是再 open 一次。
     func retry() {
         stop()
         failure = nil
@@ -258,7 +249,7 @@ final class PlayerViewModel {
         isPaused = false
         isRestarting = false
         isEnded = false
-        // 新播放器 = 新上报会话:不复位的话,播放中途出错再重试,
+        // 新引擎 = 新上报会话:不复位的话,播放中途出错再重试,
         // 新会话既不会补 seek 到起播位置,也永远不会发 Playing。
         didApplyStartOffset = false
         didBeginReporting = false
@@ -266,8 +257,8 @@ final class PlayerViewModel {
         start()
     }
 
-    /// 播完后从头再播。mpv 播完即卸载文件(没有开 keep-open),
-    /// 所以不是 seek 到 0,而是按新会话整体重建(§8 一实例一 URL)。
+    /// 播完后从头再播。内核播完即卸载文件,所以不是 seek 到 0,
+    /// 而是按新会话整体重建(一实例一 URL)。
     func replay() {
         startSeconds = 0
         positionSeconds = 0
@@ -278,19 +269,19 @@ final class PlayerViewModel {
     }
 
     /// 收尾:先按 ARCHITECTURE.md 6.6 结束上报会话(最终 Progress +
-    /// Stopped),再拆播放器。关窗、切媒体、转码 seek 都走这里。
+    /// Stopped),再拆引擎。关窗、切媒体、转码 seek 都走这里。
     func stop() {
         finishReporting(sendFinalProgress: true)
         // 收尾这一刻就把显示器休眠还回去:关窗 / 切媒体 / 转码重新起流都走这里。
         // 这里必须是**无条件释放**而不是按 phase 重算 —— stop() 返回后调用方
         // (retry / restartStream)才把 phase 置回 .idle,重算会把断言又拿一份。
         displaySleep.setActive(false)
-        // 先递增:此后旧播放器再投递的事件代次都对不上,一律丢弃。
+        // 先递增:此后旧引擎再投递的事件代次都对不上,一律丢弃。
         generation &+= 1
         startTask?.cancel()
         startTask = nil
-        monitorTask?.cancel()
-        monitorTask = nil
+        statisticsTask?.cancel()
+        statisticsTask = nil
         // 待发的倍速上报属于已经结束的会话:Stopped 之前的最终 Progress 会带上倍速
         rateReportTask?.cancel()
         rateReportTask = nil
@@ -303,19 +294,20 @@ final class PlayerViewModel {
         isRestarting = false
         stopUpNextCountdown()
         scrubPreviewSeconds = nil
-        player?.shutdown()
-        player = nil
+        pump.stop()
+        engine?.close()
+        engine = nil
     }
 
     // MARK: - 控制
 
     func togglePlayPause() {
-        guard let player else { return }
+        guard let engine else { return }
         do {
             if isPaused {
-                try player.resume()
+                try engine.play()
             } else {
-                try player.pause()
+                try engine.pause()
             }
         } catch {
             failure = LoadFailure(message: "播放控制失败:\(error)")
@@ -323,139 +315,77 @@ final class PlayerViewModel {
     }
 
     /// 倍速:连续值,夹在 `Metrics.speedRange` 内,不要求落在某个档位上。
-    /// 转码流同样由 mpv 在客户端变速,服务端不需要知道。
+    /// 转码流同样由内核在客户端变速,服务端不需要知道。
+    ///
+    /// ⚠️ 内核不推倍速读回,所以这里是**乐观更新**:设了就认为生效。
     func setSpeed(_ value: Double) {
         let target = Self.clampedSpeed(value)
-        do { try player?.setSpeed(target) } catch { return }
+        guard target != speed else { return }
+        do { try engine?.setRate(target) } catch { return }
+        speed = target
         // 记住用户的选择:同一部剧的下一集、转码 seek 重新起流都从它起播。
-        // 播放器还没建起来(仍在取播放信息)时照样记 —— 那个值会在新 mpv 上生效。
+        // 引擎还没建起来(仍在取播放信息)时照样记 —— 那个值会在新引擎上生效。
         container.playbackSpeeds.remember(target, for: item, on: server)
+        pushState()
+        // 5.2 要求改倍速立即上报,但滑块是连续的(0.05 一跳),一次拖动
+        // 就是十几个请求 —— 真实服务器纪律要求低频,所以合并成一次:
+        // 停手 `Metrics.speedReportDelay` 后再发,值取最后那次。
+        // `pushState()` 每次都走,10 秒一次的 Progress 里倍速不会缺。
+        // (会话未开始前 `reportNow` 是空操作,见 `PlaybackProgressReporter`。)
+        scheduleRateChangeReport()
         flash(Self.speedText(target), systemImage: "gauge.with.dots.needle.67percent")
     }
 
-    /// 新建的 mpv 一律是 1×,把起播倍速设回去(KNOWN_ISSUES 旧条目
+    /// 新建的引擎一律是 1×,把起播倍速设回去(KNOWN_ISSUES 旧条目
     /// 「倍速在新建播放器后回到 1×」)。换集、重新起流、重试都走这里。
     /// 值来自 `startupSpeed`:这部剧记过的优先,否则是设置页的默认倍速。
-    ///
-    /// ⛔ 必须在挂事件桥**之前**调用:桥一挂上 mpv 就会推一次当前值,
-    /// 先设好,读回来的就是目标倍速,屏显与上报都不会先闪一下 1×。
-    private func applyRememberedSpeed(to player: MPVPlayer) {
+    private func applyRememberedSpeed(to engine: any PlaybackEngine) {
         let startup = startupSpeed
+        speed = startup
         guard startup != 1 else { return }
         do {
-            try player.setSpeed(startup)
+            try engine.setRate(startup)
         } catch {
             // 设不回去只是本集退回 1×,不影响能不能播,所以不挂到 failure 上;
             // 但也不能一声不响 —— 记下来,免得以后排障时以为「倍速本来就该保留」。
+            speed = 1
             let reason = String(describing: error)
             Self.logger.error(
-                "倍速 \(startup, privacy: .public)× 设回新建播放器失败,本集按 1× 起播:\(reason, privacy: .public)")
+                "倍速 \(startup, privacy: .public)× 设回新建引擎失败,本集按 1× 起播:\(reason, privacy: .public)")
         }
     }
 
-    /// 新建的 mpv 音量是 100,把设置页的「默认音量」设上去。
-    /// 理由与时机同 `applyRememberedSpeed`(挂桥之前)。
-    private func applyDefaultVolume(to player: MPVPlayer) {
+    /// 新建的引擎音量是满的,把设置页的「默认音量」设上去。
+    private func applyDefaultVolume(to engine: any PlaybackEngine) {
         let target = container.preferences.defaultVolume
+        volume = target
         guard target != Metrics.defaultVolume else { return }
         do {
-            try player.setVolume(target)
+            try engine.setVolume(target / 100)
         } catch {
+            volume = Metrics.defaultVolume
             let reason = String(describing: error)
             Self.logger.error(
-                "默认音量 \(target, privacy: .public) 设到新建播放器失败:\(reason, privacy: .public)")
+                "默认音量 \(target, privacy: .public) 设到新建引擎失败:\(reason, privacy: .public)")
         }
-    }
-
-    // MARK: 字幕延迟
-
-    /// 当前能不能调字幕延迟:要有会话,且选中了一条字幕轨 ——
-    /// 字幕关着时调了也看不出效果,菜单与快捷键一律不响应,免得留下看不见的状态。
-    var canAdjustSubtitleDelay: Bool {
-        session != nil && selectedSubtitleTrackID != nil
-    }
-
-    /// 设字幕延迟(秒),夹在 `Metrics.subtitleDelayRange` 内。
-    /// 播放器还没建起来时照样记下,新 mpv 建好后由 `applySubtitleSettings` 设上。
-    func setSubtitleDelay(_ seconds: Double) {
-        let target = Self.clampedSubtitleDelay(seconds)
-        do { try player?.setSubtitleDelay(target) } catch { return }
-        requestedSubtitleDelay = target
-        flash(Self.subtitleDelayText(target), systemImage: "captions.bubble")
-    }
-
-    /// Z / X(`step` 默认 `Metrics.subtitleDelayStep`,⇧ 为 `subtitleDelayLargeStep`)。
-    /// 从「要的值」步进而不是读回值,理由见 `requestedSubtitleDelay`。
-    func stepSubtitleDelay(later: Bool, step: Double = Metrics.subtitleDelayStep) {
-        guard canAdjustSubtitleDelay else { return }
-        setSubtitleDelay(requestedSubtitleDelay + (later ? step : -step))
-    }
-
-    func resetSubtitleDelay() {
-        guard canAdjustSubtitleDelay else { return }
-        setSubtitleDelay(0)
-    }
-
-    /// 夹到区间并抹到两位小数(0.1 一步连加会累出 `0.30000000000000004`)。
-    /// 非有限值不该出现;真出现时归零。
-    static func clampedSubtitleDelay(_ value: Double) -> Double {
-        guard value.isFinite else { return 0 }
-        let clamped = min(max(value, Metrics.subtitleDelayRange.lowerBound),
-                          Metrics.subtitleDelayRange.upperBound)
-        let rounded = (clamped * 100).rounded() / 100
-        // -0.0 显示成「提前 0 秒」,统一成 0
-        return rounded == 0 ? 0 : rounded
-    }
-
-    /// 屏显用:「字幕延后 0.3 秒」「字幕提前 1.5 秒」「字幕无延迟」。
-    /// 用「延后 / 提前」而不是正负号:`+0.3` 到底是字幕快了还是慢了,没人记得住。
-    static func subtitleDelayText(_ seconds: Double) -> String {
-        guard seconds != 0 else { return "字幕无延迟" }
-        return "字幕\(seconds > 0 ? "延后" : "提前") \(subtitleDelaySeconds(abs(seconds))) 秒"
-    }
-
-    /// 菜单里的当前值:「+0.3 秒」「-1.5 秒」「0 秒」
-    /// `unit`:App 内界面用「秒」;菜单栏是英文,传 `"s"`(见 `PlayerCommands`)
-    static func subtitleDelayValueText(_ seconds: Double, unit: String = "秒") -> String {
-        guard seconds != 0 else { return "0 \(unit)" }
-        return "\(seconds > 0 ? "+" : "-")\(subtitleDelaySeconds(abs(seconds))) \(unit)"
-    }
-
-    private static func subtitleDelaySeconds(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX")))
     }
 
     // MARK: 字幕外观
 
-    /// 把当前的字幕外观偏好套到 mpv 上。设置窗口里改了外观之后由播放窗口调用
-    /// (`PlayerWindowView` 的 onChange),新建 mpv 时也走这里。
+    /// 把当前的字幕外观偏好套到引擎上。设置窗口里改了外观之后由播放窗口调用
+    /// (`PlayerWindowView` 的 onChange),新建引擎时也走这里。
     func applySubtitleStyle() {
-        guard let player else { return }
-        applySubtitleStyle(container.subtitleStyles.style, to: player)
+        guard let engine else { return }
+        applySubtitleStyle(container.subtitleStyles.style, to: engine)
     }
 
-    private func applySubtitleStyle(_ style: SubtitleStyle, to player: MPVPlayer) {
+    private func applySubtitleStyle(_ style: SubtitleStyle, to engine: any PlaybackEngine) {
         do {
-            try player.setSubtitleProperties(style.mpvProperties)
+            try engine.setSubtitleStyle(style.engineStyle)
         } catch {
             // 外观设不上不影响能不能播,不挂到 failure 上;但要留痕,
             // 否则「设置改了没反应」无从查起。
             Self.logger.error("字幕外观设置失败: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    /// 新建的 mpv:字幕延迟是 0、外观是 mpv 默认,把本集的延迟与外观偏好设上。
-    /// 与 `applyRememberedSpeed` 同理,⛔ 要在挂事件桥**之前**调用 ——
-    /// 桥挂上后推的第一次 `sub-delay` 就是目标值,屏显不会先闪一下 0。
-    private func applySubtitleSettings(to player: MPVPlayer) {
-        applySubtitleStyle(container.subtitleStyles.style, to: player)
-        guard requestedSubtitleDelay != 0 else { return }
-        do {
-            try player.setSubtitleDelay(requestedSubtitleDelay)
-        } catch {
-            let delay = requestedSubtitleDelay
-            Self.logger.error(
-                "字幕延迟 \(delay, privacy: .public) 秒设回新建播放器失败: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -471,7 +401,7 @@ final class PlayerViewModel {
         clampedSpeed(speed + (up ? step : -step))
     }
 
-    /// 夹到 mpv 可用的倍速区间(定义见 `Metrics.clampedSpeed`)。
+    /// 夹到倍速区间(定义见 `Metrics.clampedSpeed`)。
     static func clampedSpeed(_ value: Double) -> Double { Metrics.clampedSpeed(value) }
 
     static func speedText(_ value: Double) -> String {
@@ -483,7 +413,7 @@ final class PlayerViewModel {
     /// 拖动到指定秒数。
     ///
     /// ⛔ 两种播放方式的 seek **不是同一件事**(API_CONTRACT.md 4.5):
-    /// DirectStream 是静态文件,交给 mpv seek;转码流不能客户端 seek,
+    /// DirectStream 是静态文件,交给内核 seek;转码流不能客户端 seek,
     /// 必须停流 + `StartTimeTicks` 重新起一路流。
     ///
     /// 转码这条路径**带合并**:一次重新起流是 ~4 个请求,而连点前进 / 后退
@@ -496,7 +426,7 @@ final class PlayerViewModel {
         positionSeconds = target
         if session.plan.method == .directStream {
             do {
-                try player?.seek(to: target)
+                try engine?.seek(to: target)
             } catch {
                 failure = LoadFailure(message: "拖动失败:\(error)")
                 return
@@ -542,25 +472,42 @@ final class PlayerViewModel {
               systemImage: delta < 0 ? "gobackward" : "goforward")
     }
 
+    /// 设音量(0–100)。静音是独立开关(`isMuted`),调音量本身不解静音。
     func setVolume(_ value: Double) {
-        do { try player?.setVolume(value) } catch { /* 音量失败不打断播放 */ }
+        let target = max(0, min(100, value.isFinite ? value : volume))
+        volume = target
+        applyVolumeToEngine()
+        pushState()
+        reportNow(.volumeChange)
     }
 
     /// 键盘调音量(↑ ↓,步长 `Metrics.volumeStep`)。调音量顺带解除静音 ——
     /// 静音时按 ↑ 却听不到声音,用户只会以为按键没生效。
     func adjustVolume(by delta: Double) {
         let target = max(0, min(100, volume + delta))
-        do {
-            if isMuted { try player?.setMuted(false) }
-            try player?.setVolume(target)
-        } catch { return }
+        isMuted = false
+        volume = target
+        applyVolumeToEngine()
+        pushState()
+        reportNow(.volumeChange)
         flash("音量 \(Int(target.rounded()))", systemImage: Self.volumeSymbol(target, muted: false))
     }
 
+    /// 静音 / 取消静音。内核没有静音开关,用「音量置 0 / 还原」实现 ——
+    /// `volume` 本身保持不变,所以取消静音能回到原音量。
     func toggleMute() {
-        do { try player?.setMuted(!isMuted) } catch { /* 同上 */ return }
-        flash(isMuted ? "取消静音" : "静音",
-              systemImage: isMuted ? "speaker.wave.2.fill" : "speaker.slash.fill")
+        isMuted.toggle()
+        applyVolumeToEngine()
+        pushState()
+        reportNow(.volumeChange)
+        flash(isMuted ? "静音" : "取消静音",
+              systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+    }
+
+    /// 把当前音量(考虑静音)写到引擎上。音量失败不打断播放。
+    private func applyVolumeToEngine() {
+        guard let engine else { return }
+        do { try engine.setVolume(isMuted ? 0 : volume / 100) } catch { /* 音量失败不打断播放 */ }
     }
 
     static func volumeSymbol(_ volume: Double, muted: Bool) -> String {
@@ -570,10 +517,10 @@ final class PlayerViewModel {
         return "speaker.wave.3.fill"
     }
 
-    /// 选音轨(MPV_INTEGRATION.md 第 7 节:设 `aid` = track id)。
-    func selectAudioTrack(_ id: Int) {
+    /// 选音轨(设引擎的当前音轨)。
+    func selectAudioTrack(_ id: Int64) {
         selectedAudioTrackID = id
-        do { try player?.selectAudioTrack(id: id) } catch { return }
+        do { try engine?.selectAudioTrack(id: id) } catch { return }
         pushState()
         reportNow(.audioTrackChange)
         if let track = audioTracks.first(where: { $0.id == id }) {
@@ -581,15 +528,15 @@ final class PlayerViewModel {
         }
     }
 
-    /// 选字幕轨;nil = 关字幕(`sid` = `no`)。
+    /// 选字幕轨;nil = 关字幕。
     ///
     /// 用户在这里做过一次选择之后,起播的默认偏好就让位
-    /// (`applyPreferredSubtitle()` 不再覆盖),否则切轨后 mpv 回推的
-    /// track-list 会把用户刚选的顶掉。
-    func selectSubtitleTrack(_ id: Int?) {
+    /// (`applyPreferredSubtitle()` 不再覆盖),否则切轨后引擎回推的
+    /// 轨道列表会把用户刚选的顶掉。
+    func selectSubtitleTrack(_ id: Int64?) {
         hasUserChosenSubtitle = true
         selectedSubtitleTrackID = id
-        do { try player?.selectSubtitleTrack(id: id) } catch { return }
+        do { try engine?.selectSubtitleTrack(id: id) } catch { return }
         pushState()
         reportNow(.subtitleTrackChange)
         let name = id.flatMap { id in subtitleTracks.first { $0.id == id }?.displayName }
@@ -597,9 +544,9 @@ final class PlayerViewModel {
     }
 
     /// 起播后按设置页的字幕模式挑一次字幕轨(`SubtitlePreference.startupChoice`)。
-    /// 默认是「中文优先」:简体 → 繁体 → 未标变体的中文 → 保持 mpv 默认。
+    /// 默认是「中文优先」:简体 → 繁体 → 未标变体的中文 → 保持内核默认。
     ///
-    /// 只在 track-list 首次到达时做,且用户手动选过之后不再介入。
+    /// 只在轨道列表首次到达时做,且用户手动选过之后不再介入。
     /// ⛔ 不起 OSD、也不发 `SubtitleTrackChange`:这是起播时的默认值,不是一次
     /// 用户操作;选中的索引会由随后的首次 Progress 上报带上去。
     private func applyPreferredSubtitle() {
@@ -616,21 +563,21 @@ final class PlayerViewModel {
         }
     }
 
-    /// 把起播的字幕选择写到 mpv 上;nil = 关字幕。
-    private func applyPreferredSubtitle(id: Int?) {
-        // mpv 选中的正好就是想要的:不用写 sid,标记完成即可
+    /// 把起播的字幕选择写到引擎上;nil = 关字幕。
+    private func applyPreferredSubtitle(id: Int64?) {
+        // 引擎选中的正好就是想要的:不用写,标记完成即可
         guard id != selectedSubtitleTrackID else {
             hasAppliedPreferredSubtitle = true
             return
         }
         do {
-            try player?.selectSubtitleTrack(id: id)
+            try engine?.selectSubtitleTrack(id: id)
             hasAppliedPreferredSubtitle = true
-            // 与手动切轨一致地乐观更新;mpv 会在轨道变化时重推 track-list,
+            // 与手动切轨一致地乐观更新;引擎会在轨道变化时重推轨道列表,
             // 那时按 `selected` 读回覆盖 —— 设不上也不会一直显示错的值。
             selectedSubtitleTrackID = id
         } catch {
-            // 设不上就保持原状:mpv 下次重推 track-list 时会再判一次
+            // 设不上就保持原状:引擎下次重推轨道列表时会再判一次
         }
     }
 
@@ -677,7 +624,7 @@ final class PlayerViewModel {
         stopUpNextCountdown()
     }
 
-    /// 每个可信的 time-pos 之后评估一次:自动跳片头、开始 / 撤销下一集倒计时。
+    /// 每个可信的位置之后评估一次:自动跳片头、开始 / 撤销下一集倒计时。
     private func evaluatePlaybackPrompts() {
         guard isPositionSettled, scrubPreviewSeconds == nil else { return }
         if autoSkipIntro, !didAutoSkipIntro, !isPaused, isSkipIntroAvailable {
@@ -734,39 +681,40 @@ final class PlayerViewModel {
         seek(to: target)
     }
 
-    // MARK: - 统计信息 / 缓冲轮询
+    // MARK: - 统计信息
 
     func toggleStatistics() {
         showsStatistics.toggle()
-        if showsStatistics { refreshMonitoredProperties() } else { statistics = nil }
+        if showsStatistics {
+            startStatisticsRefresh()
+            refreshStatistics()
+        } else {
+            statisticsTask?.cancel()
+            statisticsTask = nil
+            statistics = nil
+        }
     }
 
-    /// 低频轮询 mpv(`Metrics.playerMonitorInterval`):已缓存位置常驻读,
-    /// 缓冲进度 / 网速只在缓冲中读,统计信息只在 overlay 打开时读。
-    private func startMonitoring() {
-        monitorTask?.cancel()
-        monitorTask = Task { [weak self] in
+    /// 打开统计 overlay 后低频轮询引擎(`Metrics.statisticsRefreshInterval`)。
+    /// 关掉 overlay 就停表 —— 统计是排障用,不该常驻打扰。
+    private func startStatisticsRefresh() {
+        statisticsTask?.cancel()
+        statisticsTask = Task { [weak self] in
             while true {
-                do { try await Task.sleep(for: .seconds(Metrics.playerMonitorInterval)) } catch { return }
-                guard let self else { return }
-                self.refreshMonitoredProperties()
+                do { try await Task.sleep(for: .seconds(Metrics.statisticsRefreshInterval)) } catch { return }
+                guard let self, self.showsStatistics else { return }
+                self.refreshStatistics()
             }
         }
     }
 
-    private func refreshMonitoredProperties() {
-        guard let player else { return }
-        var names = ["demuxer-cache-time"]
-        if isBuffering { names += ["cache-buffering-state", "cache-speed"] }
-        if showsStatistics { names += PlayerStatistics.propertyNames }
-        let values = player.stringProperties(names)
-        bufferedUntilSeconds = values["demuxer-cache-time"].flatMap(Double.init)
-        if isBuffering {
-            bufferingPercent = values["cache-buffering-state"].flatMap(Int.init)
-            cacheSpeedBytesPerSecond = values["cache-speed"].flatMap(Double.init)
-        }
-        if showsStatistics {
-            statistics = PlayerStatistics(properties: values, session: session)
+    private func refreshStatistics() {
+        guard let engine, showsStatistics else { return }
+        do {
+            statistics = PlayerStatistics(stats: try engine.stats(), session: session)
+        } catch {
+            // 读统计失败只影响 overlay,不打断播放;留痕便于排障。
+            Self.logger.error("读取播放统计失败: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -818,12 +766,6 @@ final class PlayerViewModel {
             method: session.plan.method.rawValue,
             host: session.plan.url.host(),
             directStreamURLProvided: session.mediaSource.directStreamUrl != nil))
-        // 起播慢时才附带 mpv 明细(带时间戳,能看出卡在首字节还是探测)。
-        // 每次都写会很快把 256KB 的日志文件顶满、清掉失败记录。
-        if timeline.isSlow {
-            NetworkDiagnostics.recordTimingDetail(
-                host: session.plan.url.host(), mpvLog: player?.recentLogLines() ?? [])
-        }
     }
 
     private func prepareAndLoad() async {
@@ -847,52 +789,31 @@ final class PlayerViewModel {
             markTimeline(.playbackInfo)
             markers = PlaybackMarkers(chapters: prepared.mediaSource.chapters)
 
-            // 渲染后端偏好起播时读一次(默认 gpu-next,见 PlaybackPreferences):
-            // gpu-next 才处理得了 Dolby Vision / HDR,关掉就退回 legacy gpu。
-            let player = MPVPlayer(
-                preferGPUNextBackend: container.preferences.preferGPUNextRenderer)
-            // 初始化失败只写进 `initializationFailure` 不抛错(MPVPlayer.init
-            // 的三条失败路径都是直接 return),不在这里查就会一路走到下面的
-            // glAttached 轮询 —— core 根本没建起来,GL 上下文永远挂不上,
-            // 2s 后报成「渲染上下文创建超时」,把真正的原因(mpv_create 返回
-            // NULL / 某个选项被拒 / mpv_initialize 失败)丢掉。
-            // docs/PITFALLS.md Q1 要验的正是这类失败,不能盖住。
-            if let reason = player.initializationFailure {
-                player.shutdown()
-                isPreparing = false
-                failure = LoadFailure(message: "播放器初始化失败:\(reason)")
-                return
-            }
+            // 建引擎(按设置页的超分偏好)。初始化失败会抛错,由下面的 catch 兜住
+            // 转成「播放器启动失败」文案 —— 不在这里静默放过。
+            let engine = try engineFactory(container.preferences.upscaler)
 
-            // 新 mpv 是 mpv 自己的默认(1× / 音量 100 / 无字幕延迟),把起播偏好设回去,
-            // 都要在挂事件桥之前(见各方法注释)。
-            applyRememberedSpeed(to: player)
-            applyDefaultVolume(to: player)
-            applySubtitleSettings(to: player)
-
+            // 先让视图把引擎的视频表面上屏,再起事件泵、open、play。
+            // 事件泵闭包捕获当前代次,旧引擎的迟到事件会被 handle 丢弃。
             let generation = self.generation
-            let bridge = MPVEventBridge { [weak self] event in
-                self?.handle(event, generation: generation)
-            }
-            player.attach(eventBridge: bridge)
-            // 先挂出去让视图把 GL layer 建起来,再等上下文就绪
-            self.player = player
-            startMonitoring()
+            pump.start(
+                engine: engine,
+                onEvent: { [weak self] event in
+                    self?.handle(event, generation: generation)
+                },
+                onFailure: { [weak self] error in
+                    self?.handlePumpFailure(error, generation: generation)
+                }
+            )
+            self.engine = engine
 
-            let deadline = Date().addingTimeInterval(Self.glAttachTimeout)
-            while !player.statisticsSnapshot().glAttached, Date() < deadline {
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            guard player.statisticsSnapshot().glAttached else {
-                // 与「服务端没给可播路径」是两回事:这里渲染上下文没建起来,
-                // 重开一次通常就好,所以单独给一条文案而不是复用 PlaybackError。
-                isPreparing = false
-                failure = LoadFailure(message: "视频渲染上下文创建超时,请重试。")
-                return
-            }
+            try engine.open(url: prepared.plan.url, headers: prepared.plan.headers)
+            // open 之后、play 之前设置起播偏好(倍速 / 默认音量 / 字幕外观 / 超分)
+            applyRememberedSpeed(to: engine)
+            applyDefaultVolume(to: engine)
+            applySubtitleStyle(container.subtitleStyles.style, to: engine)
+            try engine.play()
 
-            markTimeline(.glReady)
-            try player.load(url: prepared.plan.url, headers: prepared.plan.headers)
             isPreparing = false
             isRestarting = false
         } catch is CancellationError {
@@ -910,13 +831,16 @@ final class PlayerViewModel {
         }
     }
 
-    /// GL 渲染上下文的等待上限(2s,与开发期渲染 spike 的实测值一致)。
-    private static let glAttachTimeout: TimeInterval = 2
+    /// 引擎事件泵读取失败(`pollEvent()` 抛错)。相位不变时的兜底错误通道。
+    private func handlePumpFailure(_ error: PlayerError, generation: Int) {
+        guard generation == self.generation, failure == nil else { return }
+        failure = LoadFailure(message: "播放器内部错误:\(error.message)")
+    }
 
-    /// 倍速设不回新建播放器时的排障出口(与 `DisplaySleepAssertion` 同一个子系统)。
+    /// 倍速设不回新建引擎时的排障出口(与 `DisplaySleepAssertion` 同一个子系统)。
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "playback")
 
-    /// 转码 seek 的重新起流:结束旧上报会话 → 拆掉 mpv(连接断开即停流)
+    /// 转码 seek 的重新起流:结束旧上报会话 → 拆掉引擎(连接断开即停流)
     /// → 以新的 StartTimeTicks 重新走一遍准备流程(4.5)。
     private func restartStream(at seconds: Double) {
         // stop() 内部会发最终 Progress + Stopped(6.6:切换流即结束旧会话)
@@ -940,17 +864,15 @@ final class PlayerViewModel {
 
     /// 播放期是否该阻止显示器休眠。
     ///
-    /// 与 mpv 自带 `stop-screensaver=yes` 的语义对齐(⛔ 不是 `=2` 的「始终抑制」):
-    /// 只有正在播放才抑制,暂停 / 播完 / 加载 / 失败 / 拆播放器都还给系统。
+    /// 语义是「正在播放才抑制,暂停 / 播完 / 加载 / 失败 / 拆引擎都还给系统」。
     ///
     /// 三个判据各有各的必要性:
-    /// - `phase == .playing`:暂停会被 mpv 置成 `.paused`,加载是 `.loading`,失败是 `.failed`;
-    /// - `!isPaused`:起播前就按了暂停时,phase 仍会随 FILE_LOADED 变成 `.playing`
-    ///   (mpv 先报文件就绪、再报 pause),只看 phase 会为「暂停中的画面」占着断言;
-    /// - `!isEnded`:**播完时 phase 停在 `.playing`**(§8 状态机没有「已结束」态,
-    ///   `docs/PITFALLS.md` Q7),不看这个就会让播完卡片一直占着断言。
+    /// - `phase == .playing`:暂停会变成 `.paused`,加载是 `.loading`,失败是 `.failed`;
+    /// - `!isPaused`:起播前就按了暂停时,phase 仍会随「就绪」变成 `.playing`
+    ///   (内核先报文件就绪、再报 pause),只看 phase 会为「暂停中的画面」占着断言;
+    /// - `!isEnded`:播完时 phase 可能停在 `.playing`,不看这个就会让播完卡片一直占着断言。
     static func shouldPreventDisplaySleep(
-        phase: MPVPlayerPhase, isPaused: Bool, isEnded: Bool
+        phase: PlayerPhase, isPaused: Bool, isEnded: Bool
     ) -> Bool {
         phase == .playing && !isPaused && !isEnded
     }
@@ -980,7 +902,7 @@ final class PlayerViewModel {
         )
     }
 
-    private func embyStreamIndex(for trackID: Int, in tracks: [MPVTrack]) -> Int? {
+    private func embyStreamIndex(for trackID: Int64, in tracks: [PlayerTrack]) -> Int? {
         guard let session else { return nil }
         return StreamIndexMapper.embyIndex(
             for: trackID,
@@ -1043,10 +965,10 @@ final class PlayerViewModel {
 
     // MARK: - 事件
 
-    /// mpv 事件入口。`generation` 是**发出这条事件的播放器实例**建立时的代次,
+    /// 引擎事件入口。`generation` 是**发出这条事件的引擎实例**建立时的代次,
     /// 与当前代次不符即来自已被 `stop()` 拆掉的上一轮,直接丢弃。
-    /// (`internal` 而非 `private`:`PlayerViewModelTests` 要直接验这条门。)
-    func handle(_ event: MPVPlayerEvent, generation: Int) {
+    /// (`internal` 而非 `private`:测试要直接验这条门。)
+    func handle(_ event: PlayerEvent, generation: Int) {
         guard generation == self.generation else { return }
         switch event {
         case .phaseChanged(let newPhase):
@@ -1060,7 +982,7 @@ final class PlayerViewModel {
                     didApplyStartOffset = true
                     if startSeconds > 0, session?.plan.method == .directStream {
                         do {
-                            try player?.seek(to: startSeconds)
+                            try engine?.seek(to: startSeconds)
                             positionSeconds = startSeconds
                         } catch {
                             // 恢复位置失败不打断播放:流本身是好的,只是从头开始播。
@@ -1072,37 +994,7 @@ final class PlayerViewModel {
                 beginReportingIfNeeded()
             }
 
-        case .speed(let value):
-            // mpv 起播时会先报一次初始值(1),没变就不上报
-            guard value != speed else { return }
-            speed = value
-            pushState()
-            // 5.2 要求改倍速立即上报,但滑块是连续的(0.05 一跳),一次拖动
-            // 就是十几个请求 —— 真实服务器纪律要求低频,所以合并成一次:
-            // 停手 `Metrics.speedReportDelay` 后再发,值取最后那次。
-            // `pushState()` 每次都走,10 秒一次的 Progress 里倍速不会缺。
-            scheduleRateChangeReport()
-
-        case .subtitleDelay(let value):
-            // 不上报:5.1 的 `SubtitleOffset` 单位未核实(KNOWN_ISSUES.md Q39),
-            // 发错单位比不发更糟 —— 服务端会把它当成真值转给远程控制端。
-            subtitleDelay = value
-
-        case .buffering(let value):
-            isBuffering = value
-            if !value {
-                bufferingPercent = nil
-                cacheSpeedBytesPerSecond = nil
-            }
-
-        case .paused(let paused):
-            isPaused = paused
-            updateDisplaySleepAssertion()
-            // 5.2:暂停 / 恢复立即上报
-            pushState()
-            reportNow(paused ? .pause : .unpause)
-
-        case .timePos(let value):
+        case .position(let value):
             markTimeline(.firstFrame)
             positionSeconds = value
             pushState()
@@ -1115,74 +1007,97 @@ final class PlayerViewModel {
         case .duration(let value):
             durationSeconds = value
 
-        case .volume(let value):
-            volume = value
+        case .paused(let paused):
+            isPaused = paused
+            updateDisplaySleepAssertion()
+            // 5.2:暂停 / 恢复立即上报
             pushState()
-            reportNow(.volumeChange)
+            reportNow(paused ? .pause : .unpause)
 
-        case .muted(let value):
-            isMuted = value
-            pushState()
-            reportNow(.volumeChange)
+        case .buffering(let value):
+            isBuffering = value
 
-        case .trackList(let tracks):
-            audioTracks = tracks.filter { $0.type == .audio }
-            subtitleTracks = tracks.filter { $0.type == .sub }
-            // 读回验证(第 7 节:设置 aid/sid 后要读回,不能假设设置即生效)。
-            // track-list 的 selected 就是读回结果,菜单勾选状态据此刷新。
+        case .ended(let reason):
+            handleEnd(reason)
+
+        case .tracksChanged(let tracks):
+            audioTracks = tracks.filter { $0.kind == .audio }
+            subtitleTracks = tracks.filter { $0.kind == .subtitle }
+            // 读回验证:轨道列表的 `selected` 就是读回结果,菜单勾选状态据此刷新。
             selectedAudioTrackID = audioTracks.first { $0.selected }?.id
             selectedSubtitleTrackID = subtitleTracks.first { $0.selected }?.id
             applyPreferredSubtitle()
             pushState()
 
-        case .endFile(.eof):
+        case .trackSelectionChanged(let audio, let subtitle):
+            selectedAudioTrackID = audio
+            selectedSubtitleTrackID = subtitle
+            pushState()
+
+        case .surfaceAttached:
+            // 视频表面挂上了:起播时间线记一笔(替代旧内核的 GL 就绪)
+            markTimeline(.surfaceReady)
+
+        case .error(let error):
+            // 提示性错误(相位不变);真正的失败由 `.ended(.error)` 处理。
+            Self.logger.error("引擎错误: \(error.message, privacy: .public)")
+        }
+    }
+
+    /// 播放结束的处理:自然播完 / 我们主动停止 / 失败。
+    private func handleEnd(_ reason: PlayerEndReason) {
+        switch reason {
+        case .eof:
             // 6.6:自然播完 → 直接 Stopped,位置用最终位置
             isEnded = true
-            // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)
+            // 播完即释放显示器休眠断言(phase 可能停在 .playing,只能靠 isEnded 判)
             updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
             // 没有片尾标记、也没赶上结束前的提示(比如直接拖到了最后)时,
             // 播完卡片同样按设置倒计时播下一集
             if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
 
-        case .endFile(.error(let message)):
-            // mpv 侧的失败(拉流 401 / 解码失败 / 容器不支持)都走这里;
+        case .stopped:
+            // 我们自己发起的停止(关窗 / 切媒体 / 转码重新起流):收尾由 stop() 负责,
+            // 这里什么都不做,免得把已在收尾的会话又收一次。
+            break
+
+        case .error(let message):
+            // 引擎侧的失败(拉流 401 / 解码失败 / 容器不支持)都走这里;
             // 文案要能区分「服务端没给可播路径」(PlaybackError)与
             // 「给了但播不起来」(本分支)。
             failure = LoadFailure(message: "播放失败:\(message)")
-            // 错误码看不出 libmpv 实际收到了什么(媒体 / HTML / JSON 错误页):
-            // 连同它最近的日志一起脱敏后落诊断日志(NetworkDiagnostics,不含 token)
-            if let session {
-                let mpvLog = player?.recentLogLines() ?? []
-                NetworkDiagnostics.recordPlaybackFailure(
-                    message: message,
-                    url: session.plan.url,
-                    method: session.plan.method.rawValue,
-                    directStreamURLProvided: session.mediaSource.directStreamUrl != nil,
-                    mpvLog: mpvLog
-                )
-                // mpv 收到的是 JSON / 文本而不是媒体:补一次只读探测看看内容(每次失败至多一次)
-                if PlaybackFailureProbe.shouldProbe(mpvLog: mpvLog) {
-                    let url = session.plan.url
-                    let headers = session.plan.headers
-                    Task { await PlaybackFailureProbe.run(url: url, headers: headers) }
-                }
-            }
-
-        default:
-            break
+            recordPlaybackFailure(message)
         }
     }
 
-    /// time-pos 是否已可信(见 `isPositionSettled`)。
-    /// 只有 DirectStream + 非零续播点才需要等:客户端 seek 之前 mpv 报的是文件开头。
+    /// 把播放失败连同上下文落诊断日志,并补一次只读探测。
+    ///
+    /// 引擎看不到 HTTP 状态与响应体(收到的是媒体 / HTML / JSON 错误页),所以失败时
+    /// 对同一个播放 URL 补一次 `Range` 探测,把状态码 / Content-Type / 响应体开头
+    /// 脱敏后记下来(见 `PlaybackFailureProbe`,每次失败至多一次)。
+    private func recordPlaybackFailure(_ message: String) {
+        guard let session else { return }
+        NetworkDiagnostics.recordPlaybackFailure(
+            message: message,
+            url: session.plan.url,
+            method: session.plan.method.rawValue,
+            directStreamURLProvided: session.mediaSource.directStreamUrl != nil
+        )
+        let url = session.plan.url
+        let headers = session.plan.headers
+        Task { await PlaybackFailureProbe.run(url: url, headers: headers) }
+    }
+
+    /// 位置是否已可信(见 `isPositionSettled`)。
+    /// 只有 DirectStream + 非零续播点才需要等:客户端 seek 之前内核报的是文件开头。
     /// 转码流从 `StartTimeTicks` 处起流,没有这一步客户端 seek。
     static func isSettledPosition(_ value: Double, startSeconds: Double, method: PlaybackMethod?) -> Bool {
         guard startSeconds > 0, method == .directStream else { return true }
         return abs(value - startSeconds) < settledPositionTolerance
     }
 
-    /// 判定「已到续播点附近」的容差(秒)。`seek absolute+exact` 落点误差很小,
-    /// 3 秒足够覆盖首个 time-pos 的延迟,又不会把文件开头误判为已就位。
+    /// 判定「已到续播点附近」的容差(秒)。seek 落点误差很小,
+    /// 3 秒足够覆盖首个位置的延迟,又不会把文件开头误判为已就位。
     private static let settledPositionTolerance: Double = 3
 }

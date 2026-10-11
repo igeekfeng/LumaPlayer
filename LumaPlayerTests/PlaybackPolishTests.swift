@@ -5,7 +5,7 @@ import XCTest
 /// 统计信息格式化、播放偏好持久化、上一集查找。
 /// 2026-10-06 追加:同一部剧沿用的倍速记忆(`PlaybackSpeedStore`)。
 ///
-/// 与 `PlayerExperienceTests` 同一原则:只验不需要 mpv、不需要网络的部分。
+/// 与 `PlayerExperienceTests` 同一原则:只验不需要内核、不需要网络的部分。
 /// ⛔ 按钮位置、倒计时的实际观感、触控板手感、置顶窗口是 UI 行为,
 /// 本机无屏幕录制权限,不在这里假装覆盖。
 @MainActor
@@ -146,7 +146,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertNil(viewModel.scrubPreviewSeconds, "时长未知时不响应")
 
         viewModel.handle(.duration(100), generation: 0)
-        viewModel.handle(.timePos(50), generation: 0)
+        viewModel.handle(.position(50), generation: 0)
         viewModel.previewScrub(by: 20)
         viewModel.previewScrub(by: 5)
         XCTAssertEqual(viewModel.scrubPreviewSeconds, 75, "从当前位置起累加,而不是每次都从当前位置重算")
@@ -211,12 +211,13 @@ final class PlaybackPolishTests: XCTestCase {
 
     // MARK: - 缓冲 / 统计
 
-    func testBufferingEndClearsProgress() throws {
+    func testBufferingFlagFollowsEvents() throws {
         let viewModel = try makeViewModel()
+        XCTAssertFalse(viewModel.isBuffering)
         viewModel.handle(.buffering(true), generation: 0)
+        XCTAssertTrue(viewModel.isBuffering)
         viewModel.handle(.buffering(false), generation: 0)
-        XCTAssertNil(viewModel.bufferingPercent)
-        XCTAssertNil(viewModel.cacheSpeedBytesPerSecond)
+        XCTAssertFalse(viewModel.isBuffering)
     }
 
     func testStatisticsToggle() throws {
@@ -230,32 +231,33 @@ final class PlaybackPolishTests: XCTestCase {
 
     func testStatisticsFormatting() {
         XCTAssertEqual(PlayerStatistics.shortCodecName("H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"), "H.264")
-        XCTAssertEqual(PlayerStatistics.decoderText("no"), "软件解码")
-        XCTAssertEqual(PlayerStatistics.decoderText("videotoolbox"), "硬件解码(videotoolbox)")
-        XCTAssertEqual(PlayerStatistics.bitrateText("8200000"), "8.2 Mbps")
-        XCTAssertEqual(PlayerStatistics.bitrateText("192000"), "192 kbps")
-        XCTAssertNil(PlayerStatistics.bitrateText("0"))
-        XCTAssertNil(PlayerStatistics.bitrateText("abc"))
-        XCTAssertEqual(PlayerStatistics.fpsText("23.976"), "23.976 fps")
+        XCTAssertEqual(PlayerStatistics.decoderText(name: nil, hardware: false), "软件解码")
+        XCTAssertEqual(PlayerStatistics.decoderText(name: "videotoolbox", hardware: true), "硬件解码(videotoolbox)")
+        XCTAssertEqual(PlayerStatistics.decoderText(name: "h264", hardware: nil), "h264")
+        XCTAssertEqual(PlayerStatistics.bitrateText(8_200_000), "8.2 Mbps")
+        XCTAssertEqual(PlayerStatistics.bitrateText(192_000), "192 kbps")
+        XCTAssertNil(PlayerStatistics.bitrateText(0))
+        XCTAssertEqual(PlayerStatistics.fpsText(23.976), "23.976 fps")
+        XCTAssertNil(PlayerStatistics.fpsText(0))
     }
 
-    /// 实测值取自本机 mpv 0.41 播放一段 640×360 H.264 测试片的读数。
-    func testStatisticsLinesSkipMissingProperties() {
-        let stats = PlayerStatistics(properties: [
-            "video-codec": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
-            "video-params/w": "640",
-            "video-params/h": "360",
-            "container-fps": "24",
-            "hwdec-current": "no",
-            "audio-codec-name": "aac",
-            "audio-params/samplerate": "44100",
-            "audio-params/channel-count": "1",
-        ], session: nil)
-        let byLabel = Dictionary(uniqueKeysWithValues: stats.lines.map { ($0.label, $0.value) })
+    /// 内核给不了(nil)的字段对应的行直接不显示,不填「未知」凑数。
+    func testStatisticsLinesSkipMissingFields() {
+        var stats = PlayerStats()
+        stats.videoCodec = "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"
+        stats.width = 640
+        stats.height = 360
+        stats.frameRate = 24
+        stats.isHardwareDecoded = false
+        stats.audioCodec = "aac"
+        stats.audioSampleRate = 44_100
+        stats.audioChannels = 1
+        let lines = PlayerStatistics(stats: stats, session: nil)
+        let byLabel = Dictionary(uniqueKeysWithValues: lines.lines.map { ($0.label, $0.value) })
         XCTAssertEqual(byLabel["视频"], "H.264 · 640×360 · 24 fps")
         XCTAssertEqual(byLabel["解码"], "软件解码")
         XCTAssertEqual(byLabel["音频"], "aac · 44.1 kHz · 1 声道")
-        XCTAssertNil(byLabel["丢帧"], "读不到的属性不凑「未知」")
+        XCTAssertNil(byLabel["帧"], "内核没给帧数就不显示")
         XCTAssertNil(byLabel["播放方式"], "没有会话就不显示播放方式")
     }
 
@@ -271,8 +273,8 @@ final class PlaybackPolishTests: XCTestCase {
     // MARK: - 倍速记忆(同一部剧沿用同一个倍速)
 
     /// 决策(2026-10-06):同一部**剧集**沿用同一个倍速,不同剧集 / 电影各算各的,
-    /// 重启 App 回到 1×。这里只验「记在哪、给谁用」;真正写回 mpv 的那一步要 mpv,
-    /// 不在这里假覆盖(`player` 为 nil 时控制方法本来就是空操作)。
+    /// 重启 App 回到 1×。这里只验「记在哪、给谁用」;真正写回引擎的那一步要引擎,
+    /// 不在这里假覆盖(`engine` 为 nil 时控制方法本来就是空操作)。
     func testSpeedIsRememberedPerSeries() throws {
         let container = try makeContainer()
         let server = makeServer()

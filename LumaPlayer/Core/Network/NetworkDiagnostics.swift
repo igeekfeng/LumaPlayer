@@ -99,22 +99,21 @@ enum NetworkDiagnostics {
         append(text)
     }
 
-    /// 记一条播放失败(libmpv 已拿到 URL 但没播起来,如 `Unrecognized file format`)。
+    /// 记一条播放失败(内核已拿到 URL 但没播起来,如 `Unrecognized file format`)。
     ///
-    /// 与 `record(_:...)` 的区别:失败发生在 libmpv 内部,App 看不到 HTTP 状态与响应体,
-    /// 只能留下 mpv 的错误消息与它最近的日志(demuxer / ffmpeg 的探测过程),
-    /// 用来判断收到的是媒体内容还是 HTML / JSON 错误页、有没有重定向。
+    /// 与 `record(_:...)` 的区别:失败发生在内核内部,App 看不到 HTTP 状态与响应体,
+    /// 只能留下内核的错误消息;响应体到底回了什么由 `PlaybackFailureProbe` 另记一条
+    /// `PROBE`(对同一个 URL 补一次只读探测)。
     static func recordPlaybackFailure(
         message: String,
         url: URL,
         method: String,
-        directStreamURLProvided: Bool,
-        mpvLog: [String]
+        directStreamURLProvided: Bool
     ) {
         let text = playbackFailureLine(
             message: message, url: url, method: method,
             directStreamURLProvided: directStreamURLProvided,
-            userAgent: ClientUserAgent.value, mpvLog: mpvLog)
+            userAgent: ClientUserAgent.value)
         logger.error("\(text, privacy: .public)")
         append(text)
     }
@@ -123,28 +122,6 @@ enum NetworkDiagnostics {
     static func recordTiming(_ text: String) {
         logger.info("\(text, privacy: .public)")
         append(text)
-    }
-
-    /// 起播耗时的 mpv 明细:只留拉流 / 探测相关模块的带时间戳日志(去掉渲染器噪音)。
-    static func recordTimingDetail(host: String?, mpvLog: [String]) {
-        let lines = timingDetailLines(mpvLog)
-        guard !lines.isEmpty else { return }
-        let text = "\(Date.now.ISO8601Format()) TIMING-MPV host=\(host ?? "?") "
-            + "mpvlog=[\(lines.map { flattened(SecretRedactor.redacted($0)) }.joined(separator: " | "))]"
-        logger.info("\(text, privacy: .public)")
-        append(text)
-    }
-
-    /// 纯函数:保留 `[stream…]` / `[ffmpeg]` / `[demux]` / `[lavf]` / `[cplayer]` 的行,取最后 40 条
-    static func timingDetailLines(_ mpvLog: [String]) -> [String] {
-        let modules = ["[stream", "[ffmpeg", "[demux", "[lavf", "[cplayer"]
-        let kept = mpvLog.filter { line in
-            // 行形如 `+1.23 [ffmpeg] …`,模块在时间戳之后
-            guard let space = line.firstIndex(of: " ") else { return false }
-            let rest = line[line.index(after: space)...]
-            return modules.contains { rest.hasPrefix($0) }
-        }
-        return Array(kept.suffix(40))
     }
 
     /// 记一条播放失败后的响应体探测结果(见 `PlaybackFailureProbe`)。
@@ -157,15 +134,14 @@ enum NetworkDiagnostics {
 
     /// 播放失败日志的完整文本。纯函数。
     ///
-    /// 形如:`{时间} PLAYBACK method=directStream host=… url=… mpv="…" mpvlog=[a | b | c]`
-    /// URL 经 `SecretRedactor.redactedDescription`,mpv 日志逐条再过一次 `redacted`(双保险)。
+    /// 形如:`{时间} PLAYBACK method=directStream host=… url=… message="…"`
+    /// URL 经 `SecretRedactor.redactedDescription`,错误消息再过一次 `redacted`(双保险)。
     static func playbackFailureLine(
         message: String,
         url: URL,
         method: String,
         directStreamURLProvided: Bool = false,
         userAgent: String? = nil,
-        mpvLog: [String],
         date: Date = .now
     ) -> String {
         var parts = [
@@ -174,22 +150,15 @@ enum NetworkDiagnostics {
             "method=\(method)",
             "host=\(url.host() ?? "?")",
             "url=\(SecretRedactor.redactedDescription(of: url))",
-            "mpv=\"\(flattened(SecretRedactor.redacted(message)))\"",
+            "message=\"\(flattened(SecretRedactor.redacted(message)))\"",
             // 服务端有没有给 MediaSource.DirectStreamUrl(issue #2:有就用它,没有才自拼)
             "dsu=\(directStreamURLProvided ? "provided" : "absent")",
         ]
         if let userAgent {
             parts.append("ua=\"\(flattened(SecretRedactor.redacted(userAgent)))\"")
         }
-        if !mpvLog.isEmpty {
-            let lines = mpvLog.suffix(playbackLogLines).map { flattened(SecretRedactor.redacted($0)) }
-            parts.append("mpvlog=[\(lines.joined(separator: " | "))]")
-        }
         return parts.joined(separator: " ")
     }
-
-    /// 播放失败时带上的 mpv 日志条数(取最后 N 条,错误总在末尾附近)
-    static let playbackLogLines = 30
 
     /// 一条日志的完整文本。纯函数,单独拆出来便于测试。
     ///

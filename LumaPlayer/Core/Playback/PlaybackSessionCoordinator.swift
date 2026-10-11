@@ -18,7 +18,7 @@ actor PlaybackSessionCoordinator {
         self.itemID = itemID
     }
 
-    /// 产出可直接交给 mpv 的播放会话。
+    /// 产出可直接交给播放内核的播放会话。
     ///
     /// 失败来源有两种:`EmbyAPIError`(接口层,含 401 —— 由
     /// `ServerConnection` 按 API_CONTRACT.md 2.5 清掉本台 token)与

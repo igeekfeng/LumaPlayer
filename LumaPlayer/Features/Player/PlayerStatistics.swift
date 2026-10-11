@@ -2,9 +2,9 @@ import Foundation
 
 /// 播放统计信息 overlay 的内容(按 I 键开关)。
 ///
-/// 数据全部来自 mpv 属性的字符串读数(`MPVPlayer.stringProperties`),
+/// 数据来自播放引擎的归一化统计快照(`PlaybackEngine.stats() -> PlayerStats`),
 /// 再加上 Emby 侧的播放方式与容器。本类型只做格式化,是纯函数,便于测试。
-/// 某个属性读不到(mpv 返回 NULL)时对应的行直接不显示,不填「未知」凑数。
+/// 某个字段内核给不了(nil)时对应的行直接不显示,不填「未知」凑数。
 struct PlayerStatistics: Equatable {
     struct Line: Equatable, Identifiable {
         let label: String
@@ -14,17 +14,7 @@ struct PlayerStatistics: Equatable {
 
     let lines: [Line]
 
-    /// 需要轮询的 mpv 属性。名字均已对照本机 mpv 0.41 的 `--list-properties` 核实。
-    static let propertyNames = [
-        "video-codec", "video-params/w", "video-params/h", "video-params/pixelformat",
-        "video-params/primaries", "video-params/gamma", "container-fps", "estimated-vf-fps",
-        "hwdec-current", "video-bitrate",
-        "audio-codec-name", "audio-params/samplerate", "audio-params/channel-count", "audio-bitrate",
-        "frame-drop-count", "decoder-frame-drop-count", "display-fps",
-        "demuxer-cache-duration", "cache-speed",
-    ]
-
-    init(properties p: [String: String], session: PlaybackSession?) {
+    init(stats s: PlayerStats, session: PlaybackSession?) {
         var lines: [Line] = []
         func add(_ label: String, _ parts: [String?]) {
             let value = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
@@ -36,34 +26,34 @@ struct PlayerStatistics: Equatable {
         }
 
         let size: String? = {
-            guard let w = p["video-params/w"], let h = p["video-params/h"] else { return nil }
+            guard let w = s.width, let h = s.height else { return nil }
             return "\(w)×\(h)"
         }()
-        let fps = (p["estimated-vf-fps"] ?? p["container-fps"]).flatMap(Self.fpsText)
-        add("视频", [p["video-codec"].map(Self.shortCodecName), size, fps])
-        let colour: String? = {
-            guard let primaries = p["video-params/primaries"], let gamma = p["video-params/gamma"] else { return nil }
-            return "\(primaries) / \(gamma)"
-        }()
-        add("色彩", [p["video-params/pixelformat"], colour])
-        add("解码", [p["hwdec-current"].map(Self.decoderText)])
-        add("视频码率", [p["video-bitrate"].flatMap(Self.bitrateText)])
+        add("视频", [s.videoCodec.map(Self.shortCodecName), size, s.frameRate.flatMap(Self.fpsText)])
 
-        let sampleRate = p["audio-params/samplerate"].flatMap(Double.init).map {
+        let colour: String? = {
+            guard let primaries = s.colorPrimaries, let transfer = s.colorTransfer else { return nil }
+            return "\(primaries) / \(transfer)"
+        }()
+        add("色彩", [s.pixelFormat, colour])
+        add("解码", [Self.decoderText(name: s.decoderName, hardware: s.isHardwareDecoded)])
+        add("视频码率", [s.videoBitRate.flatMap(Self.bitrateText)])
+
+        let sampleRate = s.audioSampleRate.map {
             "\(($0 / 1000).formatted(.number.precision(.fractionLength(0...1)))) kHz"
         }
-        let channels = p["audio-params/channel-count"].map { "\($0) 声道" }
-        add("音频", [p["audio-codec-name"], sampleRate, channels, p["audio-bitrate"].flatMap(Self.bitrateText)])
+        let channels = s.audioChannels.map { "\($0) 声道" }
+        add("音频", [s.audioCodec, sampleRate, channels, s.audioBitRate.flatMap(Self.bitrateText)])
 
-        if let output = p["frame-drop-count"], let decoder = p["decoder-frame-drop-count"] {
-            add("丢帧", ["输出 \(output)", "解码 \(decoder)"])
+        if let rendered = s.renderedFrames {
+            add("帧", ["已渲染 \(rendered)", s.droppedFrames.map { "丢帧 \($0)" }])
         }
-        add("显示", [p["display-fps"].flatMap(Double.init).map { "\(Int($0.rounded())) Hz" }])
 
-        let cached = p["demuxer-cache-duration"].flatMap(Double.init).map {
-            "已缓存 \($0.formatted(.number.precision(.fractionLength(1)))) 秒"
+        let headroom = s.edrHeadroom.map {
+            "headroom \($0.formatted(.number.precision(.fractionLength(0...2))))"
         }
-        add("网络", [cached, p["cache-speed"].flatMap(Double.init).map(Self.speedText)])
+        add("输出", [s.outputMode, headroom])
+        add("显存", [s.memoryBytes.map(Self.byteText)])
 
         self.lines = lines
     }
@@ -75,27 +65,35 @@ struct PlayerStatistics: Equatable {
         raw.components(separatedBy: " / ").first ?? raw
     }
 
-    /// mpv 的 `hwdec-current`:`no` 表示软解,其余是硬解接口名(如 `videotoolbox`)。
-    static func decoderText(_ raw: String) -> String {
-        raw == "no" || raw.isEmpty ? "软件解码" : "硬件解码(\(raw))"
-    }
-
-    /// bit/s → `8.2 Mbps` / `192 kbps`。0 或不可解析时返回 nil。
-    static func bitrateText(_ raw: String) -> String? {
-        guard let bits = Double(raw), bits > 0 else { return nil }
-        if bits >= 1_000_000 {
-            return "\((bits / 1_000_000).formatted(.number.precision(.fractionLength(1)))) Mbps"
+    /// 解码方式:优先按「是否硬解」的布尔量,其次退回后端名。
+    /// `hardware` 为 nil(内核没给帧数)时只显示后端名。
+    static func decoderText(name: String?, hardware: Bool?) -> String? {
+        switch hardware {
+        case true:
+            return name.map { "硬件解码(\($0))" } ?? "硬件解码"
+        case false:
+            return "软件解码"
+        case nil:
+            return name
         }
-        return "\(Int((bits / 1000).rounded())) kbps"
     }
 
-    static func fpsText(_ raw: String) -> String? {
-        guard let fps = Double(raw), fps > 0 else { return nil }
+    /// bit/s → `8.2 Mbps` / `192 kbps`。0 或负数返回 nil。
+    static func bitrateText(_ bits: Int) -> String? {
+        guard bits > 0 else { return nil }
+        if bits >= 1_000_000 {
+            return "\((Double(bits) / 1_000_000).formatted(.number.precision(.fractionLength(1)))) Mbps"
+        }
+        return "\(Int((Double(bits) / 1000).rounded())) kbps"
+    }
+
+    static func fpsText(_ fps: Double) -> String? {
+        guard fps.isFinite, fps > 0 else { return nil }
         return "\(fps.formatted(.number.precision(.fractionLength(0...3)))) fps"
     }
 
-    /// 字节/秒 → `3.2 MB/s` / `850 KB/s`(十进制单位,与系统「活动监视器」一致)。
-    static func speedText(_ bytesPerSecond: Double) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(max(0, bytesPerSecond)), countStyle: .decimal) + "/s"
+    /// 字节数 → `320 MB`(十进制单位,与系统「活动监视器」一致)
+    static func byteText(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(max(0, bytes)), countStyle: .decimal)
     }
 }

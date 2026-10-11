@@ -49,20 +49,20 @@ final class PlaybackPreferences {
         didSet { persist(floatsOnTop, Key.floatsOnTop) }
     }
 
-    // MARK: - 色彩渲染
+    // MARK: - 画质增强
 
-    /// 优先用 `gpu-next` 渲染后端(libplacebo)。默认开。
+    /// 神经网路超分(当前内核映射到 Erika 的 ArtCNN 动漫 2× 亮度超分)。默认关。
     ///
-    /// 开:能正确处理 Dolby Vision(Profile 5)与 HDR —— 关掉的话 DV 片源会
-    /// 发紫发绿(mpv 的 legacy `gpu` 渲染器不处理 DV 的 RPU)。
-    /// 关:退回 legacy `gpu` 渲染器。留这个开关是因为 gpu-next 走的是上游
-    /// **未合并的 draft PR**,万一它让别的片源出问题,用户能自己退回去。
-    /// 详见 docs/DECISIONS/gpu-next-render-backend.md。
+    /// 只在 Apple Silicon 上有意义,且会增加 GPU 负载;动漫类片源收益最明显,
+    /// 真人片源未必看得出来,所以默认关,由用户按片源自己开。
     ///
-    /// 起播时读一次(建 `MPVPlayer` 时),**下一次起播才生效**。
-    var preferGPUNextRenderer: Bool {
-        didSet { persist(preferGPUNextRenderer, Key.preferGPUNextRenderer) }
+    /// 起播时读一次(建引擎时),**下一次起播才生效**。
+    var useNeuralUpscaler: Bool {
+        didSet { persist(useNeuralUpscaler, Key.useNeuralUpscaler) }
     }
+
+    /// 超分偏好 → 引擎档位(起播建引擎时读一次)
+    var upscaler: PlayerUpscaler { useNeuralUpscaler ? .artCNN : .off }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -73,8 +73,7 @@ final class PlaybackPreferences {
         self.autoSkipIntro = defaults.bool(forKey: Key.autoSkipIntro)
         self.autoPlayNext = defaults.object(forKey: Key.autoPlayNext) as? Bool ?? true
         self.floatsOnTop = defaults.bool(forKey: Key.floatsOnTop)
-        // ⛔ 不用 bool(forKey:):没存过时会读成 false,把默认值(开)吃掉。
-        self.preferGPUNextRenderer = defaults.object(forKey: Key.preferGPUNextRenderer) as? Bool ?? true
+        self.useNeuralUpscaler = defaults.object(forKey: Key.useNeuralUpscaler) as? Bool ?? false
     }
 
     /// 全部回到出厂值。设置页「恢复默认」用。
@@ -86,14 +85,14 @@ final class PlaybackPreferences {
         autoSkipIntro = false
         autoPlayNext = true
         floatsOnTop = false
-        preferGPUNextRenderer = true
+        useNeuralUpscaler = false
     }
 
     /// 是否有任何一项偏离默认(设置页「恢复默认」按钮的禁用判据)
     var isDefault: Bool {
         defaultSpeed == Self.defaultSpeed && seekStep == Metrics.seekStep
             && defaultVolume == Metrics.defaultVolume && subtitleMode == Self.defaultSubtitleMode
-            && !autoSkipIntro && autoPlayNext && !floatsOnTop && preferGPUNextRenderer
+            && !autoSkipIntro && autoPlayNext && !floatsOnTop && !useNeuralUpscaler
     }
 
     // MARK: - 默认值与夹取
@@ -103,7 +102,7 @@ final class PlaybackPreferences {
 
     // MARK: - 持久化
 
-    /// UserDefaults key。三个开关沿用开发期就在用的键名,老版本存下的值继续有效。
+    /// UserDefaults key。开关沿用开发期就在用的键名,老版本存下的值继续有效。
     enum Key {
         static let defaultSpeed = "player.defaultSpeed"
         static let seekStep = "player.seekStep"
@@ -112,7 +111,7 @@ final class PlaybackPreferences {
         static let autoSkipIntro = "player.autoSkipIntro"
         static let autoPlayNext = "player.autoPlayNext"
         static let floatsOnTop = "player.floatsOnTop"
-        static let preferGPUNextRenderer = "player.preferGPUNextRenderer"
+        static let useNeuralUpscaler = "player.useNeuralUpscaler"
     }
 
     @ObservationIgnored private let defaults: UserDefaults

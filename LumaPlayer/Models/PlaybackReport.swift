@@ -31,7 +31,7 @@ struct PlaybackReportBody: Encodable, Sendable, Equatable {
     let queueableMediaTypes: [String]
     /// 仅 Progress 请求携带;其他端点省略
     let eventName: String?
-    /// 当前倍速(mpv `speed` 读回值);nil 时编码省略
+    /// 当前倍速;nil 时编码省略
     let playbackRate: Double?
 
     init(

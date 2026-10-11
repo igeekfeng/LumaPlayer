@@ -370,10 +370,12 @@ actor ServerConnection {
         return try await authenticated(.playbackInfo(itemID: itemID, request: request))
     }
 
-    /// 交给 mpv 的认证头(API_CONTRACT.md 第 6 节)。
+    /// 交给播放内核的认证头(API_CONTRACT.md 第 6 节)。
     ///
-    /// 播放是 mpv 自己发的 HTTP 请求,不走 `URLSession`,所以认证信息必须
-    /// **显式取出**再交给它;漏了就是 401,而且从 mpv 侧很难定位。
+    /// 播放是内核自己发的 HTTP 请求,不走 `URLSession`,所以认证信息必须
+    /// **显式取出**再交给它;漏了就是 401,而且从内核侧很难定位。
+    /// `User-Agent` 也在这里带上(issue #2 的自定义 UA 要作用到播放链路;
+    /// 内核不会自己用 App 的 UA)。
     /// ⛔ 返回值含 token,不得进日志 —— 打印前先过 `SecretRedactor`。
     func playbackHeaders() async throws -> [String: String] {
         try await ensureCredentials()
@@ -384,6 +386,7 @@ actor ServerConnection {
         return [
             "Authorization": builder.authorizationHeaderValue(userID: profile.userID),
             "X-Emby-Token": token,
+            "User-Agent": ClientUserAgent.value,
         ]
     }
 

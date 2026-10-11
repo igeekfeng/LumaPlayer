@@ -1,20 +1,20 @@
 import XCTest
 @testable import LumaPlayer
 
-/// mpv 轨道 → Emby `MediaStream.Index` 的换算(docs/PITFALLS.md Q21)。
+/// 内核轨道 → Emby `MediaStream.Index` 的换算(docs/PITFALLS.md Q21)。
 ///
 /// 用例数据取自本地 Emby 4.9.5.0 实例上 `02-multi-track.mkv` 的实测:
-/// mpv 的 `src-id` 从 1 起,Emby 的 `Index` 从 0 起,早先直接透传 `src-id`
-/// 导致上报整体偏一位。这里断言的是**换算后的 Emby 索引**,不是 mpv 编号。
+/// 内核给的容器内轨道号从 1 起,Emby 的 `Index` 从 0 起,早先直接透传
+/// 导致上报整体偏一位。这里断言的是**换算后的 Emby 索引**,不是内核编号。
 final class StreamIndexMapperTests: XCTestCase {
 
-    /// mpv 的轨道号按类型各自从 1 编号
-    private static let tracks: [MPVTrack] = [
+    /// 内核的轨道号按类型各自从 1 编号
+    private static let tracks: [PlayerTrack] = [
         track(1, .video),
         track(1, .audio, lang: "eng"),
         track(2, .audio, lang: "chi"),
-        track(1, .sub, lang: "eng"),
-        track(2, .sub, lang: "chi"),
+        track(1, .subtitle, lang: "eng"),
+        track(2, .subtitle, lang: "chi"),
     ]
 
     private static let streams: [EmbyMediaStream] = [
@@ -27,7 +27,7 @@ final class StreamIndexMapperTests: XCTestCase {
 
     // MARK: - 对应规则
 
-    /// 实测场景:mpv 播 English(aid=1)时,服务端必须收到 1(不是 src-id 的 2)。
+    /// 实测场景:播 English(aid=1)时,服务端必须收到 1(不是容器内轨道号的 2)。
     func testAudioTracksMapByOrderWithinType() {
         XCTAssertEqual(map(1, .audio), 1)
         XCTAssertEqual(map(2, .audio), 2)
@@ -35,8 +35,8 @@ final class StreamIndexMapperTests: XCTestCase {
 
     /// 字幕同理:切到 Chinese(sid=2)对应 Emby 的 4,而不是某条音轨或越界
     func testSubtitleTracksMapByOrderWithinType() {
-        XCTAssertEqual(map(1, .sub), 3)
-        XCTAssertEqual(map(2, .sub), 4)
+        XCTAssertEqual(map(1, .subtitle), 3)
+        XCTAssertEqual(map(2, .subtitle), 4)
     }
 
     /// Emby 的 `Index` 不连续(中间夹着别的类型、或服务端给的顺序打乱)时,
@@ -57,7 +57,7 @@ final class StreamIndexMapperTests: XCTestCase {
     /// 转码流的轨道构成由服务端决定,与源文件的 MediaStreams 不对应
     func testTranscodeNeverMaps() {
         XCTAssertNil(map(1, .audio, method: .transcode))
-        XCTAssertNil(map(1, .sub, method: .transcode))
+        XCTAssertNil(map(1, .subtitle, method: .transcode))
     }
 
     /// 条数不一致:无从判断哪条对哪条
@@ -66,23 +66,23 @@ final class StreamIndexMapperTests: XCTestCase {
         XCTAssertNil(map(1, .audio, streams: streams))
     }
 
-    /// mpv 侧的外挂轨不参与对应;它也不能挤占内嵌轨的序号
-    func testExternalMPVTrackIsExcluded() {
-        let tracks = Self.tracks + [Self.track(3, .sub, lang: "zh", external: true)]
-        XCTAssertNil(map(3, .sub, tracks: tracks))
-        XCTAssertEqual(map(2, .sub, tracks: tracks), 4)
+    /// 内核侧的外挂轨不参与对应;它也不能挤占内嵌轨的序号
+    func testExternalPlayerTrackIsExcluded() {
+        let tracks = Self.tracks + [Self.track(3, .subtitle, lang: "zh", external: true)]
+        XCTAssertNil(map(3, .subtitle, tracks: tracks))
+        XCTAssertEqual(map(2, .subtitle, tracks: tracks), 4)
     }
 
     /// Emby 侧的外挂字幕(`IsExternal`)同样不计入内嵌序列
     func testExternalEmbyStreamIsExcluded() {
         let streams = Self.streams + [Self.stream(5, "Subtitle", external: true)]
-        XCTAssertEqual(map(2, .sub, streams: streams), 4)
+        XCTAssertEqual(map(2, .subtitle, streams: streams), 4)
     }
 
     /// `MediaStreams` 缺失、或有流缺 `Index`:不猜
     func testMissingStreamsOrIndexReturnsNil() {
         XCTAssertNil(StreamIndexMapper.embyIndex(
-            for: 1, tracks: Self.tracks.filter { $0.type == .audio },
+            for: 1, tracks: Self.tracks.filter { $0.kind == .audio },
             streams: nil, method: .directStream))
 
         let streams = [Self.stream(1, "Audio"), EmbyMediaStream(
@@ -104,27 +104,27 @@ final class StreamIndexMapperTests: XCTestCase {
 
     // MARK: - 辅助
 
-    /// 与 `PlayerViewModel` 一致:只把同类型的 mpv 轨道传进来
+    /// 与 `PlayerViewModel` 一致:只把同类型的内核轨道传进来
     private func map(
-        _ id: Int,
-        _ type: MPVTrackType,
-        tracks: [MPVTrack] = StreamIndexMapperTests.tracks,
+        _ id: Int64,
+        _ kind: PlayerTrackKind,
+        tracks: [PlayerTrack] = StreamIndexMapperTests.tracks,
         streams: [EmbyMediaStream] = StreamIndexMapperTests.streams,
         method: PlaybackMethod = .directStream
     ) -> Int? {
         StreamIndexMapper.embyIndex(
             for: id,
-            tracks: tracks.filter { $0.type == type },
+            tracks: tracks.filter { $0.kind == kind },
             streams: streams,
             method: method
         )
     }
 
     private static func track(
-        _ id: Int, _ type: MPVTrackType, lang: String? = nil, external: Bool = false
-    ) -> MPVTrack {
-        MPVTrack(id: id, type: type, selected: false, title: nil, lang: lang,
-                 codec: nil, isExternal: external, isForced: false)
+        _ id: Int64, _ kind: PlayerTrackKind, lang: String? = nil, external: Bool = false
+    ) -> PlayerTrack {
+        PlayerTrack(id: id, kind: kind, source: external ? .external : .embedded,
+                    selected: false, title: nil, language: lang, codec: nil)
     }
 
     private static func stream(_ index: Int, _ type: String, external: Bool = false) -> EmbyMediaStream {

@@ -167,32 +167,28 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertEqual(before, after, "测试进程不应改动诊断日志文件")
     }
 
-    /// 播放失败行:URL 的 api_key 与 mpv 日志里的凭据都不能原样出现,且保留排障线索。
+    /// 播放失败行:URL 的 api_key 不能原样出现,错误消息要保留,且换行压平。
     func testPlaybackFailureLineRedactsSecretsAndKeepsClues() throws {
         let url = try XCTUnwrap(URL(string: "https://emby.example.com/Videos/1/stream?static=true&api_key=SECRET123"))
         let line = NetworkDiagnostics.playbackFailureLine(
-            message: "unrecognized file format",
+            message: "unrecognized file format\n(retry)",
             url: url,
             method: "DirectStream",
-            mpvLog: [
-                "[ffmpeg] http: Opening 'https://emby.example.com/x?api_key=SECRET123'",
-                "[lavf] Failed to recognize file format.\n",
-            ],
             date: Date(timeIntervalSince1970: 0)
         )
 
         XCTAssertFalse(line.contains("SECRET123"))
         XCTAssertTrue(line.contains("PLAYBACK method=DirectStream host=emby.example.com"))
-        XCTAssertTrue(line.contains("mpv=\"unrecognized file format\""))
-        XCTAssertTrue(line.contains("Failed to recognize file format."))
+        XCTAssertTrue(line.contains(#"message="unrecognized file format (retry)""#))
+        XCTAssertTrue(line.contains("dsu=absent"))
         XCTAssertFalse(line.contains("\n"))
     }
 
-    /// 没有 mpv 日志时不出现空的 mpvlog 段。
-    func testPlaybackFailureLineOmitsEmptyLog() throws {
+    /// 没传 userAgent 时不出现空的 ua 段。
+    func testPlaybackFailureLineOmitsUserAgentWhenAbsent() throws {
         let url = try XCTUnwrap(URL(string: "https://emby.example.com/a"))
         let line = NetworkDiagnostics.playbackFailureLine(
-            message: "m", url: url, method: "Transcode", mpvLog: [])
-        XCTAssertFalse(line.contains("mpvlog="))
+            message: "m", url: url, method: "Transcode")
+        XCTAssertFalse(line.contains("ua="))
     }
 }

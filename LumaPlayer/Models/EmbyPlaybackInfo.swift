@@ -28,7 +28,7 @@ struct PlaybackInfoRequest: Encodable, Sendable, Equatable {
     /// 部分带网关的服务器在自拼串流地址时回 200 + JSON 错误体(issue #2)。
     let deviceProfile = DeviceProfile()
 
-    /// 只声明「视频容器/编码不限」:libmpv 什么都能播,不需要服务端替我们挑。
+    /// 只声明「视频容器/编码不限」:播放内核什么都能播,不需要服务端替我们挑。
     /// ⛔ 不要在这里写长长的容器/编码白名单 —— 写窄了服务端会把本来能直连的转码
     /// (API_CONTRACT.md 4.3)。本地 4.9.5.0 实测这个形态下 `SupportsDirectStream` 保持 true。
     struct DeviceProfile: Encodable, Sendable, Equatable {

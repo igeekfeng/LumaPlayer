@@ -112,11 +112,11 @@ private struct PlaybackSettingsView: View {
             }
 
             Section {
-                Toggle("杜比视界 / HDR 兼容渲染", isOn: $preferences.preferGPUNextRenderer)
+                Toggle("神经网路超分(ArtCNN)", isOn: $preferences.useNeuralUpscaler)
             } header: {
-                Text("色彩")
+                Text("画质增强")
             } footer: {
-                Text("默认开:用 gpu-next(libplacebo)渲染,杜比视界片源才不会发紫发绿 —— 旧渲染器不处理 DV 的元数据。代价是 GPU 负载比旧渲染器高(色调映射与缩放画质更好)。关掉退回旧渲染器,只在 gpu-next 让别的片源出问题时才关。下一次开始播放时生效。")
+                Text("默认关:开启后用 ArtCNN 对画面做 2× 亮度超分,动漫类片源提升最明显,代价是 GPU 负载更高。真人片源未必看得出来,按片源自己决定。下一次开始播放时生效。")
             }
 
             Section {
@@ -170,7 +170,7 @@ private struct SettingsValueSlider: View {
 
 /// 字幕外观(`SubtitleStyle`):全部服务器共用,改完对正在播放的视频立即生效。
 ///
-/// ⛔ 不做「预览字幕」:SwiftUI 画出来的样子和 libass 的渲染(描边算法、字体回退、
+/// ⛔ 不做「预览字幕」:SwiftUI 画出来的样子和内核的渲染(描边算法、字体回退、
 /// 按窗口缩放)对不上,一个不准的预览比没有更误导。正在播放的画面就是准确的预览。
 private struct SubtitleSettingsView: View {
     @Bindable var store: SubtitleStyleStore
@@ -193,12 +193,7 @@ private struct SubtitleSettingsView: View {
                     Text("半透明底框").tag(SubtitleStyle.Edge.box)
                 }
                 .pickerStyle(.segmented)
-                if store.style.edge == .box {
-                    SettingsValueSlider(
-                        title: "底框不透明度", value: $store.style.boxOpacity,
-                        range: SubtitleStyle.boxOpacityRange, step: 0.05,
-                        text: Self.percent(store.style.boxOpacity))
-                } else {
+                if store.style.edge != .box {
                     SettingsValueSlider(
                         title: "描边粗细", value: $store.style.outlineSize,
                         range: SubtitleStyle.outlineRange, step: 0.25,
@@ -212,23 +207,11 @@ private struct SubtitleSettingsView: View {
             }
 
             Section {
-                SettingsValueSlider(
-                    title: "垂直位置", value: $store.style.position,
-                    range: SubtitleStyle.positionRange, step: 1,
-                    text: store.style.position == SubtitleStyle.positionRange.upperBound
-                        ? "底部" : "上移 \(Int((SubtitleStyle.positionRange.upperBound - store.style.position).rounded()))%")
-            } header: {
-                Text("位置")
-            } footer: {
-                Text("百分比是相对画面高度。")
-            }
-
-            Section {
                 Toggle("对 ASS 特效字幕也套用以上样式", isOn: $store.style.overridesASS)
             } header: {
                 Text("ASS 字幕")
             } footer: {
-                Text("ASS 字幕自带颜色、字体与排版,默认只跟随这里的字号。打开后颜色、描边、位置也会强制覆盖,可能弄乱招牌、歌词这类特效排版;只建议在字幕组样式实在看不清时使用。")
+                Text("ASS 字幕自带颜色、字体与排版,默认只跟随这里的字号。打开后颜色、描边也会强制覆盖,可能弄乱招牌、歌词这类特效排版;只建议在字幕组样式实在看不清时使用。")
             }
 
             Section {

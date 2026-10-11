@@ -80,7 +80,7 @@ enum Metrics {
     static let autoHideResumeDelay: TimeInterval = 5
     /// 方向键单次 seek
     ///
-    /// 转码模式下不是 mpv seek,而是停流 + StartTimeTicks 重新起流
+    /// 转码模式下不是内核 seek,而是停流 + StartTimeTicks 重新起流
     /// (API_CONTRACT.md 4.5);token 值相同,行为由 PlayerViewModel 分派。
     /// 可在设置页改(`PlaybackPreferences.seekStep`),这个值是默认档。
     static let seekStep: TimeInterval = 10
@@ -97,7 +97,7 @@ enum Metrics {
     /// 「凡是从离散选项改成连续调节的控件,都要回头看它的副作用是按次
     /// 还是按值触发」),所以这里等连点停下来再起流。
     ///
-    /// ⛔ 不适用于 DirectStream:那是 mpv seek,本来就便宜,合并只会让
+    /// ⛔ 不适用于 DirectStream:那是内核 seek,本来就便宜,合并只会让
     /// 画面响应变慢。窗口 0.25 秒:短到感觉不到,长到足以吃掉连点。
     static let seekRestartMergeDelay: TimeInterval = 0.25
     /// 连点后退 / 前进时的累加上限(倍)。第 n 次点击跳 `seekStep × n`,
@@ -108,11 +108,11 @@ enum Metrics {
     static let seekRepeatResetDelay: TimeInterval = 1.2
     /// 音量单次增减(0–100)
     static let volumeStep: Double = 5
-    /// 音量区间(mpv `--volume`)
+    /// 音量区间(播放器内的 0–100;交给引擎时 /100 转成 0–1)
     static let volumeRange: ClosedRange<Double> = 0...100
-    /// mpv 自身的默认音量(`--volume` 默认 100),也是「默认音量」偏好的默认值
+    /// 音量偏好的默认值(100 = 满音量)
     static let defaultVolume: Double = 100
-    /// 倍速区间:与 `MPVPlayer.setSpeed` 的夹取一致(超出这个范围音频严重失真)
+    /// 倍速区间(超出这个范围音频严重失真)
     static let speedRange: ClosedRange<Double> = 0.25...4
     /// 倍速滑块与浮层 ± 按钮的步长(连续调节,不按档位跳)
     static let speedStep: Double = 0.05
@@ -129,13 +129,6 @@ enum Metrics {
         let clamped = min(max(value, speedRange.lowerBound), speedRange.upperBound)
         return (clamped * 100).rounded() / 100
     }
-    /// 字幕延迟区间(秒)。mpv 本身不设限;±60 秒已远超「同一个文件的字幕对不齐」的量级,
-    /// 再大就是字幕配错了版本,调偏移救不回来
-    static let subtitleDelayRange: ClosedRange<Double> = -60...60
-    /// Z / X 的字幕延迟步长(mpv 默认键位也是 0.1 秒)
-    static let subtitleDelayStep: Double = 0.1
-    /// ⇧Z / ⇧X 的大步长:差好几秒时不用连按几十下
-    static let subtitleDelayLargeStep: Double = 1
     /// 播放器图标按钮的点击区域边长(控制栏与菜单按钮一致,避免图标宽窄不一导致跳动)
     static let playerButtonSize: CGFloat = 32
     /// 屏显提示(OSD,如「1.25×」「字幕:中文」)停留时长
@@ -155,8 +148,6 @@ enum Metrics {
     static let scrubberTrackOpacity: Double = 0.28
     /// 已播放段
     static let scrubberPlayedOpacity: Double = 1.0
-    /// 已缓冲段。比底色亮一档、比已播放段暗一档,层次靠这三个不透明度拉开。
-    static let scrubberBufferedOpacity: Double = 0.55
     /// 悬停时间气泡距轨道的垂直距离
     static let scrubberTooltipOffset: CGFloat = 28
     /// 续播时从服务端记录的位置往回退的秒数(接上前情,Infuse / Plex 的做法)
@@ -167,8 +158,8 @@ enum Metrics {
     static let upNextCountdown = 10
     /// 没有片尾标记时,结束前多少秒开始提示下一集(与倒计时等长:数完正好播完)
     static let upNextFallbackLead: TimeInterval = 10
-    /// 缓冲进度 / 已缓存范围 / 统计信息的轮询间隔
-    static let playerMonitorInterval: TimeInterval = 1
+    /// 统计信息 overlay 打开时的刷新间隔(按 I 打开后才轮询)
+    static let statisticsRefreshInterval: TimeInterval = 1
     /// 触控板横向双指滑动:每移动 1 pt 对应的秒数(300 pt 的一次长滑 ≈ 1 分钟)
     static let trackpadSeekSecondsPerPoint: Double = 0.2
     /// 横滑判定:横向累计位移要超过纵向的这么多倍才算「拖进度」,否则放行给系统

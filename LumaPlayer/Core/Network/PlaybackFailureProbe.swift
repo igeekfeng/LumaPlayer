@@ -2,23 +2,14 @@ import Foundation
 
 /// 播放失败后的响应体探测(issue #2)。
 ///
-/// libmpv 看不到 HTTP 状态与响应体,`Mime-type: 'application/json'` 之类的日志只能说明
-/// 「回的不是媒体」。这里对**同一个播放 URL** 补发一次 `Range: bytes=0-511` 的只读 GET,
-/// 把状态码、Content-Type、重定向目标 host 与脱敏后的前几百字节落诊断日志。
+/// 播放内核看不到 HTTP 状态与响应体,错误消息只能说明「回的不是媒体」。这里对
+/// **同一个播放 URL** 补发一次 `Range: bytes=0-511` 的只读 GET,把状态码、
+/// Content-Type、重定向目标 host 与脱敏后的前几百字节落诊断日志。
 ///
-/// 纪律(CLAUDE.md「真实服务器使用纪律」):只在 mpv 已失败且日志表明收到非媒体内容时触发,
+/// 纪律(CLAUDE.md「真实服务器使用纪律」):只在播放已失败时触发,
 /// 每次失败最多一次,不重试。不跟随重定向:自定义头(`X-Emby-Token`)会被 URLSession
 /// 带到重定向后的任意 host,只记下 Location 的 host 就停。
 enum PlaybackFailureProbe {
-    /// mpv 日志里出现这些 Content-Type 才值得探测(收到的是文本类内容而不是媒体)
-    static func shouldProbe(mpvLog: [String]) -> Bool {
-        mpvLog.contains { line in
-            guard let range = line.range(of: "Mime-type: '") else { return false }
-            let mime = line[range.upperBound...].lowercased()
-            return mime.hasPrefix("application/json") || mime.hasPrefix("text/")
-        }
-    }
-
     static let bytesLimit = 512
 
     /// 对播放 URL 补一次 `Range` 探测。

@@ -2,16 +2,16 @@ import Foundation
 
 /// 起播耗时时间线(只记「花在哪一段」,不含 URL / token)。
 ///
-/// 起播慢时要分清是服务端(PlaybackInfo)、本机(GL 上下文)还是 mpv 拉流探测慢,
+/// 起播慢时要分清是服务端(PlaybackInfo)、本机(视频表面挂接)还是内核拉流探测慢,
 /// 所以按阶段记录相邻两个时间点的间隔。值类型、时钟由调用方传入 → 可以脱离真实时间单测。
 struct PlaybackTimeline: Sendable, Equatable {
     /// 阶段,按发生顺序
     enum Stage: String, Sendable, CaseIterable {
         /// `PlaybackInfo`(含决策)返回
         case playbackInfo
-        /// mpv 创建完、GL 渲染上下文挂好
-        case glReady
-        /// `loadfile` 已发出 → mpv 报「已开始播放」(拉流 + 探测容器 + 缓冲到能起播)
+        /// 引擎建好、视频表面挂接完成
+        case surfaceReady
+        /// 已开始播放(拉流 + 探测容器 + 缓冲到能起播)
         case playing
         /// 收到第一个播放位置(≈ 出第一帧)
         case firstFrame
@@ -37,14 +37,9 @@ struct PlaybackTimeline: Sendable, Equatable {
         return isFinished
     }
 
-    /// 起播总时长超过这个值就算慢,值得附带 mpv 明细(`TIMING-MPV`)
-    static let slowThreshold: Duration = .seconds(3)
-
-    var isSlow: Bool {
-        (marks.last?.at ?? .zero) >= Self.slowThreshold
-    }
-
-    /// `{时间} TIMING method=DirectStream host=… dsu=provided total=3.42s | playbackInfo=0.52s glReady=0.05s playing=2.60s firstFrame=0.25s`
+    /// 起播耗时时间线的可读文本。
+    ///
+    /// `{时间} TIMING method=DirectStream host=… dsu=provided total=3.42s | playbackInfo=0.52s surfaceReady=0.05s playing=2.60s firstFrame=0.25s`
     /// 各阶段是**相对上一个阶段**的间隔,total 是起点到最后一个阶段。
     func line(method: String, host: String?, directStreamURLProvided: Bool, date: Date = .now) -> String {
         var previous = Duration.zero

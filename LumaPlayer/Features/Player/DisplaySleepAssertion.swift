@@ -19,18 +19,11 @@ protocol DisplaySleepInhibiting: AnyObject {
 ///
 /// ## 为什么必须由宿主自己做
 ///
-/// mpv 自带 `--stop-screensaver`(默认 `yes`),但它是**经 video output** 实现的:
-/// `player/playloop.c` 的 `update_screensaver_state()` 只把状态算成
-/// `VOCTRL_KILL_SCREENSAVER` / `VOCTRL_RESTORE_SCREENSAVER` 发给 VO,真正调
-/// `IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep)`
-/// 的是 macOS 的 VO 层(`video/out/mac/common.swift`)。
+/// 播放内核不替宿主管屏幕休眠策略(旧内核 libmpv 的 `--stop-screensaver` 在
+/// render API 下也不生效 —— `vo=libmpv` 没有 mac VO,没人持断言;GitHub issue #1)。
+/// 这条只能由 App 自己补(`docs/PITFALLS.md` Q34)。
 ///
-/// 本项目走 render API 并显式设了 `vo=libmpv`(`MPVPlayer.startupOptions`),
-/// 而 `video/out/vo_libmpv.c` 的 `control()` 里**没有**这两个 VOCTRL ——
-/// 没有 mac VO,就没有人持断言。所以这条只能由 App 自己补
-/// (GitHub issue #1;`docs/PITFALLS.md` Q34、`docs/MPV_INTEGRATION.md` 3.2)。
-///
-/// ## 语义(对齐 mpv 的 `stop-screensaver=yes`,⛔ 不是 `=2` 的「始终抑制」)
+/// ## 语义(只在**正在播放**时抑制,⛔ 不是「始终抑制」)
 ///
 /// 只在**正在播放**时持有;暂停 / 播完 / 失败 / 拆播放器立即释放,把休眠策略还给系统。
 /// 判据本身在 `PlayerViewModel.shouldPreventDisplaySleep`(纯函数,可单测)。

@@ -2,10 +2,9 @@ import Foundation
 
 /// 播放链路与 API 请求的 `User-Agent`。
 ///
-/// - 默认(用户没填):API 请求走系统默认 UA(以 `LumaPlayer/{版本}` 开头),
-///   mpv 显式设成 `LumaPlayer/{版本}` —— 它自己的默认是 `libmpv`,与 `Authorization` 里的
-///   `Client="LumaPlayer"` 不一致。
-/// - 用户在设置里填了自定义值:API、图片、mpv 播放全部用它。
+/// - 默认(用户没填):API 请求与播放拉流都用 `LumaPlayer/{版本}`
+///   (播放链路把它放进 `playbackHeaders()`,由播放内核逐请求带上)。
+/// - 用户在设置里填了自定义值:API、图片、播放全部用它。
 ///
 /// 背景(issue #2):部分服务器带网关,只放行白名单播放器,按 UA 拒绝其余客户端的拉流。
 /// 做法参照 OcPlayer:全局一个选项、逐请求读取(改完即时生效)、默认不启用。
