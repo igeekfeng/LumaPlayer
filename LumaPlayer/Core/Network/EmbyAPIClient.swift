@@ -1,6 +1,6 @@
 import Foundation
 
-/// 单台服务器的 HTTP 客户端(actor,ARCHITECTURE.md 3.1.2)。
+/// 单台服务器的 HTTP 客户端(actor,CLAUDE.md「并发分层」)。
 ///
 /// ⛔ **每台服务器一个实例,token 不共享**(6.3 架构约束)—— token 是实例状态,
 /// 不是静态单例,这样一台服务器 401 时不可能污染另一台。

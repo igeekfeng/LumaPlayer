@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// `PlaybackProgressReporter` 的串行化、代次门与失败策略
-/// (API_CONTRACT.md 5.3、5.4;ARCHITECTURE.md 6.6)。
+/// (API_CONTRACT.md 5.3、5.4)。
 ///
 /// 全部用注入的 `send` / `sleeper`,**零网络、零真实 10 秒等待** ——
 /// 间隔是断言出来的,不是等出来的(注入的 sleeper 立即返回,只记录时长)。
@@ -12,7 +12,7 @@ import XCTest
 final class PlaybackProgressReporterTests: XCTestCase {
 
     /// 记录「发了什么」与「睡了多久」。用 actor 而不是 `@unchecked Sendable`
-    /// 的盒子:后者是 ARCHITECTURE.md 3.1.2 禁止的手段,测试代码也不例外。
+    /// 的盒子:后者是 CLAUDE.md「并发分层」禁止的手段,测试代码也不例外。
     private actor Recorder {
         private(set) var entered: [EmbyEndpoint] = []
         private(set) var sent: [EmbyEndpoint] = []
@@ -242,7 +242,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
                        ["/Sessions/Playing",
                         "/Sessions/Playing/Progress",
                         "/Sessions/Playing/Stopped"])
-        // ARCHITECTURE.md 6.6:Stopped 用最终位置
+        // API_CONTRACT.md 5.4:Stopped 用最终位置
         let stopped = sent.last.flatMap(reportBody)
         XCTAssertEqual(stopped?.positionTicks, 1_200_000_000)
         XCTAssertEqual(stopped?.isPaused, true)

@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 字幕外观偏好(2026-10-06,`FEATURE_GAP_ANALYSIS.md` P0-2)。
+/// 字幕外观偏好(2026-10-06)。
 ///
 /// 两层分开验:
 /// - `SubtitleStyle` → 内核中立样式(`engineStyle`)的映射、夹取:纯值,直接验;

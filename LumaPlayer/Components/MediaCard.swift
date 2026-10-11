@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 媒体库网格里的一张海报卡片(UI_DESIGN.md 6.1)。
+/// 媒体库网格里的一张海报卡片(DesignTokens.swift「界面规则」)。
 ///
 /// 非玻璃卡片、不叠玻璃(4.2 禁止区域);已看/未看完用**底部进度条**表达,
 /// 不用透明度变化作为唯一提示(6.1)。
@@ -26,7 +26,7 @@ struct MediaCard: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) { badge }
-                // 悬停:轻微放大 + 阴影(系统 hover 的惯用反馈,不叠玻璃,UI_DESIGN.md 6.1)
+                // 悬停:轻微放大 + 阴影(系统 hover 的惯用反馈,不叠玻璃,DesignTokens.swift「界面规则」)
                 .scaleEffect(isHovering ? Self.hoverScale : 1)
                 .shadow(color: .black.opacity(isHovering ? 0.25 : 0), radius: Metrics.spacingS, y: Metrics.spacingXS)
             VStack(alignment: .leading, spacing: Metrics.spacingXS) {
@@ -50,7 +50,7 @@ struct MediaCard: View {
     private static var hoverScale: CGFloat { 1.03 }
 
     /// 右上角:看完了打 ✓;剧集还有没看的集就显示集数(Emby Web 同款)。
-    /// 两者都有文字 / 图标语义,不只靠颜色(UI_DESIGN.md 6.1)。
+    /// 两者都有文字 / 图标语义,不只靠颜色(DesignTokens.swift「界面规则」)。
     @ViewBuilder
     private var badge: some View {
         if item.isPlayed {
@@ -82,7 +82,7 @@ struct MediaCard: View {
     }
 
     /// 有 `Primary` tag 才请求图片(API_CONTRACT.md 3.3:没 tag 去请求会 404)。
-    /// `MaxWidth` 取 `posterMinWidth × 2` = 300(UI_DESIGN.md 2.1)。
+    /// `MaxWidth` 取 `posterMinWidth × 2` = 300(DesignTokens.swift)。
     private var posterSpec: ImageSpec? {
         guard let tag = item.primaryImageTagValue else { return nil }
         return ImageSpec(

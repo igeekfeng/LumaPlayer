@@ -1,8 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// ServerRegistry 的增删改查、持久化「重启」与凭据联动
-/// (ARCHITECTURE.md 10.1)。
+/// ServerRegistry 的增删改查、持久化「重启」与凭据联动。
 /// UserDefaults 用独立 suite、凭据用临时文件,测试后清理。
 final class ServerRegistryTests: XCTestCase {
     private var suiteName: String!

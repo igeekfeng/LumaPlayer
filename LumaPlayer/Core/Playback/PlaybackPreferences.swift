@@ -8,7 +8,7 @@ import Foundation
 /// 记在里面只能在本次播放内活下来。
 ///
 /// ⛔ 偏好是从 UserDefaults 读回来的,不能假设没被手改过 —— 读进来一律夹回合法范围
-/// (`FEATURE_GAP_ANALYSIS.md` P0-4 要求的就是「设置页里能改,且改完留得住」)。
+/// (要求就是「设置页里能改,且改完留得住」)。
 @MainActor
 @Observable
 final class PlaybackPreferences {

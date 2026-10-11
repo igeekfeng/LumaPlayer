@@ -4,7 +4,7 @@ import Foundation
 /// (API_CONTRACT.md 3.1)。
 ///
 /// 字段**全部可选**:API_CONTRACT.md 8.1 的必填表不含本类型,而服务器
-/// 不由我们控制(ARCHITECTURE.md 2.1),不同版本、不同权限下这个端点
+/// 不由我们控制,不同版本、不同权限下这个端点
 /// 返回的字段差异很大。缺失时上层按「未知」展示,
 /// ⛔ 不得在模型层填假默认值(8.1)。
 struct EmbyServerInfo: Decodable, Sendable, Equatable {

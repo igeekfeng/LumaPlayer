@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 @testable import LumaPlayer
 
-/// 播放窗口的窗口行为(UI_DESIGN.md 5.3)。
+/// 播放窗口的窗口行为(PlayerCommands.swift 的快捷键表)。
 @MainActor
 final class PlayerWindowTests: XCTestCase {
 

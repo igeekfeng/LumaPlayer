@@ -2,7 +2,7 @@ import os
 import XCTest
 @testable import LumaPlayer
 
-/// 接口响应缓存的单元测试(docs/DECISIONS/local-cache.md)。
+/// 接口响应缓存的单元测试(规则见 `EmbyResponseCache` 的类型注释)。
 ///
 /// 临时目录 + 注入时钟:仓库此前没有「注入临时目录」的先例,
 /// 这里用 `temporaryDirectory + UUID 子目录、tearDown 删除`的模式,

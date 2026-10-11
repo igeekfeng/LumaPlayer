@@ -310,7 +310,7 @@ private struct HomeSectionError: View {
     }
 }
 
-/// 「我的媒体」里的一个媒体库入口:封面 + 名称的横版块(非玻璃,UI_DESIGN.md 4.2)。
+/// 「我的媒体」里的一个媒体库入口:封面 + 名称的横版块(非玻璃,DesignTokens.swift「界面规则」)。
 /// 媒体库有 `Primary` 图就显示封面,没有则退回按类型选的图标。
 private struct LibraryTile: View {
     let view: EmbyView

@@ -3,7 +3,7 @@ import SwiftUI
 /// 横版(16:9)卡片:「继续观看」「下一集」用(Emby Web / Apple TV 的做法 ——
 /// 续播内容用剧照而不是海报,一眼能认出停在哪一集)。
 ///
-/// 非玻璃卡片(UI_DESIGN.md 4.2);悬停时画面上出现玻璃播放按钮,
+/// 非玻璃卡片(DesignTokens.swift「界面规则」);悬停时画面上出现玻璃播放按钮,
 /// 点它直接续播,点卡片其余位置打开详情。
 struct LandscapeCard: View {
     let item: EmbyItem
@@ -109,7 +109,7 @@ struct LandscapeCard: View {
     }
 }
 
-/// 卡片底部的进度条(UI_DESIGN.md 6.1:已播放 / 未看完的清晰标记)。
+/// 卡片底部的进度条(DesignTokens.swift「界面规则」:已播放 / 未看完的清晰标记)。
 /// 画在图片上,所以用白色 + 半透明轨道,不随深浅色变化。
 struct CardProgressBar: View {
     let fraction: Double

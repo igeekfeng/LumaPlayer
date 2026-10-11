@@ -4,7 +4,7 @@ import Observation
 /// 「添加服务器」表单的状态与校验(ViewModel 层,@MainActor + @Observable)。
 ///
 /// 保存 = 地址规范化 → 探测 → 登录 → 成功后入库
-/// (ARCHITECTURE.md 6.2)。登录失败不落库。
+/// (API_CONTRACT.md 1.4)。登录失败不落库。
 @MainActor
 @Observable
 final class AddServerViewModel {
@@ -23,7 +23,7 @@ final class AddServerViewModel {
     }
 
     /// 用户**显式**写了 `http://`:密码会以明文发送,输入阶段就要警告
-    /// (API_CONTRACT.md 3.1、ARCHITECTURE.md 8.2)。
+    /// (API_CONTRACT.md 3.1、CLAUDE.md「安全与隐私」)。
     /// 没写 scheme 的地址不在此列 —— 那种情况由探测阶段的局域网回退决定,
     /// 回退成 http 后由登录页再警告一次。
     var showsInsecureWarning: Bool {

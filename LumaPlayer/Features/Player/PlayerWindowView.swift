@@ -1,11 +1,11 @@
 import SwiftUI
 import AppKit
 
-/// 播放器窗口的根视图(独立窗口,ARCHITECTURE.md 7.5)。
+/// 播放器窗口的根视图(独立窗口,CLAUDE.md「架构主线」)。
 ///
 /// 窗口是单实例的:内容由 `AppState.nowPlaying` 决定,换请求就按新 `id`
 /// 重建播放页(旧的随 `onDisappear` 走完收尾上报)。没有请求时关窗 ——
-/// 切换 / 删除服务器会清空请求(UI_DESIGN.md 7.1)。
+/// 切换 / 删除服务器会清空请求(DesignTokens.swift「界面规则」)。
 struct PlayerSceneRoot: View {
     static let windowID = "player"
 
@@ -28,7 +28,7 @@ struct PlayerSceneRoot: View {
         .onChange(of: container.state.nowPlaying?.id) { old, new in
             if old != nil, new == nil { dismissWindow(id: Self.windowID) }
         }
-        // 深色环境:视频背景亮度不可控,玻璃与文字按深色外观取色才稳定可读(UI_DESIGN.md 8.1)
+        // 深色环境:视频背景亮度不可控,玻璃与文字按深色外观取色才稳定可读(DesignTokens.swift「界面规则」)
         .environment(\.colorScheme, .dark)
     }
 }
@@ -115,7 +115,7 @@ struct PlayerWindowView: View {
             }
         }
         .onChange(of: viewModel.isPaused) { _, paused in
-            // 暂停时常驻;恢复播放后多等一会儿再隐藏(UI_DESIGN.md 2.1 autoHideResumeDelay)
+            // 暂停时常驻;恢复播放后多等一会儿再隐藏(DesignTokens.swift autoHideResumeDelay)
             if paused { revealControls(autoHide: false) } else { revealControls(delay: Metrics.autoHideResumeDelay) }
             nowPlaying.update(from: viewModel)
         }
@@ -154,7 +154,7 @@ struct PlayerWindowView: View {
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
         .onChange(of: viewModel.nextEpisode?.id) { nowPlaying.update(from: viewModel) }
         .task(id: viewModel.osd?.id) { await showOSD() }
-        // 快捷键按 UI_DESIGN.md 5.3。Space / M / [ ] / ⌘→ 同时挂在菜单栏「Playback」菜单
+        // 快捷键按 PlayerCommands.swift 的快捷键表。Space / M / [ ] / ⌘→ 同时挂在菜单栏「Playback」菜单
         // (PlayerCommands):菜单启用时按键先被菜单吃掉,下面的同名处理不会重复触发;
         // 这里保留它们,是为菜单未就绪(焦点值尚未传到菜单)时按键仍然可用。
         // 方向键只取 .down:按住不放时 .repeat 会连续触发 seek,而转码模式下
@@ -376,7 +376,7 @@ struct PlayerWindowView: View {
 
     // MARK: - 自动隐藏
 
-    /// 显示控制层;`autoHide` 时在 `delay` 秒后隐藏(UI_DESIGN.md 5.1)。
+    /// 显示控制层;`autoHide` 时在 `delay` 秒后隐藏(DesignTokens.swift「界面规则」)。
     ///
     /// 每次调用都会**重置**计时(`hideTask?.cancel()` 后重新排),所以
     /// 「指针移动 → 显示 → 静止 → 隐藏」是一个自然的循环。
@@ -469,7 +469,7 @@ struct PlayerWindowView: View {
 
     /// 视图离开(关窗 / 换集 / 切服务器)即拆引擎:`PlayerSurfaceView` 的
     /// dismantleNSView 也会触发,两条路径都指向可重入的 shutdown。
-    /// stop() 内部会补最后一次 Progress + Stopped(ARCHITECTURE.md 6.6),
+    /// stop() 内部会补最后一次 Progress + Stopped(API_CONTRACT.md 5.4),
     /// 发完后广播给详情页 / 首页重读进度(Q22)。
     private func tearDown() {
         hideTask?.cancel()
@@ -511,7 +511,8 @@ struct PlayerWindowView: View {
 /// - 倍速已有更好的落点:控制栏的常驻按钮 + 改速瞬间的 OSD 提示。
 /// - 预计结束时刻移到了进度条的切换态(见 `PlayerScrubber`)。
 ///
-/// 层级归属的调研依据见 `UI_DESIGN.md` 5.1;逐家播放器对照见那里的表。
+/// 依据(2026-10-02 查证):QuickTime / Infuse 把标题放窗口标题栏,技术信息放独立面板;
+/// IINA / Plex 同样把媒体信息放独立面板(`Cmd+I` / Get Info)。
 struct PlayerTitleBar: View {
     let viewModel: PlayerViewModel
 
@@ -555,7 +556,7 @@ struct PlayerTitleBar: View {
     }
 }
 
-/// 屏显提示:小型非交互玻璃胶囊(UI_DESIGN.md 4.1)。
+/// 屏显提示:小型非交互玻璃胶囊(DesignTokens.swift「界面规则」)。
 struct PlayerOSDView: View {
     let osd: PlayerOSD
 

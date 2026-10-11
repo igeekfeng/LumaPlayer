@@ -20,7 +20,7 @@ enum SettingsTab: String {
 /// - **服务器**:服务器管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`)。
 ///
 /// 服务器管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
-/// (UI_DESIGN.md 3.1)。
+/// (DesignTokens.swift「界面规则」)。
 struct AppSettingsView: View {
     let container: AppContainer
 

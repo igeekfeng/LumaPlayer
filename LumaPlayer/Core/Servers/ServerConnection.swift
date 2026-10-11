@@ -11,7 +11,7 @@ enum ServerLoginError: Error, Equatable {
     case unreachable(host: String)
     /// 401:用户名或密码错误。不清 token、不提示「重新登录」
     case invalidCredentials
-    /// 登录成功,但用鉴权请求验证访问权限时失败(ARCHITECTURE.md 6.2 步骤 5)
+    /// 登录成功,但用鉴权请求验证访问权限时失败
     case accessDenied(EmbyAPIError)
     /// 探测 / 登录过程中的其他接口错误
     case api(EmbyAPIError)
@@ -36,7 +36,7 @@ struct ServerLoginResult: Sendable, Equatable {
 }
 
 /// 单台服务器的连接、探测与登录(actor:持有可变档案与客户端状态,
-/// ARCHITECTURE.md 3.1.2 的 `Core/Servers` 分层)。
+/// CLAUDE.md「并发分层」的 `Core/Servers` 分层)。
 ///
 /// 一台服务器一个实例、一个 `EmbyAPIClient`:token 不共享,
 /// 因此「一台 401 不影响另一台」是结构上成立的,不是靠调用顺序保证的。
@@ -81,7 +81,7 @@ actor ServerConnection {
     }
 
     /// 免输入就能进:有 token,或记住了密码(缺 token 时第一次鉴权请求前会静默登录)。
-    /// false = 需要用户重新登录(ARCHITECTURE.md 7.3)。
+    /// false = 需要用户重新登录。
     func canAuthenticateWithoutPrompt() async throws -> Bool {
         if try await hasStoredToken() { return true }
         return try await credentials.password(forServer: profile.id) != nil
@@ -90,7 +90,7 @@ actor ServerConnection {
     // MARK: - 登录
 
     /// 探测(`/emby` 前缀 + 允许的 http 回退)→ 登录 → 用鉴权请求验证权限
-    /// (ARCHITECTURE.md 6.2 的顺序)。
+    /// (API_CONTRACT.md 1.4 的顺序)。
     ///
     /// 返回更新后的档案与兼容信息;**本方法不碰注册表**,持久化由调用方决定,
     /// 这样「登录失败就不落库」(不留一条存在但用不了的服务器)。
@@ -202,7 +202,7 @@ actor ServerConnection {
     /// 自己查「继续观看」的写法 —— 官方客户端抓包为
     /// `/Items/Resume?Recursive=true&MediaTypes=Video&Limit=...`;`MediaTypes`
     /// 在官方 OpenAPI 4.1.1.0 上 ✅(2026-09-23 核实)。实测与选型见
-    /// `docs/DECISIONS/emby-resume-items-endpoint.md`。
+    /// `PITFALLS.md 第 3 节「继续观看」`。
     ///
     /// ⛔ **不要**改成 `/Items?Filters=IsResumable`:那是不带 `ParentId` 的查询,
     /// 在用户那台 4.7.11.0 上实测返回的是顶层「媒体库」条目,不是影片。
@@ -403,7 +403,7 @@ actor ServerConnection {
         // Playing / Stopped 意味着播放位置与续播列表变了(resume / nextUp /
         // 详情里的 UserData),缓存的响应不再可信。**Progress tick 不失效**:
         // 它每 10 秒一次,会让播放期间的浏览永远打不到缓存
-        // (docs/DECISIONS/local-cache.md 的失效规则表)。
+        // (`EmbyResponseCache` 的失效规则表)。
         switch endpoint {
         case .sessionsPlaying, .sessionsPlayingStopped:
             await responseCache?.invalidate(serverID: profile.id)
@@ -517,7 +517,7 @@ actor ServerConnection {
     ///    用一个无效组合登录),抛 `.unauthorized` 让 UI 回登录页。
     ///    不会循环重试,不碰其他服务器。
     ///
-    /// 没记住密码时没有静默重登(`docs/DECISIONS/remember-password-credentials-file.md`)。
+    /// 没记住密码时没有静默重登(`API_CONTRACT.md 2.5`)。
     private func withUnauthorizedHandling<R: Sendable>(
         _ operation: () async throws -> R
     ) async throws -> R {

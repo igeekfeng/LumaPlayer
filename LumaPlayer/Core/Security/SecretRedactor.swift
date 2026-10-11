@@ -1,6 +1,6 @@
 import Foundation
 
-/// 凭据脱敏(ARCHITECTURE.md 8.1;docs/PITFALLS.md Q9)。
+/// 凭据脱敏(CLAUDE.md「安全与隐私」;docs/PITFALLS.md Q9)。
 ///
 /// 播放 URL 可能带认证信息(认证头 / 可能的 `api_key` 退路),
 /// 任何写进日志、警告框或未来诊断导出的文本都必须先过这里。
@@ -9,7 +9,7 @@ enum SecretRedactor {
     /// 替换后的占位串
     static let placeholder = "<redacted>"
 
-    /// 需要脱敏的键名(小写比较)。范围按 ARCHITECTURE.md 8.1:
+    /// 需要脱敏的键名(小写比较)。范围按 CLAUDE.md「安全与隐私」:
     /// `api_key` / Token / Authorization / 密码字段。
     private static let sensitiveKeys = [
         "api_key", "apikey", "api-key",

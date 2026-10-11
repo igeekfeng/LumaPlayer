@@ -1,7 +1,7 @@
 import Foundation
 
 /// 一次播放会话的编排:取 PlaybackInfo → 决策 → 补认证头
-/// (ARCHITECTURE.md 6.5)。
+/// (ERIKA_INTEGRATION.md §1)。
 ///
 /// 放在 actor 里是因为它串行地读连接状态(档案的 baseURL / `/emby` 前缀
 /// 与本地 token),这些状态本来就属于 `ServerConnection`;

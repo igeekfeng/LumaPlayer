@@ -2,7 +2,7 @@ import Foundation
 
 /// 一次「请播放器窗口播这一项」的请求(`AppState.nowPlaying`)。
 ///
-/// 播放器是**单实例的独立窗口**(ARCHITECTURE.md 7.5):详情页只负责
+/// 播放器是**单实例的独立窗口**(CLAUDE.md「架构主线」):详情页只负责
 /// 写入请求并唤起窗口,窗口按 `id` 重建播放页 —— 换一集 = 换一个请求,
 /// 旧播放页随之消失并走完收尾上报。`id` 每次新建都不同,所以同一项
 /// 再点一次播放也会得到一个新会话,而不是被当成「没变」忽略。
@@ -45,7 +45,7 @@ enum NextEpisodeResolver {
     }
 }
 
-/// 播放画面上的短暂提示(非交互玻璃胶囊,UI_DESIGN.md 4.1)。
+/// 播放画面上的短暂提示(非交互玻璃胶囊,DesignTokens.swift「界面规则」)。
 struct PlayerOSD: Equatable, Identifiable {
     let id = UUID()
     let text: String

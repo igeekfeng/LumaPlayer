@@ -1,6 +1,6 @@
 import Foundation
 
-/// 一台 Emby 服务器的非敏感配置(ARCHITECTURE.md 6.1 的契约模型)。
+/// 一台 Emby 服务器的非敏感配置(CLAUDE.md「每台服务器完全隔离」的契约模型)。
 ///
 /// ⚠️ AccessToken **不**属于此类型:token 按 `id` 存本地凭据文件
 /// (API_CONTRACT.md 1.2、2.2),因此本模型可安全持久化到 UserDefaults
@@ -15,7 +15,7 @@ struct ServerProfile: Codable, Identifiable, Sendable, Equatable, Hashable {
     var baseURL: URL
 
     /// `/emby` 或 `""`。由探测阶段确定后保存,禁止每次请求时重新猜
-    /// (API_CONTRACT.md 1.2、ARCHITECTURE.md 6.1)。
+    /// (API_CONTRACT.md 1.2、CLAUDE.md「每台服务器完全隔离」)。
     var apiPathPrefix: String
 
     var serverID: String?

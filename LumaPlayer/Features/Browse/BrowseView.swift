@@ -27,7 +27,7 @@ private struct DetailItem: Hashable {
 }
 
 /// 主窗口:单个 `NavigationStack`,首页是根,媒体库 / 搜索结果 / 详情都 push 上来,
-/// 返回由系统处理(工具栏返回按钮 / ⌘[)(UI_DESIGN.md 第 3 节)。
+/// 返回由系统处理(工具栏返回按钮 / ⌘[)(DesignTokens.swift「界面规则」)。
 ///
 /// 服务器管理在设置窗口的「服务器」标签页,切换在工具栏的服务器菜单。
 struct BrowseView: View {
@@ -57,7 +57,7 @@ struct BrowseView: View {
         // 服务器切换器不上详情页(见 `toolbarContent`)。搜索框不在这里,见 `searchField`。
         .toolbar { toolbarContent }
         // 详情页是一整页 hero(详情页用 `backgroundExtensionEffect` 把背景图铺到标题栏下面):
-        // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(UI_DESIGN.md 6.2)。
+        // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(DesignTokens.swift「界面规则」)。
         .toolbarBackgroundVisibility(isShowingDetail ? .hidden : .automatic, for: .windowToolbar)
         // 设置窗口里增 / 改 / 删服务器后重读,菜单里的名称跟着变
         .task(id: container.state.serverListRevision) { await reloadServers() }

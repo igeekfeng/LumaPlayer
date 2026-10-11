@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 布局参照 Emby Web 的信息结构(海报 + 标题 + 元信息 + 播放 / ✓ / ♡),
 /// 呈现上按 macOS 原生做:整幅背景图做 hero(`backgroundExtensionEffect`
-/// 让它延伸到工具栏下面)、播放主按钮用带 tint 的玻璃(UI_DESIGN.md 4.1)。
+/// 让它延伸到工具栏下面)、播放主按钮用带 tint 的玻璃(DesignTokens.swift「界面规则」)。
 ///
 /// 剧集是**单页**:季、分集和播放按钮都在这一页里,
 /// 页面只有**一个**播放主按钮,它作用于当前定位的那一集

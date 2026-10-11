@@ -18,7 +18,7 @@ final class HomeViewModel {
     static let sectionLimit = 20
 
     /// 首页为之显示「最新」的媒体库类型。音乐 / 有声书 / 直播不在首版范围内
-    /// (ARCHITECTURE.md 2.4),`CollectionType` 为 null 的混合库照常显示。
+    /// (CLAUDE.md「非目标」),`CollectionType` 为 null 的混合库照常显示。
     static let latestCollectionTypes: Set<String?> = [nil, "movies", "tvshows", "homevideos", "musicvideos", "mixed"]
 
     /// 「最新」同时最多在途几个请求。媒体库 20+ 的服务器上,一次刷新不该把
@@ -61,7 +61,7 @@ final class HomeViewModel {
     @Observable
     final class Sections {
         /// 「我的媒体」:`/Users/{UserId}/Views`,入口列表来自服务器、不写死「电影/电视剧」
-        /// (UI_DESIGN.md 3.1)。「最新」的行也按它来,所以先回来它才发「最新」的请求
+        /// (DesignTokens.swift「界面规则」)。「最新」的行也按它来,所以先回来它才发「最新」的请求
         let views = Row<[EmbyView]>()
         let resume = Row<[EmbyItem]>()
         /// 每个媒体库的「最新」,键是 View 的 Id。只在库的集合变了时整体替换,
