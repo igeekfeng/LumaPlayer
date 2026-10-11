@@ -20,7 +20,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 # ── 白名单:公开的示例域与官方域,允许出现在仓库里 ──
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example)$'
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|github\.com|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。
@@ -29,7 +29,7 @@ PERSONAL_B64='eGlhb2ZlbmdlZWt8QjRWUUxWOTlLUnxHWlE4Mzk3WFI0fFVUM0o5RjRHWFo='
 PERSONAL_PATTERN=$(printf '%s' "$PERSONAL_B64" | base64 -D 2>/dev/null || printf '%s' "$PERSONAL_B64" | base64 -d)
 
 # 滤掉 Swift 成员访问噪声(`类型名.属性名` 不是域名)
-SWIFT_NOISE='^(FileManager|NetworkDiagnostics|PlayerError|PlaybackEngine|ErikaPlaybackEngine|EmbyAPIError|EmbyAPIClient|CredentialStore|CredentialFileStore|LegacyKeychainImport|PlaybackFailureProbe|ServerRegistry|ServerConnection|PlayerStatistics|ProcessInfo|MPNowPlayingInfoCenter|EmbyResponseCache|LibrarySort|Metrics|Self|self|result|probe|stored|sent|updated|items|raw|parts|fields|requests|duration|elapsed|session|item|detail|episode|profile|plan|response|context|endpoint|configuration|connection|player|track|viewModel|list|nodes|url|file|page|cache|store|state|error|container|reporter|recorder|mutex|credentials|tasks|sleeps|queue|payload|candidates|lines|images|entries|attempts|rows|targets|logs|outDir|cArgs|directory|wrapper|profiles|data|facts|public|storage|decoder|secondCredentials|embySameType|logger|probed|prepared|insertionOrder|accessOrder|playback|marks|ApiClient|test)\.'
+SWIFT_NOISE='^(FileManager|NetworkDiagnostics|PlayerError|PlaybackEngine|ErikaPlaybackEngine|EmbyAPIError|EmbyAPIClient|CredentialStore|CredentialFileStore|LegacyKeychainImport|PlaybackFailureProbe|ServerRegistry|ServerConnection|PlayerStatistics|ProcessInfo|MPNowPlayingInfoCenter|EmbyResponseCache|LibrarySort|Metrics|Self|self|result|probe|stored|sent|updated|items|raw|parts|fields|requests|duration|elapsed|session|item|detail|episode|profile|plan|response|context|endpoint|configuration|connection|player|track|viewModel|list|nodes|url|file|page|cache|store|state|error|container|reporter|recorder|mutex|credentials|tasks|sleeps|queue|payload|candidates|lines|images|entries|attempts|rows|targets|logs|outDir|cArgs|directory|wrapper|profiles|data|facts|public|storage|decoder|secondCredentials|embySameType|logger|probed|prepared|insertionOrder|accessOrder|playback|marks|hasher|latestViews|ApiClient|test)\.'
 
 fail=0
 report() { printf '\n❌ %s\n' "$1"; shift; printf '%s\n' "$@"; fail=1; }
