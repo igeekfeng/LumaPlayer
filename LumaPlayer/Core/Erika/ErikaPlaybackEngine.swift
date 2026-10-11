@@ -214,7 +214,17 @@ final class ErikaPlaybackEngine: PlaybackEngine {
         switch raw.kind {
         case .stateChanged:
             let newPhase = Self.phase(from: raw.state)
+            // Erika 没有独立的暂停事件,暂停/恢复只体现在 stateChanged 的相位里。
+            // 上层(`PlayerViewModel.isPaused` / 控制栏图标 / NowPlaying)靠 `.paused`
+            // 判定,所以这里必须把它翻译出来 —— 只在真正跨越暂停边界时发,避免
+            // 起播(loading→playing)也带一条多余的「恢复」。
+            let previous = phaseValue
             setPhase(newPhase)
+            if newPhase == .paused, previous != .paused {
+                pending.append(.paused(true))
+            } else if previous == .paused, newPhase == .playing {
+                pending.append(.paused(false))
+            }
             if let reason = detector.observe(.phaseChanged(newPhase)) {
                 pending.append(.ended(reason))
             }
