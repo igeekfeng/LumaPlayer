@@ -11,8 +11,8 @@
 #
 # 产物：build/LumaPlayer-{版本}-{构建号}.dmg（build/ 已被 .gitignore 忽略）
 #
-# DMG 里的 App 已由 bundle-libmpv.sh 打入 libmpv 及全部依赖（方案 B），
-# 目标机不需要装 Homebrew / mpv。
+# 播放内核 Erika 由 SwiftPM 静态链接进 App，DMG 里的 App 自带全部运行时，
+# 目标机不需要装任何东西。
 # 但签名是 ad-hoc、未公证：其他机器首次打开要右键「打开」放行一次。
 # 只在自己的 Apple Silicon + macOS 27 机器上用，不是分发包。
 #
@@ -87,7 +87,6 @@ trap '/bin/rm -rf "${STAGE}"' EXIT
 # -L 解引用：Release 产物里可能含符号链接，不解开会拷出指向构建目录的坏链接。
 /bin/cp -R -L "${SRC}" "${STAGE}/"
 /bin/ln -s /Applications "${STAGE}/Applications"
-"${REPO_ROOT}/Scripts/bundle-libmpv.sh" "${STAGE}/${APP_NAME}"
 
 # --- 4. 生成、签名、校验 -----------------------------------------------------
 OUT_DIR="${REPO_ROOT}/build"

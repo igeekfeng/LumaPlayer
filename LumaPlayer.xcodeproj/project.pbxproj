@@ -302,18 +302,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
-				);
-				OTHER_SWIFT_FLAGS = (
-					"-Xcc",
-					"-DGL_SILENCE_DEPRECATION",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.LumaPlayer;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
 			};
 			name = Debug;
 		};
@@ -337,18 +329,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(SRCROOT)/Vendor/mpv/prefix/lib/libmpv.2.dylib",
-				);
-				OTHER_SWIFT_FLAGS = (
-					"-Xcc",
-					"-DGL_SILENCE_DEPRECATION",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.LumaPlayer;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
 			};
 			name = Release;
 		};
@@ -364,7 +348,6 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LumaPlayer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LumaPlayer";
 			};
 			name = Debug;
@@ -381,7 +364,6 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/mpv";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LumaPlayer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LumaPlayer";
 			};
 			name = Release;

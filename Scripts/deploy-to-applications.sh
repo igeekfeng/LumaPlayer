@@ -10,8 +10,8 @@
 #   ./Scripts/deploy-to-applications.sh --allow-dirty # 工作区有未提交改动也照样构建
 #   ./Scripts/deploy-to-applications.sh --no-open  # 装完不自动启动
 #
-# 装好的 App 由 bundle-libmpv.sh 打入 libmpv 及全部依赖（方案 B），
-# 之后 brew upgrade mpv 不会影响它。
+# 播放内核 Erika 由 SwiftPM 静态链接进 App，无需再往 App 里拷 dylib
+# （原 Scripts/bundle-libmpv.sh 已随 libmpv 一起移除）。
 #
 set -euo pipefail
 
@@ -88,7 +88,6 @@ done
 /bin/rm -rf "${DEST}"
 /bin/cp -R -L "${SRC}" "${DEST}"
 echo "已安装到: ${DEST}"
-"${REPO_ROOT}/Scripts/bundle-libmpv.sh" "${DEST}"
 
 # --- 5. 校验签名，并刷新 LaunchServices（让 Dock / Finder 用上新图标）------
 /usr/bin/codesign --verify --strict "${DEST}"
