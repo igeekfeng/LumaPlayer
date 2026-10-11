@@ -15,4 +15,10 @@ final class PlaybackFailureProbeTests: XCTestCase {
         XCTAssertFalse(PlaybackFailureProbe.shouldProbe(mpvLog: ["[cplayer] Opening failed"]))
         XCTAssertFalse(PlaybackFailureProbe.shouldProbe(mpvLog: []))
     }
+
+    func testProbesOnHTTPErrorStatus() {
+        XCTAssertTrue(PlaybackFailureProbe.shouldProbe(mpvLog: ["[ffmpeg] https: HTTP error 403 Forbidden"]))
+        XCTAssertTrue(PlaybackFailureProbe.shouldProbe(mpvLog: ["[ffmpeg] http: HTTP error 502 Bad Gateway"]))
+        XCTAssertFalse(PlaybackFailureProbe.shouldProbe(mpvLog: ["[ffmpeg] https: HTTP error 30 x"]))
+    }
 }

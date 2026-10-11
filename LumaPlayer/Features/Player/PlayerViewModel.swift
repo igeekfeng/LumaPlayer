@@ -1250,7 +1250,7 @@ final class PlayerViewModel {
                     directStreamURLProvided: session.mediaSource.directStreamUrl != nil,
                     mpvLog: mpvLog
                 )
-                // mpv 收到的是 JSON / 文本而不是媒体:补一次只读探测看看内容(每次失败至多一次)
+                // 收到 JSON / 文本或 HTTP 4xx/5xx:补一次只读探测看看状态与重定向(每次失败至多一次)
                 if PlaybackFailureProbe.shouldProbe(mpvLog: mpvLog) {
                     let url = session.plan.url
                     let headers = session.plan.headers
