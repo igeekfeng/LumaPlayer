@@ -1,8 +1,8 @@
 # LumaPlayer
 
-一个 macOS 原生 Emby 客户端。SwiftUI 写界面，libmpv 负责解码播放，直接对接你自己（或朋友的）Emby 服务器。
+一个 macOS 原生 Emby 客户端。SwiftUI 写界面，[Erika](https://github.com/AimesSoft/ErikaSwift)（Metal）负责解码播放，直接对接你自己（或朋友的）Emby 服务器。
 
-> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍：Homebrew 的 libmpv 及其依赖也是按 27.0 编译的，部署目标更低会有链接器 warning 且产物跑不起来。
+> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍：部署目标更低会有链接器 warning 且产物跑不起来。
 
 ## 特性
 
@@ -20,10 +20,12 @@
 | 系统 | macOS 27 或更高 |
 | 芯片 | Apple Silicon（arm64） |
 | Xcode | 16 或更高（工程用同步文件夹，`objectVersion = 77`） |
-| libmpv | Homebrew 的 `mpv`（开发期实测 0.41.0，`MPV_CLIENT_API_VERSION = 2.5`） |
+| 播放内核 | [ErikaSwift](https://github.com/AimesSoft/ErikaSwift) 0.2.x（SwiftPM 依赖，构建时自动拉取并静态链接，无需额外安装） |
+
+首次构建（或换机）需要网络：`xcodebuild` 会自动解析 SwiftPM 依赖。也可以先手动解析：
 
 ```bash
-brew install mpv
+xcodebuild -resolvePackageDependencies -scheme LumaPlayer
 ```
 
 ## 构建与运行
@@ -54,8 +56,7 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' \
 ./Scripts/make-dmg.sh
 ```
 
-两者都会调用 `Scripts/bundle-libmpv.sh`，把 Homebrew 的 libmpv 及 48 个传递依赖打进
-`Contents/Frameworks/`，因此装出来的 App 不再依赖目标机的 Homebrew。
+播放内核 Erika 由 SwiftPM **静态链接**进 App，DMG / 安装副本自带全部运行时，目标机不需要装任何东西。
 
 App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 
@@ -64,13 +65,14 @@ App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 ```
 LumaPlayer/
 ├── App/          入口、应用级状态、错误类型
-├── Core/         网络（EmbyAPIClient / 端点 / 认证）、服务器连接、安全存储、MPV 封装、缓存
+├── Core/         网络（EmbyAPIClient / 端点 / 认证）、服务器连接、安全存储、播放引擎、缓存
+│   ├── Playback/Engine/   内核无关的归一化播放层（协议 + 值类型 + 事件泵）
+│   └── Erika/             Erika 适配器（全项目唯一 import 内核的目录）
 ├── Features/     Browse / Home / Detail / Library / Player / Search / Servers / Settings / Onboarding
 ├── Models/       Emby 响应模型
 ├── Components/   设计 token 与复用视图
 └── Resources/    Info.plist、entitlements、AppIcon
-LumaPlayerTests/  45 个测试文件 + 全部脱敏 fixture
-Vendor/           libmpv 的 module map
+LumaPlayerTests/  46 个测试文件 + 全部脱敏 fixture
 Tools/            图标生成脚本、本地 Emby 开发实例（Docker）
 Scripts/          构建、打包、部署脚本
 ```
