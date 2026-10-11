@@ -1,0 +1,15 @@
+{
+  "originHash" : "c1adf8cc07d9e16183c8be38dcc0311538a2bca18ddd6bf6314071d25fd3fd03",
+  "pins" : [
+    {
+      "identity" : "erikaswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AimesSoft/ErikaSwift",
+      "state" : {
+        "revision" : "08682d85e9e14285c35b7f0944e28b73b66cf65e",
+        "version" : "0.2.1"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -22,9 +22,9 @@ xcuserdata/
 *.dSYM
 
 # ── SwiftPM ──
+# Package.resolved 入库:锁定 ErikaSwift 的版本,保证每台机器解析到同一份内核。
 .build/
 .swiftpm/
-Package.resolved
 .*
 
 # ── 本地开发用 Emby 实例（Tools/emby-dev/）──

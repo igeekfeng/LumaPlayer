@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA00000000000000000000A2 /* Erika in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000A1 /* Erika */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA0000000000000000000020 /* LumaPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LumaPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000021 /* LumaPlayerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LumaPlayerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -43,6 +47,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA00000000000000000000A2 /* Erika in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -94,6 +99,7 @@
 			);
 			name = LumaPlayer;
 			packageProductDependencies = (
+				AA00000000000000000000A1 /* Erika */,
 			);
 			productName = LumaPlayer;
 			productReference = AA0000000000000000000020 /* LumaPlayer.app */;
@@ -151,6 +157,9 @@
 			mainGroup = AA0000000000000000000002;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */,
+			);
 			productRefGroup = AA0000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -408,6 +417,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AimesSoft/ErikaSwift";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.2.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA00000000000000000000A1 /* Erika */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */;
+			productName = Erika;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AA0000000000000000000001 /* Project object */;
 }
