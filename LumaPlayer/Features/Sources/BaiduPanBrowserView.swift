@@ -344,16 +344,7 @@ private struct BaiduPanCard: View {
                         radius: Metrics.spacingS,
                         y: Metrics.spacingXS
                     )
-                VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                    Text(displayTitle)
-                        .font(.body)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    subtitle
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                textBlock
             }
         }
         .buttonStyle(.plain)
@@ -373,6 +364,47 @@ private struct BaiduPanCard: View {
     private var imageAspectRatio: Double {
         item.kind == .episode ? Metrics.landscapeAspectRatio : Metrics.posterAspectRatio
     }
+
+    /// 标题 + 副标题。**高度固定**:文件名有的 1 行有的 2 行、有的条目又压根没有副标题,
+    /// 高度跟着内容走就会让网格里的卡片高高低低。
+    ///
+    /// 钉高度的办法是叠一份**等行数的隐藏文本**当尺子(两行标题 + 一行副标题),
+    /// 行高由系统按字体算 —— 写死像素值会在字体/缩放变化时对不上。
+    @ViewBuilder
+    private var textBlock: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacingXS) {
+            ZStack(alignment: .topLeading) {
+                Text(Self.placeholderTwoLines)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hidden()
+                    // 只是把高度撑起来的尺子,别让 VoiceOver 把它读出来
+                    .accessibilityHidden(true)
+                Text(displayTitle)
+                    .font(.body)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ZStack(alignment: .topLeading) {
+                Text(Self.placeholderOneLine)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hidden()
+                    .accessibilityHidden(true)
+                subtitle
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// 撑两行标题用的隐藏文本。`\n` 让 `Text` 真的排两行,ASCII 是为了不落到中文回退字体
+    /// (回退字体行高和 SF 不一致,尺子就量歪了)。
+    private static let placeholderTwoLines = "X\nX"
+    private static let placeholderOneLine = "X"
 
     /// 主标题:分集优先显示**集名** —— 集名才是这一集的标识,
     /// 而剧名(`琅琊榜`)整目录每一张都一样、看了等于没看。
@@ -475,7 +507,7 @@ private struct BaiduResumeCardView: View {
                     Text(card.title)
                         .font(.body)
                         .lineLimit(1)
-                    Text(isPreparing ? "正在准备…" : "已看到 \(PlayerTime.text(card.positionSeconds))")
+                    Text(isPreparing ? "正在准备…" : card.subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -489,7 +521,7 @@ private struct BaiduResumeCardView: View {
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(card.title),已看到 \(PlayerTime.text(card.positionSeconds))")
+        .accessibilityLabel("\(card.title),\(card.subtitle)")
     }
 
     private static var hoverScale: CGFloat { 1.03 }
