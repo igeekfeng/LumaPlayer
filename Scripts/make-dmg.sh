@@ -18,7 +18,8 @@
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# realpath 取物理路径，理由同 deploy-to-applications.sh（PITFALLS.md 第 1 节）。
+REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"
 SCHEME="LumaPlayer"
 CONFIG="Release"
 DESTINATION="platform=macOS,arch=arm64"

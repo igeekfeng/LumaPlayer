@@ -4,7 +4,7 @@
 // Vendor/mpv/prefix/），不再指向 Homebrew。原因：gpu-next 渲染后端用的
 // MPV_RENDER_PARAM_BACKEND 只存在于自编那份 render.h 里 —— Homebrew 的
 // mpv 0.41.0 与上游 master 都没有（PR mpv-player/mpv#16818 未合并）。
-// 见 docs/DECISIONS/gpu-next-render-backend.md。
+// 见 docs/PITFALLS.md 第 2 节「播放内核(libmpv)」。
 //
 // ⚠️ 路径相对于本文件；**新克隆要先跑 Scripts/build-libmpv.sh** 生成
 //    prefix/，否则编译找不到头（.gitignore 把 prefix/ 排除了）。

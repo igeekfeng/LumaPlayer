@@ -22,7 +22,10 @@
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# realpath 取物理路径：meson 会把 prefix 写进 libmpv 的 install name，再被 App 继承下来。
+# 经软链 / 大小写不同的路径调用时（bash 内建 `pwd -P` 只解软链），install name 会与编译时的
+# SRCROOT 不一致，打包时 bundle-libmpv.sh 就收不到依赖（PITFALLS.md 第 1 节）。
+REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"
 MPV_REPO="https://github.com/sparky3387/mpv.git"
 # 钉死的 commit：mpv-player/mpv#16818 "vo_libmpv: introduce 'gpu-next' render backend"
 # 的 head（fork sparky3387/mpv）。上游合并后应改回官方仓库并更新此值。

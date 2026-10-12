@@ -23,7 +23,7 @@ set -euo pipefail
 
 SIGN_IDENTITY="-"   # ad-hoc
 BREW_PREFIX="/opt/homebrew"
-VENDOR_PREFIX="$(cd "$(dirname "$0")/.." && pwd)/Vendor/mpv/prefix"
+VENDOR_PREFIX="$(/bin/realpath "$(dirname "$0")/..")/Vendor/mpv/prefix"
 
 APP="${1:-}"
 if [[ -z "${APP}" || ! -d "${APP}/Contents/MacOS" ]]; then
@@ -54,7 +54,18 @@ rpaths() {
 # --- 1. 沿依赖图收集并拷贝 ---------------------------------------------------
 # 以引用路径的文件名（即 install name 的 basename，如 libavcodec.63.dylib）命名，
 # 而不是解开符号链接后的真实文件名（libavcodec.63.1.102.dylib）—— 引用方认的是前者。
+# 路径前缀必须与编译时写进二进制的一致：二进制里是物理路径（含大小写），所以
+# VENDOR_PREFIX 用 realpath 取物理路径（bash 内建 `pwd -P` 不改大小写，见 PITFALLS.md 第 1 节）。
 echo "收集依赖（Homebrew + 自编 libmpv）…"
+if [[ -z "$(bundled_deps "${EXE}")" ]]; then
+    echo "error: 主程序没有引用任何位于依赖根下的库，打包无从下手。" >&2
+    echo "       期望的依赖根: ${BREW_PREFIX} 与 ${VENDOR_PREFIX}" >&2
+    echo "       主程序实际引用（前 3 条）:" >&2
+    /usr/bin/otool -L "${EXE}" | /usr/bin/tail -n +2 | /usr/bin/awk 'NR<=3{print "         "$1}' >&2
+    echo "       若上面是别的绝对路径：脚本是被软链 / 大小写不同的路径调用的，" >&2
+    echo "       脚本算出的依赖根与编译时的 SRCROOT 对不上（改用物理路径调用）。" >&2
+    exit 1
+fi
 queue=("${EXE}")
 while ((${#queue[@]})); do
     cur="${queue[0]}"

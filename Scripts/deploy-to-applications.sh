@@ -15,7 +15,10 @@
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# realpath：取物理路径（bash 内建 `pwd -P` 只解软链、不改大小写）。经软链或大小写不同的
+# 路径调用时，逻辑路径会和编译时写进二进制的 SRCROOT 不一致，bundle-libmpv.sh 就收不到依赖
+# （见 PITFALLS.md 第 1 节）。
+REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"
 SCHEME="LumaPlayer"
 CONFIG="Release"
 DESTINATION="platform=macOS,arch=arm64"

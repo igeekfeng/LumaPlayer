@@ -31,6 +31,15 @@ module map 与 `OTHER_LDFLAGS` 都指向那里。`brew upgrade` 换了 ffmpeg / 
 **打包脚本只对 Release 产物跑,且只作用于拷出来的 App。** Debug 产物是桩 + `LumaPlayer.debug.dylib`,
 从桩遍历 `otool -L` 会漏依赖;打包时要删指向 Homebrew 的 `LC_RPATH`。
 
+**打包脚本必须用物理路径解析仓库根,否则静默收不到依赖。** 现象:`deploy-to-applications.sh` 走到「改写加载路径…」
+后报 3 条 `otool-classic: can't open file: .../Contents/Frameworks/*.dylib`,然后无声退出。
+原因:编译时写进二进制的 libmpv 路径是**物理**路径(编译器的 SRCROOT),而 `Scripts/*.sh` 里
+`cd "$(dirname "$0")/.." && pwd` 拿到的是**逻辑**路径 —— 从软链或大小写不同的路径(如 `~/projects/LumaPlayer`)
+调用脚本时两者对不上,`bundle-libmpv.sh` 的 `bundled_deps` 一条都匹配不到,`Frameworks/` 空着,
+后面的 `"${FW}"/*.dylib` 就当成字面量传给了 `otool`。做法:4 个脚本统一用
+`REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"`(`build-libmpv.sh` 也改,meson 的 prefix 会进 install name);
+`bash` 内建 `pwd -P` **不够**——它只解软链,不改大小写。`bundle-libmpv.sh` 现在若一条依赖都没匹配到会直接报错并打印主程序的实际引用。
+
 **只支持 macOS 27。** Homebrew 的依赖按 27.0 编译,Deployment Target 低于 27 会得到链接器 warning 且产物也只能在 27 上跑(Q3、Q26)。
 ⛔ 别把「支持 macOS 26」写回任何地方。
 
