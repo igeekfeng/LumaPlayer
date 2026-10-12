@@ -329,8 +329,24 @@ final class AppContainer {
     ///
     /// ⛔ 与 Emby 那条一样:**调用方(视图)必须自己 `openWindow`**。这里只写请求,
     /// 窗口不会因为 `nowPlaying` 有值自己出现 —— 漏了它表现为「点了播放没反应」。
-    func play(_ file: BaiduPanFile, fromBeginning: Bool = false) {
-        state.nowPlaying = PlaybackRequest(baiduFile: file, startFromBeginning: fromBeginning)
+    ///
+    /// - Parameter episodeQueue: 同剧兄弟集(浏览页在起播那一刻用**当前目录已列条目**装配)。
+    ///   没有(单条视频 / 「继续观看」卡片)就传 nil —— 播放页据此不显示换集入口。
+    func play(
+        _ file: BaiduPanFile,
+        episodeQueue: EpisodeQueue? = nil,
+        fromBeginning: Bool = false
+    ) {
+        state.nowPlaying = PlaybackRequest(
+            baiduFile: file, startFromBeginning: fromBeginning, episodeQueue: episodeQueue)
+    }
+
+    /// 播一个**已经装配好的**请求(播放页换集用)。
+    ///
+    /// 与上面两条的分工:那两条从「一项内容」现搭请求,这条直接采纳调用方搭好的请求 ——
+    /// 换集时队列必须**原样带过去**(百度的兄弟集只在这一次请求里,丢了就得再列网盘)。
+    func play(_ request: PlaybackRequest) {
+        state.nowPlaying = request
     }
 
     /// 记下「这条百度内容在「继续观看」里长什么样」:标题 + 定位 + 封面快照。

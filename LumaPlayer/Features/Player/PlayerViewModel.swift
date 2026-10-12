@@ -98,8 +98,16 @@ final class PlayerViewModel {
     private(set) var isBuffering = false
     /// 已自然播完(`end-file` reason = eof)。重播 / 重试时复位。
     private(set) var isEnded = false
-    /// 剧集的下一集;不是剧集、已是最后一集或查询失败时为 nil。
-    private(set) var nextEpisode: EmbyItem?
+    /// 本次播放可切换的剧集队列(上一集 / 下一集 / 选集面板的唯一数据源)。
+    ///
+    /// 来源有二,都在 `init` / `loadEpisodeQueue` 里定下:
+    /// - 请求自带(百度由浏览页用**当前目录已列条目**装配;换集时原样带过来);
+    /// - Emby 由本页查当前季的分集。
+    /// nil = 不是剧集 / 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
+    private(set) var episodeQueue: EpisodeQueue?
+    /// 剧集的下一集;不是剧集、已是最后一集、或定位不到时为 nil。
+    /// Emby 在队列边界处会再补一次跨季查询(下一季的第一集)。
+    private(set) var nextEpisode: PlaybackEpisode?
     /// 画面上的短暂提示(「1.25×」「字幕:中文」…,DesignTokens.swift「界面规则」)。
     /// 每次都是新 id,视图据此重新计时消失。
     private(set) var osd: PlayerOSD?
@@ -111,7 +119,12 @@ final class PlayerViewModel {
     // MARK: - 片头 / 下一集 / 缓冲 / 统计 / 触控板拖动
 
     /// 剧集的上一集(系统「正在播放」的上一曲、⌘←);查找规则与下一集对称。
-    private(set) var previousEpisode: EmbyItem?
+    /// Emby 在队列边界处会再补一次跨季查询(上一季的最后一集)。
+    private(set) var previousEpisode: PlaybackEpisode?
+    /// 选集面板的成员(有序)。当前集由 `currentEpisodeID` 标出;不足两集时面板不出现。
+    var episodes: [PlaybackEpisode] { episodeQueue?.episodes ?? [] }
+    /// 当前这一集的来源内 id(选集面板高亮用)。
+    var currentEpisodeID: String? { episodeQueue?.current?.id }
     /// 当前源的片头片尾标记(API_CONTRACT.md 4.3.1);服务端没给就是 `.none`。
     private(set) var markers = PlaybackMarkers.none
     /// 「下一集」倒计时剩余秒数;nil = 没在倒计时
@@ -231,6 +244,13 @@ final class PlayerViewModel {
         } else {
             self.startSeconds = 0
         }
+        // 请求自带剧集队列(百度来源,或换集时带过来的):上一集 / 下一集当场就定,
+        // ⛔ 不用等网络 —— 百度也**不能再查**(未审核应用配额 10 次/小时)。
+        if let queue = request.episodeQueue {
+            self.episodeQueue = queue
+            self.nextEpisode = queue.next
+            self.previousEpisode = queue.previous
+        }
     }
 
     /// 既有 Emby 调用点 / 测试的形状(见 `PlayerWindowView` 与接线测试)。
@@ -297,9 +317,10 @@ final class PlayerViewModel {
             }
             await prepareAndLoad()
         }
-        // 上一集 / 下一集与播放本身无关,单独查、只查一次(转码 seek 重新起流也走 start())
-        if nextEpisodeTask == nil, item?.kind == .episode {
-            nextEpisodeTask = Task { [weak self] in await self?.loadAdjacentEpisodes() }
+        // 上一集 / 下一集与播放本身无关,单独查、只查一次(转码 seek 重新起流也走 start())。
+        // 请求已带队列(百度 / 换集带过来的)就不查 —— 队列本身就是答案。
+        if nextEpisodeTask == nil, episodeQueue == nil, item?.kind == .episode {
+            nextEpisodeTask = Task { [weak self] in await self?.loadEpisodeQueue() }
         }
     }
 
@@ -716,14 +737,32 @@ final class PlayerViewModel {
     /// 换到下一集:写一个新的播放请求,播放窗口据此重建播放页,
     /// 本页随之拆除并走完收尾上报(与关窗同一条路径)。
     func playNextEpisode() {
-        guard let nextEpisode, let server else { return }
-        stopUpNextCountdown()
-        container.play(nextEpisode, on: server)
+        switchToEpisode(nextEpisode)
     }
 
     func playPreviousEpisode() {
-        guard let previousEpisode, let server else { return }
-        container.play(previousEpisode, on: server)
+        switchToEpisode(previousEpisode)
+    }
+
+    /// 选集面板点某一集 —— 可能不是相邻集,直接跳过去。
+    func playEpisode(_ episode: PlaybackEpisode) {
+        switchToEpisode(episode)
+    }
+
+    /// 换到某一集:装配新请求交给播放窗口(换集 = 换请求,见 `PlaybackRequest`)。
+    ///
+    /// 队列**只在百度来源**带过去:它的兄弟集只存在于这次请求里,丢了就得再列一遍
+    /// 网盘(配额);Emby 的兄弟集在服务端,新播放页自己查更全(还能补齐跨季边界)。
+    private func switchToEpisode(_ episode: PlaybackEpisode?) {
+        guard let episode else { return }
+        stopUpNextCountdown()
+        // 百度:换集同样要补记「继续观看」的展示快照(复用起播那一刻的 `SourceItem`),
+        // ⛔ 不能等渲染续播区时再列网盘(配额,见 `AppContainer.rememberResumeCard`)。
+        if let item = episode.resumeItem, let file = episode.source.baiduFile {
+            Task { await container.rememberResumeCard(item: item, file: file) }
+        }
+        let carried = episode.source.baiduFile != nil ? episodeQueue?.selecting(episode) : nil
+        container.play(PlaybackRequest(source: episode.source, episodeQueue: carried))
     }
 
     // MARK: - 跳过片头 / 下一集提示
@@ -855,17 +894,26 @@ final class PlayerViewModel {
         osd = PlayerOSD(text: text, systemImage: systemImage)
     }
 
-    /// 查上一集 / 下一集:先在本季里找紧挨着的一集;已是本季首 / 末集就取
-    /// 上一季的最后一集 / 下一季的第一集。
+    /// 查本季的分集并装配剧集队列,再定出上一集 / 下一集。
+    ///
+    /// 队列成员就是**本季**的分集(选集面板列的就是它);上一集 / 下一集在队列边界处
+    /// 再补一次跨季查询(上一季的最后一集 / 下一季的第一集)—— 与既有行为一致,
+    /// 这两个边界集**不进队列**(它们不属于本季)。
+    ///
     /// 只用 ✅ 端点 `Shows/{Id}/Episodes` 与 `Shows/{Id}/Seasons`(API_CONTRACT.md 3.2)。
-    private func loadAdjacentEpisodes() async {
+    private func loadEpisodeQueue() async {
         guard let item, let server,
               let seriesID = item.seriesID, let seasonID = item.seasonID else { return }
         let connection = container.connection(for: server)
         do {
             let episodes = try await connection.episodes(seriesID: seriesID, seasonID: seasonID)
-            nextEpisode = NextEpisodeResolver.item(after: item.id, in: episodes)
-            previousEpisode = NextEpisodeResolver.item(before: item.id, in: episodes)
+            let queue = EpisodeQueue(
+                episodes: episodes.map { Self.playableEpisode($0, on: server) },
+                currentIndex: episodes.firstIndex { $0.id == item.id }
+            )
+            episodeQueue = queue
+            nextEpisode = queue.next
+            previousEpisode = queue.previous
             guard nextEpisode == nil || previousEpisode == nil else { return }
 
             let seasons = try await connection.seasons(seriesID: seriesID)
@@ -873,18 +921,30 @@ final class PlayerViewModel {
                 nextEpisode = try await connection
                     .episodes(seriesID: seriesID, seasonID: nextSeason.id)
                     .first
+                    .map { Self.playableEpisode($0, on: server) }
             }
             if previousEpisode == nil,
                let previousSeason = NextEpisodeResolver.item(before: seasonID, in: seasons) {
                 previousEpisode = try await connection
                     .episodes(seriesID: seriesID, seasonID: previousSeason.id)
                     .last
+                    .map { Self.playableEpisode($0, on: server) }
             }
         } catch {
             // 上一集 / 下一集是附加功能:查不到只是不显示对应入口,不影响正在进行的播放,
             // 也不弹错误(播放页的错误位只留给播放本身)。已查到的那一个保留。
             return
         }
+    }
+
+    /// `EmbyItem` → `PlaybackEpisode`。Emby 的进度走服务端,所以 `resumeItem` 为 nil。
+    static func playableEpisode(_ episode: EmbyItem, on server: ServerProfile) -> PlaybackEpisode {
+        PlaybackEpisode(
+            id: episode.id,
+            label: episode.episodeLabel,
+            title: episode.name,
+            source: .emby(server: server, item: episode)
+        )
     }
 
     // MARK: - 内部

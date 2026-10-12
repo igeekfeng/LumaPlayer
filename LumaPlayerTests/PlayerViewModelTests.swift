@@ -132,6 +132,91 @@ final class PlayerViewModelTests: XCTestCase {
         await viewModel.waitUntilReportingFinished()
     }
 
+    // MARK: - 剧集队列(播放页换集)
+
+    /// 请求自带队列(百度来源的形态):上一集 / 下一集当场就定,⛔ 一次网络都不发。
+    ///
+    /// 百度没有 Emby 的 `seriesID` / `seasonID`,这条路上以前恒为 nil ——
+    /// 播放页因此一个换集入口都不显示(队列由浏览页用已列条目装配后带进请求)。
+    func testRequestCarriedQueueResolvesNeighboursWithoutNetwork() throws {
+        let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 1)
+
+        XCTAssertEqual(viewModel.episodes.count, 3)
+        XCTAssertEqual(viewModel.currentEpisodeID, "20")
+        XCTAssertEqual(viewModel.previousEpisode?.id, "10")
+        XCTAssertEqual(viewModel.nextEpisode?.id, "30")
+        XCTAssertEqual(viewModel.nextEpisode?.label, "第 3 集")
+        XCTAssertNil(viewModel.playingItem, "百度来源没有 Emby 项")
+    }
+
+    /// 首集没有上一集、末集没有下一集 —— ⛔ 不绕回。
+    func testQueueBoundariesHaveNoWrapAround() throws {
+        let first = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
+        XCTAssertNil(first.previousEpisode)
+        XCTAssertEqual(first.nextEpisode?.id, "20")
+
+        let last = try makeBaiduViewModel(episodeCount: 3, playingIndex: 2)
+        XCTAssertEqual(last.previousEpisode?.id, "20")
+        XCTAssertNil(last.nextEpisode)
+    }
+
+    /// 没有队列(电影 / 单条视频)时三个换集入口都不出现。
+    func testMovieHasNoEpisodeQueue() throws {
+        let viewModel = try makeViewModel()
+        XCTAssertTrue(viewModel.episodes.isEmpty)
+        XCTAssertNil(viewModel.nextEpisode)
+        XCTAssertNil(viewModel.previousEpisode)
+        XCTAssertNil(viewModel.currentEpisodeID)
+    }
+
+    /// 一部百度来源的剧集:`episodeCount` 集,当前播第 `playingIndex` 集,
+    /// 队列由浏览页装配后带进请求(与 `BaiduPanSourceViewModel.play(_ item:)` 同一条路)。
+    private func makeBaiduViewModel(episodeCount: Int, playingIndex: Int) throws -> PlayerViewModel {
+        let registry = try ServerRegistry(
+            defaults: UserDefaults(suiteName: "test.LumaPlayer.player.baidu.\(UUID().uuidString)")!,
+            credentials: credentials
+        )
+        let sourceID = UUID()
+        let items = (0..<episodeCount).map { index in
+            SourceItem(
+                ref: SourceItemRef(sourceID: sourceID, fsID: UInt64((index + 1) * 10)),
+                title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
+                episodeNumber: index + 1, seasonNumber: 1, episodeTitle: nil,
+                durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+        }
+        let files = Dictionary(uniqueKeysWithValues: items.compactMap { item -> (UInt64, BaiduPanFile)? in
+            guard let fsID = UInt64(item.ref.itemID) else { return nil }
+            return (fsID, BaiduPanFile(
+                fsID: fsID,
+                path: "/apps/LumaPlayer/\(fsID).mp4",
+                name: "\(fsID).mp4",
+                sizeBytes: nil,
+                isDirectory: false,
+                category: nil,
+                modifiedAt: nil,
+                thumbnailURL: nil))
+        })
+        let playing = items[playingIndex]
+        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
+            selecting: playing, in: items, filesByID: files))
+        let playingFile = try XCTUnwrap(files[UInt64(playing.ref.itemID) ?? 0])
+
+        return PlayerViewModel(
+            container: AppContainer(
+                registry: registry,
+                credentials: credentials,
+                preferences: UserDefaults(
+                    suiteName: "test.LumaPlayer.player.baidu.prefs.\(UUID().uuidString)")!,
+                watchProgress: WatchProgressStore(
+                    fileURL: FileManager.default.temporaryDirectory
+                        .appending(path: "player-queue-\(UUID().uuidString).json"))
+            ),
+            request: PlaybackRequest(
+                source: .baiduPan(file: playingFile), episodeQueue: queue),
+            displaySleep: displaySleep
+        )
+    }
+
     // MARK: - 转码 seek 的合并起流
 
     /// 关窗 / 切媒体后,待起流的合并 seek 必须被作废。

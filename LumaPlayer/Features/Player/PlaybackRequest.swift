@@ -46,10 +46,22 @@ struct PlaybackRequest: Identifiable, Equatable {
     let source: PlaybackSource
     /// 「从头播放」:忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
     var startFromBeginning = false
+    /// 本次播放可切换的剧集队列(上一集 / 下一集 / 选集面板的唯一数据源)。
+    ///
+    /// 装配点按来源:百度由浏览页**在起播那一刻**用当前目录已列的条目装配
+    /// (⛔ 不为了换集再列一次网盘,配额见 `docs/BAIDU_PAN_API.md`);Emby 由播放页
+    /// 自己查(`PlayerViewModel.loadEpisodeQueue`)。换集时原样带进新请求。
+    /// nil = 不是剧集 / 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
+    var episodeQueue: EpisodeQueue?
 
-    init(source: PlaybackSource, startFromBeginning: Bool = false) {
+    init(
+        source: PlaybackSource,
+        startFromBeginning: Bool = false,
+        episodeQueue: EpisodeQueue? = nil
+    ) {
         self.source = source
         self.startFromBeginning = startFromBeginning
+        self.episodeQueue = episodeQueue
     }
 
     /// 既有 Emby 调用点的形状(首页 / 媒体库 / 详情 / 搜索)。
@@ -58,9 +70,14 @@ struct PlaybackRequest: Identifiable, Equatable {
         self.startFromBeginning = startFromBeginning
     }
 
-    init(baiduFile: BaiduPanFile, startFromBeginning: Bool = false) {
+    init(
+        baiduFile: BaiduPanFile,
+        startFromBeginning: Bool = false,
+        episodeQueue: EpisodeQueue? = nil
+    ) {
         self.source = .baiduPan(file: baiduFile)
         self.startFromBeginning = startFromBeginning
+        self.episodeQueue = episodeQueue
     }
 
     var embyServer: ServerProfile? { source.embyServer }

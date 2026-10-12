@@ -423,7 +423,41 @@ final class BaiduPanSourceViewModel {
         // 起播这一刻顺手记下展示快照(标题 / 封面),「继续观看」才渲染得出来。
         // ⛔ 不要等到渲染续播区时回头再列网盘(配额,见 `AppContainer.rememberResumeCard`)。
         Task { await container.rememberResumeCard(item: item, file: file) }
-        container.play(file)
+        container.play(file, episodeQueue: Self.episodeQueue(
+            selecting: item, in: sortedItems, filesByID: filesByID))
+    }
+
+    /// 用**当前目录已列的条目**装配剧集队列(播放页的上一集 / 下一集 / 选集面板)。
+    ///
+    /// ⛔ 这里一次网络请求都不发:兄弟集此刻就在 `items` / `filesByID` 里,
+    /// 而配额只有 10 次/小时(见 `docs/BAIDU_PAN_API.md`)。顺序取调用方给的
+    /// `items`(浏览页传的就是界面那一份 `sortedItems`),与看到的**完全一致**。
+    ///
+    /// 纯函数,不碰 VM 状态 —— 测试直接驱动它,不必先造一个真目录。
+    ///
+    /// 只收 `.episode`:合成器判定「这一层像剧集序列」才会给这个 kind
+    /// (`BaiduPanMetadataSynthesizer.mediaItem`),所以单条视频 / 电影不会凭空得到
+    /// 一个「队列」,花絮之类也不会混进来。不足两集同样不给 —— 没有可切的一集。
+    static func episodeQueue(
+        selecting item: SourceItem,
+        in items: [SourceItem],
+        filesByID: [UInt64: BaiduPanFile]
+    ) -> EpisodeQueue? {
+        guard item.kind == .episode else { return nil }
+        let episodes = items.filter { $0.kind == .episode }
+        guard episodes.count > 1 else { return nil }
+        let entries = episodes.compactMap { entry -> PlaybackEpisode? in
+            guard let fsID = UInt64(entry.ref.itemID), let file = filesByID[fsID] else { return nil }
+            return PlaybackEpisode(
+                id: entry.ref.itemID,
+                label: entry.episodeNumber.map { "第 \($0) 集" },
+                title: entry.episodeTitle ?? entry.title,
+                source: .baiduPan(file: file),
+                resumeItem: entry
+            )
+        }
+        guard let index = entries.firstIndex(where: { $0.id == item.ref.itemID }) else { return nil }
+        return EpisodeQueue(episodes: entries, currentIndex: index)
     }
 
     /// 播「继续观看」区的一张卡片。它可能不在当前目录里,所以只能靠快照重建文件 ——

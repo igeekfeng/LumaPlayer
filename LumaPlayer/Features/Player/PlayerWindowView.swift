@@ -53,6 +53,8 @@ struct PlayerWindowView: View {
     @State private var isHoveringControls = false
     /// 倍速浮层打开中:控制栏要一直留着,否则它会在自动隐藏时连浮层一起带走
     @State private var isSpeedPopoverPresented = false
+    /// 选集浮层打开中:同理,控制栏不能自动隐藏
+    @State private var isEpisodePickerPresented = false
     /// 正在显示的屏显提示(比 `viewModel.osd` 晚一拍清空)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -144,6 +146,10 @@ struct PlayerWindowView: View {
         }
         .onChange(of: isSpeedPopoverPresented) { _, presented in
             // 打开时钉住控制栏;关掉后按正常节奏重新计时隐藏
+            if presented { revealControls(autoHide: false) } else { revealControls() }
+        }
+        .onChange(of: isEpisodePickerPresented) { _, presented in
+            // 选集浮层同理:开着的时候控制栏不能自己收走
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
@@ -330,17 +336,15 @@ struct PlayerWindowView: View {
     }
 
     private var controlBar: some View {
-        let viewModel = viewModel
-        let playNext: (() -> Void)? = viewModel.nextEpisode == nil
-            ? nil
-            : { viewModel.playNextEpisode() }
         // 全宽触底:不再加水平 padding 与最大宽度,压暗衬底要一直铺到窗口边缘。
         // 内容的左右缩进在 `PlayerControlsView` 内部做(controlBarSideInset)。
-        return PlayerControlsView(
+        // 换集入口(上一集 / 下一集 / 选集)由控制栏自己按 `viewModel` 的队列决定,
+        // 这里不再单独算一个 `playNext` 传进去。
+        PlayerControlsView(
             viewModel: viewModel,
             toggleFullScreen: { toggleFullScreen() },
-            playNext: playNext,
-            isSpeedPopoverPresented: $isSpeedPopoverPresented
+            isSpeedPopoverPresented: $isSpeedPopoverPresented,
+            isEpisodePickerPresented: $isEpisodePickerPresented
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -413,6 +417,7 @@ struct PlayerWindowView: View {
             && !isBusy
             && !isHoveringControls
             && !isSpeedPopoverPresented
+            && !isEpisodePickerPresented
             && viewModel.scrubPreviewSeconds == nil
     }
 
@@ -585,7 +590,7 @@ struct PlayerOSDView: View {
 
 /// 播完后的卡片:有下一集时主操作是「播放下一集」,否则是「重新播放」。
 struct PlayerEndCard: View {
-    let nextEpisode: EmbyItem?
+    let nextEpisode: PlaybackEpisode?
     /// 自动播放下一集的倒计时;nil = 不自动播
     var countdown: Int?
     var playNext: () -> Void
@@ -599,7 +604,7 @@ struct PlayerEndCard: View {
                 Text("下一集")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text([nextEpisode.episodeLabel, nextEpisode.name].compactMap { $0 }.joined(separator: " · "))
+                Text([nextEpisode.label, nextEpisode.title].compactMap { $0 }.joined(separator: " · "))
                     .font(.headline)
                     .lineLimit(2)
             } else {
@@ -637,7 +642,7 @@ struct PlayerEndCard: View {
 /// 片尾的「下一集」提示(Netflix / Plex 的 Up Next):显示下一集名,
 /// 开着自动播放时带倒计时。取消后本次播放不再出现。
 struct PlayerUpNextPrompt: View {
-    let nextEpisode: EmbyItem
+    let nextEpisode: PlaybackEpisode
     let countdown: Int?
     var playNext: () -> Void
     var dismiss: () -> Void
@@ -647,7 +652,7 @@ struct PlayerUpNextPrompt: View {
             Text("下一集")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text([nextEpisode.episodeLabel, nextEpisode.name].compactMap { $0 }.joined(separator: " · "))
+            Text([nextEpisode.label, nextEpisode.title].compactMap { $0 }.joined(separator: " · "))
                 .font(.headline)
                 .lineLimit(1)
             GlassEffectContainer(spacing: Metrics.spacingS) {

@@ -193,6 +193,95 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNil(BaiduResumeCard(record: record))
     }
 
+    // MARK: - 播放页换集(剧集队列)
+
+    /// 队列**复用当前目录已列的条目**:兄弟集此刻就在手上,⛔ 不为换集再列一次网盘
+    /// (未审核应用配额 10 次/小时)。顺序与调用方给的一致(浏览页传 `sortedItems`)。
+    func testEpisodeQueueReusesListedSiblings() throws {
+        let sourceID = UUID()
+        let items = (1...3).map { makeEpisodeItem(sourceID: sourceID, index: $0) }
+        let files = makeFiles(for: items)
+
+        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
+            selecting: items[1], in: items, filesByID: files))
+
+        XCTAssertEqual(queue.episodes.map(\.id), ["10", "20", "30"])
+        XCTAssertEqual(queue.current?.id, "20")
+        XCTAssertEqual(queue.previous?.id, "10")
+        XCTAssertEqual(queue.next?.id, "30")
+        XCTAssertEqual(queue.current?.label, "第 2 集")
+        XCTAssertEqual(queue.current?.title, "示例剧", "没有集名时退回剧名(与浏览页卡片同一口径)")
+        XCTAssertNotNil(
+            queue.current?.resumeItem,
+            "百度条目要带上展示快照的来源 —— 换集时靠它补记「继续观看」,⛔ 不回头列网盘")
+    }
+
+    /// 单条视频 / 电影不给队列:合成器只在「这一层像剧集序列」时才给 `.episode`。
+    func testEpisodeQueueIsNilForNonEpisode() {
+        let sourceID = UUID()
+        let movie = SourceItem(
+            ref: SourceItemRef(sourceID: sourceID, fsID: 7),
+            title: "示例电影", kind: .video, overview: nil, year: nil, tmdbID: nil,
+            episodeNumber: nil, seasonNumber: nil, episodeTitle: nil,
+            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+        let files = makeFiles(for: [movie])
+
+        XCTAssertNil(BaiduPanSourceViewModel.episodeQueue(
+            selecting: movie, in: [movie], filesByID: files))
+    }
+
+    /// 只有一集:没有可切的一集 —— 播放页因此不显示换集入口。
+    func testEpisodeQueueIsNilForSingleEpisode() {
+        let sourceID = UUID()
+        let only = makeEpisodeItem(sourceID: sourceID, index: 1)
+
+        XCTAssertNil(BaiduPanSourceViewModel.episodeQueue(
+            selecting: only, in: [only], filesByID: makeFiles(for: [only])))
+    }
+
+    /// 同目录的花絮 / 电影不混进队列 —— 队列只收 `.episode`。
+    func testEpisodeQueueExcludesNonEpisodeFiles() throws {
+        let sourceID = UUID()
+        let episodes = (1...2).map { makeEpisodeItem(sourceID: sourceID, index: $0) }
+        let extra = SourceItem(
+            ref: SourceItemRef(sourceID: sourceID, fsID: 99),
+            title: "幕后花絮", kind: .video, overview: nil, year: nil, tmdbID: nil,
+            episodeNumber: nil, seasonNumber: nil, episodeTitle: nil,
+            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+        let items = episodes + [extra]
+
+        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
+            selecting: episodes[0], in: items, filesByID: makeFiles(for: items)))
+
+        XCTAssertEqual(queue.episodes.map(\.id), ["10", "20"], "花絮不占一集的位置")
+    }
+
+    // MARK: - 夹具
+
+    private func makeEpisodeItem(sourceID: UUID, index: Int) -> SourceItem {
+        SourceItem(
+            ref: SourceItemRef(sourceID: sourceID, fsID: UInt64(index * 10)),
+            title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
+            episodeNumber: index, seasonNumber: 1, episodeTitle: nil,
+            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+    }
+
+    private func makeFiles(for items: [SourceItem]) -> [UInt64: BaiduPanFile] {
+        Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            guard let fsID = UInt64(item.ref.itemID) else { return nil }
+            return (fsID, BaiduPanFile(
+                fsID: fsID,
+                path: "/apps/LumaPlayer/\(item.ref.itemID).mp4",
+                name: "\(item.ref.itemID).mp4",
+                sizeBytes: nil,
+                isDirectory: false,
+                category: nil,
+                modifiedAt: nil,
+                thumbnailURL: nil
+            ))
+        })
+    }
+
     private func makeItem(sourceID: UUID) -> SourceItem {
         SourceItem(
             ref: SourceItemRef(sourceID: sourceID, fsID: 42),

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 播放器底部控制栏(DesignTokens.swift「界面规则」的优先级:播放/暂停 → 进度 →
-/// 音量 → 字幕/音轨 → 全屏 → 其他)。
+/// 播放器底部控制栏(DesignTokens.swift「界面规则」的优先级:播放/暂停 → 换集 →
+/// 进度 → 音量 → 字幕/音轨 → 全屏 → 其他)。
 ///
 /// **形态:全宽底部横条 + 渐变压暗,不是悬浮玻璃药丸。**
 ///
@@ -24,29 +24,23 @@ import SwiftUI
 struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
     var toggleFullScreen: () -> Void
-    /// 有下一集时才给(剧集且不是最后一集)
-    var playNext: (() -> Void)?
     /// 倍速浮层是否打开:打开期间控制栏不能自动隐藏,否则浮层连着控制栏一起消失
     @Binding var isSpeedPopoverPresented: Bool
+    /// 选集浮层是否打开:同上,打开期间要钉住控制栏
+    @Binding var isEpisodePickerPresented: Bool
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
             PlayerScrubber(viewModel: viewModel)
             HStack(spacing: Metrics.spacingM) {
                 transport
+                episodeNav
                 PlayerVolumeControl(viewModel: viewModel)
                 Spacer(minLength: Metrics.spacingL)
                 PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
                 PlayerSubtitleMenu(viewModel: viewModel)
                 PlayerAudioMenu(viewModel: viewModel)
                 PlayerOptionsMenu(viewModel: viewModel)
-                if let playNext {
-                    PlayerIconButton(
-                        systemImage: "forward.end.fill",
-                        label: "下一集",
-                        action: playNext
-                    )
-                }
                 PlayerIconButton(
                     systemImage: "arrow.up.left.and.arrow.down.right",
                     label: "切换全屏",
@@ -87,6 +81,51 @@ struct PlayerControlsView: View {
                 prominent: true
             ) { viewModel.togglePlayPause() }
             PlayerRepeatSkipButton(direction: .forward, viewModel: viewModel)
+        }
+    }
+
+    /// 剧集导航:上一集 / 下一集 / 选集。
+    ///
+    /// 放在 `transport` **右侧**,而不是原先的控制栏最右端(那里挨着全屏):
+    /// 换集是 transport 语义,贴着播放键那一簇才找得到。⛔ 不插到播放键**左边**
+    /// —— 那样播放 / 暂停会随「是不是剧集」左右横移,破坏上面那条「播放键固定最左」。
+    ///
+    /// 三个入口各自按可用性出现(没有就不占位):电影 / 单条视频三者全无。
+    /// 队列由 `PlayerViewModel` 按来源装好(百度复用目录已列条目,Emby 查当前季)。
+    @ViewBuilder
+    private var episodeNav: some View {
+        if viewModel.previousEpisode != nil {
+            PlayerIconButton(systemImage: "backward.end.fill", label: "上一集") {
+                viewModel.playPreviousEpisode()
+            }
+        }
+        if viewModel.nextEpisode != nil {
+            PlayerIconButton(systemImage: "forward.end.fill", label: "下一集") {
+                viewModel.playNextEpisode()
+            }
+        }
+        if viewModel.episodes.count > 1 {
+            episodePickerButton
+        }
+    }
+
+    /// 选集:弹出本季 / 本目录的剧集列表,点任意一集直接切(不必一集一集翻)。
+    ///
+    /// 用 popover 而不是 `Menu`(与倍速浮层同一套):几百集时菜单铺不开,
+    /// 而浮层里能放可滚动列表并把当前集滚到可见。
+    private var episodePickerButton: some View {
+        PlayerIconButton(systemImage: "list.number", label: "选集") {
+            isEpisodePickerPresented.toggle()
+        }
+        .popover(isPresented: $isEpisodePickerPresented, arrowEdge: .bottom) {
+            PlayerEpisodePicker(
+                episodes: viewModel.episodes,
+                currentID: viewModel.currentEpisodeID,
+                onSelect: { episode in
+                    isEpisodePickerPresented = false
+                    viewModel.playEpisode(episode)
+                }
+            )
         }
     }
 }
