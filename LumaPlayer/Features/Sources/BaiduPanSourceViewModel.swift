@@ -33,12 +33,35 @@ final class BaiduPanSourceViewModel {
     private(set) var libraryRoot: String?
     /// 当前目录
     private(set) var currentDirectory: String?
-    /// 当前目录的卡片(来源无关条目,带封面)。
+    /// 当前目录的卡片(来源无关条目,带封面),**百度返回的原始顺序**。
     /// ⚠️ 它**不含播放所需的信息**(`path` / 原始文件名),所以下面还有一份原始索引。
+    /// ⚠️ 界面⛔ 不要直接读它 —— 用 `sortedItems`(那个才是排好的)。
     private(set) var items: [SourceItem] = []
     /// `fs_id` → 原始文件。播放与「进目录」都要用它 ——
     /// 合成后的 `SourceItem` 只保留展示所需字段,`path` 这类定位信息不在里面。
     private var filesByID: [UInt64: BaiduPanFile] = [:]
+
+    /// 目录排序方式。默认**剧集顺序** —— 「看剧都是从前往后看的」。
+    ///
+    /// ⚠️ 它是**展示层**状态:改它只重排已经取回的条目,⛔ 不重新请求目录
+    /// (配额 10 次/小时,见 `BaiduPanSortOrder` 的注释)。
+    var sort: BaiduPanSortOrder = .episode {
+        didSet {
+            guard sort != oldValue else { return }
+            ascending = sort.defaultAscending
+        }
+    }
+    /// 排序方向。换排序方式时回到该档的自然方向(与 `LibraryViewModel` 同一条纪律)。
+    var ascending = true
+
+    /// 按当前排序排好的条目 —— **界面用这个**。
+    ///
+    /// 为什么是计算属性而不是在 `loadFiles()` 里排一次:刮削回来会**整份换掉**
+    /// `items`(`startScrape`),排一次的做法会在那一刻把顺序丢掉;
+    /// 而且改排序不该触发任何网络请求。
+    var sortedItems: [SourceItem] {
+        sort.apply(to: items, filesByID: filesByID, ascending: ascending)
+    }
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: BaiduPanDirectoryFailure?
 

@@ -131,6 +131,29 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(ignored, 0, "「从头播放」必须忽略续播位置")
     }
 
+    // MARK: - 目录排序
+
+    /// 默认**剧集顺序** —— 「看剧都是从前往后看的」。
+    /// 换排序方式回到该档的自然方向(与 `LibraryViewModel` 同一条纪律)。
+    func testDirectorySortDefaultsToEpisodeOrder() async throws {
+        let container = try makeContainer()
+        let source = try await container.addBaiduSource(
+            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
+        let viewModel = BaiduPanSourceViewModel(container: container, source: source)
+
+        XCTAssertEqual(viewModel.sort, .episode)
+        XCTAssertTrue(viewModel.ascending)
+
+        // 时间档的自然方向是「新的在前」
+        viewModel.sort = .modifiedDate
+        XCTAssertFalse(viewModel.ascending)
+
+        // 手动翻过方向之后换档,仍回到该档的自然方向
+        viewModel.ascending = true
+        viewModel.sort = .name
+        XCTAssertTrue(viewModel.ascending)
+    }
+
     // MARK: - 续播卡片(「继续观看」区)
 
     /// 起播时记下展示快照,「继续观看」区才渲染得出来(标题 / 定位 / 封面),

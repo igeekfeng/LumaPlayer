@@ -14,8 +14,14 @@ import SwiftUI
 ///
 /// 这里的条目是**媒体文件本身**,不是 Emby 那种「进详情页再选集」的结构。
 /// 点目录就进目录,点文件就播 —— 与文件管理器一致,不需要中间那一层。
+///
+/// ## 顺序
+///
+/// 目录顺序**由客户端排**(`BaiduPanSortOrder`),不用百度返回的顺序:
+/// 那个是纯字符串序,`10.mp4` 会排在 `2.mp4` 前面。默认按剧集顺序排,
+/// 排序菜单在路径栏右侧,改排序不发请求。
 struct BaiduPanBrowserView: View {
-    let viewModel: BaiduPanSourceViewModel
+    @Bindable var viewModel: BaiduPanSourceViewModel
     let store: PosterImageStore
 
     /// ⛔ 唤起播放窗口。**写请求与开窗必须成对出现**:`AppState.nowPlaying`
@@ -83,6 +89,8 @@ struct BaiduPanBrowserView: View {
 
             libraryRootButton
 
+            sortMenu
+
             Button {
                 Task { await viewModel.reload() }
             } label: {
@@ -128,6 +136,31 @@ struct BaiduPanBrowserView: View {
         }
     }
 
+    // MARK: - 排序
+
+    /// 排序菜单(与 `LibraryView` 的工具栏同形)。
+    ///
+    /// ⚠️ 与 Emby 那边的**根本差别**:这里的排序全在本地做,选完立刻就变,
+    /// ⛔ 不会重新请求目录(配额 10 次/小时)。所以**没有**「加载中」这一态。
+    private var sortMenu: some View {
+        Menu {
+            Picker("排序方式", selection: $viewModel.sort) {
+                ForEach(BaiduPanSortOrder.allCases) { order in
+                    Text(order.title).tag(order)
+                }
+            }
+            .pickerStyle(.inline)
+            Picker("顺序", selection: $viewModel.ascending) {
+                Text("升序").tag(true)
+                Text("降序").tag(false)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("排序:\(viewModel.sort.title)", systemImage: "arrow.up.arrow.down")
+        }
+        .help("排序:\(viewModel.sort.title)(\(viewModel.ascending ? "升序" : "降序"))。目录恒在最前。")
+    }
+
     // MARK: - 内容
 
     @ViewBuilder
@@ -156,7 +189,7 @@ struct BaiduPanBrowserView: View {
                     }
                     if !viewModel.items.isEmpty {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
-                            ForEach(viewModel.items) { item in
+                            ForEach(viewModel.sortedItems) { item in
                                 BaiduPanCard(
                                     item: item,
                                     store: store,
