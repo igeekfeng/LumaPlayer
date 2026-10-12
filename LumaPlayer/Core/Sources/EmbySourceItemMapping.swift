@@ -25,6 +25,8 @@ extension EmbyItem {
             kind: Self.sourceKind(for: kind),
             overview: overview,
             year: productionYear,
+            // Emby 的元数据全是服务端给的,没有「名称里写死 TMDB id」这回事
+            tmdbID: nil,
             // Emby 的分集在剧集页里单独展示,不走这条投影;⛔ 不猜 IndexNumber
             episodeNumber: nil,
             seasonNumber: nil,

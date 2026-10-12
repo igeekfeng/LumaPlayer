@@ -16,6 +16,10 @@ import Foundation
 /// | 电影 / 单条视频 | 一次 `/3/search/movie` | 海报 / 简介 / 年份 |
 /// | 目录卡片(`.folder`) | 一次 `/3/search/tv`(**严格**标题一致) | 剧级海报 / 简介 / 首播年 |
 ///
+/// ⚠️ **名称里写了 `{tmdbid-N}` 的条目跳过搜索**,直接 `GET /3/tv/{N}` 或 `/3/movie/{N}`
+/// (`SourceItem.tmdbID`)—— 标准命名库已经给了权威 id,再按标题搜既慢又可能搜错。
+/// 标签不区分影 / 剧,所以:剧集条目按剧查;目录卡片先按剧、404 再按电影;单条视频反之。
+///
 /// ⚠️ **剧集为什么必须钻到季**:`/3/search/tv` 只给剧级海报。拿它去配每一集,
 /// 结果就是「每一集的封面都长一样、还都没有集名」—— 分集剧照 / 集名 / 单集简介
 /// 只有季详情端点给(`docs/TMDB_API.md` §7)。
@@ -68,16 +72,30 @@ actor BaiduPanMetadataScraper {
         let season: Int
     }
 
+    /// 按**显式 id** 直取条目的键:id + 查哪个端点(影 / 剧)。
+    ///
+    /// ⚠️ 影与剧分开缓存:同一个数字 id 在两个端点下可能是**两部不同的作品**,
+    /// 拿一份结果糊弄另一边就是配错片(硬规则 4)。
+    struct DetailsKey: Hashable, Sendable {
+        let id: Int
+        let isSeries: Bool
+    }
+
     /// 一组剧集条目:同一个「剧名 + 年份 + 季」共用一次搜索 + 一次季详情。
+    ///
+    /// `tmdbID` 非空时(名称里写了 `{tmdbid-N}`)不走搜索,直接按 id 取剧
+    /// —— 这时 `title` / `year` 只用于分组与展示。
     struct SeriesKey: Hashable, Sendable {
         let title: String
         let year: Int?
         let season: Int
+        let tmdbID: Int?
 
-        init(title: String, year: Int?, season: Int?) {
+        init(title: String, year: Int?, season: Int?, tmdbID: Int? = nil) {
             self.title = title
             self.year = year
             self.season = season ?? BaiduPanMetadataScraper.seasonWhenUnknown
+            self.tmdbID = tmdbID
         }
     }
 
@@ -88,6 +106,10 @@ actor BaiduPanMetadataScraper {
     /// 值类型是 `TMDBMatch?`,写的时候用 `updateValue(_:forKey:)` 而不是下标赋值 ——
     /// 下标赋 `nil` 是**删键**,那样「查过没命中」这件事就丢了(见 `searchMatch`)。
     private var searchCache: [QueryKey: TMDBMatch?] = [:]
+
+    /// 查过的**按 id 直取**结果。与 `searchCache` 同口径:`nil` = 查过但**这个端点没有这个 id**
+    /// (404 这种确定性失败),传输 / 认证类失败不写(下次进目录要能重试)。
+    private var detailsCache: [DetailsKey: TMDBMatch?] = [:]
 
     /// 查过的**季详情报表**(集号 → 分集)。只在**成功**时写(以及 404 这种确定性失败写成空表),
     /// 传输类失败不写 —— 下次进目录要能重试。
@@ -137,7 +159,8 @@ actor BaiduPanMetadataScraper {
         var offsetsByKey: [SeriesKey: [Int]] = [:]
         for (offset, item) in items.enumerated()
         where item.kind == .episode && Self.isScrapable(item) {
-            let key = SeriesKey(title: item.title, year: item.year, season: item.seasonNumber)
+            let key = SeriesKey(
+                title: item.title, year: item.year, season: item.seasonNumber, tmdbID: item.tmdbID)
             offsetsByKey[key, default: []].append(offset)
         }
         guard !offsetsByKey.isEmpty else { return items }
@@ -170,13 +193,46 @@ actor BaiduPanMetadataScraper {
 
     /// 查一组的剧 + 该季分集。任一步拿不到就返回 nil(⛔ 不拿别的剧来凑)。
     private func seriesBundle(for key: SeriesKey, token: String) async -> SeriesBundle? {
-        guard let series = await searchMatch(
-            title: key.title, year: key.year, isSeries: true, token: token) else {
-            return nil
+        // 名称里写了显式 id 就直接按 id 取剧;否则按标题 + 年份搜
+        let series: TMDBMatch?
+        if let id = key.tmdbID {
+            series = await detailsMatch(id: id, isSeries: true, token: token)
+        } else {
+            series = await searchMatch(
+                title: key.title, year: key.year, isSeries: true, token: token)
         }
+        guard let series else { return nil }
         let episodes = await seasonEpisodes(
             seriesID: series.tmdbID, season: key.season, token: token)
         return SeriesBundle(series: series, episodes: episodes)
+    }
+
+    /// 按**显式 id** 直取条目(跳过搜索)。`isSeries` 决定查影还是剧端点。
+    ///
+    /// ⛔ 不抛错(与 `searchMatch` 同处置):失败折成 `nil` + `lastFailureDescription`。
+    /// 404 = 这个 id 在这个端点不存在,是**确定性**答案 → 写进缓存不再重问;
+    /// 传输 / 认证类失败不写缓存(下次进目录要能重试)。
+    private func detailsMatch(id: Int, isSeries: Bool, token: String) async -> TMDBMatch? {
+        let key = DetailsKey(id: id, isSeries: isSeries)
+        if let cached = detailsCache[key] { return cached }
+
+        let match: TMDBMatch
+        do {
+            match = try await client.details(id: id, isSeries: isSeries, token: token)
+        } catch is CancellationError {
+            // 用户换了目录 / 关页面:这次不算失败,也不写缓存(下次还要问)
+            return nil
+        } catch let error as TMDBError {
+            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响目录**
+            lastFailureDescription = error.userMessage
+            if case .notFound = error { detailsCache.updateValue(nil, forKey: key) }
+            return nil
+        } catch {
+            lastFailureDescription = "刮削失败:\(error)"
+            return nil
+        }
+        detailsCache.updateValue(match, forKey: key)
+        return match
     }
 
     /// 拉一季的分集,折成「集号 → 分集」表。
@@ -243,6 +299,9 @@ actor BaiduPanMetadataScraper {
     // MARK: - 单条电影 / 视频
 
     /// 电影 / 单条视频:各查一次 `/3/search/movie`。
+    ///
+    /// 名称里写了 `{tmdbid-N}` 的直接按 id 取:先当电影查,404 再当剧查
+    /// (剧集条目不会走到这里 —— 它们在 `enrichEpisodes` 就按剧处理了)。
     private func enrichSingles(items: [SourceItem], token: String) async -> [SourceItem] {
         let offsets = items.indices.filter {
             Self.isScrapable(items[$0]) && items[$0].kind != .episode
@@ -251,6 +310,12 @@ actor BaiduPanMetadataScraper {
 
         let matches = await inBatches(offsets) { offset -> (Int, TMDBMatch?) in
             let item = items[offset]
+            if let id = item.tmdbID {
+                if let movie = await self.detailsMatch(id: id, isSeries: false, token: token) {
+                    return (offset, movie)
+                }
+                return (offset, await self.detailsMatch(id: id, isSeries: true, token: token))
+            }
             return (offset, await self.searchMatch(
                 title: item.title, year: item.year, isSeries: false, token: token))
         }
@@ -271,7 +336,7 @@ actor BaiduPanMetadataScraper {
 
         let matches = await inBatches(offsets) { offset -> (Int, TMDBMatch?) in
             let item = items[offset]
-            return (offset, await self.folderMatch(folderTitle: item.title, token: token))
+            return (offset, await self.folderMatch(item: item, token: token))
         }
         var result = items
         for (offset, match) in matches {
@@ -289,14 +354,25 @@ actor BaiduPanMetadataScraper {
     ///
     /// ⛔ 只查剧端点:电影目录(片名做目录名的存法)这次**不刮** —— 一个目录查两次
     /// (剧 + 电影)会让 50 个目录的片库多烧一倍请求。这是**已知限制**,见 `docs/KNOWN_ISSUES.md`。
-    private func folderMatch(folderTitle: String, token: String) async -> TMDBMatch? {
+    ///
+    /// ⚠️ **例外:目录名写了 `{tmdbid-N}`。** 这时不再靠标题对齐(目录名里那串标签
+    /// 归一化后根本对不上任何 TMDB 标题),直接按 id 取:先当剧查,404 再当电影查。
+    /// 多出的那一次请求只在「这个 id 不是剧」时才发生,而它换来的是**确定**的命中,
+    /// 不是猜出来的封面。
+    private func folderMatch(item: SourceItem, token: String) async -> TMDBMatch? {
+        if let id = item.tmdbID {
+            if let series = await detailsMatch(id: id, isSeries: true, token: token) {
+                return series
+            }
+            return await detailsMatch(id: id, isSeries: false, token: token)
+        }
         // 复用剧集搜索的缓存与「选命中项」规则(键与剧集组相同)
         guard let match = await searchMatch(
-            title: folderTitle, year: nil, isSeries: true, token: token) else {
+            title: item.title, year: nil, isSeries: true, token: token) else {
             return nil
         }
         guard let title = match.title,
-              Self.normalizedTitle(title) == Self.normalizedTitle(folderTitle) else {
+              Self.normalizedTitle(title) == Self.normalizedTitle(item.title) else {
             return nil
         }
         return match

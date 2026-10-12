@@ -45,6 +45,8 @@ enum BaiduPanMetadataSynthesizer {
         var year: Int?
         var season: Int?
         var episode: Int?
+        /// 名称里显式写出的 TMDB id(`{tmdbid-63926}`)。见 `extractExplicitTMDBID`
+        var tmdbID: Int?
 
         /// 标题或年份至少解析出一个
         var isMeaningful: Bool { !title.isEmpty || year != nil }
@@ -82,12 +84,18 @@ enum BaiduPanMetadataSynthesizer {
     // MARK: - 条目构造
 
     private static func folderItem(_ file: BaiduPanFile, sourceID: UUID) -> SourceItem {
-        SourceItem(
+        // 目录名里可能带显式 TMDB id(`一拳超人 (2015) {tmdbid-63926}`):
+        // 取 id 展示名剥掉标签 —— `{tmdbid-…}` 是元数据,不是目录名该显示的东西。
+        let explicit = extractExplicitTMDBID(in: file.name)
+        let stripped = explicit?.cleaned.trimmingCharacters(in: .whitespaces)
+        return SourceItem(
             ref: SourceItemRef(sourceID: sourceID, fsID: file.fsID),
-            title: file.name,
+            // 剥完标签若是空的(目录名就只是那个标签)→ 退回原名,⛔ 不留空标题
+            title: (stripped?.isEmpty == false ? stripped : nil) ?? file.name,
             kind: .folder,
             overview: nil,
             year: nil,
+            tmdbID: explicit?.id,
             episodeNumber: nil,
             seasonNumber: nil,
             episodeTitle: nil,
@@ -109,14 +117,18 @@ enum BaiduPanMetadataSynthesizer {
 
         let kind: SourceItemKind
         let title: String
+        let tmdbID: Int?
         let episodeNumber: Int?
         let seasonNumber: Int?
         if let folder {
             kind = .episode
             title = folder.seriesTitle
+            // 剧集文件夹结构下 id 取自目录名(见 `seriesFolder`);文件名自己带标签时也认
+            tmdbID = folder.tmdbID ?? parsed.tmdbID
             episodeNumber = parsed.episode ?? bareEpisodeNumber(file.name)
             seasonNumber = folder.season
         } else {
+            tmdbID = parsed.tmdbID
             episodeNumber = parsed.episode
             seasonNumber = parsed.season
             if parsed.episode != nil {
@@ -136,6 +148,7 @@ enum BaiduPanMetadataSynthesizer {
             // 百度不给简介。⛔ 不从文件名硬造 —— 那是最典型的假数据
             overview: nil,
             year: parsed.year,
+            tmdbID: tmdbID,
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             // 集名只有 TMDB 的分集数据里有 —— 合成器给不出,⛔ 不拿剧名冒充
@@ -155,6 +168,8 @@ enum BaiduPanMetadataSynthesizer {
         let seriesTitle: String
         /// 季号。`nil` = 目录名与文件名都没给出季号
         let season: Int?
+        /// 目录名里显式写出的 TMDB id(`一拳超人 (2015) {tmdbid-63926}`)。`nil` = 没有
+        var tmdbID: Int? = nil
     }
 
     /// 这一层里「看起来是某一集」的文件有几个。
@@ -177,20 +192,35 @@ enum BaiduPanMetadataSynthesizer {
     ///
     /// 返回非 nil 表示「这是个剧集文件夹」:剧名取自目录名,文件名只是集号。
     ///
-    /// ⚠️ 两个前提缺一不可,否则会**配错剧**(那正是硬规则 4 要避免的假数据):
-    /// 1. 文件名自己认不出剧名(否则以文件名为准);
-    /// 2. 这一层确实像个剧集序列(`looksLikeEpisodeSequence`)——
-    ///    孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」。
+    /// ## 三条判据(按优先级)
     ///
-    /// 季号(有 13 季的剧判错季,就会拿第 1 季的分集剧照配第 13 季的文件):
-    /// - 父目录是**季文件夹**(`琅琊榜/第13季/01.mp4`)→ 剧名取**祖父**目录、季号取父目录名;
-    /// - 否则父目录就是剧名(`琅琊榜/01.mp4`)→ 季号只能来自文件名(`Show.S02E07`);
-    ///   文件名也没写季号时为 `nil`,⛔ 不在这里猜 1(`BaiduPanMetadataScraper` 决定怎么办)。
+    /// 0. **祖先目录带显式 TMDB id**(`一拳超人 (2015) {tmdbid-63926}/Season 1/…`):
+    ///    带这个标签的目录就是这部剧的根 —— 剧名与 id 都取自它,文件名自己的标题让位。
+    ///    这条是为**标准命名库**加的:`一拳超人.ONE PUNCH MAN.2015.S01E12…` 这种中英混排标题
+    ///    靠标题根本搜不准,而目录名已经给了权威 id。
+    /// 1. 父目录是**季文件夹**(`琅琊榜/第13季/01.mp4`)→ 剧名取**祖父**目录、季号取父目录名;
+    /// 2. 否则父目录就是剧名(`琅琊榜/01.mp4`)→ 季号只能来自文件名(`Show.S02E07`);
+    ///    文件名也没写季号时为 `nil`,⛔ 不在这里猜 1(`BaiduPanMetadataScraper` 决定怎么办)。
+    ///
+    /// ⚠️ 后两条的前提缺一不可,否则会**配错剧**(那正是硬规则 4 要避免的假数据):
+    /// 文件名自己认不出剧名(否则以文件名为准);且这一层确实像个剧集序列
+    /// (`looksLikeEpisodeSequence`)—— 孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」。
+    /// 判据 0 不受这两条约束:显式 id 本身就是「这是哪部剧」的权威答案。
     private static func seriesFolder(
         _ file: BaiduPanFile,
         parsed: ParsedName,
         looksLikeEpisodeSequence: Bool
     ) -> SeriesFolder? {
+        // 判据 0:祖先目录带显式 id。只要文件名认得出是**某一集**,就借它当剧名 + id。
+        if let annotated = annotatedAncestorDirectory(file.path),
+           parsed.episode != nil || bareEpisodeNumber(file.name) != nil {
+            // 季号:文件名里的优先(`S01E12`);否则看父目录是不是季文件夹(`Season 1`)
+            let season = parsed.season
+                ?? seasonNumber(fromDirectoryName: parentDirectoryName(file.path))
+            return SeriesFolder(
+                seriesTitle: annotated.title, season: season, tmdbID: annotated.tmdbID)
+        }
+
         guard looksLikeEpisodeSequence else { return nil }
         let isBareNumber = bareEpisodeNumber(file.name) != nil
         let isMarkedWithoutTitle = parsed.episode != nil && parsed.title.isEmpty
@@ -207,6 +237,26 @@ enum BaiduPanMetadataSynthesizer {
             return SeriesFolder(seriesTitle: series, season: season)
         }
         return SeriesFolder(seriesTitle: parent, season: parsed.season)
+    }
+
+    /// 路径上最近的、目录名带显式 `{tmdbid-N}` 的**祖先目录**。
+    ///
+    /// 标准命名库里带这个标签的目录就是这部剧 / 这部电影的根,
+    /// 所以它同时给出「权威 id」与「剥掉标签后的干净名字」。
+    /// ⚠️ 从最近的一级往上找:嵌套时以**最靠近文件**的那个标签为准。
+    private static func annotatedAncestorDirectory(_ path: String) -> (title: String, tmdbID: Int)? {
+        var current = path
+        while true {
+            current = (current as NSString).deletingLastPathComponent
+            let name = (current as NSString).lastPathComponent
+            // 根(`/`)或空 → 到头了
+            if name.isEmpty || name == "/" { return nil }
+            guard let explicit = extractExplicitTMDBID(in: name) else { continue }
+            let title = explicit.cleaned.trimmingCharacters(in: .whitespaces)
+            // 目录名只剩一个标签 → 给不出剧名,不认(⛔ 不拿空串当剧名)
+            guard !title.isEmpty else { return nil }
+            return (title, explicit.id)
+        }
     }
 
     /// 目录名是不是一个**季文件夹**,是就给出季号。
@@ -281,9 +331,44 @@ enum BaiduPanMetadataSynthesizer {
 
     // MARK: - 文件名解析
 
+    /// 从名称里抠出**显式写死的 TMDB id**,并返回剥掉该标签后的名称。
+    ///
+    /// 认 tinyMediaManager / Jellyfin / Kodi 一类媒体库的标准命名:
+    /// `{tmdbid-63926}` / `[tmdbid-63926]` / `(tmdbid-63926)` / 裸写的 `tmdbid-63926`,
+    /// 键名 `tmdbid` 或 `tmdb`(大小写不敏感),分隔符 `-` 或 `=`。
+    ///
+    /// ⚠️ 标签只给 id,**不给「这是电影还是剧」** —— TMDB 两个 id 空间各自编号,
+    /// 所以这里只回答「是哪个 id」,由刮削层按上下文决定查哪个端点。
+    ///
+    /// 返回 `nil` = 名称里没有这个标签。有标签但数字读不出(超 `Int` 范围)也当没有。
+    static func extractExplicitTMDBID(in name: String) -> (id: Int, cleaned: String)? {
+        // 带括号包裹的先试:`[\[{(]\s*tmdb…\s*[\])}]` —— 整段连括号一起剥掉
+        if let match = name.firstMatch(of: /[\[{(]\s*(?i:tmdbid|tmdb)\s*[-=]\s*(\d{1,9})\s*[\])}]/),
+           let id = Int(match.1) {
+            return (id, removing(match.range, from: name))
+        }
+        // 裸写:`tmdbid-63926`
+        if let match = name.firstMatch(of: /(?i:tmdbid|tmdb)\s*[-=]\s*(\d{1,9})/),
+           let id = Int(match.1) {
+            return (id, removing(match.range, from: name))
+        }
+        return nil
+    }
+
+    /// 删掉一段匹配区间,并把因此留下的多余空白收成一个空格。
+    private static func removing(_ range: Range<String.Index>, from name: String) -> String {
+        var text = name
+        text.removeSubrange(range)
+        return text
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .joined(separator: " ")
+    }
+
     /// 从文件名解析标题 / 年份 / 季集。
     ///
     /// 规则(顺序即优先级):
+    /// 0. **显式 TMDB id**:`{tmdbid-63926}` —— 先抠出 id 并从名称里剥掉(见上),
+    ///    它不参与标题;
     /// 1. **季集**:`S01E02` / `E02` / `第01集` —— 命中就把条目判成剧集;
     /// 2. **年份**:4 位数且在 `1900...2099`,**且后面紧跟发布标记或到此为止**。
     ///    这条约束是关键:片名里也可能有 4 位数字(`1917`),
@@ -291,8 +376,12 @@ enum BaiduPanMetadataSynthesizer {
     /// 3. **发布标记**:命中即截断,后面的都是编码 / 音轨 / 语言信息。
     static func parse(name: String) -> ParsedName {
         let base = (name as NSString).deletingPathExtension
+        // 名称里写死的显式 TMDB id(`{tmdbid-63926}`)先抠出来、并从标题里剥掉 ——
+        // 它是元数据,不是片名的一部分(见 `extractExplicitTMDBID`)。
+        let explicit = extractExplicitTMDBID(in: base)
+        let cleaned = explicit?.cleaned ?? base
         // 归一化分隔符:发布组习惯用 `.` 与 `_`(`Some.Movie.2019.1080p.mkv`)
-        let normalized = base
+        let normalized = cleaned
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: ".", with: " ")
             // 括号只包着年份(`Some.Movie.(2019)`),去掉不影响别的
@@ -305,6 +394,7 @@ enum BaiduPanMetadataSynthesizer {
             .map(String.init)
 
         var parsed = ParsedName()
+        parsed.tmdbID = explicit?.id
         var titleTokens: [String] = []
         var index = 0
 

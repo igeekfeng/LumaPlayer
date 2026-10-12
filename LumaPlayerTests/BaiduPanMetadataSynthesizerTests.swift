@@ -300,6 +300,99 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season"))
     }
 
+    // MARK: - 显式 TMDB id(`{tmdbid-63926}`)
+
+    /// 认标准命名里的 `{tmdbid-N}` / `[tmdbid-N]` / 裸写,键名 `tmdbid` 与 `tmdb`,
+    /// 分隔符 `-` 与 `=` —— 并把该标签从名称里剥掉。
+    func testExtractsAndStripsExplicitTMDBID() {
+        let braced = BaiduPanMetadataSynthesizer.extractExplicitTMDBID(
+            in: "一拳超人 (2015) {tmdbid-63926}")
+        XCTAssertEqual(braced?.id, 63926)
+        XCTAssertEqual(braced?.cleaned, "一拳超人 (2015)")
+
+        XCTAssertEqual(
+            BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "[tmdbid-550] Fight Club")?.id, 550)
+        XCTAssertEqual(
+            BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "Fight Club (1999) {tmdb=550}")?.id,
+            550)
+        XCTAssertEqual(
+            BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "Show.TMDBID-1234")?.id, 1234)
+
+        // 没有标签 / 数字读不出 → 都没有
+        XCTAssertNil(BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "Fight Club (1999)"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "{tmdbid-}"))
+    }
+
+    /// 文件名里的标签不参与标题,id 被解析出来。
+    func testParseStripsTagFromFileName() {
+        let parsed = BaiduPanMetadataSynthesizer.parse(
+            name: "Fight.Club.1999.{tmdbid-550}.1080p.BluRay.mkv")
+
+        XCTAssertEqual(parsed.tmdbID, 550)
+        XCTAssertEqual(parsed.title, "Fight Club")
+        XCTAssertEqual(parsed.year, 1999)
+    }
+
+    /// 目录卡片:目录名里的 id 进 `tmdbID`,展示名剥掉标签(标签是元数据,不是片名)。
+    func testFolderCardCarriesExplicitTMDBID() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("一拳超人 (2015) {tmdbid-63926}", fsID: 1, isDirectory: true)],
+            sourceID: sourceID)
+
+        let item = synthesized.first?.item
+        XCTAssertEqual(item?.kind, .folder)
+        XCTAssertEqual(item?.tmdbID, 63926)
+        XCTAssertEqual(item?.title, "一拳超人 (2015)")
+    }
+
+    /// ★ 剧集文件:文件名自己认不出干净剧名(中英混排 + 年份),但**祖先目录**带显式 id
+    /// → 剧名与 id 都取自那个目录,季集仍按文件名。
+    func testEpisodeBorrowsExplicitIDFromAnnotatedAncestor() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile(
+                "一拳超人.ONE PUNCH MAN.2015.S01E12.2160p.BDRip.HEVC.FLAC.AACx2.ASSx2-NoxiaAI.mkv",
+                fsID: 1,
+                inDirectory: "一拳超人 (2015) {tmdbid-63926}/Season 1")],
+            sourceID: sourceID)
+
+        let item = synthesized.first?.item
+        XCTAssertEqual(item?.kind, .episode)
+        XCTAssertEqual(item?.tmdbID, 63926)
+        XCTAssertEqual(item?.title, "一拳超人 (2015)")
+        XCTAssertEqual(item?.seasonNumber, 1)
+        XCTAssertEqual(item?.episodeNumber, 12)
+    }
+
+    /// 文件名没写季号时,季号从祖先目录与文件之间的**季文件夹**(`Season 1`)取。
+    func testAnnotatedAncestorSeasonFromSeasonFolder() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile(
+                "01.mkv", fsID: 1,
+                inDirectory: "一拳超人 (2015) {tmdbid-63926}/Season 1")],
+            sourceID: sourceID)
+
+        let item = synthesized.first?.item
+        XCTAssertEqual(item?.tmdbID, 63926)
+        XCTAssertEqual(item?.title, "一拳超人 (2015)")
+        XCTAssertEqual(item?.seasonNumber, 1)
+        XCTAssertEqual(item?.episodeNumber, 1)
+    }
+
+    /// ⛔ 带标签的祖先目录只对**剧集文件**生效:认不出集号的普通视频不借它的 id,
+    /// 免得把预告片 / 花絮当成正片配上那部剧的海报。
+    func testAnnotatedAncestorDoesNotApplyToNonEpisode() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile(
+                "Some.Movie.2019.1080p.mkv", fsID: 1,
+                inDirectory: "一拳超人 (2015) {tmdbid-63926}")],
+            sourceID: sourceID)
+
+        let item = synthesized.first?.item
+        XCTAssertNil(item?.tmdbID)
+        XCTAssertEqual(item?.kind, .video)
+        XCTAssertEqual(item?.title, "Some Movie")
+    }
+
     // MARK: - 辅助
 
     private func makeFile(

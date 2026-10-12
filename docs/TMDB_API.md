@@ -192,3 +192,29 @@ https://image.tmdb.org/t/p/{file_size}/{still_path}
 ⚠️ 剧照是 **16:9 横图**,与海报(2:3 竖图)不是一个形状;档位本项目用 `w300`
 (卡片宽度量级)。⛔ 别拿海报的 `w500` 当剧照档位 —— 那是按竖图挑的。
 `still_path` 与 `poster_path` 同样**自带版本语义**,可直接进 `ImageDescriptor.cacheKey`。
+
+## 9. 按 id 直取端点(跳过搜索)
+
+`GET /3/tv/{series_id}` 与 `GET /3/movie/{movie_id}`
+
+同一个官方规格文件读出:
+
+| 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|---|
+| `series_id` / `movie_id` | path | int32 | ✅ | — | TMDB 条目 id |
+| `language` | query | string | | `en-US` | 同 §2 |
+| `append_to_response` | query | string | | — | ⛔ 本项目不用 |
+
+**为什么需要它**:文件名 / 目录名里**显式写死**了 TMDB id 时(标准命名
+`一拳超人 (2015) {tmdbid-63926}`,见 `docs/KNOWN_ISSUES.md`),再按标题搜一遍
+既慢又可能搜错(中英混排标题 + 年份根本对不上)。有 id 就直接取。
+
+⚠️ **响应体形状**:与 §3 的 `results[]` 条目**同字段名**(电影 `title` /
+`release_date`,剧 `name` / `first_air_date`),但**顶层就是条目本身**,没有
+`results` 包装 —— 所以能解进同一个 `TMDBResult`。解码立场同 §3:除 `id` 外一律可选。
+
+⚠️ **id 不区分影 / 剧**:TMDB 的两个 id 空间各自编号,同一个数字在两边可能是
+**两部不同的作品**。标签本身只说「是这个 id」,查哪个端点由调用方按上下文决定
+(`BaiduPanMetadataScraper`:剧集条目按剧查;目录卡片先剧后影;单条视频先影后剧)。
+id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.notFound`,
+是**确定性**答案,可以记住不再重问。

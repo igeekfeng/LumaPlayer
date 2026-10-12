@@ -275,6 +275,65 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(enriched.first?.year, 2024, "本地解析出的年份不动")
     }
 
+    // MARK: - 端到端:显式 TMDB id(`{tmdbid-N}`)
+
+    /// 目录名带 `{tmdbid-N}` → 直接 `GET /3/tv/{N}`,⛔ 不再按标题搜
+    /// (目录名里那串标签归一化后根本对不上任何 TMDB 标题)。
+    func testFolderWithExplicitIDQueriesByID() async throws {
+        await save(token: "READ_TOKEN")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/63926")
+
+        let items = [item(
+            title: "一拳超人 (2015)", year: nil, kind: .folder, origin: .none, tmdbID: 63926)]
+        let enriched = await Self.makeScraper(credentials).enrich(items)
+
+        let folder = try XCTUnwrap(enriched.first)
+        XCTAssertEqual(folder.overview, "一部剧。")
+        XCTAssertEqual(folder.year, 2011)
+        XCTAssertEqual(folder.poster?.cacheKey, ImageDescriptor.tmdbPosterKey(
+            sourceID: sourceID,
+            posterPath: "/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg",
+            size: TMDBImage.posterSize))
+        XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/3/search/tv"),
+                     "有显式 id 就不该再按标题搜")
+    }
+
+    /// 显式 id 在**剧**端点不存在(404)→ 退一步当电影查(标签本身不区分影 / 剧)。
+    func testExplicitIDFallsBackToMovieWhenNotASeries() async throws {
+        await save(token: "READ_TOKEN")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"status_code":34,"status_message":"not found","success":false}"#,
+                  statusCode: 404),
+            host: host, path: "/3/tv/550")
+        MockEmbyURLProtocol.stub(.json(Self.movieDetailsJSON), host: host, path: "/3/movie/550")
+
+        let items = [item(
+            title: "Fight Club (1999)", year: nil, kind: .folder, origin: .none, tmdbID: 550)]
+        let enriched = await Self.makeScraper(credentials).enrich(items)
+
+        XCTAssertEqual(enriched.first?.poster?.cacheKey, ImageDescriptor.tmdbPosterKey(
+            sourceID: sourceID,
+            posterPath: "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+            size: TMDBImage.posterSize))
+    }
+
+    /// 剧集带显式 id → `GET /3/tv/{id}` 取剧 + `GET /3/tv/{id}/season/{n}` 取分集,⛔ 不搜索。
+    func testEpisodeWithExplicitIDSkipsSearch() async throws {
+        await save(token: "READ_TOKEN")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
+        MockEmbyURLProtocol.stub(.json(Self.seasonJSON), host: host, path: "/3/tv/1399/season/1")
+
+        let items = [item(
+            title: "Game of Thrones", year: nil, kind: .episode, origin: .filename,
+            episodeNumber: 1, seasonNumber: 1, tmdbID: 1399)]
+        let enriched = await Self.makeScraper(credentials).enrich(items)
+
+        XCTAssertEqual(enriched.first?.episodeTitle, "凛冬将至")
+        XCTAssertNotNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/3/tv/1399/season/1"))
+        XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/3/search/tv"),
+                     "有显式 id 就不该再按标题搜")
+    }
+
     // MARK: - 失败处置
 
     /// 没填 token = 用户没开刮削:一个请求都不发,也不报失败。
@@ -381,7 +440,8 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         kind: SourceItemKind,
         origin: MetadataOrigin,
         episodeNumber: Int? = nil,
-        seasonNumber: Int? = nil
+        seasonNumber: Int? = nil,
+        tmdbID: Int? = nil
     ) -> SourceItem {
         SourceItem(
             ref: SourceItemRef(sourceID: sourceID, fsID: 42),
@@ -389,6 +449,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             kind: kind,
             overview: nil,
             year: year,
+            tmdbID: tmdbID,
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: nil,
@@ -414,6 +475,23 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "popularity":369.594,"poster_path":"/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg",
     "first_air_date":"2011-04-17","name":"Game of Thrones",
     "vote_average":8.4,"vote_count":21000}],"total_pages":1,"total_results":1}
+    """#
+
+    /// `/3/tv/{id}` 200 示例(按 id 直取剧):与 `/3/search/tv` 的 `results[]` 同字段名,
+    /// 但顶层就是条目本身,没有 `results` 包装。
+    private static let tvDetailsJSON = #"""
+    {"adult":false,"id":1399,"origin_country":["US"],"original_language":"en",
+    "original_name":"Game of Thrones","overview":"一部剧。",
+    "poster_path":"/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg","first_air_date":"2011-04-17",
+    "name":"Game of Thrones","vote_average":8.4,"vote_count":21000}
+    """#
+
+    /// `/3/movie/{id}` 200 示例(按 id 直取电影)
+    private static let movieDetailsJSON = #"""
+    {"adult":false,"id":550,"original_language":"en","original_title":"Fight Club",
+    "overview":"一部电影。","poster_path":"/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+    "release_date":"1999-10-15","title":"Fight Club","video":false,
+    "vote_average":8.433,"vote_count":26279}
     """#
 
     /// `/3/tv/1399/season/1` 200 示例(`docs/TMDB_API.md` §7):

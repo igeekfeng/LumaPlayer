@@ -79,6 +79,16 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let kind: SourceItemKind
     let overview: String?
     let year: Int?
+    /// 名称里**显式写出**的 TMDB id(`一拳超人 (2015) {tmdbid-63926}`)。
+    ///
+    /// 来源:文件名或目录名里的 `{tmdbid-N}` / `[tmdbid-N]` 标签
+    /// (`BaiduPanMetadataSynthesizer.extractExplicitTMDBID`)。
+    /// 有了它刮削层就**直接按 id 查**,跳过搜索与标题匹配 —— 这是
+    /// tinyMediaManager / Jellyfin 一类媒体库的标准命名(`docs/KNOWN_ISSUES.md`)。
+    ///
+    /// ⚠️ 标签本身**不区分影 / 剧**(TMDB 的两个 id 空间各自编号),
+    /// 所以这一格只说「是这个 id」,由刮削层按上下文决定查哪个端点。
+    let tmdbID: Int?
     /// 集号。`nil` = 不是剧集 / 不知道是第几集。
     ///
     /// 来源有二:文件名里的 `S01E02` / `第12集`,或**剧集文件夹结构**
@@ -121,6 +131,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             kind: kind,
             overview: overview,
             year: year,
+            tmdbID: tmdbID,
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: episodeTitle,
@@ -147,6 +158,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             kind: kind,
             overview: self.overview ?? overview,
             year: self.year ?? year,
+            tmdbID: tmdbID,
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: self.episodeTitle ?? episodeTitle,

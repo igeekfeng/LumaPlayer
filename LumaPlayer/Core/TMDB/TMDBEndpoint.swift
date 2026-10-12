@@ -30,6 +30,16 @@ enum TMDBEndpoint: Sendable, Equatable {
     /// ⚠️ 剧级海报 / 简介 / 首播年**不**走它 —— 那些 `/3/search/tv` 已经给过(§3),
     /// 这里只补分集。
     case tvSeason(seriesID: Int, seasonNumber: Int, language: String)
+    /// `GET /3/tv/{series_id}?language=`
+    ///
+    /// 按**显式 id** 直取剧集(跳过搜索)—— 标准命名里的 `{tmdbid-63926}`
+    /// 已经给了 id,再按标题搜一遍既慢又可能搜错(`docs/TMDB_API.md` §9)。
+    case tvDetails(id: Int, language: String)
+    /// `GET /3/movie/{movie_id}?language=`
+    ///
+    /// 按**显式 id** 直取电影。与 `tvDetails` 成对 —— 标签只给 id,
+    /// 是电影还是剧由调用方按上下文决定(见 `TMDBClient.details`)。
+    case movieDetails(id: Int, language: String)
 
     // MARK: - 形状
 
@@ -43,6 +53,8 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .searchTV: return "/3/search/tv"
         case .tvSeason(let seriesID, let seasonNumber, _):
             return "/3/tv/\(seriesID)/season/\(seasonNumber)"
+        case .tvDetails(let id, _): return "/3/tv/\(id)"
+        case .movieDetails(let id, _): return "/3/movie/\(id)"
         }
     }
 
@@ -54,6 +66,8 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .searchMovie: return "search/movie"
         case .searchTV: return "search/tv"
         case .tvSeason: return "tv/season"
+        case .tvDetails: return "tv/details"
+        case .movieDetails: return "movie/details"
         }
     }
 
@@ -75,6 +89,9 @@ enum TMDBEndpoint: Sendable, Equatable {
             return items
         case .tvSeason(_, _, let language):
             // 季详情的 series_id / season_number 走 **path**(§7),不进查询串
+            return [("language", language)]
+        case .tvDetails(_, let language), .movieDetails(_, let language):
+            // 按 id 直取:id 走 path,只有语言进查询串
             return [("language", language)]
         }
     }

@@ -117,6 +117,30 @@ struct TMDBClient: Sendable {
         return response.episodes
     }
 
+    // MARK: - 按 id 直取
+
+    /// 按**显式 id** 直接取条目,跳过搜索与标题匹配(标准命名里的 `{tmdbid-63926}`)。
+    ///
+    /// `isSeries` 由调用方按上下文给:标签本身只给 id,**不区分影 / 剧**
+    /// (TMDB 两个 id 空间各自编号)。`/3/tv/{id}` 与 `/3/movie/{id}` 的响应体
+    /// 字段名不同(`name` / `first_air_date` vs `title` / `release_date`),
+    /// 但都能解进同一个 `TMDBResult` —— 由 `TMDBMatch(result:kind:)` 归一。
+    ///
+    /// id 在该端点不存在时服务端回 404 → `TMDBError.notFound`(§5)。
+    func details(
+        id: Int,
+        isSeries: Bool,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBMatch {
+        let endpoint: TMDBEndpoint = isSeries
+            ? .tvDetails(id: id, language: language)
+            : .movieDetails(id: id, language: language)
+        let data = try await send(endpoint, token: token)
+        let result: TMDBResult = try decode(data, endpoint: endpoint)
+        return TMDBMatch(result: result, kind: isSeries ? .tv : .movie)
+    }
+
     // MARK: - 传输与解码
 
     /// 发一次请求,返回响应体。只做传输层校验(HTTP 状态、是否 HTTP 响应)。

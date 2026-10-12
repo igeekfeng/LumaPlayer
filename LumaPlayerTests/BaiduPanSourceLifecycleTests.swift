@@ -200,6 +200,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             kind: .video,
             overview: nil,
             year: 2021,
+            tmdbID: nil,
             episodeNumber: nil,
             seasonNumber: nil,
             episodeTitle: nil,
