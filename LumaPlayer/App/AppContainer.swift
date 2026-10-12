@@ -367,7 +367,9 @@ final class AppContainer {
                     title: item.title,
                     locator: file.path,
                     fileName: file.name,
-                    cover: item.poster?.snapshot
+                    cover: item.poster?.snapshot,
+                    // 集号:一部剧的续播卡片只出一张,靠它说清接着看的是第几集
+                    episodeNumber: item.episodeNumber
                 )
             )
         } catch {}

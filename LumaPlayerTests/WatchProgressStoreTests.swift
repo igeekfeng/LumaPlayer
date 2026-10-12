@@ -159,6 +159,30 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.fileID), ["3"])
     }
 
+    /// 看完(≥95%)的集不该再占一张「继续观看」卡 —— 与 `resumeSeconds` 同一把尺子。
+    func testResumeEntriesSkipsFinishedEntries() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(fileID: "a", display: display(sourceID: sourceID, title: "A"))
+        try await store.record(fileID: "a", positionSeconds: 590, durationSeconds: 600)
+        try await store.rememberDisplay(fileID: "b", display: display(sourceID: sourceID, title: "B"))
+        try await store.record(fileID: "b", positionSeconds: 60, durationSeconds: 600)
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["b"])
+    }
+
+    /// 时长未知时判不了「看完」,按未看完留在列表里(⛔ 不猜)。
+    func testResumeEntriesKeepsUnfinishedWhenDurationUnknown() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(fileID: "a", display: display(sourceID: sourceID))
+        try await store.record(fileID: "a", positionSeconds: 590, durationSeconds: nil)
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["a"])
+    }
+
     func testResumeEntriesFiltersBySourceAndSortsByRecency() async throws {
         let store = makeStore()
         let mine = UUID()

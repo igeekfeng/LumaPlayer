@@ -574,9 +574,17 @@ final class BaiduPanSourceViewModel {
     }
 
     /// 把一条移出「继续观看」:删掉本地进度记录(⛔ 不动网盘上的文件)。
+    ///
+    /// ⚠️ 删的是**这一整部剧**:卡片是一部剧一张,只删当前那一集的话,
+    /// 同剧下一集有进度就会立刻顶上来 —— 表现为「移出了又回来了」。
+    /// (本地续播库没有「隐藏」这一态,删记录是它唯一的移除手段。)
     func removeResumeCard(_ card: BaiduResumeCard) async {
+        let key = Self.seriesKey(title: card.title, locator: card.path)
         do {
-            try await container.watchProgress.remove(fileID: card.fileID)
+            for record in await container.watchProgress.resumeEntries(sourceID: source.id)
+            where Self.seriesKey(of: record) == key {
+                try await container.watchProgress.remove(fileID: record.fileID)
+            }
             resumeCards = resumeCards.filter { $0.id != card.id }
         } catch {
             notice = "移出继续观看失败:\(error)"
@@ -593,7 +601,39 @@ final class BaiduPanSourceViewModel {
     /// 卡片角上);这个读的是**全库**里有进度的条目(撑起顶部的续播区)。
     private func loadResumeCards() async {
         let records = await container.watchProgress.resumeEntries(sourceID: source.id)
-        resumeCards = records.compactMap(BaiduResumeCard.init(record:))
+        resumeCards = Self.oneCardPerSeries(records).compactMap(BaiduResumeCard.init(record:))
+    }
+
+    /// 一部剧只留**一条**记录:同一目录 + 同一剧名的合成一张,取最近看的那一集。
+    ///
+    /// ## 为什么必须在展示层合
+    ///
+    /// 续播库按**文件**记(一集一条,换集 / 跳集都要各自记得住),而卡片上的标题
+    /// 是**剧名**(`BaiduPanMetadataSynthesizer.mediaItem`:剧集目录结构取目录名)。
+    /// 不合就会看到一排同名卡片 —— 一部剧看几集就占几张。
+    ///
+    /// ⛔ 不改续播库:各集的进度还得留着(进目录时角标要按集显示),这里只是**卡片**聚合。
+    ///
+    /// - Note: `resumeEntries` 已按 `updatedAt` 倒序,所以留下的是组内最近看的那一集。
+    static func oneCardPerSeries(
+        _ records: [WatchProgressStore.ResumeRecord]
+    ) -> [WatchProgressStore.ResumeRecord] {
+        var seen: Set<String> = []
+        return records.filter { seen.insert(seriesKey(of: $0)).inserted }
+    }
+
+    /// 一部剧的聚合键:剧名 + 所在目录。
+    ///
+    /// ⚠️ 目录也进键:不同目录下同名的内容是**两部**(重拍 / 同名电影),
+    /// 只按剧名合会把它们并成一张。代价是同一部剧分季目录
+    /// (`剧/Season 1`、`剧/Season 2`)会各出一张 —— 那正是「不并错」换来的。
+    static func seriesKey(of record: WatchProgressStore.ResumeRecord) -> String {
+        seriesKey(title: record.display.title, locator: record.display.locator)
+    }
+
+    static func seriesKey(title: String, locator: String) -> String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(name)|\(Self.directory(ofFilePath: locator))"
     }
 
     /// `SourceItem` 只是给 UI 的投影;播放与进目录要原始文件(`path` / 真实文件名)。
@@ -633,11 +673,20 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
     let positionSeconds: Double
     /// 已知总时长;未知为 nil(百度不给时长时就没有,进度条也不画)
     let durationSeconds: Double?
+    /// 第几集。nil = 不是一集,或快照里没记 —— 副标题就只报「已看到 …」
+    let episodeNumber: Int?
     let path: String
     let fileName: String
     let poster: ImageDescriptor?
 
     var id: String { fileID }
+
+    /// 副标题:一部剧只出一张卡,得说清接着看的是第几集。
+    var subtitle: String {
+        let progress = "已看到 \(PlayerTime.text(positionSeconds))"
+        guard let episodeNumber else { return progress }
+        return "第 \(episodeNumber) 集 · \(progress)"
+    }
 
     /// 折不出可播文件(键不是合法 `fs_id`)就返回 nil —— ⛔ 不端一张点不动的卡片。
     init?(record: WatchProgressStore.ResumeRecord) {
@@ -645,6 +694,7 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
         self.fileID = record.fileID
         self.title = record.display.title
         self.positionSeconds = record.positionSeconds
+        self.episodeNumber = record.display.episodeNumber
         self.durationSeconds = record.durationSeconds
         self.path = record.display.locator
         self.fileName = record.display.fileName

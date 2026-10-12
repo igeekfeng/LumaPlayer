@@ -52,6 +52,9 @@ actor WatchProgressStore {
         var fileName: String
         /// 封面快照。nil = 当时没配到封面,卡片降级成图标
         var cover: ImageDescriptor.Snapshot?
+        /// 集号。nil = 不是一集(电影 / 单条视频),或老记录没记。
+        /// 它只在**卡片合并后**才有意义:一部剧只出一张卡时,得说清接着看的是第几集。
+        var episodeNumber: Int? = nil
     }
 
     /// 一条可供 UI 渲染的续播记录(`resumeEntries` 的返回)。
@@ -104,11 +107,17 @@ actor WatchProgressStore {
     ///   (`PlaybackRules.resumePosition`),与 Emby 来源走同一个函数。
     func resumeSeconds(forFileID id: String) -> Double? {
         guard let entry = entries()[id], entry.positionSeconds > 0 else { return nil }
-        if let duration = entry.durationSeconds, duration > 0,
-           entry.positionSeconds / duration >= Self.finishedThreshold {
-            return nil
-        }
+        guard !Self.isFinished(entry) else { return nil }
         return entry.positionSeconds
+    }
+
+    /// 这一条是不是已经看完。
+    ///
+    /// ⚠️ 时长未知时**判不了**,按未看完处理(⛔ 不猜):宁可多留一张卡,
+    /// 也不能因为缺时长就把看到一半的判成看完。
+    private static func isFinished(_ entry: Entry) -> Bool {
+        guard let duration = entry.durationSeconds, duration > 0 else { return false }
+        return entry.positionSeconds / duration >= finishedThreshold
     }
 
     /// 全部记录(诊断 / 测试观察用)
@@ -116,14 +125,17 @@ actor WatchProgressStore {
 
     /// 某个来源下**有进度**的续播记录(UI 渲染「继续观看」用)。
     ///
-    /// 过滤两条:必须带展示快照(老记录没有),位置必须 > 0(起播那一刻
-    /// 写进来的 0 秒不算「看过」)。按 `updatedAt` 倒序 —— 最近看的排前面。
+    /// 过滤三条:必须带展示快照(老记录没有),位置必须 > 0(起播那一刻
+    /// 写进来的 0 秒不算「看过」),已看完(≥ `finishedThreshold`)的不再续播 ——
+    /// 与 `resumeSeconds` 同一把尺子,否则看完的集会一直占着一张卡。
+    /// 按 `updatedAt` 倒序 —— 最近看的排前面。
     func resumeEntries(sourceID: UUID) -> [ResumeRecord] {
         entries()
             .compactMap { key, entry -> ResumeRecord? in
                 guard let display = entry.display,
                       display.sourceID == sourceID,
-                      entry.positionSeconds > 0 else { return nil }
+                      entry.positionSeconds > 0,
+                      !Self.isFinished(entry) else { return nil }
                 return ResumeRecord(
                     fileID: key,
                     positionSeconds: entry.positionSeconds,

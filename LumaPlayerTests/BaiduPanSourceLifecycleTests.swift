@@ -193,6 +193,54 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNil(BaiduResumeCard(record: record))
     }
 
+    /// 一部剧只出一张卡:看第 1 集一半又看第 2 集一半,退出后不该出现两张同名卡片。
+    func testOneCardPerSeriesKeepsMostRecentEpisode() throws {
+        let records = [
+            makeRecord(fileID: "1", title: "琅琊榜", episode: 2, at: Date(timeIntervalSinceNow: 0)),
+            makeRecord(fileID: "2", title: "琅琊榜", episode: 1, at: Date(timeIntervalSinceNow: -60)),
+            makeRecord(fileID: "3", title: "别的电影", episode: nil, at: Date(timeIntervalSinceNow: -30))
+        ]
+
+        let collapsed = BaiduPanSourceViewModel.oneCardPerSeries(records)
+        XCTAssertEqual(collapsed.map(\.fileID), ["1", "3"], "同剧同目录只留一张,取最近看的那一集")
+        let card = try XCTUnwrap(BaiduResumeCard(record: collapsed[0]))
+        XCTAssertEqual(card.subtitle, "第 2 集 · 已看到 10:00")
+    }
+
+    /// 同名但在**不同目录** = 两部内容,不能并成一张(重拍 / 同名电影)。
+    func testOneCardPerSeriesKeepsSameTitlesInDifferentDirectoriesApart() throws {
+        let records = [
+            makeRecord(fileID: "1", title: "同名", locator: "/apps/LumaPlayer/A/01.mp4"),
+            makeRecord(fileID: "2", title: "同名", locator: "/apps/LumaPlayer/B/01.mp4")
+        ]
+
+        XCTAssertEqual(BaiduPanSourceViewModel.oneCardPerSeries(records).count, 2)
+    }
+
+    private func makeRecord(
+        fileID: String,
+        title: String,
+        locator: String = "/apps/LumaPlayer/琅琊榜/01.mp4",
+        episode: Int? = nil,
+        position: Double = 600,
+        at updatedAt: Date = Date()
+    ) -> WatchProgressStore.ResumeRecord {
+        WatchProgressStore.ResumeRecord(
+            fileID: fileID,
+            positionSeconds: position,
+            durationSeconds: 2400,
+            updatedAt: updatedAt,
+            display: WatchProgressStore.Display(
+                sourceID: UUID(),
+                title: title,
+                locator: locator,
+                fileName: (locator as NSString).lastPathComponent,
+                cover: nil,
+                episodeNumber: episode
+            )
+        )
+    }
+
     // MARK: - 播放页换集(剧集队列)
 
     /// 队列**复用当前目录已列的条目**:兄弟集此刻就在手上,⛔ 不为换集再列一次网盘
