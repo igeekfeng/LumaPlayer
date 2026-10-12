@@ -295,12 +295,30 @@ enum BaiduPanMetadataSynthesizer {
 
     /// 文件名**整个**就是集号时返回那个号(`01.mp4` → 1)。
     ///
+    /// 两种形态都算「整个文件名就是集号」:
+    /// - 纯数字:`01.mp4`;
+    /// - 集号 + 发布标记:`47-4K.高码率.mkv` → 47(集号后面**紧跟**发布标记)。
+    ///
     /// ⚠️ 只认 1–3 位数字:4 位是年份的形状(`2012.mp4` 是一部电影),
     /// 带别的字的留给 `parse`(它知道发布标记从哪断)。
+    ///
+    /// ⚠️ 「集号 + 发布标记」是**弱信号**:`47-4K.高码率.mkv` 与电影发布名
+    /// `300.1080p.BluRay.mkv` 结构完全一样,文件名本身分不出。所以调用方只在
+    /// **同目录成串**时才把它当集号 —— 见 `seriesFolder` 的 `looksLikeEpisodeSequence` 闸门。
     static func bareEpisodeNumber(_ name: String) -> Int? {
         let base = baseName(name).trimmingCharacters(in: .whitespaces)
-        guard (1...3).contains(base.count), base.allSatisfy({ $0.isASCII && $0.isNumber }),
-              let number = Int(base), number > 0 else {
+        // 纯数字:`01.mp4`
+        if (1...3).contains(base.count), base.allSatisfy({ $0.isASCII && $0.isNumber }),
+           let number = Int(base), number > 0 {
+            return number
+        }
+        // 集号 + 发布标记:`47-4K.高码率.mkv`
+        // 判据与 `parse` 一致:集号后面**紧跟**发布标记(`4K` / `1080p` …)。
+        let tokens = tokenize(base)
+        guard tokens.count >= 2, let first = tokens.first,
+              (1...3).contains(first.count), first.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let number = Int(first), number > 0,
+              isReleaseTag(tokens[1]) else {
             return nil
         }
         return number
@@ -380,18 +398,7 @@ enum BaiduPanMetadataSynthesizer {
         // 它是元数据,不是片名的一部分(见 `extractExplicitTMDBID`)。
         let explicit = extractExplicitTMDBID(in: base)
         let cleaned = explicit?.cleaned ?? base
-        // 归一化分隔符:发布组习惯用 `.` 与 `_`(`Some.Movie.2019.1080p.mkv`)
-        let normalized = cleaned
-            .replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: ".", with: " ")
-            // 括号只包着年份(`Some.Movie.(2019)`),去掉不影响别的
-            .replacingOccurrences(of: "(", with: " ")
-            .replacingOccurrences(of: ")", with: " ")
-            .replacingOccurrences(of: "[", with: " ")
-            .replacingOccurrences(of: "]", with: " ")
-        let tokens = normalized
-            .split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "\t" })
-            .map(String.init)
+        let tokens = tokenize(cleaned)
 
         var parsed = ParsedName()
         parsed.tmdbID = explicit?.id
@@ -418,6 +425,22 @@ enum BaiduPanMetadataSynthesizer {
         parsed.title = titleTokens.joined(separator: " ")
             .trimmingCharacters(in: .whitespaces)
         return parsed
+    }
+
+    /// 归一化分隔符后切成 token(`47-4K.高码率` → `["47", "4K", "高码率"]`)。
+    ///
+    /// 发布组习惯用 `.` 与 `_`(`Some.Movie.2019.1080p.mkv`),括号只包着年份
+    /// (`Some.Movie.(2019)`),去掉不影响别的。`-` 与空格、制表符一样当分隔符。
+    private static func tokenize(_ base: String) -> [String] {
+        base
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "(", with: " ")
+            .replacingOccurrences(of: ")", with: " ")
+            .replacingOccurrences(of: "[", with: " ")
+            .replacingOccurrences(of: "]", with: " ")
+            .split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "\t" })
+            .map(String.init)
     }
 
     /// 是不是一个「上映年」形状的 token(见 `parse` 第 2 条规则)
@@ -473,7 +496,7 @@ enum BaiduPanMetadataSynthesizer {
     /// 中文标记常常连写成一个 token(`国语中字`),所以用「包含」判定
     private static let chineseReleaseMarkers = [
         "国语", "粤语", "英语", "中字", "简中", "繁中", "双语", "简繁",
-        "字幕", "内嵌", "外挂", "高清", "蓝光", "修复版",
+        "字幕", "内嵌", "外挂", "高清", "蓝光", "修复版", "高码率", "高碼率",
     ]
 
     static func isReleaseTag(_ token: String) -> Bool {

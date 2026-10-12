@@ -54,6 +54,13 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(parsed.year, 2019)
     }
 
+    /// `高码率` 这类中文清晰度词也算发布标记 → 标题在它前面截断。
+    func testHighBitrateMarkerStopsTitle() {
+        let parsed = BaiduPanMetadataSynthesizer.parse(name: "某剧.高码率.1080p.mkv")
+
+        XCTAssertEqual(parsed.title, "某剧")
+    }
+
     /// 没有任何发布标记时,整个文件名都是标题 —— ⛔ 不为了「看起来像个标题」而截断。
     func testTitleWithoutTagsKeepsEverything() {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "我的电影.mp4")
@@ -201,6 +208,34 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
 
+    /// ★ `47-4K.高码率.mkv` 这类「集号-发布标记」存法:同目录成串时借目录名当剧名,
+    /// 集号单独记。⛔ 否则「47」会被当电影名拿去搜 TMDB,配回来的必然是别的片。
+    func testEpisodeWithReleaseTagsAdoptsFolderName() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01-4K.高码率.mkv", fsID: 1, inDirectory: "庆余年"),
+                makeFile("02-4K.高码率.mkv", fsID: 2, inDirectory: "庆余年"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["庆余年", "庆余年"])
+        XCTAssertEqual(synthesized.map(\.item.kind), [.episode, .episode])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+        XCTAssertEqual(synthesized.first?.item.metadataOrigin, .filename)
+    }
+
+    /// ⛔ 孤零零一个 `300.1080p.BluRay.mkv` 不能变成「第 300 集」——
+    /// 它与 `47-4K.高码率.mkv` 结构一样,靠**同目录成串**区分(见 `bareEpisodeNumber`)。
+    func testSingleEpisodeWithReleaseTagsStaysMovie() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("300.1080p.BluRay.mkv", fsID: 1, inDirectory: "Movies")],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.first?.item.kind, .video)
+        XCTAssertEqual(synthesized.first?.item.title, "300")
+        XCTAssertNil(synthesized.first?.item.episodeNumber)
+    }
+
     /// 文件名自己认得出剧名时**以文件名为准**,⛔ 不拿目录名盖掉它。
     func testFileWithOwnTitleKeepsItInsideEpisodeFolder() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
@@ -223,6 +258,20 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("movie.mp4"))
     }
 
+    /// ★ 「集号 + 发布标记」也当「整个文件名就是集号」:`47-4K.高码率.mkv` → 47。
+    /// 判据是集号后面**紧跟**发布标记(与 `parse` 一致),所以连写的 `WEB-DL` 也不影响。
+    func testBareEpisodeNumberAcceptsEpisodeFollowedByReleaseTags() {
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("47-4K.高码率.mkv"), 47)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("01-4K.高码率.mkv"), 1)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("12.1080p.WEB-DL.mkv"), 12)
+
+        // ⛔ 集号后面不是发布标记 → 那是标题,不是集号
+        XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("47-收藏版.mkv"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("某剧.01.1080p.mkv"))
+        // ⛔ 4 位数字仍是年份形状
+        XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("2012.1080p.mkv"))
+    }
+
     // MARK: - 季文件夹(剧名取祖父目录,季号取父目录)
 
     /// ★ `琅琊榜/第13季/01.mp4`:剧名取**祖父**目录,季号取**父**目录。
@@ -237,6 +286,21 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
 
         XCTAssertEqual(synthesized.map(\.item.title), ["琅琊榜", "琅琊榜"])
         XCTAssertEqual(synthesized.map(\.item.kind), [.episode, .episode])
+        XCTAssertEqual(synthesized.map(\.item.seasonNumber), [13, 13])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+    }
+
+    /// 「集号-发布标记」与季文件夹叠加:`剧名/第13季/01-4K.高码率.mkv`
+    /// → 剧名取祖父目录、季号取父目录、集号取文件名。
+    func testEpisodeWithReleaseTagsInsideSeasonFolder() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01-4K.高码率.mkv", fsID: 1, inDirectory: "剧名/第13季"),
+                makeFile("02-4K.高码率.mkv", fsID: 2, inDirectory: "剧名/第13季"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["剧名", "剧名"])
         XCTAssertEqual(synthesized.map(\.item.seasonNumber), [13, 13])
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
