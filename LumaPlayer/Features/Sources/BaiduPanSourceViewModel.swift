@@ -41,6 +41,20 @@ final class BaiduPanSourceViewModel {
     /// 合成后的 `SourceItem` 只保留展示所需字段,`path` 这类定位信息不在里面。
     private var filesByID: [UInt64: BaiduPanFile] = [:]
 
+    /// **会话级**目录缓存:`目录路径` → 一次目录读取的完整结果。
+    ///
+    /// 为什么要有它:未审核应用配额只有 **10 次/小时**(`docs/BAIDU_PAN_API.md`),
+    /// 而「进目录 → 退回上层 → 再进同一个目录」这种来回走会把配额烧光。
+    /// 有了它,同一会话里重进**已列过**的目录就是**零请求**。
+    ///
+    /// ⚠️ 取舍:网盘里新增 / 删除的文件要等用户点刷新才反映 —— 这正是
+    /// 「有数据就不自动请求、把刷新交给用户」的既定策略。`reload()`(结构性变化)
+    /// 会清掉它;用户点「刷新 / 重试」走 `refreshFiles()` 强制重列。
+    ///
+    /// ⚠️ 缓存里的封面地址是百度 `dlink`(8 小时有效)。会话通常远短于 8 小时,
+    /// 且封面图本身另有磁盘缓存兜底,所以不为过期另做处理。
+    private var directoryCache: [String: BaiduPanSourceProvider.DirectoryContent] = [:]
+
     /// 目录排序方式。默认**剧集顺序** —— 「看剧都是从前往后看的」。
     ///
     /// ⚠️ 它是**展示层**状态:改它只重排已经取回的条目,⛔ 不重新请求目录
@@ -129,6 +143,10 @@ final class BaiduPanSourceViewModel {
         isLoading = true
         loadFailure = nil
         defer { isLoading = false }
+        // 结构性变化(首次进入 / 换配置 / 换授权 / 用户点工具栏刷新):会话缓存作废,
+        // 之后从片库根重新列起。⚠️ 放在这里而不是 `case .authorized` 里 ——
+        // 解绑 / 换密钥之后会走到「需要授权」那一屏,那条路也得把旧缓存清掉。
+        directoryCache.removeAll()
         do {
             authorization = try await connection.authorization()
             // 目录名只用于展示。⛔ 这里的 `try?` 不是吞错:凭据文件读不出来时
@@ -137,8 +155,9 @@ final class BaiduPanSourceViewModel {
             switch authorization {
             case .authorized:
                 // ⚠️ 进这一屏一律**从片库根重新开始**:`reload()` 只在结构性变化后
-                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权)。路径栏那个
-                // 刷新按钮走的是 `loadFiles()`,**不会**重置当前目录。
+                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权 / 工具栏刷新)。
+                // 路径栏那个刷新按钮走 `refreshFiles()`,**不会**重置当前目录,
+                // 也不会清掉其它目录的会话缓存。
                 guard loadsDirectory else { break }
                 currentDirectory = nil
                 await loadFiles()
@@ -267,10 +286,32 @@ final class BaiduPanSourceViewModel {
         await loadFiles(allowingLibraryRootFallback: true)
     }
 
+    /// 强制重新列目录(用户点「刷新 / 重试」):⛔ 不用会话缓存,并把这一目录的缓存换成新的。
+    ///
+    /// ⚠️ 与 `loadFiles()` 的分工:`loadFiles()` 走**导航**(进目录 / 退回上层),
+    /// 命中会话缓存就零请求;这个是用户**明确要最新数据**,必须走网络。
+    func refreshFiles() async {
+        await loadFiles(allowingLibraryRootFallback: true, forceRefresh: true)
+    }
+
+    /// 播完一场后刷新**本地续播状态**(进度标签、继续观看区)。
+    ///
+    /// ⛔ 不重新列目录:那是 2 次百度请求(`list` + `filemetas`),而播完一场变的
+    /// 只有本地续播库(`WatchProgressStore`)—— 目录内容一个字节都没动。
+    /// 进度标签与续播区都直接读本地库,所以只重读本地就够(配额纪律)。
+    func refreshResumeState() async {
+        await loadResumeCards()
+        await loadResumePositions()
+    }
+
     /// `allowingLibraryRootFallback`:片库根读不出来时,允许清掉它并回落到应用目录。
     /// ⛔ 只回落**一次**。递归时传 false:再失败就是应用目录本身的问题,
     /// 继续套娃只会把真正的错误(目录名填错)藏在一层层的重试里。
-    private func loadFiles(allowingLibraryRootFallback allowFallback: Bool) async {
+    ///
+    /// `forceRefresh`:⛔ 不用会话缓存,强制走网络并把结果写回缓存(用户点刷新 / 重试)。
+    private func loadFiles(
+        allowingLibraryRootFallback allowFallback: Bool, forceRefresh: Bool = false
+    ) async {
         isLoadingFiles = true
         directoryFailure = nil
         // 新一轮读取:上一轮的后台刮削结果已经作废
@@ -290,7 +331,14 @@ final class BaiduPanSourceViewModel {
             directory = currentDirectory ?? library ?? root
             currentDirectory = directory
             let provider = makeProvider()
-            let content = try await provider.content(directory: directory)
+            let content: BaiduPanSourceProvider.DirectoryContent
+            if !forceRefresh, let cached = directoryCache[directory] {
+                // 命中会话缓存:同一会话里重进已列过的目录 → 零请求(配额纪律)
+                content = cached
+            } else {
+                content = try await provider.content(directory: directory)
+                directoryCache[directory] = content
+            }
             items = content.items
             // 原始文件按 `fs_id` 留一份:播放与进目录要 `path` / 真实文件名。
             // ⚠️ 它来自**同一次**目录读取,不是再列一遍(配额,见 provider 的注释)
@@ -306,7 +354,7 @@ final class BaiduPanSourceViewModel {
                 try? await connection.setLibraryRoot(nil)
                 libraryRoot = nil
                 currentDirectory = nil
-                await loadFiles(allowingLibraryRootFallback: false)
+                await loadFiles(allowingLibraryRootFallback: false, forceRefresh: forceRefresh)
                 return
             }
             directoryFailure = BaiduPanDirectoryFailure(

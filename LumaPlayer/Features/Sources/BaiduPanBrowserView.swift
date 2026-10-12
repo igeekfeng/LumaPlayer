@@ -92,12 +92,12 @@ struct BaiduPanBrowserView: View {
             sortMenu
 
             Button {
-                Task { await viewModel.reload() }
+                Task { await viewModel.refreshFiles() }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .disabled(viewModel.isLoadingFiles)
-            .help("刷新")
+            .help("刷新当前目录")
 
             Button("解除授权") {
                 Task { await viewModel.signOut() }
@@ -179,7 +179,7 @@ struct BaiduPanBrowserView: View {
             } description: {
                 Text(emptyHint)
             } actions: {
-                Button("刷新") { Task { await viewModel.loadFiles() } }
+                Button("刷新") { Task { await viewModel.refreshFiles() } }
             }
         } else {
             ScrollView {
@@ -275,7 +275,7 @@ struct BaiduPanBrowserView: View {
             } else {
                 OnboardingNotice(text: failure.message, style: .error)
             }
-            Button("重试") { Task { await viewModel.loadFiles() } }
+            Button("重试") { Task { await viewModel.refreshFiles() } }
         }
         .padding(Metrics.spacingXL)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -27,9 +27,11 @@ struct BaiduPanSourceView: View {
             .task(id: refreshToken) { await viewModel.reload() }
             // 百度来源没有服务端进度上报(进度记在本地续播库),所以播完一场
             // 要自己重读一次,「已看到 mm:ss」才会立刻反映在列表上。
+            // ⚠️ 只重读**本地**续播状态 —— ⛔ 不重新列目录(那是 2 次百度请求,
+            // 而播完一场目录内容一个字节都没变,见 `refreshResumeState`)。
             .onChange(of: container.state.lastFinishedPlayback) { _, finished in
                 guard finished?.serverID == nil else { return }
-                Task { await viewModel.loadFiles() }
+                Task { await viewModel.refreshResumeState() }
             }
     }
 
