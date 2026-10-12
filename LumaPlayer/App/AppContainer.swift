@@ -23,6 +23,10 @@ final class AppContainer {
     /// 本地「隐藏条目」库:用户不想再看到、但**网盘上还留着**的条目。
     /// 与 `watchProgress` 同一套做法(JSON 文件,不用服务端),因为百度没有这类标记接口。
     let hiddenItems: HiddenItemsStore
+    /// 本地「手动片头 / 片尾」库:服务端检测不出片头片尾时用户自己标的。
+    /// 与 `hiddenItems` 同一套做法(JSON 文件)—— Emby 没有写回章节标记的接口,
+    /// 只能记在本地。键是「同一部剧」的范围键(见 `ManualMarkersScope`)。
+    let manualMarkers: ManualMarkersStore
     /// 百度网盘来源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
     /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
     private var baiduConnectionInstance: BaiduPanConnection?
@@ -42,7 +46,8 @@ final class AppContainer {
         session: URLSession = .shared,
         preferences: UserDefaults = .standard,
         watchProgress: WatchProgressStore? = nil,
-        hiddenItems: HiddenItemsStore? = nil
+        hiddenItems: HiddenItemsStore? = nil,
+        manualMarkers: ManualMarkersStore? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
@@ -53,6 +58,8 @@ final class AppContainer {
             ?? WatchProgressStore(fileURL: WatchProgressStore.defaultFileURL)
         self.hiddenItems = hiddenItems
             ?? HiddenItemsStore(fileURL: HiddenItemsStore.defaultFileURL)
+        self.manualMarkers = manualMarkers
+            ?? ManualMarkersStore(fileURL: ManualMarkersStore.defaultFileURL)
     }
 
     /// 生产组装:沙盒容器里的凭据文件 + UserDefaults(.standard)。

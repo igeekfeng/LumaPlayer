@@ -55,6 +55,8 @@ struct PlayerWindowView: View {
     @State private var isSpeedPopoverPresented = false
     /// 选集抽屉打开中:同理,控制栏不能自动隐藏(抽屉靠控制栏上的按钮收起)
     @State private var isEpisodePanelPresented = false
+    /// 手动片头片尾输入面板打开中:同理,面板开着期间钉住控制栏
+    @State private var isMarkersEditorPresented = false
     /// 正在显示的屏显提示(比 `viewModel.osd` 晚一拍清空)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -151,6 +153,10 @@ struct PlayerWindowView: View {
         .onChange(of: isEpisodePanelPresented) { _, presented in
             // 选集抽屉同理:开着的时候控制栏不能自己收走
             if presented { revealControls(autoHide: false) } else { revealControls() }
+        }
+        .sheet(isPresented: $isMarkersEditorPresented) {
+            // 手动片头片尾:表单在窗口上呈现(sheet 比 popover 稳,菜单点开就收起来了)
+            PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
         }
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
         .onChange(of: viewModel.nextEpisode?.id) { nowPlaying.update(from: viewModel) }
@@ -365,7 +371,8 @@ struct PlayerWindowView: View {
             viewModel: viewModel,
             toggleFullScreen: { toggleFullScreen() },
             isSpeedPopoverPresented: $isSpeedPopoverPresented,
-            isEpisodePanelPresented: $isEpisodePanelPresented
+            isEpisodePanelPresented: $isEpisodePanelPresented,
+            isMarkersEditorPresented: $isMarkersEditorPresented
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -439,6 +446,7 @@ struct PlayerWindowView: View {
             && !isHoveringControls
             && !isSpeedPopoverPresented
             && !isEpisodePanelPresented
+            && !isMarkersEditorPresented
             && viewModel.scrubPreviewSeconds == nil
     }
 

@@ -28,6 +28,8 @@ struct PlayerControlsView: View {
     @Binding var isSpeedPopoverPresented: Bool
     /// 选集抽屉是否打开:同上,打开期间要钉住控制栏(抽屉本身也靠控制栏上的按钮收起)
     @Binding var isEpisodePanelPresented: Bool
+    /// 手动片头片尾输入面板是否打开:同上,面板开着期间也要钉住控制栏
+    @Binding var isMarkersEditorPresented: Bool
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
@@ -40,7 +42,10 @@ struct PlayerControlsView: View {
                 PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
                 PlayerSubtitleMenu(viewModel: viewModel)
                 PlayerAudioMenu(viewModel: viewModel)
-                PlayerOptionsMenu(viewModel: viewModel)
+                PlayerOptionsMenu(
+                    viewModel: viewModel,
+                    isMarkersEditorPresented: $isMarkersEditorPresented
+                )
                 PlayerIconButton(
                     systemImage: "arrow.up.left.and.arrow.down.right",
                     label: "切换全屏",
@@ -229,6 +234,10 @@ struct PlayerScrubber: View {
                 Capsule()
                     .fill(.white.opacity(Metrics.scrubberPlayedOpacity))
                     .frame(width: width * fraction)
+                // 片头 / 片尾标记:画在已播放段**之上** —— 播过片头之后还要看得见,
+                // 不然「设在哪了」只有回到片头才发现。用强调色,与白色的已播放 / 已缓存段区分。
+                // 颜色不是唯一表达:菜单里有文字摘要(无障碍规则)。
+                markerOverlay(width: width)
             }
             .frame(height: trackHeight)
             .frame(maxHeight: .infinity)
@@ -303,6 +312,31 @@ struct PlayerScrubber: View {
     private var bufferedFraction: Double? {
         guard duration > 0, let buffered = viewModel.bufferedUntilSeconds, buffered > 0 else { return nil }
         return min(1, buffered / duration)
+    }
+
+    /// 片头区间带 + 片尾起点竖条(位置来自 `viewModel.markers`,手动标注与服务端标记合并后的结果)。
+    ///
+    /// 时长未知时**不画**:没有分母就算不出位置,画在哪儿都是猜的。
+    @ViewBuilder
+    private func markerOverlay(width: CGFloat) -> some View {
+        if duration > 0 {
+            if let intro = viewModel.markers.intro, intro.lowerBound < duration {
+                let start = min(max(intro.lowerBound / duration, 0), 1)
+                let end = min(max(intro.upperBound / duration, 0), 1)
+                Capsule()
+                    .fill(.tint)
+                    .opacity(Metrics.scrubberMarkerOpacity)
+                    .frame(width: max(Metrics.scrubberMarkerMinWidth, width * (end - start)))
+                    .offset(x: width * start)
+            }
+            if let credits = viewModel.markers.creditsStart, credits < duration {
+                Capsule()
+                    .fill(.tint)
+                    .opacity(Metrics.scrubberMarkerOpacity)
+                    .frame(width: Metrics.scrubberMarkerWidth)
+                    .offset(x: width * (credits / duration) - Metrics.scrubberMarkerWidth / 2)
+            }
+        }
     }
 
     private func seconds(at x: CGFloat, width: CGFloat) -> Double {
@@ -557,15 +591,19 @@ struct PlayerAudioMenu: View {
     }
 }
 
-/// 低频的播放偏好:自动跳过片头、自动播下一集、置顶、统计信息。
+/// 低频的播放偏好:自动跳过片头、自动播下一集、手动片头片尾、置顶、统计信息。
 /// 与菜单栏「Playback」菜单里的对应项是同一份状态。
 struct PlayerOptionsMenu: View {
     @Bindable var viewModel: PlayerViewModel
+    /// 手动片头片尾输入面板(由播放窗口持有并呈现 sheet;这里只负责打开)
+    @Binding var isMarkersEditorPresented: Bool
 
     var body: some View {
         Menu {
             Toggle("自动跳过片头", isOn: $viewModel.autoSkipIntro)
             Toggle("自动播放下一集", isOn: $viewModel.autoPlayNext)
+            Divider()
+            markersMenu
             Divider()
             Toggle("窗口置顶", isOn: $viewModel.floatsOnTop)
             Toggle("显示统计信息", isOn: Binding(
@@ -584,6 +622,68 @@ struct PlayerOptionsMenu: View {
         .fixedSize()
         .help("播放选项")
         .accessibilityLabel("播放选项")
+    }
+
+    /// 手动片头 / 片尾:服务端检测不出来时自己标。**同一部剧的每一集共用一份**,
+    /// 所以在一集里标好后,这部剧后面的集数都套用(见 `ManualMarkersScope`)。
+    ///
+    /// 「按当前位置打点」放在最前:拖到片头 / 片尾再点最省事;要精确到秒才用「手动输入…」。
+    ///
+    /// ⚠️ 标签里⛔ **不要**写 `viewModel.positionSeconds`:它是每 0.2s 变一次的值,
+    /// 一读就会让整个 `PlayerOptionsMenu` 跟着重绘,`ellipsis.circle` 这个 Menu 按钮
+    /// 被反复重建 —— 悬停高亮一直在闪(2026-10-12 实测)。打点的具体秒数由点击后的
+    /// 屏显提示(`flash`)给出,这里只报「会打在当前位置」。
+    private var markersMenu: some View {
+        Menu("片头片尾") {
+            // 已经设了什么:先摆出来,否则设完只在屏显里闪一下,回头完全看不出来。
+            // `manualMarkerValues` 只在用户改动时变,不会像 `positionSeconds` 那样每 0.2s 抖。
+            if let summary = viewModel.manualMarkerValues?.summary {
+                Text(summary)
+                Divider()
+            }
+            Button("设为片头起点(当前位置)") {
+                viewModel.setIntroStartAtCurrentPosition()
+            }
+            Button("设为片头终点(当前位置)") {
+                viewModel.setIntroEndAtCurrentPosition()
+            }
+            Button("设为片尾起点(当前位置)") {
+                viewModel.setCreditsStartAtCurrentPosition()
+            }
+            Divider()
+            Button("手动输入…") { isMarkersEditorPresented = true }
+            Button("清除本剧的片头片尾", role: .destructive) {
+                viewModel.clearManualMarkers()
+            }
+            .disabled(!viewModel.hasManualMarkers)
+        }
+    }
+}
+
+// MARK: - 手动片头 / 片尾的文案
+
+extension ManualMarkers {
+    /// 菜单里显示「已经设了什么」的一行摘要;三个位置都没填时 nil。
+    ///
+    /// 例:`片头 00:30–02:00 · 片尾 22:00`。只填了一端、终点不晚于起点、片尾为 0
+    /// 这几种都**不会生效**,摘要里明确写「未生效」—— 光看数字看不出这个区别。
+    ///
+    /// ⚠️ 放在 Features 层而不是 `ManualMarkers` 定义处:它要用 `PlayerTime.markerText`,
+    /// 而 `ManualMarkers` 在 Core(⛔ Core 不依赖 Features)。
+    var summary: String? {
+        var parts: [String] = []
+        switch (introStart, introEnd) {
+        case let (start?, end?) where end > start:
+            parts.append("片头 \(PlayerTime.markerText(start))–\(PlayerTime.markerText(end))")
+        case (nil, nil):
+            break
+        default:
+            parts.append("片头未生效")
+        }
+        if let creditsStart {
+            parts.append(creditsStart > 0 ? "片尾 \(PlayerTime.markerText(creditsStart))" : "片尾未生效")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -725,6 +825,43 @@ enum PlayerTime {
             return String(format: "%d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    /// 标记位置的回显:`0` 也要显示成 `00:00`。
+    ///
+    /// ⛔ 与 `text(_:)` 分开:`text(0)` 返回 `--:--`(那是「时长未知」的语义),
+    /// 而标记位置的 0 是「片头从片首开始」这个**真实值** —— 按 `text` 回显成 `--:--`,
+    /// 再保存一次就把它弄丢了。`nil` 返回空串(那一格没标)。
+    static func markerText(_ seconds: Double?) -> String {
+        guard let seconds, seconds.isFinite, seconds >= 0 else { return "" }
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    /// 解析用户输入的时间(手动片头片尾的文本框):接受 `hh:mm:ss` / `mm:ss` / 秒数
+    /// (`90` / `90.5`)。`hh` 与纯秒数那一档可以任意大,`mm` / `ss` 必须落在 0–59。
+    ///
+    /// 解析不出、为空、或为负时返回 nil —— ⛔ 不当作 0:`text(0)` 是「未知」的语义,
+    /// 拿 0 冒充用户填的值会把片头标到片首(与「时长未知不给 0」同一立场)。
+    static func parse(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let parts = trimmed.split(separator: ":", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count) else { return nil }
+        var total: Double = 0
+        for (index, part) in parts.enumerated() {
+            guard let value = Double(part), value.isFinite, value >= 0 else { return nil }
+            // 除第一段(时 / 纯秒数)外,分与秒必须落在 0–59
+            if index > 0, value >= 60 { return nil }
+            total = total * 60 + value
+        }
+        return total
     }
 
     /// VoiceOver 读的版本:「1 小时 2 分 3 秒」,不读冒号。

@@ -125,8 +125,15 @@ final class PlayerViewModel {
     var episodes: [PlaybackEpisode] { episodeQueue?.episodes ?? [] }
     /// 当前这一集的来源内 id(选集面板高亮用)。
     var currentEpisodeID: String? { episodeQueue?.current?.id }
-    /// 当前源的片头片尾标记(API_CONTRACT.md 4.3.1);服务端没给就是 `.none`。
+    /// 当前源的片头片尾标记(API_CONTRACT.md 4.3.1);服务端没给、用户也没手动标就是 `.none`。
+    ///
+    /// ⚠️ 这是**最终**标记 = 服务端标记(`serverMarkers`)与用户手动标注(`manualMarkers`)
+    /// 合并后的结果,手动优先 —— 由 `refreshMarkers()` 算,⛔ 不要直接写它。
     private(set) var markers = PlaybackMarkers.none
+    /// 服务端 `Chapters` 解析出来的原始标记(合并前)
+    private var serverMarkers = PlaybackMarkers.none
+    /// 用户手动标注(同一部剧共用;起播时从本地库读回)。nil = 没标过。
+    private var manualMarkers: ManualMarkers?
     /// 「下一集」倒计时剩余秒数;nil = 没在倒计时
     private(set) var upNextCountdown: Int?
     /// 本次播放里用户点过「取消」:不再提示、不再自动播下一集
@@ -780,6 +787,78 @@ final class PlayerViewModel {
         flash("已跳过片头", systemImage: "forward.fill")
     }
 
+    // MARK: - 手动片头 / 片尾
+
+    /// 手动标注的当前值(编辑面板回显用);没标过时为 nil。
+    var manualMarkerValues: ManualMarkers? { manualMarkers }
+
+    /// 本剧有没有手动标注(「清除」菜单项的启用判据)。
+    var hasManualMarkers: Bool { manualMarkers?.isEmpty == false }
+
+    /// 手动标注的范围键:同一部剧的每一集共用一份(见 `ManualMarkersScope`)。
+    private var manualMarkersScopeKey: String { ManualMarkersScope.key(for: request.source) }
+
+    /// 重算最终标记:手动标注按标记组覆盖服务端,未设的那组沿用服务端。
+    private func refreshMarkers() {
+        markers = manualMarkers?.applying(to: serverMarkers) ?? serverMarkers
+    }
+
+    /// 把当前位置设为片头起点(同一部剧共用)。
+    func setIntroStartAtCurrentPosition() {
+        var updated = manualMarkers ?? ManualMarkers()
+        updated.introStart = positionSeconds
+        updated.updatedAt = Date()
+        commitManualMarkers(updated, flashText: "片头起点 \(PlayerTime.text(positionSeconds))")
+    }
+
+    /// 把当前位置设为片头终点(同一部剧共用)。
+    func setIntroEndAtCurrentPosition() {
+        var updated = manualMarkers ?? ManualMarkers()
+        updated.introEnd = positionSeconds
+        updated.updatedAt = Date()
+        commitManualMarkers(updated, flashText: "片头终点 \(PlayerTime.text(positionSeconds))")
+    }
+
+    /// 把当前位置设为片尾起点(同一部剧共用)。
+    func setCreditsStartAtCurrentPosition() {
+        var updated = manualMarkers ?? ManualMarkers()
+        updated.creditsStart = positionSeconds
+        updated.updatedAt = Date()
+        commitManualMarkers(updated, flashText: "片尾起点 \(PlayerTime.text(positionSeconds))")
+    }
+
+    /// 手动输入面板的「保存」:整组替换本剧的标注(空 = 不标那一格)。
+    func setManualMarkers(introStart: Double?, introEnd: Double?, creditsStart: Double?) {
+        commitManualMarkers(
+            ManualMarkers(introStart: introStart, introEnd: introEnd, creditsStart: creditsStart),
+            flashText: "片头片尾已保存")
+    }
+
+    /// 清除本剧的手动标注。
+    func clearManualMarkers() {
+        guard hasManualMarkers else { return }
+        commitManualMarkers(ManualMarkers(), flashText: "已清除本剧的片头片尾")
+    }
+
+    /// 落库 + 立即生效 + 屏显反馈。
+    ///
+    /// 内存先改、落盘异步:标注要**立刻**影响「跳过片头」按钮 / 自动跳过,
+    /// 不能等磁盘。写盘失败不静默吞(硬规则 4)—— 屏显一句失败,内存里的改动保留。
+    private func commitManualMarkers(_ updated: ManualMarkers, flashText: String) {
+        manualMarkers = updated.isEmpty ? nil : updated
+        refreshMarkers()
+        flash(flashText, systemImage: "flag")
+        let store = container.manualMarkers
+        let key = manualMarkersScopeKey
+        Task { [weak self] in
+            do {
+                try await store.set(updated, for: key)
+            } catch {
+                self?.flash("片头片尾保存失败", systemImage: "exclamationmark.triangle")
+            }
+        }
+    }
+
     /// 播放中的「下一集」提示是否该出现(播完之后由播完卡片接手,这里返回 false)。
     var isUpNextPromptVisible: Bool {
         guard nextEpisode != nil, !isUpNextDismissed, !isEnded, failure == nil,
@@ -1004,7 +1083,11 @@ final class PlayerViewModel {
                 durationSeconds = authoritative
             }
             markTimeline(.playbackInfo)
-            markers = PlaybackMarkers(chapters: prepared.mediaSource.chapters)
+            serverMarkers = PlaybackMarkers(chapters: prepared.mediaSource.chapters)
+            // 用户手动标注(同一部剧共用):读回来与服务端标记合并,手动优先。
+            // 本地 JSON 读取,一次会话只读一遍(转码重新起流时会再读一次,顺带拾起中途的修改)。
+            manualMarkers = await container.manualMarkers.record(for: manualMarkersScopeKey)
+            refreshMarkers()
 
             // 渲染后端策略起播时读一次(默认按片源:DV 用 gpu-next,其余 legacy,
             // 见 MPVRenderBackendPolicy)。切换在 MPVPlayer 内部、VO 建立前完成,这里不用管。

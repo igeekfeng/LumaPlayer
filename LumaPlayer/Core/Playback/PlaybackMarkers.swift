@@ -2,10 +2,12 @@ import Foundation
 
 /// 片头区间与片尾起点(纯值,无网络无 IO,靠单元测试覆盖)。
 ///
-/// 数据来自 `MediaSource.Chapters` 里 `MarkerType` 为 `IntroStart` / `IntroEnd` /
-/// `CreditsStart` 的条目(API_CONTRACT.md 4.3.1)。这些标记要服务端生成:
-/// Emby 自带的片头检测需要 Premiere 且只对剧集生效,片尾大多靠插件写入 ——
-/// 所以**没有标记是常态**,本类型的每个结果都是可选的,调用方不得假设存在。
+/// 数据有两个来源,校验是同一套:
+/// - **服务端**:`MediaSource.Chapters` 里 `MarkerType` 为 `IntroStart` / `IntroEnd` /
+///   `CreditsStart` 的条目(API_CONTRACT.md 4.3.1)。这些标记要服务端生成:
+///   Emby 自带的片头检测需要 Premiere 且只对剧集生效,片尾大多靠插件写入 ——
+///   所以**没有标记是常态**,本类型的每个结果都是可选的,调用方不得假设存在。
+/// - **用户手动标注**:`ManualMarkers`(服务端检测不出来时自己标,见 `ManualMarkersStore`)。
 struct PlaybackMarkers: Sendable, Equatable {
     /// 片头 [起点, 终点)(秒)。只有两个标记都在、且终点晚于起点时才有值。
     let intro: Range<Double>?
@@ -19,6 +21,20 @@ struct PlaybackMarkers: Sendable, Equatable {
         self.creditsStart = creditsStart
     }
 
+    /// 从三个**原始位置**构造(用户手动标注的形态)。
+    ///
+    /// 校验与 `init(chapters:)` **同一套**:片头要两端都在且 `end > start`,
+    /// `creditsStart` 要 `> 0` —— 少一个端、顺序颠倒、或片尾为 0 都当作「没标」。
+    /// 手动输入同样可能只填了一半,不能因为「是用户填的」就放行。
+    init(introStart: Double?, introEnd: Double?, creditsStart: Double?) {
+        if let start = introStart, let end = introEnd, start >= 0, end > start {
+            intro = start..<end
+        } else {
+            intro = nil
+        }
+        self.creditsStart = creditsStart.flatMap { $0 > 0 ? $0 : nil }
+    }
+
     init(chapters: [EmbyChapter]?) {
         func position(of marker: String) -> Double? {
             chapters?
@@ -26,14 +42,10 @@ struct PlaybackMarkers: Sendable, Equatable {
                 .startPositionTicks
                 .map { TickConverter.seconds(fromTicks: $0) }
         }
-        if let start = position(of: EmbyChapter.Marker.introStart),
-           let end = position(of: EmbyChapter.Marker.introEnd),
-           start >= 0, end > start {
-            intro = start..<end
-        } else {
-            intro = nil
-        }
-        creditsStart = position(of: EmbyChapter.Marker.creditsStart).flatMap { $0 > 0 ? $0 : nil }
+        self.init(
+            introStart: position(of: EmbyChapter.Marker.introStart),
+            introEnd: position(of: EmbyChapter.Marker.introEnd),
+            creditsStart: position(of: EmbyChapter.Marker.creditsStart))
     }
 
     /// 当前位置是否该显示「跳过片头」。

@@ -198,6 +198,14 @@ enum Metrics {
     static let scrubberBufferedOpacity: Double = 0.55
     /// 悬停时间气泡距轨道的垂直距离
     static let scrubberTooltipOffset: CGFloat = 28
+
+    /// 进度条上片头 / 片尾标记的不透明度。标记画在**已播放段之上**(播过片头还要看得见),
+    /// 所以要不透明到能压住白色,又不至于盖掉底下的位置信息。
+    static let scrubberMarkerOpacity: Double = 0.95
+    /// 片尾起点竖条的宽度
+    static let scrubberMarkerWidth: CGFloat = 2
+    /// 片头标记带的最小宽度:片头很短时(几秒)也要看得见
+    static let scrubberMarkerMinWidth: CGFloat = 3
     /// 续播时从服务端记录的位置往回退的秒数(接上前情,Infuse / Plex 的做法)
     static let resumeRewind: TimeInterval = 5
     /// 片头最后几秒不再显示「跳过片头」(见 `PlaybackMarkers.isInIntro`)
