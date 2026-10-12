@@ -184,4 +184,28 @@ actor CredentialStore {
     func deleteBaiduPanToken() async throws {
         try await storage.removeValue(forAccount: BaiduAccount.token)
     }
+
+    // MARK: - TMDB 刮削(docs/TMDB_API.md §1)
+
+    /// v4 **Read Access Token**。用户在设置里手输,存凭据文件(0600、不进备份)。
+    ///
+    /// ⚠️ 与百度那套不同:它**不是**按来源分的 —— 一个 App 用一份 TMDB token
+    /// 刮所有来源(百度 / 未来其它)的元数据,所以 account 是固定名字,不带 id。
+    /// 它是**只读**凭据,不含写权限,泄露面比 AppKey/SecretKey 小。
+    private static let tmdbReadAccessTokenAccount = "tmdb-read-access-token"
+
+    func tmdbReadAccessToken() async throws -> String? {
+        guard let data = try await storage.value(forAccount: Self.tmdbReadAccessTokenAccount) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func saveTMDBReadAccessToken(_ token: String) async throws {
+        try await storage.setValue(Data(token.utf8), forAccount: Self.tmdbReadAccessTokenAccount)
+    }
+
+    func deleteTMDBReadAccessToken() async throws {
+        try await storage.removeValue(forAccount: Self.tmdbReadAccessTokenAccount)
+    }
 }

@@ -111,6 +111,19 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         let stamp = modifiedAt.map { String(Int($0.timeIntervalSince1970)) } ?? "nomtime"
         return "baidu|\(sourceID.uuidString)|\(fsID)|\(stamp)|cover|\(maxWidth)"
     }
+
+    /// TMDB 一张海报的缓存 key:来源 + `poster_path` + 档位。
+    ///
+    /// ⚠️ `poster_path` **自带版本语义**:换了海报 TMDB 会换路径
+    /// (`docs/TMDB_API.md` §4),所以它直接当版本段 —— 与 `baiduCoverKey`
+    /// 拿 `server_mtime` 当版本段是同一个角色。
+    /// ⛔ 不要拿 TMDB 条目 id 当版本:`id` 不变而海报会变,那样换了海报仍端旧图。
+    ///
+    /// ⚠️ 分集剧照(`episodes[].still_path`,§8)也走它:拼法与版本语义**完全一致**
+    /// (`path` 是版本段),⛔ 不另立一个只有名字不同的 key。
+    static func tmdbPosterKey(sourceID: UUID, posterPath: String, size: String) -> String {
+        "tmdb|\(sourceID.uuidString)|\(posterPath)|\(size)"
+    }
 }
 
 extension ImageDescriptor {

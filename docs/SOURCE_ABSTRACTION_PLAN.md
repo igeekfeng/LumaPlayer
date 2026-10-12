@@ -43,6 +43,10 @@ Emby 有的东西,但用户期望选中百度网盘时也能有**接近 Emby 的
 - ⛔ 改播放内核(main 仍是 libmpv;exp 的 Rust/AVKit 核心不搬)。
 - ⛔ 把 Emby 的 `ServerProfile` 类型改名(见 §6.2 的理由)。
 - ⛔ 在线刮削(TMDB 等)—— 元数据只来自用户自己的网盘(文件名 / `.nfo` / 同目录图片)。
+  **2026-10-12 改**:在线刮削**要做**,形态是**客户端直连 TMDB**(⛔ 不要后端服务),
+  token 由用户在设置里输入。链路本身(客户端 + DTO + token 入口 + 测试)先落地,随后**已接入**
+  `BaiduPanSourceProvider`(`BaiduPanMetadataScraper`,列目录后第二趟;见 §6.3)。
+  真实网络行为待验,见 `docs/KNOWN_ISSUES.md`「TMDB 在线刮削」。事实来源 `docs/TMDB_API.md`。
 - ⛔ 百度网盘的写操作(上传 / 删除 / 重命名)。
 
 ## 1. 结论:需要哪些「功能增强」
@@ -348,7 +352,30 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 
 ### 6.3 百度元数据「本地合成」而非「猜」
 
-- 来源优先级:`nfo` > 文件名解析 > 无。⛔ 不联网刮削,⛔ 不用文件名硬造简介。
+- 来源优先级(本地合成这一层):`nfo` > 文件名解析 > 无。
+  合成器(`BaiduPanMetadataSynthesizer`)是**纯函数、不认识网络**:
+  ⛔ 它自己不联网,⛔ 也不用文件名硬造简介。
+- **2026-10-12 补充**:在线刮削(TMDB)是**独立的一层**,接在本地合成**之后**
+  —— 文件名解析出的标题 / 年份 → TMDB 查询 → 补封面 / 简介。合成器本身不变。
+  事实来源 `docs/TMDB_API.md`;token 由用户在设置里输入,⛔ 不要后端服务器。
+  **已接入**(`BaiduPanMetadataScraper`):`BaiduPanSourceProvider.listDirectory` 先出条目,
+  再由 ViewModel 起**后台第二趟**刮削 —— 列表先出、封面后补,TMDB 不可达也不挡浏览。
+  只补**原来没有值**的字段(`SourceItem.withScrapedMetadata`),用户放在网盘目录里的 `poster.jpg` 优先。
+- **2026-10-12 补充(剧集文件夹结构)**:`琅琊榜/01.mp4` 这种「目录名是剧名、文件名只是集号」
+  的存法,单个文件名给不出剧名 —— 拿「01」去搜 TMDB 会配回别的片。规则:
+  ① 文件名自己认得出剧名时**以文件名为准**(`Show.S01E02.mkv`);
+  ② 认不出、且这一层确实像个剧集序列(**同一目录 ≥2 个**这类文件)时,标题取父目录名、
+  `kind = .episode`、集号记进 `SourceItem.episodeNumber`;
+  ③ 孤零零一个 `300.mp4` **不**当成「《目录名》第 300 集」(那会配错片,硬规则 4)。
+  ⚠️ 未支持:`剧名.01.mp4`(标题与集号挤在同一个文件名里)—— 无法与《Ocean's 11》这类片名区分。
+- **2026-10-12 补充(刮削钻到分集,Emby 观感)**:剧集条目先 `/3/search/tv` 拿剧(海报 / 简介 /
+  首播年),再 `/3/tv/{id}/season/{n}` 拿**该季分集** —— 分集拿到**分集剧照 / 集名 / 单集简介**,
+  剧级海报⛔ **不**套给每一集(那是「每集封面都长一样」的成因;`docs/TMDB_API.md` §7/§8)。
+  集名进 `SourceItem.episodeTitle`(与剧名 `title` 分开)。季号来自文件名 `SxxExx` 或**季文件夹**
+  (`琅琊榜/第13季/01.mp4` → 剧名取祖父目录、季号取父目录);解析不出季号时**默认第 1 季**
+  (`BaiduPanMetadataScraper.seasonWhenUnknown`,明说的取舍)—— 局限见 `docs/KNOWN_ISSUES.md`。
+  目录卡片另按**剧**查一次拿剧级海报,**只认标题完全一致**(比单条文件的「唯一结果就认」更严);
+  ⛔ 电影目录本次不刮(已知限制,见 `docs/KNOWN_ISSUES.md`)。
 - 合成不出来的字段一律 `nil`,UI 降级成图标卡,与项目硬规则 4(不静默吞错、不假数据)一致。
 
 ### 6.4 不复用 exp 的「形式」
@@ -433,10 +460,12 @@ exp 的 `BaiduPanSourceView`(独立 sheet)与 `AddServerView` 侧门按钮**全�
 | 体验合成过度承诺 | 合成器只做**有凭据**的字段;缺就降级,登记 `KNOWN_ISSUES.md` |
 | 真机验证 | 本机**无**百度开发者账号,mock 覆盖;真实网盘行为标「未验证」 |
 
-## 8. 明确不做
+### 8. 明确不做
 
-在线刮削、封面下载到沙盒(P5 只预留 `localFile` 分支)、百度写操作、跨来源统一搜索排序
-(先各来源内部搜)、把 Emby 的 `EmbyMediaSource` 抽象掉(P4 只加映射,不改名称)。
+在线刮削**已改为要做**(2026-10-12:客户端直连 TMDB,见 `docs/TMDB_API.md`;
+本条其余项仍不做)、封面下载到沙盒(P5 只预留 `localFile` 分支)、百度写操作、
+跨来源统一搜索排序(先各来源内部搜)、把 Emby 的 `EmbyMediaSource` 抽象掉
+(P4 只加映射,不改名称)。
 
 ## 9. 进度
 

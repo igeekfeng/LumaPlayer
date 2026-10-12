@@ -157,16 +157,161 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.item.kind, .audio)
     }
 
+    // MARK: - 剧集文件夹结构(目录名是剧名,文件名只是集号)
+
+    /// ★ `琅琊榜/01.mp4` 这类存法:标题取目录名,集号单独记。
+    /// 否则「01」会被当电影名拿去搜 TMDB,配回来的必然是别的片。
+    func testNumberedFilesInFolderAdoptFolderNameAsSeries() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01.mp4", fsID: 1, inDirectory: "琅琊榜"),
+                makeFile("02.mp4", fsID: 2, inDirectory: "琅琊榜"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["琅琊榜", "琅琊榜"])
+        XCTAssertEqual(synthesized.map(\.item.kind), [.episode, .episode])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+        // 从目录结构解析出来的,照样算「有元数据」,刮削才会去问 TMDB
+        XCTAssertEqual(synthesized.first?.item.metadataOrigin, .filename)
+    }
+
+    /// ⛔ 孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」—— 那是配错片。
+    /// 目录里**成串**的数字才是剧集的特征。
+    func testSingleNumberedFileKeepsItsOwnTitle() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("300.mp4", fsID: 1, inDirectory: "Movies")],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.first?.item.title, "300")
+        XCTAssertEqual(synthesized.first?.item.kind, .video)
+        XCTAssertNil(synthesized.first?.item.episodeNumber)
+    }
+
+    /// 文件名带明确集标记但没带标题(`E01.mp4` / `第02集.mp4`)也借目录名。
+    func testEpisodeMarkerWithoutTitleAdoptsFolderName() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("E01.mp4", fsID: 1, inDirectory: "某剧"),
+                makeFile("第02集.mp4", fsID: 2, inDirectory: "某剧"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["某剧", "某剧"])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+    }
+
+    /// 文件名自己认得出剧名时**以文件名为准**,⛔ 不拿目录名盖掉它。
+    func testFileWithOwnTitleKeepsItInsideEpisodeFolder() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01.mp4", fsID: 1, inDirectory: "琅琊榜"),
+                makeFile("02.mp4", fsID: 2, inDirectory: "琅琊榜"),
+                makeFile("Show.S01E09.mkv", fsID: 3, inDirectory: "琅琊榜"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized[2].item.title, "Show")
+        XCTAssertEqual(synthesized[2].item.episodeNumber, 9)
+    }
+
+    /// 集号只认 1–3 位纯数字:4 位是年份的形状(`2012.mp4` 是一部电影)。
+    func testBareEpisodeNumberOnlyAcceptsShortDigits() {
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("01.mp4"), 1)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("12.mkv"), 12)
+        XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("2012.mp4"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("movie.mp4"))
+    }
+
+    // MARK: - 季文件夹(剧名取祖父目录,季号取父目录)
+
+    /// ★ `琅琊榜/第13季/01.mp4`:剧名取**祖父**目录,季号取**父**目录。
+    /// 这部剧有 13 季,季号判错就会拿第 1 季的分集剧照去配第 13 季的文件。
+    func testSeasonFolderTakesGrandparentAsSeriesAndParentAsSeason() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01.mp4", fsID: 1, inDirectory: "琅琊榜/第13季"),
+                makeFile("02.mp4", fsID: 2, inDirectory: "琅琊榜/第13季"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["琅琊榜", "琅琊榜"])
+        XCTAssertEqual(synthesized.map(\.item.kind), [.episode, .episode])
+        XCTAssertEqual(synthesized.map(\.item.seasonNumber), [13, 13])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+    }
+
+    /// `Season 13` 这种英文写法同样识别,剧名照取祖父目录。
+    func testEnglishSeasonFolderIsRecognized() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01.mp4", fsID: 1, inDirectory: "Some Show/Season 13"),
+                makeFile("02.mp4", fsID: 2, inDirectory: "Some Show/Season 13"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.title), ["Some Show", "Some Show"])
+        XCTAssertEqual(synthesized.map(\.item.seasonNumber), [13, 13])
+    }
+
+    /// 平铺存法(没有季文件夹、文件名也没写季号)→ 季号**留 nil**,
+    /// ⛔ 不在合成器里填 1 冒充(拿哪一季去问由刮削层决定)。
+    func testFlatFolderLeavesSeasonUnknown() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [
+                makeFile("01.mp4", fsID: 1, inDirectory: "琅琊榜"),
+                makeFile("02.mp4", fsID: 2, inDirectory: "琅琊榜"),
+            ],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.map(\.item.seasonNumber), [nil, nil])
+        XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
+    }
+
+    /// 文件名里的 `SxxExx` 自己带季号 → 直接用它(⛔ 不因为父目录不是季文件夹就丢掉)。
+    func testSeasonNumberFromFileNameIsKept() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("Show.S02E07.1080p.mkv", fsID: 1, inDirectory: "剧集")],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.first?.item.seasonNumber, 2)
+        XCTAssertEqual(synthesized.first?.item.episodeNumber, 7)
+    }
+
+    /// 季文件夹名识别:只认**整个目录名就是季标记**的写法。
+    func testSeasonNumberFromDirectoryNameFormats() {
+        // 中文
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第13季"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第2季"), 2)
+        // 英文:空格 / 无空格 / `.` `_` `-` 都当分隔符
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season 13"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "season13"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season.13"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "season_13"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season-13"), 13)
+        // 简写
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "S13"), 13)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "s2"), 2)
+
+        // ⛔ 剧名与季号挤在一起的目录名不认(无法可靠切分);中文数字不认
+        XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "琅琊榜 第13季"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第十三季"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "琅琊榜"))
+        XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season"))
+    }
+
     // MARK: - 辅助
 
     private func makeFile(
         _ name: String,
         fsID: UInt64,
+        inDirectory directory: String? = nil,
         isDirectory: Bool = false
     ) -> BaiduPanFile {
-        BaiduPanFile(
+        let folder = directory.map { "/\($0)" } ?? ""
+        return BaiduPanFile(
             fsID: fsID,
-            path: "/apps/LumaPlayer/\(name)",
+            path: "/apps/LumaPlayer\(folder)/\(name)",
             name: name,
             sizeBytes: isDirectory ? nil : 1024,
             isDirectory: isDirectory,

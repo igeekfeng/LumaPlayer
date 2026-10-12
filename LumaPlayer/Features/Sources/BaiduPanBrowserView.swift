@@ -6,7 +6,9 @@ import SwiftUI
 ///
 /// 百度不给视频封面,所以封面是**本地合成**的:同目录的
 /// `<同名>.jpg` / `poster.jpg` / `folder.jpg`(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
-/// 配不到就不伪造 —— 卡片降级成图标卡,⛔ 绝不留一片空白占位图假装有封面。
+/// 本地配不到时,再由后台第二趟问 TMDB 补(设置里填了 token 才走,
+/// 见 `BaiduPanMetadataScraper`;用户自己放的图优先,⛔ 不被盖掉)。
+/// 两样都没有就不伪造 —— 卡片降级成图标卡,⛔ 绝不留一片空白占位图假装有封面。
 ///
 /// ## 为什么点一下就是播放
 ///
@@ -31,6 +33,14 @@ struct BaiduPanBrowserView: View {
             Divider()
             if let notice = viewModel.notice {
                 OnboardingNotice(text: notice, style: .warning)
+                    .padding(.horizontal, Metrics.spacingL)
+                    .padding(.vertical, Metrics.spacingS)
+                Divider()
+            }
+            if let scrapeFailure = viewModel.scrapeFailure {
+                // 刮削失败只影响封面:目录照常能看,所以是提示而不是错误页
+                // (CLAUDE.md 硬规则 4「不静默吞错」:失败原因如实说出来)。
+                OnboardingNotice(text: scrapeFailure, style: .warning)
                     .padding(.horizontal, Metrics.spacingL)
                     .padding(.vertical, Metrics.spacingS)
                 Divider()
@@ -275,7 +285,7 @@ private struct BaiduPanCard: View {
             VStack(alignment: .leading, spacing: Metrics.spacingS) {
                 // 尺寸由 Color.clear 钉死,图片只当 overlay(与 `MediaCard` 同一个理由)
                 Color.clear
-                    .aspectRatio(Metrics.posterAspectRatio, contentMode: .fit)
+                    .aspectRatio(imageAspectRatio, contentMode: .fit)
                     .overlay {
                         PosterImage(
                             descriptor: item.poster,
@@ -291,7 +301,7 @@ private struct BaiduPanCard: View {
                         y: Metrics.spacingXS
                     )
                 VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                    Text(item.title)
+                    Text(displayTitle)
                         .font(.body)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -312,13 +322,31 @@ private struct BaiduPanCard: View {
 
     private static var hoverScale: CGFloat { 1.03 }
 
+    /// 分集用 16:9 横版,其余用海报比例(2:3)。
+    ///
+    /// ⚠️ 为什么分集要换:分集拿的是**分集剧照**(16:9 横图,`docs/TMDB_API.md` §8),
+    /// 塞进竖版框会被裁掉一大半画面。一屏全是分集的剧集目录因此长成 Emby 的分集视图。
+    private var imageAspectRatio: Double {
+        item.kind == .episode ? Metrics.landscapeAspectRatio : Metrics.posterAspectRatio
+    }
+
+    /// 主标题:分集优先显示**集名** —— 集名才是这一集的标识,
+    /// 而剧名(`琅琊榜`)整目录每一张都一样、看了等于没看。
+    /// 没有集名(TMDB 未命中 / 未配置 token)时退回 `title`。
+    private var displayTitle: String {
+        item.episodeTitle ?? item.title
+    }
+
     /// 副标题:有续播就报「已看到 mm:ss」(百度没有服务端进度,这条来自本地库);
-    /// 其次是年份(从文件名解析出来的);目录则标明它是文件夹。
+    /// 其次是集号(分集的主标题是集名,不报集号就分不清是哪一集);
+    /// 再次是年份(从文件名解析出来的);目录则标明它是文件夹。
     /// ⛔ 都没有就不显示,不填占位符。
     @ViewBuilder
     private var subtitle: some View {
         if let resumeSeconds, resumeSeconds > 0 {
             Text("已看到 \(PlayerTime.text(resumeSeconds))")
+        } else if let episode = item.episodeNumber {
+            Text("第 \(episode) 集")
         } else if let year = item.year {
             Text(String(year))
         } else if item.kind.isContainer {
@@ -338,8 +366,9 @@ private struct BaiduPanCard: View {
     }
 
     private var accessibilityText: String {
-        var parts = [item.title]
+        var parts = [displayTitle]
         if item.kind.isContainer { parts.append("文件夹") }
+        if let episode = item.episodeNumber { parts.append("第 \(episode) 集") }
         if let year = item.year { parts.append(String(year)) }
         if let resumeSeconds, resumeSeconds > 0 {
             parts.append("已看到 \(PlayerTime.text(resumeSeconds))")

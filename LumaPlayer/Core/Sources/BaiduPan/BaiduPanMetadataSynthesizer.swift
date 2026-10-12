@@ -6,12 +6,18 @@ import Foundation
 ///
 /// 百度只给文件名。要让百度来源看起来像 Emby(标题、年份、封面),
 /// 就必须在客户端把**网盘里已有的信息**合成出来 ——
-/// ⛔ 不联网刮削,⛔ 不用文件名硬造简介(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+/// ⛔ 这个合成器**自己不认识网络**:它不联网、不查 TMDB,⛔ 也不用文件名硬造简介。
+///
+/// (在线刮削是**另一层**,接在它之后:文件名解析出的标题 / 年份 → TMDB 查询 →
+/// 补封面 / 简介。见 `docs/TMDB_API.md` 与 `docs/SOURCE_ABSTRACTION_PLAN.md` §6.3。)
 ///
 /// ## 为什么要整目录一起处理
 ///
 /// `poster.jpg` / `folder.jpg` 这类封面**不在这条视频自己的元数据里** ——
 /// 它们是同目录的**兄弟条目**。只看单个文件根本配不出封面。
+///
+/// 同理还有**剧集文件夹结构**:`琅琊榜/01.mp4` 这种「目录名是剧名、文件名只是集号」
+/// 的存法,单个文件名也给不出剧名 —— 得整目录一起看(见 `seriesFolder`)。
 ///
 /// ## 一条明确的取舍
 ///
@@ -49,6 +55,10 @@ enum BaiduPanMetadataSynthesizer {
     /// 把一个目录的原始条目合成为卡片 + 封面引用。
     static func synthesize(files: [BaiduPanFile], sourceID: UUID) -> [Synthesized] {
         let covers = CoverIndex(files: files)
+        // 「这一层装的是不是一部剧」要在**整目录**上判,单个文件名看不出来:
+        // 目录里成串的 `01.mp4` / `02.mp4` 才是剧集的特征,孤零零一个 `300.mp4`
+        // 更可能是一部叫《300》的电影(见 `seriesFolder`)。
+        let looksLikeEpisodeSequence = episodeLikeCount(files: files) >= 2
         var result: [Synthesized] = []
         for file in files {
             if file.isDirectory {
@@ -56,7 +66,11 @@ enum BaiduPanMetadataSynthesizer {
             } else if file.kind.isPlayable {
                 let parsed = parse(name: file.name)
                 result.append(Synthesized(
-                    item: mediaItem(file, parsed: parsed, sourceID: sourceID),
+                    item: mediaItem(
+                        file,
+                        parsed: parsed,
+                        looksLikeEpisodeSequence: looksLikeEpisodeSequence,
+                        sourceID: sourceID),
                     cover: covers.cover(for: file)
                 ))
             }
@@ -74,6 +88,9 @@ enum BaiduPanMetadataSynthesizer {
             kind: .folder,
             overview: nil,
             year: nil,
+            episodeNumber: nil,
+            seasonNumber: nil,
+            episodeTitle: nil,
             durationSeconds: nil,
             poster: nil,
             metadataOrigin: .none
@@ -83,29 +100,183 @@ enum BaiduPanMetadataSynthesizer {
     private static func mediaItem(
         _ file: BaiduPanFile,
         parsed: ParsedName,
+        looksLikeEpisodeSequence: Bool,
         sourceID: UUID
     ) -> SourceItem {
+        // 剧集文件夹结构(`琅琊榜/01.mp4`):文件名自己给不出剧名,借目录名
+        let folder = seriesFolder(
+            file, parsed: parsed, looksLikeEpisodeSequence: looksLikeEpisodeSequence)
+
         let kind: SourceItemKind
-        if parsed.episode != nil {
+        let title: String
+        let episodeNumber: Int?
+        let seasonNumber: Int?
+        if let folder {
             kind = .episode
-        } else if file.kind == .audio {
-            kind = .audio
+            title = folder.seriesTitle
+            episodeNumber = parsed.episode ?? bareEpisodeNumber(file.name)
+            seasonNumber = folder.season
         } else {
-            kind = .video
+            episodeNumber = parsed.episode
+            seasonNumber = parsed.season
+            if parsed.episode != nil {
+                kind = .episode
+            } else if file.kind == .audio {
+                kind = .audio
+            } else {
+                kind = .video
+            }
+            // 解析不出标题就退回文件名(去扩展名)—— ⛔ 不留空标题
+            title = parsed.title.isEmpty ? baseName(file.name) : parsed.title
         }
         return SourceItem(
             ref: SourceItemRef(sourceID: sourceID, fsID: file.fsID),
-            // 解析不出标题就退回文件名(去扩展名)—— ⛔ 不留空标题
-            title: parsed.title.isEmpty ? baseName(file.name) : parsed.title,
+            title: title,
             kind: kind,
             // 百度不给简介。⛔ 不从文件名硬造 —— 那是最典型的假数据
             overview: nil,
             year: parsed.year,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            // 集名只有 TMDB 的分集数据里有 —— 合成器给不出,⛔ 不拿剧名冒充
+            episodeTitle: nil,
             // 时长要另发 `filemetas` 才有;播放时会由 `authoritativeDurationSeconds` 补上
             durationSeconds: nil,
             poster: nil,
-            metadataOrigin: parsed.isMeaningful ? .filename : .none
+            metadataOrigin: folder != nil || parsed.isMeaningful ? .filename : .none
         )
+    }
+
+    // MARK: - 剧集文件夹结构
+
+    /// 剧集文件夹结构解析结果。
+    struct SeriesFolder: Sendable, Equatable {
+        /// 剧名(取自目录名)
+        let seriesTitle: String
+        /// 季号。`nil` = 目录名与文件名都没给出季号
+        let season: Int?
+    }
+
+    /// 这一层里「看起来是某一集」的文件有几个。
+    ///
+    /// 判据只有两种,都要求文件名**自己认不出剧名**:
+    /// - 整个文件名就是集号(`01.mp4` / `12.mp4`);
+    /// - 文件名带了明确的集标记但没带标题(`E02.mp4` / `第01集.mp4`)。
+    ///
+    /// ⚠️ 带标题的不算(`Show.S01E02.mkv` 自己就有剧名,不需要借目录名)。
+    private static func episodeLikeCount(files: [BaiduPanFile]) -> Int {
+        files.count { file in
+            guard !file.isDirectory, file.kind.isPlayable else { return false }
+            if bareEpisodeNumber(file.name) != nil { return true }
+            let parsed = parse(name: file.name)
+            return parsed.episode != nil && parsed.title.isEmpty
+        }
+    }
+
+    /// 该不该把目录名当成剧名,以及季号是多少。
+    ///
+    /// 返回非 nil 表示「这是个剧集文件夹」:剧名取自目录名,文件名只是集号。
+    ///
+    /// ⚠️ 两个前提缺一不可,否则会**配错剧**(那正是硬规则 4 要避免的假数据):
+    /// 1. 文件名自己认不出剧名(否则以文件名为准);
+    /// 2. 这一层确实像个剧集序列(`looksLikeEpisodeSequence`)——
+    ///    孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」。
+    ///
+    /// 季号(有 13 季的剧判错季,就会拿第 1 季的分集剧照配第 13 季的文件):
+    /// - 父目录是**季文件夹**(`琅琊榜/第13季/01.mp4`)→ 剧名取**祖父**目录、季号取父目录名;
+    /// - 否则父目录就是剧名(`琅琊榜/01.mp4`)→ 季号只能来自文件名(`Show.S02E07`);
+    ///   文件名也没写季号时为 `nil`,⛔ 不在这里猜 1(`BaiduPanMetadataScraper` 决定怎么办)。
+    private static func seriesFolder(
+        _ file: BaiduPanFile,
+        parsed: ParsedName,
+        looksLikeEpisodeSequence: Bool
+    ) -> SeriesFolder? {
+        guard looksLikeEpisodeSequence else { return nil }
+        let isBareNumber = bareEpisodeNumber(file.name) != nil
+        let isMarkedWithoutTitle = parsed.episode != nil && parsed.title.isEmpty
+        guard isBareNumber || isMarkedWithoutTitle else { return nil }
+
+        let parent = parentDirectoryName(file.path)
+        guard !parent.isEmpty else { return nil }
+        if let season = seasonNumber(fromDirectoryName: parent) {
+            let series = grandparentDirectoryName(file.path)
+            // 季文件夹的上一层必须有个目录名才是剧名;拿不到就**不认**这一层,
+            // ⛔ 不拿季文件夹名(`第13季`)当剧名 —— 那样 TMDB 搜不到东西,
+            // 也不会误配成别的剧。
+            guard !series.isEmpty else { return nil }
+            return SeriesFolder(seriesTitle: series, season: season)
+        }
+        return SeriesFolder(seriesTitle: parent, season: parsed.season)
+    }
+
+    /// 目录名是不是一个**季文件夹**,是就给出季号。
+    ///
+    /// 认这几种写法(整个目录名就是季标记,不含剧名):
+    /// - `第13季`;
+    /// - `Season 13` / `season13` / `Season.13`(`.` `_` `-` 与空格都当分隔符);
+    /// - `S13` / `s2`。
+    ///
+    /// ⚠️ 只认**整个目录名**就是季标记的写法:剧名与季号挤在一起的目录名
+    /// (`琅琊榜 第13季`)不认 —— 与 `剧名.01.mp4` 一样,无法可靠切分剧名与季号
+    /// (S §6.3 的取舍:认不出来就不认,不猜)。中文数字(`第十三季`)同理不认。
+    static func seasonNumber(fromDirectoryName name: String) -> Int? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        func number(_ text: Substring) -> Int? {
+            guard let value = Int(text), value > 0 else { return nil }
+            return value
+        }
+        // `.` `_` `-` 与空格都当分隔符(`Season.13` / `season_13`)
+        let normalized = trimmed
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        if let match = normalized.wholeMatch(of: /第(\d{1,2})季/) {
+            return number(match.1)
+        }
+        if let match = normalized.wholeMatch(of: /[Ss]eason\s*(\d{1,2})/) {
+            return number(match.1)
+        }
+        if let match = trimmed.wholeMatch(of: /[Ss](\d{1,2})/) {
+            return number(match.1)
+        }
+        return nil
+    }
+
+    /// 文件名**整个**就是集号时返回那个号(`01.mp4` → 1)。
+    ///
+    /// ⚠️ 只认 1–3 位数字:4 位是年份的形状(`2012.mp4` 是一部电影),
+    /// 带别的字的留给 `parse`(它知道发布标记从哪断)。
+    static func bareEpisodeNumber(_ name: String) -> Int? {
+        let base = baseName(name).trimmingCharacters(in: .whitespaces)
+        guard (1...3).contains(base.count), base.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let number = Int(base), number > 0 else {
+            return nil
+        }
+        return number
+    }
+
+    /// 路径最后一级目录名(`/apps/x/琅琊榜/01.mp4` → `琅琊榜`)。
+    /// 拿不到(路径没有目录,或就是根)时返回 `""`。
+    private static func parentDirectoryName(_ path: String) -> String {
+        directoryName(atLevel: 1, of: path)
+    }
+
+    /// 路径再上一级目录名(`/apps/x/琅琊榜/第13季/01.mp4` → `琅琊榜`)。
+    /// 拿不到时返回 `""`。
+    private static func grandparentDirectoryName(_ path: String) -> String {
+        directoryName(atLevel: 2, of: path)
+    }
+
+    /// 从路径末尾往上数第 `level` 级目录名(`level = 1` 就是父目录)。
+    private static func directoryName(atLevel level: Int, of path: String) -> String {
+        var current = path
+        for _ in 0..<level {
+            current = (current as NSString).deletingLastPathComponent
+        }
+        let name = (current as NSString).lastPathComponent
+        // 根目录时 `lastPathComponent` 是 `/`,那不是个名字
+        return name == "/" ? "" : name
     }
 
     // MARK: - 文件名解析
@@ -170,15 +341,19 @@ enum BaiduPanMetadataSynthesizer {
         return isReleaseTag(tokens[index + 1]) ? year : nil
     }
 
-    private static func seasonEpisode(in token: String) -> (season: Int, episode: Int)? {
-        if let match = token.wholeMatch(of: /[Ss](\d{1,2})[Ee](\d{1,3})/) {
-            return (Int(match.1) ?? 0, Int(match.2) ?? 0)
+    private static func seasonEpisode(in token: String) -> (season: Int?, episode: Int)? {
+        if let match = token.wholeMatch(of: /[Ss](\d{1,2})[Ee](\d{1,3})/),
+           let season = Int(match.1), let episode = Int(match.2) {
+            return (season, episode)
         }
+        // ⚠️ 下面两种只带集号、**不带季号** —— 季返回 `nil`。
+        // ⛔ 不要用 0 当「不知道」的哨兵:TMDB 的**第 0 季是特别篇**(`docs/TMDB_API.md` §7),
+        // 拿 0 当「不知道」会让特别篇与「没写季号」混成同一件事。
         if let match = token.wholeMatch(of: /[Ee][Pp]?(\d{1,3})/), token.count <= 4 {
-            return (0, Int(match.1) ?? 0)
+            return (nil, Int(match.1) ?? 0)
         }
         if let match = token.wholeMatch(of: /第(\d{1,3})[集话話]/) {
-            return (0, Int(match.1) ?? 0)
+            return (nil, Int(match.1) ?? 0)
         }
         return nil
     }

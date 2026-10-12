@@ -61,6 +61,13 @@ final class BaiduPanSourceViewModel {
     private let loadsDirectory: Bool
     private var authorizationTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    /// 这一轮目录读取的轮次。TMDB 刮削是**后台跑的第二趟**,回来时目录可能已经换了
+    /// —— 靠它丢掉过期结果(与 `MediaDetailViewModel.generation` 同一处置)。
+    private var directoryGeneration = 0
+    private var scrapeTask: Task<Void, Never>?
+    /// 上一次 TMDB 刮削的失败原因(nil = 没失败 / 没配置 token)。
+    /// ⚠️ 与 `notice` 分开:它是**附加信息**的失败,不能盖掉目录本身的提示。
+    private(set) var scrapeFailure: String?
 
     init(container: AppContainer, source: BaiduPanSource, loadsDirectory: Bool = true) {
         self.container = container
@@ -71,12 +78,14 @@ final class BaiduPanSourceViewModel {
     private var connection: BaiduPanConnection { container.baiduConnection() }
 
     /// 条目读取走 `BaiduPanSourceProvider` —— 那里把「列目录 → 合成条目 →
-    /// 批量换封面地址」三步收在一起,这一页不必知道封面为什么要另外发请求。
+    /// 批量换封面地址 → 刮削补封面」几步收在一起,这一页不必知道封面
+    /// 为什么要另外发请求、也不必知道刮削走的是哪个服务。
     private func makeProvider() -> BaiduPanSourceProvider {
         BaiduPanSourceProvider(
             connection: connection,
             sourceID: source.id,
-            folderName: folderName ?? source.folderName
+            folderName: folderName ?? source.folderName,
+            scraper: container.metadataScraper()
         )
     }
 
@@ -191,6 +200,8 @@ final class BaiduPanSourceViewModel {
     func signOut() async {
         do {
             try await connection.signOut()
+            // 正在跑的后台刮削也要停:解绑之后它写回来的卡片已经不属于这一屏
+            cancelScrape()
             items = []
             filesByID = [:]
             currentDirectory = nil
@@ -235,6 +246,8 @@ final class BaiduPanSourceViewModel {
     private func loadFiles(allowingLibraryRootFallback allowFallback: Bool) async {
         isLoadingFiles = true
         directoryFailure = nil
+        // 新一轮读取:上一轮的后台刮削结果已经作废
+        cancelScrape()
         defer { isLoadingFiles = false }
 
         // 「继续观看」独立于当前目录:目录读失败也要看得到它。只在最外层读一次
@@ -249,12 +262,14 @@ final class BaiduPanSourceViewModel {
             libraryRoot = library
             directory = currentDirectory ?? library ?? root
             currentDirectory = directory
-            let content = try await makeProvider().content(directory: directory)
+            let provider = makeProvider()
+            let content = try await provider.content(directory: directory)
             items = content.items
             // 原始文件按 `fs_id` 留一份:播放与进目录要 `path` / 真实文件名。
             // ⚠️ 它来自**同一次**目录读取,不是再列一遍(配额,见 provider 的注释)
             filesByID = content.filesByID
             await loadResumePositions()
+            startScrape(items: content.items, provider: provider)
             return
         } catch let error as BaiduPanError {
             // 片库根在网盘里被删了 / 改了名 → 丢掉这个偏好,回落到应用目录。
@@ -276,6 +291,35 @@ final class BaiduPanSourceViewModel {
             directoryFailure = BaiduPanDirectoryFailure(
                 message: "读取目录失败:\(error)", isApplicationRootUnavailable: false)
         }
+    }
+
+    /// 目录**已经能看**之后再问 TMDB 补封面(`docs/TMDB_API.md`)。
+    ///
+    /// ⚠️ 为什么是后台第二趟:这一趟要发 N 次外部请求(N = 认出来的片子数),
+    /// 让它参与列表加载就等于「TMDB 连不上 → 片库打不开」。所以列表先出、封面后补,
+    /// 回来时就地换图(`PosterImage` 认 `descriptor` 的 `cacheKey`,会自动重取)。
+    ///
+    /// 失败(没 token / token 无效 / 连不上)只挂一句提示到 `scrapeFailure`:
+    /// 卡片保持本地合成的样子,降级成图标卡 —— ⛔ 不假装有封面。
+    private func startScrape(items directoryItems: [SourceItem], provider: BaiduPanSourceProvider) {
+        let myGeneration = directoryGeneration
+        scrapeFailure = nil
+        scrapeTask = Task { [weak self] in
+            let enriched = await provider.scrape(items: directoryItems)
+            let failure = await provider.lastScrapeFailureDescription()
+            // 期间换了目录:这一趟的结果已经过期,⛔ 不能把上一层的卡片写回来
+            guard let self, myGeneration == self.directoryGeneration else { return }
+            self.items = enriched
+            self.scrapeFailure = failure
+        }
+    }
+
+    /// 丢掉正在跑的后台刮削(它的结果已经作废)。轮次 +1 也就是让它在回来时自行退出。
+    private func cancelScrape() {
+        directoryGeneration += 1
+        scrapeTask?.cancel()
+        scrapeTask = nil
+        scrapeFailure = nil
     }
 
     /// 进一个目录卡片

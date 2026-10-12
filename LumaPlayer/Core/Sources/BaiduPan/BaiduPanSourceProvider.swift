@@ -4,8 +4,9 @@ import Foundation
 ///
 /// ## 它把「一次目录读取」的全部步骤收在一处
 ///
-/// 列目录 → 合成条目 → **批量**换封面地址。上层(浏览页)只管拿 `[SourceItem]`,
-/// ⛔ 不必知道封面为什么要另外发一次请求。
+/// 列目录 → 合成条目 → **批量**换封面地址 → (可选)**在线刮削**补封面。
+/// 上层(浏览页)只管拿 `[SourceItem]`,
+/// ⛔ 不必知道封面为什么要另外发一次请求、也不必知道刮削走的是哪个服务。
 ///
 /// ⛔ 播放不走它 —— 那条走 `BaiduPanSessionPreparer`(生命周期与浏览不同)。
 actor BaiduPanSourceProvider: SourceProvider {
@@ -21,11 +22,20 @@ actor BaiduPanSourceProvider: SourceProvider {
     private let connection: BaiduPanConnection
     /// 应用目录名(空状态提示要用)
     private let folderName: String
+    /// 在线刮削(TMDB)。⚠️ **全 App 共用一个实例** —— 它带查询缓存,
+    /// 每次列目录都新建一个的话,同一个目录会被反复问(`AppContainer.metadataScraper`)。
+    private let scraper: BaiduPanMetadataScraper
 
-    init(connection: BaiduPanConnection, sourceID: UUID, folderName: String) {
+    init(
+        connection: BaiduPanConnection,
+        sourceID: UUID,
+        folderName: String,
+        scraper: BaiduPanMetadataScraper
+    ) {
         self.connection = connection
         self.sourceID = sourceID
         self.folderName = folderName
+        self.scraper = scraper
     }
 
     // MARK: - SourceProvider
@@ -98,5 +108,24 @@ actor BaiduPanSourceProvider: SourceProvider {
             items: items,
             filesByID: Dictionary(uniqueKeysWithValues: files.map { ($0.fsID, $0) })
         )
+    }
+
+    // MARK: - 在线刮削(TMDB)
+
+    /// 第二趟:把目录条目交给 TMDB 补封面 / 简介 / 年份(`docs/TMDB_API.md`)。
+    ///
+    /// ⚠️ 为什么与 `content(directory:)` **分开**,而不是收在同一趟里:
+    /// 这一趟要发 N 次 TMDB 请求(N = 能认出来的片子数)。把它塞进列目录那一趟,
+    /// 就等于让「看目录」等一串外部请求 —— TMDB 连不上时整个片库都会卡住。
+    /// 所以调度权交给调用方(浏览页):列表先出来,这一趟在后台跑完再就地换图。
+    ///
+    /// ⛔ 不抛错:刮削是附加信息,失败时原样返回(`lastScrapeFailureDescription` 里有原因)。
+    func scrape(items: [SourceItem]) async -> [SourceItem] {
+        await scraper.enrich(items)
+    }
+
+    /// 上一次刮削失败的原因(nil = 没失败)。界面拿它给一句提示。
+    func lastScrapeFailureDescription() async -> String? {
+        await scraper.lastFailureDescription
     }
 }

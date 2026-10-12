@@ -28,7 +28,7 @@ struct AppSettingsView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            GeneralSettingsView()
+            GeneralSettingsView(credentials: container.credentials)
                 .tabItem { Label("通用", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
             PlaybackSettingsView(preferences: container.preferences)
@@ -45,8 +45,10 @@ struct AppSettingsView: View {
     }
 }
 
-/// 通用:网络(自定义 User-Agent)。
+/// 通用:网络(自定义 User-Agent)+ 元数据刮削(TMDB token)。
 private struct GeneralSettingsView: View {
+    let credentials: CredentialStore
+
     @AppStorage(ClientUserAgent.customKey) private var customUserAgent = ""
 
     var body: some View {
@@ -63,9 +65,125 @@ private struct GeneralSettingsView: View {
             } footer: {
                 Text("部分服务器只放行白名单播放器,按 User-Agent 拒绝其余客户端拉流(表现为能登录浏览、播放报无法识别的文件格式)。填写后对所有服务器的请求与播放生效,改完立即生效。请只在确有需要时使用,并自行承担服务器方的处置风险。")
             }
+
+            MetadataScrapeSettingsView(credentials: credentials)
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// 元数据刮削:TMDB v4 Read Access Token 的输入。
+///
+/// ## 为什么让用户自己填 token
+///
+/// 内置一串等于把凭据编进二进制分发,而且所有人共用一份配额;
+/// 自用场景下由用户填自己的(在 themoviedb.org 免费注册即得)才是对的形状。
+/// token 存 `CredentialStore`,⛔ 不进 UserDefaults、不进仓库
+/// (`docs/TMDB_API.md` §1)。
+///
+/// ## 为什么不做「测试连接」按钮
+///
+/// 那需要真发一次搜索请求,而刮削本来就是低频动作 —— 真要验证,
+/// 浏览一次百度目录就会走到;多一个按钮只是多一个失败点。
+private struct MetadataScrapeSettingsView: View {
+    let credentials: CredentialStore
+
+    /// 编辑中的值
+    @State private var token = ""
+    /// 磁盘上的现值(用于判断「有没有改」与「能不能清除」)
+    @State private var savedToken = ""
+    @State private var status: Status = .idle
+
+    private enum Status: Equatable {
+        case idle
+        case saved
+        case error(String)
+    }
+
+    var body: some View {
+        Section {
+            SecureField(
+                "Read Access Token",
+                text: $token,
+                prompt: Text("粘贴 TMDB 的 API Read Access Token")
+            )
+            .autocorrectionDisabled()
+
+            HStack {
+                statusLabel
+                Spacer()
+                Button("清除") {
+                    Task { await clear() }
+                }
+                .disabled(savedToken.isEmpty && token.isEmpty)
+                Button("保存") {
+                    Task { await save() }
+                }
+                .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines) == savedToken)
+            }
+        } header: {
+            Text("元数据刮削")
+        } footer: {
+            Text("给百度网盘来源刮封面与简介。填 TMDB 账号 API 设置页里的 v4「API Read Access Token」(一串 JWT),留空则不刮削。只写在本机凭据文件里,不进偏好设置、不进备份。")
+        }
+        .task { await load() }
+    }
+
+    @ViewBuilder
+    private var statusLabel: some View {
+        switch status {
+        case .idle:
+            if savedToken.isEmpty {
+                Text("未配置,不刮削").foregroundStyle(.secondary)
+            } else {
+                Text("已配置").foregroundStyle(.secondary)
+            }
+        case .saved:
+            Text("已保存").foregroundStyle(.secondary)
+        case .error(let message):
+            Text(message).foregroundStyle(.red)
+        }
+    }
+
+    private func load() async {
+        do {
+            let existing = try await credentials.tmdbReadAccessToken() ?? ""
+            token = existing
+            savedToken = existing
+            status = .idle
+        } catch {
+            // ⛔ 不静默吞:读不出来如实说,不假装「未配置」
+            status = .error("读凭据文件失败")
+        }
+    }
+
+    private func save() async {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            if trimmed.isEmpty {
+                // 留空 = 关闭刮削。删掉条目而不是存一个空串,读回来的语义更干净。
+                try await credentials.deleteTMDBReadAccessToken()
+            } else {
+                try await credentials.saveTMDBReadAccessToken(trimmed)
+            }
+            token = trimmed
+            savedToken = trimmed
+            status = .saved
+        } catch {
+            status = .error("保存失败:凭据文件不可写")
+        }
+    }
+
+    private func clear() async {
+        do {
+            try await credentials.deleteTMDBReadAccessToken()
+            token = ""
+            savedToken = ""
+            status = .idle
+        } catch {
+            status = .error("清除失败:凭据文件不可写")
+        }
     }
 }
 

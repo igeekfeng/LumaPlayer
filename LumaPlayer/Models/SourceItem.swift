@@ -79,6 +79,26 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let kind: SourceItemKind
     let overview: String?
     let year: Int?
+    /// 集号。`nil` = 不是剧集 / 不知道是第几集。
+    ///
+    /// 来源有二:文件名里的 `S01E02` / `第12集`,或**剧集文件夹结构**
+    /// (`琅琊榜/01.mp4` —— 目录名是剧名,文件名只是集号)。后者见
+    /// `BaiduPanMetadataSynthesizer.mediaItem`:那种文件名给不出剧名,
+    /// 只能借目录名,而集号必须单独留一格,否则 `title` 一被目录名占掉
+    /// 就再也分不清是第几集了。
+    let episodeNumber: Int?
+    /// 季号。`nil` = 不知道是第几季。
+    ///
+    /// 来源:`Show.S02E07` 这类文件名解析出的季,或**季文件夹**(`琅琊榜/第13季/01.mp4`
+    /// —— 这部剧有 13 季,季号判错就会拿第 1 季的分集剧照去配第 13 季的文件)。
+    /// ⚠️ 解析不出来时**留 nil**,⛔ 不在模型层填 1 冒充;由刮削层决定拿哪一季去问
+    /// (`BaiduPanMetadataScraper` 的注释)。
+    let seasonNumber: Int?
+    /// 集名(`第 3 集` 的那个名字)。`nil` = 还不知道。
+    ///
+    /// ⚠️ 与 `title` **分开**:剧集文件夹结构下 `title` 是**剧名**(`琅琊榜`),
+    /// 集名只有 TMDB 的分集数据里有(TMDB 未命中 / 未配置 token 时就是 `nil`)。
+    let episodeTitle: String?
     let durationSeconds: Double?
     /// 封面。nil = 这个条目没找到任何可用的图 → UI 降级成图标卡
     let poster: ImageDescriptor?
@@ -101,8 +121,37 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             kind: kind,
             overview: overview,
             year: year,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            episodeTitle: episodeTitle,
             durationSeconds: durationSeconds,
             poster: poster,
+            metadataOrigin: metadataOrigin
+        )
+    }
+
+    /// 补上**在线刮削**(TMDB)取回来的字段。
+    ///
+    /// ⚠️ 只补**原来没有值**的那几个:本地合成出来的东西优先。
+    /// 最要紧的一条是封面 —— 网盘目录里放着的 `poster.jpg` 是用户**故意**配的,
+    /// ⛔ 不能被 TMDB 的海报盖掉(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+    func withScrapedMetadata(
+        poster: ImageDescriptor?,
+        overview: String?,
+        year: Int?,
+        episodeTitle: String? = nil
+    ) -> SourceItem {
+        SourceItem(
+            ref: ref,
+            title: title,
+            kind: kind,
+            overview: self.overview ?? overview,
+            year: self.year ?? year,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            episodeTitle: self.episodeTitle ?? episodeTitle,
+            durationSeconds: durationSeconds,
+            poster: self.poster ?? poster,
             metadataOrigin: metadataOrigin
         )
     }

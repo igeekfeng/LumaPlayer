@@ -100,6 +100,18 @@ final class AppContainer {
         return fresh
     }
 
+    /// 在线刮削(TMDB)。**全 App 一份**是刻意的:`BaiduPanMetadataScraper` 带一层
+    /// 「问过的标题」缓存,每次列目录都新建一个就等于每次都重新问一遍 TMDB。
+    /// token 由它自己在用时向 `credentials` 取 —— 设置页刚填的 token 立刻生效。
+    private var metadataScraperInstance: BaiduPanMetadataScraper?
+
+    func metadataScraper() -> BaiduPanMetadataScraper {
+        if let existing = metadataScraperInstance { return existing }
+        let fresh = BaiduPanMetadataScraper(credentials: credentials)
+        metadataScraperInstance = fresh
+        return fresh
+    }
+
     /// 添加百度网盘来源:先存配置 → 再落库。
     ///
     /// 一个 App 只对应开放平台上一份应用与一次授权,所以已存在百度来源时是

@@ -25,6 +25,11 @@ extension EmbyItem {
             kind: Self.sourceKind(for: kind),
             overview: overview,
             year: productionYear,
+            // Emby 的分集在剧集页里单独展示,不走这条投影;⛔ 不猜 IndexNumber
+            episodeNumber: nil,
+            seasonNumber: nil,
+            // 集名同理:Emby 的 `Name` 已经进了 `title`,这一格留给分集专用名
+            episodeTitle: nil,
             durationSeconds: runTimeTicks.flatMap { TickConverter.seconds(fromTicks: $0) },
             poster: coverImage.map { cover in
                 .emby(
