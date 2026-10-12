@@ -40,6 +40,9 @@ final class BaiduPanSourceViewModel {
     /// `fs_id` → 原始文件。播放与「进目录」都要用它 ——
     /// 合成后的 `SourceItem` 只保留展示所需字段,`path` 这类定位信息不在里面。
     private var filesByID: [UInt64: BaiduPanFile] = [:]
+    /// 被用户隐藏的条目身份。**同步过滤**用 —— 计算属性里⛔ 不能 await,
+    /// 所以每轮 `loadFiles` 从本地库读一次,存成内存集合。
+    private var hiddenRefs: Set<SourceItemRef> = []
 
     /// **会话级**目录缓存:`目录路径` → 一次目录读取的完整结果。
     ///
@@ -68,14 +71,19 @@ final class BaiduPanSourceViewModel {
     /// 排序方向。换排序方式时回到该档的自然方向(与 `LibraryViewModel` 同一条纪律)。
     var ascending = true
 
-    /// 按当前排序排好的条目 —— **界面用这个**。
+    /// 按当前排序排好的条目,**并去掉被隐藏的** —— **界面用这个**。
     ///
     /// 为什么是计算属性而不是在 `loadFiles()` 里排一次:刮削回来会**整份换掉**
     /// `items`(`startScrape`),排一次的做法会在那一刻把顺序丢掉;
     /// 而且改排序不该触发任何网络请求。
+    ///
+    /// 为什么隐藏过滤在这里而不是从 `items` 里真删:`items` 会被刮削整份换掉,
+    /// 真删的做法会在那一刻把隐藏项又写回来。而且留着它,设置页点「恢复」
+    /// 能立刻重新出现 —— 不必再等一次列目录(配额:2 次请求)。
     var sortedItems: [SourceItem] {
-        sort.apply(to: items, filesByID: filesByID, ascending: ascending)
+        visible(sort.apply(to: items, filesByID: filesByID, ascending: ascending))
     }
+
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: BaiduPanDirectoryFailure?
 
@@ -318,6 +326,10 @@ final class BaiduPanSourceViewModel {
         cancelScrape()
         defer { isLoadingFiles = false }
 
+        // 隐藏列表是**本地**的,读它不发请求(配额纪律)。⛔ 必须每轮都读:
+        // 设置页可能刚刚恢复了一条,而浏览页这一屏还开着。
+        hiddenRefs = await container.hiddenItems.hiddenRefs(sourceID: source.id)
+
         // 「继续观看」独立于当前目录:目录读失败也要看得到它。只在最外层读一次
         // —— 片库根回落是同一轮的递归,不必重读。
         if allowFallback { await loadResumeCards() }
@@ -553,8 +565,11 @@ final class BaiduPanSourceViewModel {
     private func directoryContent(
         for directory: String
     ) async -> BaiduPanSourceProvider.DirectoryContent? {
+        // ⚠️ 两个分支都要过隐藏过滤:从「继续观看」起播时,隐藏的兄弟集
+        // 不该因为换了个入口就回到选集面板里。
         if directory == currentDirectory, !items.isEmpty {
-            return BaiduPanSourceProvider.DirectoryContent(items: items, filesByID: filesByID)
+            return BaiduPanSourceProvider.DirectoryContent(
+                items: sortedItems, filesByID: filesByID)
         }
         do {
             let provider = makeProvider()
@@ -562,7 +577,7 @@ final class BaiduPanSourceViewModel {
             // 逐集剧照只来自 TMDB 那一趟(⛔ 不抛错:没配 token / 连不上就退本地图)
             let enriched = await provider.scrape(items: content.items)
             return BaiduPanSourceProvider.DirectoryContent(
-                items: enriched, filesByID: content.filesByID)
+                items: visible(enriched), filesByID: content.filesByID)
         } catch {
             return nil
         }
@@ -595,13 +610,76 @@ final class BaiduPanSourceViewModel {
         resumePositions[item.ref.itemID]
     }
 
+    // MARK: - 动作:删除 / 隐藏
+
+    /// 让一条条目从眼前消失:只本地隐藏,或连网盘里的文件一起删。
+    ///
+    /// - Parameter alsoDeleteRemotely: 勾了「同时删除网盘里的文件」。
+    ///
+    /// ⚠️ 两条路后果不同,⛔ 别混:
+    ///
+    /// - **只隐藏** → 写 `HiddenItemsStore`(设置页可恢复),`items` 不动
+    ///   —— 留着它,恢复那一刻条目立刻重现,不必再列一次目录(配额 2 次请求);
+    /// - **连网盘一起删** → ⛔ **不写**隐藏库:文件已经不在网盘,恢复不出任何东西,
+    ///   记一条只会让「已隐藏」列表越积越多。改成把本地这一份(缓存 / 卡片 /
+    ///   续播记录)一起清掉。
+    ///
+    /// 勾了但网盘删失败 → **直接抛**,既不隐藏也不摘除 —— 让用户看到「没删成」,
+    /// ⛔ 不悄悄降级成隐藏(那会让人以为已经删干净了)。
+    func delete(_ item: SourceItem, alsoDeleteRemotely: Bool) async throws {
+        guard let file = file(for: item) else {
+            throw BaiduPanError.configuration(
+                "找不到「\(item.title)」在网盘上的路径,没法删除。")
+        }
+        guard alsoDeleteRemotely else {
+            try await container.hiddenItems.hide(
+                HiddenItemsStore.Item(ref: item.ref, title: item.title, hiddenAt: Date()))
+            hiddenRefs.insert(item.ref)
+            resumeCards.removeAll { $0.fileID == item.ref.itemID }
+            return
+        }
+
+        try await connection.deleteFile(at: file.path)
+
+        // 只进内存:下一轮 `loadFiles` 会从库里重读(这一条从来没写进库),
+        // 而那时目录缓存已经丢掉、条目来自网络 —— 删掉的自然不会再出现。
+        hiddenRefs.insert(item.ref)
+        items.removeAll { $0.ref == item.ref }
+        if let fsID = UInt64(item.ref.itemID) { filesByID.removeValue(forKey: fsID) }
+        resumeCards.removeAll { $0.fileID == item.ref.itemID }
+        resumePositions.removeValue(forKey: item.ref.itemID)
+        // 缓存要丢两层:被删的那一条自己(目录的话还有它的子层),
+        // 以及**它所在的那一层** —— 后者还留着它的卡片,不丢就等于删了个寂寞。
+        evictCachedDirectory(file.path)
+        evictCachedDirectory(Self.directory(ofFilePath: file.path))
+        do {
+            try await container.watchProgress.remove(fileID: item.ref.itemID)
+        } catch {
+            // 文件已经删掉了,清不掉进度只是留一条死记录 —— 如实说一句,
+            // ⛔ 不把它算成删除失败(那会让人再删一次)。
+            notice = "网盘文件已删除,但本地续播记录没清掉:\(error)"
+        }
+    }
+
+    /// 丢掉一条目录缓存:它自己与其**所有子层**(删掉一个目录后,子层的旧内容一样是垃圾)。
+    private func evictCachedDirectory(_ path: String) {
+        guard !path.isEmpty else { return }
+        directoryCache = directoryCache.filter { key, _ in
+            key != path && !BaiduPanPath.isInside(key, applicationRoot: path)
+        }
+    }
+
     /// 读本地续播库里属于这个来源的记录,折成卡片。
     ///
     /// 与 `loadResumePositions` 的分工:那个读的是**当前目录**每一条的进度(画在
     /// 卡片角上);这个读的是**全库**里有进度的条目(撑起顶部的续播区)。
     private func loadResumeCards() async {
         let records = await container.watchProgress.resumeEntries(sourceID: source.id)
-        resumeCards = Self.oneCardPerSeries(records).compactMap(BaiduResumeCard.init(record:))
+        // ⚠️ 过滤放在这里而不是调用方:这个方法在 `loadFiles` 的片库根回落里
+        // 会被再调一次,只在外层过滤会漏掉那一趟。
+        let visibleRecords = records.filter { !hiddenRefs.contains(
+            SourceItemRef(sourceID: source.id, itemID: $0.fileID)) }
+        resumeCards = Self.oneCardPerSeries(visibleRecords).compactMap(BaiduResumeCard.init(record:))
     }
 
     /// 一部剧只留**一条**记录:同一目录 + 同一剧名的合成一张,取最近看的那一集。
@@ -641,6 +719,12 @@ final class BaiduPanSourceViewModel {
     private func file(for item: SourceItem) -> BaiduPanFile? {
         guard let fsID = UInt64(item.ref.itemID) else { return nil }
         return filesByID[fsID]
+    }
+
+    /// 去掉被隐藏的条目。
+    private func visible(_ items: [SourceItem]) -> [SourceItem] {
+        guard !hiddenRefs.isEmpty else { return items }
+        return items.filter { !hiddenRefs.contains($0.ref) }
     }
 
     /// 修改配置时预填给表单的现值。

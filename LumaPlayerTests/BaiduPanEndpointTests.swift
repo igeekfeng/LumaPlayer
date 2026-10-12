@@ -116,11 +116,49 @@ final class BaiduPanEndpointTests: XCTestCase {
         XCTAssertTrue(ua.hasPrefix("xpanvideo;"), "播放流的 UA 必须以 xpanvideo 开头:\(ua)")
     }
 
-    /// 所有端点都是 GET,且诊断名里不含凭据(CLAUDE.md「安全与隐私」)。
+    /// 除删除外全是 GET;诊断名里不含凭据(CLAUDE.md「安全与隐私」)。
     func testEndpointNamesExcludeSecrets() {
         let endpoint = BaiduPanEndpoint.fileList(
             accessToken: "SUPERSECRET", directory: "/", start: 0, limit: 1)
         XCTAssertEqual(endpoint.method, "GET")
         XCTAssertFalse(endpoint.name.contains("SUPERSECRET"))
+
+        let deletion = BaiduPanEndpoint.deleteFile(
+            accessToken: "SUPERSECRET", path: "/apps/LumaPlayer/a.mkv")
+        XCTAssertEqual(deletion.method, "POST")
+        XCTAssertFalse(deletion.name.contains("SUPERSECRET"))
+    }
+
+    // MARK: - 删除(`docs/BAIDU_PAN_API.md` §2.4)
+
+    /// 删除是唯一的 POST:`method=filemanager&opera=delete`,`access_token` 仍在查询串上。
+    func testDeleteUsesFileManagerEndpoint() throws {
+        let endpoint = BaiduPanEndpoint.deleteFile(
+            accessToken: "TOK", path: "/apps/LumaPlayer/a.mkv")
+        let url = try XCTUnwrap(endpoint.url)
+
+        XCTAssertEqual(url.host, "pan.baidu.com")
+        XCTAssertEqual(url.path, "/rest/2.0/xpan/file")
+        let query = try XCTUnwrap(url.query)
+        XCTAssertTrue(query.contains("method=filemanager"), "实际:\(query)")
+        XCTAssertTrue(query.contains("opera=delete"), "实际:\(query)")
+        XCTAssertTrue(query.contains("access_token=TOK"), "实际:\(query)")
+    }
+
+    /// `filelist` 是**路径字符串的 JSON 数组**(⛔ 不是对象),整段编码后放进 body;
+    /// `async=0` 要逐条结果。
+    func testDeleteBodyCarriesJSONPathArray() throws {
+        let endpoint = BaiduPanEndpoint.deleteFile(
+            accessToken: "TOK", path: "/apps/LumaPlayer/剧集/S01E01.mkv")
+        XCTAssertEqual(endpoint.contentType, "application/x-www-form-urlencoded")
+
+        let body = try XCTUnwrap(endpoint.httpBody.flatMap { String(data: $0, encoding: .utf8) })
+        XCTAssertTrue(body.contains("async=0"), "实际:\(body)")
+        // `["/apps/…"]` 整体编码:`[` `"` `/` 都要是百分号形式
+        XCTAssertTrue(
+            body.contains("filelist=%5B%22%2Fapps%2FLumaPlayer%2F"),
+            "实际:\(body)")
+        // ⛔ token 不许进 body:它只在查询串上
+        XCTAssertFalse(body.contains("TOK"), "body 里不得出现 token:\(body)")
     }
 }

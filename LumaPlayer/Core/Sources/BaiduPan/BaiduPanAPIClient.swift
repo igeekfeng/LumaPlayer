@@ -140,6 +140,33 @@ struct BaiduPanAPIClient: Sendable {
         return response.list ?? []
     }
 
+    // MARK: - 删除
+
+    /// 删一条文件或目录(`docs/BAIDU_PAN_API.md` §2.4)。
+    ///
+    /// ⚠️ 顶层 `errno == 0` **只表示受理** —— 单条失败放在 `info[].errno` 里
+    /// (`errno=0` + `info[0].errno=-9`「要删的已经不在了」是常态)。
+    /// ⛔ 只看顶层就等于把「其实没删掉」吞成成功(CLAUDE.md 硬规则 4)。
+    func delete(path: String, accessToken: String) async throws {
+        let endpoint = BaiduPanEndpoint.deleteFile(accessToken: accessToken, path: path)
+        let data = try await send(endpoint)
+        let response: BaiduPanFileManagerResponse = try decode(data, endpoint: endpoint)
+        // `async=0` 必须给逐条结果;没给(异步只回 `taskid`)就说不清删没删成
+        guard let info = response.info, !info.isEmpty else {
+            throw BaiduPanError.decoding(
+                endpoint: endpoint.name, detail: "响应里没有逐条删除结果")
+        }
+        // 一次只送一条,所以唯一条目就是它;条目多于一条时按 path 认领,
+        // 认不出就⛔ 不猜是哪一条 —— 直接当失败。
+        guard let entry = info.count == 1 ? info[0] : info.first(where: { $0.path == path }) else {
+            throw BaiduPanError.decoding(
+                endpoint: endpoint.name, detail: "删除结果里没有这条路径")
+        }
+        guard entry.errno == 0 else {
+            throw BaiduPanError.server(errno: entry.errno, message: nil)
+        }
+    }
+
     // MARK: - 播放流探测
 
     /// 起播前探一次 `method=streaming`(`nom3u8=1`,只要状态)。
@@ -194,6 +221,11 @@ struct BaiduPanAPIClient: Sendable {
         for (name, value) in endpoint.headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
+        // 只有删除(`method=filemanager`)带 form body,其余端点都是纯查询串
+        if let contentType = endpoint.contentType {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        request.httpBody = endpoint.httpBody
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {

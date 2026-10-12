@@ -8,16 +8,19 @@ enum SettingsTab: String {
     case playback
     case subtitles
     case servers
+    /// 被隐藏的条目(只在本机隐藏的那些,可恢复)
+    case hidden
 
     static let storageKey = "settings.selectedTab"
 }
 
-/// 设置窗口(⌘,)。四个标签页:
+/// 设置窗口(⌘,)。五个标签页:
 ///
 /// - **通用**:网络(自定义 User-Agent);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
-/// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`)。
+/// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`);
+/// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复。
 ///
 /// 来源管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
 /// (DesignTokens.swift「界面规则」)。
@@ -40,6 +43,9 @@ struct AppSettingsView: View {
             ServerListView(container: container)
                 .tabItem { Label("来源", systemImage: "rectangle.stack.badge.plus") }
                 .tag(SettingsTab.servers)
+            HiddenItemsSettingsView(store: container.hiddenItems)
+                .tabItem { Label("已隐藏", systemImage: "eye.slash") }
+                .tag(SettingsTab.hidden)
         }
         .frame(width: Metrics.settingsWindowWidth, height: Metrics.settingsWindowHeight)
     }
@@ -414,5 +420,72 @@ private struct SubtitleSettingsView: View {
 
     private static func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
+    }
+}
+
+/// 已隐藏:本机隐藏的条目,逐条恢复。
+///
+/// ## 这里只有「只隐藏」的那些
+///
+/// 连网盘一起删掉的条目⛔ 不进这个列表 —— 文件已经不在网盘,恢复不出任何东西
+/// (`BaiduPanSourceViewModel.delete` 的注释)。所以这个列表的每一条都是
+/// **网盘上还在、只是不想看见**的条目。
+private struct HiddenItemsSettingsView: View {
+    let store: HiddenItemsStore
+
+    @State private var items: [HiddenItemsStore.Item] = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if items.isEmpty {
+                ContentUnavailableView {
+                    Label("没有隐藏的条目", systemImage: "eye.slash")
+                } description: {
+                    Text("在百度网盘片库里右键一张卡片选「删除…」、且不勾选"
+                        + "「同时删除网盘里的文件」时,条目会记在这里。")
+                }
+            } else {
+                List(items) { item in
+                    HStack(spacing: Metrics.spacingM) {
+                        VStack(alignment: .leading, spacing: Metrics.spacingXS) {
+                            Text(item.title)
+                                .lineLimit(2)
+                            Text(Self.dateText(item.hiddenAt))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("恢复") { Task { await restore(item) } }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task { await reload() }
+        .alert("操作失败", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func reload() async {
+        items = await store.all()
+    }
+
+    private func restore(_ item: HiddenItemsStore.Item) async {
+        do {
+            try await store.restore(item.ref)
+            await reload()
+        } catch {
+            errorMessage = "恢复失败:\(error)"
+        }
+    }
+
+    private static func dateText(_ date: Date) -> String {
+        date.formatted(.dateTime.year().month().day().hour().minute())
     }
 }

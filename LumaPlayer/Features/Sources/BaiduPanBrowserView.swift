@@ -29,6 +29,12 @@ struct BaiduPanBrowserView: View {
     /// 少了 `openWindow` 就是点了播放毫无动静(Emby 那 4 个调用点同理)。
     @Environment(\.openWindow) private var openWindow
 
+    /// 待确认删除的条目(右键菜单里点了「删除…」)。
+    /// 弹窗状态放 View 的 `@State` —— 与 `ServerListView` 同一惯例。
+    @State private var pendingDeletion: SourceItem?
+    /// 删除失败的原因(面板关掉后由 alert 报出,见类型注释里的范式)。
+    @State private var actionErrorMessage: String?
+
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Metrics.posterMinWidth), spacing: Metrics.gridSpacing)]
     }
@@ -52,6 +58,19 @@ struct BaiduPanBrowserView: View {
                 Divider()
             }
             content
+        }
+        .sheet(item: $pendingDeletion) { item in
+            BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
+                actionErrorMessage = message
+            }
+        }
+        // 与 `ServerListView` 破坏性操作同一范式:确认面板关掉后再报失败
+        .alert("操作失败", isPresented: Binding(
+            get: { actionErrorMessage != nil },
+            set: { if !$0 { actionErrorMessage = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(actionErrorMessage ?? "")
         }
     }
 
@@ -173,9 +192,11 @@ struct BaiduPanBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let failure = viewModel.directoryFailure {
             failurePane(failure)
-        } else if viewModel.items.isEmpty, viewModel.resumeCards.isEmpty {
+        } else if viewModel.sortedItems.isEmpty, viewModel.resumeCards.isEmpty {
+            // ⚠️ 判的是 `sortedItems` 不是 `items`:整目录都被隐藏时 `items` 非空,
+            // 用它会既不画网格、也不给空状态,只剩一片白。
             ContentUnavailableView {
-                Label("这里还没有可播的文件", systemImage: "folder")
+                Label(emptyTitle, systemImage: emptySymbol)
             } description: {
                 Text(emptyHint)
             } actions: {
@@ -187,7 +208,7 @@ struct BaiduPanBrowserView: View {
                     if !viewModel.resumeCards.isEmpty {
                         resumeShelf
                     }
-                    if !viewModel.items.isEmpty {
+                    if !viewModel.sortedItems.isEmpty {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
                             ForEach(viewModel.sortedItems) { item in
                                 BaiduPanCard(
@@ -196,6 +217,11 @@ struct BaiduPanBrowserView: View {
                                     resumeSeconds: viewModel.resumeSeconds(for: item)
                                 ) {
                                     open(item)
+                                }
+                                .contextMenu {
+                                    Button("删除…", systemImage: "trash", role: .destructive) {
+                                        pendingDeletion = item
+                                    }
                                 }
                             }
                         }
@@ -291,7 +317,22 @@ struct BaiduPanBrowserView: View {
     /// 关键字,自建会报「apps 为关键字,无法创建」)。用户能碰的只有
     /// 「我的应用数据」**里面** —— 在那里新建一个与控制台应用名**完全一致**
     /// (含大小写)的文件夹。⛔ 绝不能写成「去网盘里建一个 apps 文件夹」。
+    /// ⚠️ 整层都在、只是被隐藏了,与「本来就没有」是两件事:前者要告诉人
+    /// 东西还在哪里能找回来,⛔ 不能混成一句「这里没有可播的文件」——
+    /// 那会让人以为片子丢了。
+    private var emptyTitle: String {
+        viewModel.items.isEmpty ? "这里还没有可播的文件" : "这一层都被隐藏了"
+    }
+
+    private var emptySymbol: String {
+        viewModel.items.isEmpty ? "folder" : "eye.slash"
+    }
+
     private var emptyHint: String {
+        guard viewModel.items.isEmpty else {
+            return "这些条目只是在本机被隐藏了,网盘上的文件都还在。"
+                + "设置 →「已隐藏」里可以逐条恢复。"
+        }
         let name = viewModel.folderName ?? "应用目录"
         guard viewModel.relativePath == "/" else {
             return "这一层没有可播的文件。往上一级看看,或者把视频放进这个目录再回来刷新。"

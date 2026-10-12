@@ -9,7 +9,7 @@ import Foundation
 ///   (不像 Emby 那样按服务器分);
 /// - **token 在查询串上**,不在请求头;
 /// - **没有播放上报**(`docs/BAIDU_PAN_API.md` 没有这类端点),
-///   所以这个 actor 里没有任何写接口。
+///   所以这个 actor 里唯一的写接口就是 `deleteFile(at:)`(§2.4)。
 ///
 /// ## ★ `refresh_token` 单飞(`docs/BAIDU_PAN_API.md` §6 的三条坑)
 ///
@@ -220,6 +220,33 @@ actor BaiduPanConnection {
         return entries.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// 删掉网盘上的一条文件或目录(`docs/BAIDU_PAN_API.md` §2.4)。
+    ///
+    /// ⚠️ **不可恢复**,而且删的是用户网盘里真东西,所以这里多两道闸:
+    ///
+    /// 1. 路径必须**严格落在**应用目录之内。⛔ 不能直接信
+    ///    `BaiduPanPath.isInside`:它对「路径**等于**应用目录根」也返回 true,
+    ///    只靠它就能一键删掉整个 `/apps/{应用目录名}`;
+    /// 2. 删掉的若是片库根,顺手把书签清掉 —— 留着就是指向已不存在目录的悬空值
+    ///    (`loadFiles` 的静默回落虽然兜得住,路径栏会先闪一帧错的)。
+    ///
+    /// 走 `withToken`:token 失效时它会刷新后重试一次。删除**不是幂等**操作,
+    /// 但这里的重试只发生在「服务端说 token 失效」的码上 —— 那种情况下第一次
+    /// 请求确实没有生效,重发一次是对的,不会把已经删掉的东西再删一遍。
+    func deleteFile(at path: String) async throws {
+        let root = try await applicationDirectory()
+        guard BaiduPanPath.isInside(path, applicationRoot: root), path != root else {
+            throw BaiduPanError.configuration(
+                "「\(path)」不在应用目录 \(root) 之内,不能删除。")
+        }
+        try await withToken { [client] token in
+            try await client.delete(path: path, accessToken: token)
+        }
+        if try await libraryRoot() == path {
+            try await setLibraryRoot(nil)
         }
     }
 

@@ -59,13 +59,24 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         adToken: String?
     )
 
+    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=delete`
+    /// —— 删一条文件或目录(`docs/BAIDU_PAN_API.md` §2.4)。
+    ///
+    /// ⚠️ 这是本项目**唯一**的写接口,也是唯一走 POST + form body 的端点:
+    /// `opera=delete` 的 `filelist` 是**路径字符串的 JSON 数组**(不是对象),
+    /// 一次只删一条时仍是单元素数组。
+    ///
+    /// `async` 一律 `0`(同步):异步只回 `taskid`、`info` 为空,拿不到逐条结果,
+    /// 而删除必须当场知道成没成。
+    case deleteFile(accessToken: String, path: String)
+
     // MARK: - 形状
 
     var host: String {
         switch self {
         case .deviceCode, .deviceToken, .refreshToken:
             return "openapi.baidu.com"
-        case .userInfo, .fileList, .fileMeta, .streaming:
+        case .userInfo, .fileList, .fileMeta, .streaming, .deleteFile:
             return "pan.baidu.com"
         }
     }
@@ -76,12 +87,19 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         case .deviceCode: return "/oauth/2.0/device/code"
         case .deviceToken, .refreshToken: return "/oauth/2.0/token"
         case .userInfo: return "/rest/2.0/xpan/nas"
-        case .fileList, .streaming: return "/rest/2.0/xpan/file"
+        case .fileList, .streaming, .deleteFile: return "/rest/2.0/xpan/file"
         case .fileMeta: return "/rest/2.0/xpan/multimedia"
         }
     }
 
-    var method: String { "GET" }
+    var method: String {
+        switch self {
+        case .deleteFile: return "POST"
+        case .deviceCode, .deviceToken, .refreshToken,
+             .userInfo, .fileList, .fileMeta, .streaming:
+            return "GET"
+        }
+    }
 
     /// 诊断用端点名。**不含任何凭据**,可安全进日志(CLAUDE.md「安全与隐私」)。
     var name: String {
@@ -93,6 +111,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         case .fileList: return "xpan/file?method=list"
         case .fileMeta: return "xpan/multimedia?method=filemetas"
         case .streaming: return "xpan/file?method=streaming"
+        case .deleteFile: return "xpan/file?method=filemanager(opera=delete)"
         }
     }
 
@@ -162,6 +181,55 @@ enum BaiduPanEndpoint: Sendable, Equatable {
             if probeOnly { items.append(("nom3u8", "1")) }
             if let adToken { items.append(("adToken", adToken)) }
             return items
+        case .deleteFile(let accessToken, _):
+            return [
+                ("method", "filemanager"),
+                ("access_token", accessToken),
+                ("opera", "delete"),
+            ]
+        }
+    }
+
+    /// POST 的表单字段(body)。nil = 这个端点只有查询串,没有 body。
+    ///
+    /// ⚠️ 值用**同一个** `Self.encode`(只留 unreserved):`/` → `%2F`、
+    /// `"` → `%22`。服务端按 `application/x-www-form-urlencoded` 解码后
+    /// 拿回的就是原始字符,与查询串同口径。
+    /// ⛔ `access_token` 留在查询串上(§1),不挪进 body。
+    var formFields: [(name: String, value: String)]? {
+        switch self {
+        case .deleteFile(_, let path):
+            return [
+                // 同步:要当场拿到 `info[]` 的逐条结果(§2.4)
+                ("async", "0"),
+                ("filelist", "[\"\(path)\"]"),
+            ]
+        case .deviceCode, .deviceToken, .refreshToken,
+             .userInfo, .fileList, .fileMeta, .streaming:
+            return nil
+        }
+    }
+
+    /// 编码好的 body;`nil` 表示不设 `httpBody`。
+    var httpBody: Data? {
+        guard let fields = formFields else { return nil }
+        let encoded = fields.compactMap { item -> String? in
+            guard let name = Self.encode(item.name), let value = Self.encode(item.value) else {
+                return nil
+            }
+            return "\(name)=\(value)"
+        }
+        .joined(separator: "&")
+        return encoded.data(using: .utf8)
+    }
+
+    /// body 的 `Content-Type`。只有带 body 的端点才有(§2.4)。
+    var contentType: String? {
+        switch self {
+        case .deleteFile: return "application/x-www-form-urlencoded"
+        case .deviceCode, .deviceToken, .refreshToken,
+             .userInfo, .fileList, .fileMeta, .streaming:
+            return nil
         }
     }
 
@@ -173,7 +241,8 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     /// 唯一例外是**播放流**,它要的是 `xpanvideo;…`,⛔ 两者不能互换。
     var headers: [String: String] {
         switch self {
-        case .deviceCode, .deviceToken, .refreshToken, .userInfo, .fileList, .fileMeta:
+        case .deviceCode, .deviceToken, .refreshToken, .userInfo, .fileList, .fileMeta,
+             .deleteFile:
             return ["User-Agent": BaiduPanUserAgent.download]
         case .streaming:
             return ["User-Agent": BaiduPanUserAgent.streaming]

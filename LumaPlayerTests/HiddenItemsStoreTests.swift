@@ -1,0 +1,97 @@
+import XCTest
+@testable import LumaPlayer
+
+/// 本地隐藏列表(「不想看见但网盘上还在」的条目)。
+///
+/// 隔离方式与 `WatchProgressStoreTests` 一致:每个用例一个临时 JSON 文件,
+/// tearDown 删掉 —— 测试跑在宿主 App 进程里,不能碰真实沙盒容器里的那份。
+final class HiddenItemsStoreTests: XCTestCase {
+
+    private var fileURL: URL!
+    private let sourceID = UUID()
+
+    override func setUpWithError() throws {
+        fileURL = FileManager.default.temporaryDirectory
+            .appending(path: "hidden-items-\(UUID().uuidString).json")
+    }
+
+    override func tearDownWithError() throws {
+        if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
+    }
+
+    private func makeStore() -> HiddenItemsStore {
+        HiddenItemsStore(fileURL: fileURL)
+    }
+
+    private func makeItem(itemID: String = "42", title: String = "第 3 集") -> HiddenItemsStore.Item {
+        HiddenItemsStore.Item(
+            ref: SourceItemRef(sourceID: sourceID, itemID: itemID),
+            title: title,
+            hiddenAt: Date())
+    }
+
+    // MARK: - 隐藏与恢复
+
+    func testHiddenRefIsReportedForItsSource() async throws {
+        let store = makeStore()
+        try await store.hide(makeItem())
+
+        let refs = await store.hiddenRefs(sourceID: sourceID)
+        XCTAssertTrue(refs.contains(SourceItemRef(sourceID: sourceID, itemID: "42")))
+        // ⛔ 不串来源:另一个 sourceID 不该看到它
+        let other = await store.hiddenRefs(sourceID: UUID())
+        XCTAssertTrue(other.isEmpty)
+    }
+
+    func testRestoreBringsTheItemBack() async throws {
+        let store = makeStore()
+        let item = makeItem()
+        try await store.hide(item)
+        try await store.restore(item.ref)
+
+        let refs = await store.hiddenRefs(sourceID: sourceID)
+        XCTAssertTrue(refs.isEmpty, "恢复后就不该再被过滤掉")
+        let isHidden = await store.isHidden(item.ref)
+        XCTAssertFalse(isHidden)
+    }
+
+    func testAllIsSortedByMostRecentFirst() async throws {
+        let store = makeStore()
+        try await store.hide(HiddenItemsStore.Item(
+            ref: SourceItemRef(sourceID: sourceID, itemID: "1"),
+            title: "旧的", hiddenAt: Date(timeIntervalSince1970: 1_000)))
+        try await store.hide(HiddenItemsStore.Item(
+            ref: SourceItemRef(sourceID: sourceID, itemID: "2"),
+            title: "新的", hiddenAt: Date(timeIntervalSince1970: 9_000)))
+
+        let titles = await store.all().map(\.title)
+        XCTAssertEqual(titles, ["新的", "旧的"])
+    }
+
+    // MARK: - 持久化
+
+    /// 换一个实例(模拟重启)还在 —— 隐藏是**持久化**的,不是内存态。
+    func testSnapshotSurvivesANewStoreInstance() async throws {
+        try await makeStore().hide(makeItem())
+
+        let reloaded = await makeStore().hiddenRefs(sourceID: sourceID)
+        XCTAssertEqual(reloaded.count, 1)
+    }
+
+    func testWritesWithRestrictivePermissions() async throws {
+        try await makeStore().hide(makeItem())
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600, "「谁不想看什么」属于隐私")
+    }
+
+    /// 文件坏了要**如实报出来**,⛔ 不静默当成「没有隐藏条目」继续跑。
+    func testCorruptedFileIsReportedNotSwallowed() async throws {
+        try Data("not json".utf8).write(to: fileURL)
+        let store = makeStore()
+
+        _ = await store.hiddenRefs(sourceID: sourceID)
+        let failure = await store.lastLoadFailureDescription
+        XCTAssertNotNil(failure, "损坏原因要留下来,不能假装没事")
+    }
+}

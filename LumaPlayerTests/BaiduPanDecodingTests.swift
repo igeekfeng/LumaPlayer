@@ -260,6 +260,34 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(envelope.adToken, "TOK")
     }
 
+    // MARK: - 删除结果(`docs/BAIDU_PAN_API.md` §2.4)
+
+    /// ⚠️ 顶层 `errno == 0` **只表示受理**:单条失败在 `info[].errno` 里。
+    /// 只看顶层会把「其实没删掉」吞成成功(CLAUDE.md 硬规则 4)。
+    func testFileManagerResultKeepsPerItemErrno() throws {
+        let json = """
+        {"errno":0,"info":[{"errno":-9,"path":"/apps/LumaPlayer/a.mkv"}],
+         "request_id":9131857965670515801}
+        """
+        let response = try JSONDecoder().decode(
+            BaiduPanFileManagerResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.errno, 0, "顶层只表示受理")
+        let entry = try XCTUnwrap(response.info?.first)
+        XCTAssertEqual(entry.errno, -9, "逐条结果要留着,这才是删没删成的判据")
+        XCTAssertEqual(entry.path, "/apps/LumaPlayer/a.mkv")
+    }
+
+    /// 异步(`async≠0`)只回 `taskid`、没有 `info` —— 那种响应**说不清**删没删成。
+    func testAsyncFileManagerResponseHasNoPerItemResult() throws {
+        let json = """
+        {"errno":0,"info":[],"request_id":9132303301733449639,"taskid":569942193355668}
+        """
+        let response = try JSONDecoder().decode(
+            BaiduPanFileManagerResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.info?.isEmpty, true)
+        XCTAssertEqual(response.taskID, 569942193355668)
+    }
+
     // MARK: - 错误文案
 
     func testErrnoMessagesAreExplainable() {

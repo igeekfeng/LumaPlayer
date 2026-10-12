@@ -257,6 +257,31 @@ struct BaiduPanMetaResponse: Decodable, Sendable {
     }
 }
 
+/// `method=filemanager&opera=delete` 的响应(`docs/BAIDU_PAN_API.md` §2.4)。
+///
+/// ⚠️ 顶层 `errno` 只表示**受理**,逐条结果在 `info` 里 —— 两者都要看。
+/// `async≠0` 时没有 `info`,只有 `taskid`。
+struct BaiduPanFileManagerResponse: Decodable, Sendable {
+    /// 逐条结果。`async=0` 时才有;缺失就是「说不清删没删成」。
+    struct Info: Decodable, Sendable {
+        let errno: Int
+        let path: String
+    }
+
+    let errno: Int
+    let info: [Info]?
+    let requestID: UInt64?
+    /// 异步处理(`async≠0`)时的任务号。本项目固定 `async=0`,⛔ 不依赖它。
+    let taskID: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case errno
+        case info
+        case requestID = "request_id"
+        case taskID = "taskid"
+    }
+}
+
 /// 列表 / 元信息里的一个条目。
 ///
 /// ⚠️ 解码策略:除 `errno` 外**全部可选且容错**。理由有两条:
