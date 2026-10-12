@@ -20,19 +20,30 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
     /// 换集时靠它补记「继续观看」的展示信息 —— ⛔ 不回头再列一遍网盘(未审核应用
     /// 配额 10 次/小时,见 `docs/BAIDU_PAN_API.md`)。
     let resumeItem: SourceItem?
+    /// 选集面板里的封面(16:9 剧照优先)。
+    ///
+    /// 来源:Emby 是分集自己的 `Primary`(剧照截图);百度是 `SourceItem.poster`
+    /// —— 同目录的同名图,或 TMDB 刮回来的分集剧照。nil = 没有可用的图,
+    /// 面板按 `PosterImage` 的既定处置降级成占位图(⛔ 不假装有封面)。
+    ///
+    /// ⚠️ 百度侧**没配 TMDB token 时逐集剧照是拿不到的**:合成器只给「目录卡片」
+    /// 挑同目录封面,不逐集配(`docs/KNOWN_ISSUES.md`)。Emby 不受影响。
+    let poster: ImageDescriptor?
 
     init(
         id: String,
         label: String?,
         title: String,
         source: PlaybackSource,
-        resumeItem: SourceItem? = nil
+        resumeItem: SourceItem? = nil,
+        poster: ImageDescriptor? = nil
     ) {
         self.id = id
         self.label = label
         self.title = title
         self.source = source
         self.resumeItem = resumeItem
+        self.poster = poster
     }
 }
 

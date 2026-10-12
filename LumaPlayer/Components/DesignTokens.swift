@@ -217,6 +217,17 @@ enum Metrics {
     /// 跳过片头 / 下一集提示距窗口底部(控制栏可见时要让出控制栏)
     static let playerPromptBottomInset: CGFloat = 100
 
+    // MARK: 分集面板(播放页右侧滑出的选集抽屉)
+
+    /// 面板宽度。⛔ 不铺满:它要能和画面并存 —— 一边看一边挑下一集。
+    static let episodePanelWidth: CGFloat = 380
+    /// 面板里一行缩略图的宽度(16:9)。同时是图片请求的档位基准
+    /// (`ImageSpec.maxWidth` 取它的两倍,视网膜屏才不糊)。
+    static let episodeThumbnailWidth: CGFloat = 132
+    /// 面板在材质上再压一层的黑色不透明度。视频亮度不可控,只靠玻璃的自适应
+    /// 在亮画面上压不住,再叠一层固定的暗底才保证文字可读。
+    static let episodePanelDimOpacity: Double = 0.55
+
     // MARK: 海报网格
 
     /// 网格单元最小宽度

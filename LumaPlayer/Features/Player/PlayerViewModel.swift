@@ -938,12 +938,24 @@ final class PlayerViewModel {
     }
 
     /// `EmbyItem` → `PlaybackEpisode`。Emby 的进度走服务端,所以 `resumeItem` 为 nil。
+    ///
+    /// 封面取分集自己的 `Primary`(剧照截图,`landscapeImage` 的第一条),
+    /// 没有才退到 Thumb / Backdrop —— 与分集卡片(`EpisodeCard`)同一口径。
     static func playableEpisode(_ episode: EmbyItem, on server: ServerProfile) -> PlaybackEpisode {
         PlaybackEpisode(
             id: episode.id,
             label: episode.episodeLabel,
             title: episode.name,
-            source: .emby(server: server, item: episode)
+            source: .emby(server: server, item: episode),
+            poster: episode.landscapeImage.map { image in
+                .emby(ImageSpec(
+                    serverID: server.id,
+                    itemID: image.itemID,
+                    type: image.type,
+                    tag: image.tag,
+                    maxWidth: Int(Metrics.episodeThumbnailWidth * 2)
+                ))
+            }
         )
     }
 

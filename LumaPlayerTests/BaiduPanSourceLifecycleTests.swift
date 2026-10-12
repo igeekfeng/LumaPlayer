@@ -256,6 +256,41 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(queue.episodes.map(\.id), ["10", "20"], "花絮不占一集的位置")
     }
 
+    /// 队列条目带上封面的描述符:选集面板(`PlayerEpisodePanel`)靠它显示剧照。
+    /// 没有封面的条目保持 nil —— 面板由 `PosterImage` 降级成占位图,⛔ 不假装有封面。
+    func testEpisodeQueueCarriesEntryPoster() throws {
+        let sourceID = UUID()
+        let cover = ImageDescriptor.remote(
+            ownerID: sourceID,
+            url: URL(string: "https://d.pcs.baidu.com/file/a?access_token=T")!,
+            headers: ["User-Agent": "netdisk"],
+            cacheKey: "baidu|\(sourceID.uuidString)|10|1700000000|cover|400"
+        )
+        let withCover = SourceItem(
+            ref: SourceItemRef(sourceID: sourceID, fsID: 10),
+            title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
+            episodeNumber: 1, seasonNumber: 1, episodeTitle: "第一集",
+            durationSeconds: nil, poster: cover, metadataOrigin: .filename)
+        let noCover = makeEpisodeItem(sourceID: sourceID, index: 2)
+        let items = [withCover, noCover]
+
+        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
+            selecting: withCover, in: items, filesByID: makeFiles(for: items)))
+
+        XCTAssertEqual(queue.current?.poster, cover, "有封面就带上")
+        XCTAssertEqual(queue.current?.title, "第一集", "有集名就用集名")
+        XCTAssertNil(queue.episodes[1].poster, "没有封面就是 nil(面板降级成占位图)")
+    }
+
+    /// 从文件路径反推所在目录:继续观看卡片起播时没有兄弟上下文,
+    /// 靠它决定去列哪一层(`play(_ card:)` 的 A1 路径)。
+    func testDirectoryOfFilePath() {
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.directory(ofFilePath: "/apps/LumaPlayer/剧/第 1 集.mp4"),
+            "/apps/LumaPlayer/剧")
+        XCTAssertEqual(BaiduPanSourceViewModel.directory(ofFilePath: "/a.mp4"), "/")
+    }
+
     // MARK: - 夹具
 
     private func makeEpisodeItem(sourceID: UUID, index: Int) -> SourceItem {

@@ -53,8 +53,8 @@ struct PlayerWindowView: View {
     @State private var isHoveringControls = false
     /// 倍速浮层打开中:控制栏要一直留着,否则它会在自动隐藏时连浮层一起带走
     @State private var isSpeedPopoverPresented = false
-    /// 选集浮层打开中:同理,控制栏不能自动隐藏
-    @State private var isEpisodePickerPresented = false
+    /// 选集抽屉打开中:同理,控制栏不能自动隐藏(抽屉靠控制栏上的按钮收起)
+    @State private var isEpisodePanelPresented = false
     /// 正在显示的屏显提示(比 `viewModel.osd` 晚一拍清空)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -148,8 +148,8 @@ struct PlayerWindowView: View {
             // 打开时钉住控制栏;关掉后按正常节奏重新计时隐藏
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
-        .onChange(of: isEpisodePickerPresented) { _, presented in
-            // 选集浮层同理:开着的时候控制栏不能自己收走
+        .onChange(of: isEpisodePanelPresented) { _, presented in
+            // 选集抽屉同理:开着的时候控制栏不能自己收走
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
@@ -198,6 +198,11 @@ struct PlayerWindowView: View {
         }
         .onKeyPress("f") { toggleFullScreen(); return .handled }
         .onKeyPress(.escape) {
+            // 选集抽屉开着时,先收抽屉 —— 退出全屏是更「重」的动作,不该抢在前面
+            if isEpisodePanelPresented {
+                isEpisodePanelPresented = false
+                return .handled
+            }
             guard window.isFullScreen else { return .ignored }
             toggleFullScreen()
             return .handled
@@ -263,8 +268,24 @@ struct PlayerWindowView: View {
                 }
                 promptLayer
                 controlsLayer
+                // 选集抽屉压在最上层:从右侧滑出,和画面并存(不铺满)。
+                // 左侧留白不参与命中测试,点画面照样落到 `interactionLayer`。
+                if isEpisodePanelPresented {
+                    PlayerEpisodePanel(
+                        episodes: viewModel.episodes,
+                        currentID: viewModel.currentEpisodeID,
+                        store: container.posters,
+                        onSelect: { episode in
+                            isEpisodePanelPresented = false
+                            viewModel.playEpisode(episode)
+                        },
+                        onClose: { isEpisodePanelPresented = false }
+                    )
+                    .transition(.move(edge: .trailing))
+                }
             }
             .animation(controlsAnimation, value: controlsVisible)
+            .animation(controlsAnimation, value: isEpisodePanelPresented)
             .animation(osdAnimation, value: shownOSD)
         }
     }
@@ -344,7 +365,7 @@ struct PlayerWindowView: View {
             viewModel: viewModel,
             toggleFullScreen: { toggleFullScreen() },
             isSpeedPopoverPresented: $isSpeedPopoverPresented,
-            isEpisodePickerPresented: $isEpisodePickerPresented
+            isEpisodePanelPresented: $isEpisodePanelPresented
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -417,7 +438,7 @@ struct PlayerWindowView: View {
             && !isBusy
             && !isHoveringControls
             && !isSpeedPopoverPresented
-            && !isEpisodePickerPresented
+            && !isEpisodePanelPresented
             && viewModel.scrubPreviewSeconds == nil
     }
 

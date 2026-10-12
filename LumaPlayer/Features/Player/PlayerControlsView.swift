@@ -26,8 +26,8 @@ struct PlayerControlsView: View {
     var toggleFullScreen: () -> Void
     /// 倍速浮层是否打开:打开期间控制栏不能自动隐藏,否则浮层连着控制栏一起消失
     @Binding var isSpeedPopoverPresented: Bool
-    /// 选集浮层是否打开:同上,打开期间要钉住控制栏
-    @Binding var isEpisodePickerPresented: Bool
+    /// 选集抽屉是否打开:同上,打开期间要钉住控制栏(抽屉本身也靠控制栏上的按钮收起)
+    @Binding var isEpisodePanelPresented: Bool
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
@@ -105,27 +105,17 @@ struct PlayerControlsView: View {
             }
         }
         if viewModel.episodes.count > 1 {
-            episodePickerButton
+            episodePanelButton
         }
     }
 
-    /// 选集:弹出本季 / 本目录的剧集列表,点任意一集直接切(不必一集一集翻)。
+    /// 选集:切换右侧滑出的分集抽屉(`PlayerEpisodePanel`),点任意一集直接切。
     ///
-    /// 用 popover 而不是 `Menu`(与倍速浮层同一套):几百集时菜单铺不开,
-    /// 而浮层里能放可滚动列表并把当前集滚到可见。
-    private var episodePickerButton: some View {
+    /// 用抽屉而不是 `Menu` / `popover`(第一版是 popover):几百集时菜单铺不开,
+    /// 而抽屉里能放带剧照的可滚动列表,并把当前集滚到可见(理由见 `PlayerEpisodePanel`)。
+    private var episodePanelButton: some View {
         PlayerIconButton(systemImage: "list.number", label: "选集") {
-            isEpisodePickerPresented.toggle()
-        }
-        .popover(isPresented: $isEpisodePickerPresented, arrowEdge: .bottom) {
-            PlayerEpisodePicker(
-                episodes: viewModel.episodes,
-                currentID: viewModel.currentEpisodeID,
-                onSelect: { episode in
-                    isEpisodePickerPresented = false
-                    viewModel.playEpisode(episode)
-                }
-            )
+            isEpisodePanelPresented.toggle()
         }
     }
 }

@@ -213,7 +213,11 @@ struct BaiduPanBrowserView: View {
     private var resumeShelf: some View {
         MediaShelf(title: "继续观看") {
             ForEach(viewModel.resumeCards) { card in
-                BaiduResumeCardView(card: card, store: store) {
+                BaiduResumeCardView(
+                    card: card,
+                    store: store,
+                    isPreparing: viewModel.preparingPlaybackFileID == card.fileID
+                ) {
                     open(card)
                 }
                 .contextMenu {
@@ -238,9 +242,16 @@ struct BaiduPanBrowserView: View {
     }
 
     /// 续播卡片 → 直接续播(起播位置由本地续播库给)。
+    ///
+    /// ⚠️ 起播前要先补列它所在的目录(换集入口要兄弟集,见
+    /// `BaiduPanSourceViewModel.play(_ card:)`),所以这里等它一次再开窗 ——
+    /// 顺序反了会先弹一个黑窗口。
     private func open(_ card: BaiduResumeCard) {
-        viewModel.play(card)
-        openWindow(id: PlayerSceneRoot.windowID)
+        Task {
+            if await viewModel.play(card) {
+                openWindow(id: PlayerSceneRoot.windowID)
+            }
+        }
     }
 
     /// 目录读失败。分两种处置:
@@ -417,6 +428,8 @@ private struct BaiduPanCard: View {
 private struct BaiduResumeCardView: View {
     let card: BaiduResumeCard
     let store: PosterImageStore
+    /// 正在为这张卡片补列目录(换集入口要兄弟集)。转圈 + 禁止重复点击
+    var isPreparing = false
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -435,6 +448,16 @@ private struct BaiduResumeCardView: View {
                             placeholderSystemImage: "play.rectangle"
                         )
                     }
+                    .overlay {
+                        // 补列目录期间给一个明确的「正在准备」—— 那一步要发两次请求,
+                        // 没有它点了就像没反应
+                        if isPreparing {
+                            ZStack {
+                                Color.black.opacity(0.45)
+                                ProgressView()
+                            }
+                        }
+                    }
                     .overlay(alignment: .bottom) {
                         if let fraction = progressFraction {
                             CardProgressBar(fraction: fraction)
@@ -452,7 +475,7 @@ private struct BaiduResumeCardView: View {
                     Text(card.title)
                         .font(.body)
                         .lineLimit(1)
-                    Text("已看到 \(PlayerTime.text(card.positionSeconds))")
+                    Text(isPreparing ? "正在准备…" : "已看到 \(PlayerTime.text(card.positionSeconds))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -461,6 +484,7 @@ private struct BaiduResumeCardView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(isPreparing)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)

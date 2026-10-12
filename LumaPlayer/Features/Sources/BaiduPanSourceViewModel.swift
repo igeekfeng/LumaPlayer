@@ -75,6 +75,10 @@ final class BaiduPanSourceViewModel {
     /// 按最近看排序。⛔ 不限于当前目录 —— 它就是要跨目录把你看过的东西捞出来。
     private(set) var resumeCards: [BaiduResumeCard] = []
 
+    /// 正在为「继续观看」起播做准备(补列它所在的目录)的那张卡片。
+    /// 卡片据此转圈 —— 补列要发两次请求,不显示就等于「点了没反应」。
+    private(set) var preparingPlaybackFileID: String?
+
     private let container: AppContainer
     /// 这个页面属于哪个百度来源(决定 `sourceID`,也就决定了封面缓存 key)
     private let source: BaiduPanSource
@@ -453,19 +457,72 @@ final class BaiduPanSourceViewModel {
                 label: entry.episodeNumber.map { "第 \($0) 集" },
                 title: entry.episodeTitle ?? entry.title,
                 source: .baiduPan(file: file),
-                resumeItem: entry
+                resumeItem: entry,
+                // 选集面板的封面:同目录同名图,或 TMDB 刮回来的分集剧照
+                poster: entry.poster
             )
         }
         guard let index = entries.firstIndex(where: { $0.id == item.ref.itemID }) else { return nil }
         return EpisodeQueue(episodes: entries, currentIndex: index)
     }
 
-    /// 播「继续观看」区的一张卡片。它可能不在当前目录里,所以只能靠快照重建文件 ——
+    /// 播「继续观看」区的一张卡片。
+    ///
+    /// 卡片是**跨目录**的(那正是这个区的意义),所以文件本身只能靠快照重建 ——
     /// ⚠️ 这不是「编一个文件」:`fs_id` / `path` / `name` 都是**当初那条文件**的原值,
     /// 只是把播放用不到的字段(size / category / mtime)留空。
-    func play(_ card: BaiduResumeCard) {
-        guard let file = card.reconstructedFile else { return }
-        container.play(file)
+    ///
+    /// 换集入口要的兄弟集不在手上,所以起播前**补列一次它所在的那个目录**
+    /// (目录由 `path` 推出);卡片恰好落在当前浏览的目录里时不列,直接复用。
+    /// 列回来的那一份同时带着封面,选集面板因此也有图。
+    ///
+    /// ⛔ 不改 `currentDirectory`:点「继续观看」是**接着看**,不是要跳到那个目录 ——
+    /// 那样浏览页会毫无征兆地换一屏。
+    ///
+    /// - Returns: 是否已经把播放请求写好(视图据此决定要不要唤起播放窗口)。
+    @discardableResult
+    func play(_ card: BaiduResumeCard) async -> Bool {
+        guard let file = card.reconstructedFile else { return false }
+        guard preparingPlaybackFileID == nil else { return false }
+        preparingPlaybackFileID = card.fileID
+        defer { preparingPlaybackFileID = nil }
+
+        let content = await directoryContent(for: Self.directory(ofFilePath: file.path))
+        let queue = content.flatMap { content in
+            content.items.first { $0.ref.itemID == String(file.fsID) }.flatMap { item in
+                Self.episodeQueue(selecting: item, in: content.items, filesByID: content.filesByID)
+            }
+        }
+        container.play(file, episodeQueue: queue)
+        return true
+    }
+
+    /// 某个目录的内容:就是当前目录就直接复用(0 请求),否则补列一次。
+    ///
+    /// ⛔ 拿不到就返回 nil,**照常播放**,只是没有换集入口 —— 「继续观看」的语义是
+    /// 接着看,不能因为一次列目录失败就播不了。目录本身的错误浏览页已经提示过,
+    /// 这里再弹一次只会把起播打断。
+    private func directoryContent(
+        for directory: String
+    ) async -> BaiduPanSourceProvider.DirectoryContent? {
+        if directory == currentDirectory, !items.isEmpty {
+            return BaiduPanSourceProvider.DirectoryContent(items: items, filesByID: filesByID)
+        }
+        do {
+            let provider = makeProvider()
+            let content = try await provider.content(directory: directory)
+            // 逐集剧照只来自 TMDB 那一趟(⛔ 不抛错:没配 token / 连不上就退本地图)
+            let enriched = await provider.scrape(items: content.items)
+            return BaiduPanSourceProvider.DirectoryContent(
+                items: enriched, filesByID: content.filesByID)
+        } catch {
+            return nil
+        }
+    }
+
+    /// 从文件全路径推出它所在的目录(续播快照只存了文件路径,没有目录字段)。
+    static func directory(ofFilePath path: String) -> String {
+        (path as NSString).deletingLastPathComponent
     }
 
     /// 把一条移出「继续观看」:删掉本地进度记录(⛔ 不动网盘上的文件)。

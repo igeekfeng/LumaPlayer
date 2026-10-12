@@ -169,6 +169,28 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.currentEpisodeID)
     }
 
+    /// Emby 分集的封面折成**来源无关**的 `.emby` 描述符(选集面板按它请求剧照)。
+    /// 分集自己的 `Primary` 优先,尺寸档位取 `episodeThumbnailWidth` 的两倍(视网膜屏)。
+    func testPlayableEpisodeCarriesLandscapePosterDescriptor() throws {
+        let profile = ServerProfile(
+            displayName: "emby.test",
+            baseURL: testURL("https://emby.test"),
+            deviceID: "DEVICE-UUID-1"
+        )
+        let item = try JSONDecoder().decode(EmbyItem.self, from: Data(#"{"Id":"EP-1","Name":"第一集","Type":"Episode","SeriesId":"SER-1","SeasonId":"SEA-1","IndexNumber":1,"ParentIndexNumber":1,"ImageTags":{"Primary":"TAG-1"}}"#.utf8))
+
+        let episode = PlayerViewModel.playableEpisode(item, on: profile)
+
+        XCTAssertEqual(episode.poster, .emby(ImageSpec(
+            serverID: profile.id,
+            itemID: "EP-1",
+            type: .primary,
+            tag: "TAG-1",
+            maxWidth: Int(Metrics.episodeThumbnailWidth * 2)
+        )))
+        XCTAssertNil(episode.resumeItem, "Emby 的进度走服务端,不带展示快照来源")
+    }
+
     /// 一部百度来源的剧集:`episodeCount` 集,当前播第 `playingIndex` 集,
     /// 队列由浏览页装配后带进请求(与 `BaiduPanSourceViewModel.play(_ item:)` 同一条路)。
     private func makeBaiduViewModel(episodeCount: Int, playingIndex: Int) throws -> PlayerViewModel {
