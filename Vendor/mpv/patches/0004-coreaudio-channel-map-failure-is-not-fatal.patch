@@ -1,0 +1,16 @@
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -330,8 +330,11 @@
+                                kAudioOutputUnitProperty_ChannelMap,
+                                kAudioUnitScope_Global, 0, layout, layout_size);
+ 
+-    CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+-                     "unable to set the input channel layout on the audio unit");
++    // macOS 27 rejects this with -50 for every layout (mpv issue #18384).
++    // Treating it as fatal makes every file fall back to ao_avfoundation, whose
++    // ~2 s read-ahead makes speed changes jump the audio clock. Without the
++    // map the unit uses the default channel order, as it did before #15622.
++    CHECK_CA_WARN("unable to set the input channel layout on the audio unit");
+ 
+     AURenderCallbackStruct render_cb = (AURenderCallbackStruct) {
+         .inputProc       = render_cb_lpcm,

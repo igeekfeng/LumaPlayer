@@ -98,6 +98,9 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 #   0003：gpu-next 后端没注册硬解设备，hwdec=auto 只能退成 videotoolbox-copy（4K 帧每帧
 #         拷回内存 + CPU 重排上传，能耗高）。补上 VideoToolbox 设备，IOSurface 平面在 GPU 上
 #         blit 进 libplacebo 纹理（libplacebo 的 GL 后端采样 sampler2DRect 会生成非法 GLSL）。
+#   0004：macOS 27 上 ao_coreaudio 设 kAudioOutputUnitProperty_ChannelMap 对任何声道布局都报 -50
+#         （上游 issue #18384，未修），init 失败 → 一律回退 ao_avfoundation，它预排约 2 秒音频，
+#         改倍速时音频时钟跳变、视频连续丢帧。改成只告警、继续初始化（等同 #15622 之前不设映射）。
 # 上游修好后删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue
