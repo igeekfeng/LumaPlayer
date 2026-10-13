@@ -100,7 +100,8 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 #         blit 进 libplacebo 纹理（libplacebo 的 GL 后端采样 sampler2DRect 会生成非法 GLSL）。
 #   0004：macOS 27 上 ao_coreaudio 设 kAudioOutputUnitProperty_ChannelMap 对任何声道布局都报 -50
 #         （上游 issue #18384，未修），init 失败 → 一律回退 ao_avfoundation，它预排约 2 秒音频，
-#         改倍速时音频时钟跳变、视频连续丢帧。改成只告警、继续初始化（等同 #15622 之前不设映射）。
+#         改倍速时音频时钟跳变、视频连续丢帧。改成只告警，并重建 AudioUnit 后不设映射继续初始化
+#         （等同 #15622 之前）。必须重建：设映射被拒后的 unit 能 start 但永不调渲染回调，卡首帧。
 # 上游修好后删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue

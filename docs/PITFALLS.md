@@ -118,6 +118,13 @@ render API 下 VO 也没有「睡到目标时刻」的余量,小步来回改同�
 ⚠️ 拿 Homebrew mpv 对照时别加 `--ao=coreaudio`:强制后初始化失败就没声音,视频按系统时钟走,反而「看不出问题」。
 Q43 结案(2026-10-13):离屏 harness 丢帧 16–89 → 0;倍速观感、声道、5.1 下混、蓝牙切换经人工确认。上游修好 #18384 后删补丁 0004。
 
+**补丁 0004 只把 `ChannelMap` 失败降为告警还不够,必须丢掉那个 AudioUnit 重建。** 设映射被拒后的 unit `AudioOutputUnitStart`
+返回成功,但渲染回调一次都不调 → 音频时钟不走,画面停在首帧、缓冲照涨、播放 / 暂停都没反应,`current-ao` 却显示 coreaudio。
+最小复现:DefaultOutput unit 依次设 StreamFormat、CurrentDevice、ChannelMap(-50)、回调、Start,1 秒回调 0 次;跳过 ChannelMap 则约 94 次。
+排查「首帧出来就不动」先看 `time-pos` 是否推进、`current-ao` 是谁。
+⚠️ 上一条 Q43 的「丢帧 16–89 → 0」大概率是在这个卡死状态下测的(不播自然不丢帧),作废;重建 unit 后 `vo=null` 离屏实测
+2×→1× 一次丢 4 帧,倍速观感需重新人工确认(2026-10-13)。
+
 **`NSWindow.isReleasedWhenClosed` 默认 YES。** 手动建窗口交给 ARC 时置 `false`,否则 `close()` 过度释放。
 
 **测试媒体要 faststart(`-movflags +faststart`)。** moov 在尾部 + 服务器不支持 Range 时流不可 seek,首帧永不就绪。

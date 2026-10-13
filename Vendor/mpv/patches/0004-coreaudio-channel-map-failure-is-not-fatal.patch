@@ -1,16 +1,34 @@
 --- a/audio/out/ao_coreaudio.c
 +++ b/audio/out/ao_coreaudio.c
-@@ -330,8 +330,11 @@
-                                kAudioOutputUnitProperty_ChannelMap,
-                                kAudioUnitScope_Global, 0, layout, layout_size);
+@@ -326,12 +326,25 @@ static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, Audi
+     CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+                      "can't link audio unit to selected device");
  
+-    err = AudioUnitSetProperty(p->audio_unit,
+-                               kAudioOutputUnitProperty_ChannelMap,
+-                               kAudioUnitScope_Global, 0, layout, layout_size);
+-
 -    CHECK_CA_ERROR_L(coreaudio_error_audiounit,
 -                     "unable to set the input channel layout on the audio unit");
-+    // macOS 27 rejects this with -50 for every layout (mpv issue #18384).
-+    // Treating it as fatal makes every file fall back to ao_avfoundation, whose
-+    // ~2 s read-ahead makes speed changes jump the audio clock. Without the
-+    // map the unit uses the default channel order, as it did before #15622.
-+    CHECK_CA_WARN("unable to set the input channel layout on the audio unit");
++    if (layout) {
++        err = AudioUnitSetProperty(p->audio_unit,
++                                   kAudioOutputUnitProperty_ChannelMap,
++                                   kAudioUnitScope_Global, 0, layout, layout_size);
++        if (err != noErr) {
++            // macOS 27 rejects this with -50 for every layout (mpv issue #18384).
++            // Treating it as fatal makes every file fall back to ao_avfoundation,
++            // whose ~2 s read-ahead makes speed changes jump the audio clock.
++            // The rejected set leaves the unit unusable, though: it starts
++            // without error but never calls the render callback, so playback
++            // stalls on the first frame. Rebuild the unit and skip the map; it
++            // then uses the default channel order, as it did before #15622.
++            CHECK_CA_WARN("unable to set the input channel layout on the audio unit");
++            AudioUnitUninitialize(p->audio_unit);
++            AudioComponentInstanceDispose(p->audio_unit);
++            p->audio_unit = NULL;
++            return init_audiounit(ao, asbd, NULL, 0);
++        }
++    }
  
      AURenderCallbackStruct render_cb = (AURenderCallbackStruct) {
          .inputProc       = render_cb_lpcm,
