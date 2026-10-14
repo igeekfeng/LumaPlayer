@@ -97,7 +97,11 @@ enum BaiduPanMetadataSynthesizer {
             year: nil,
             tmdbID: explicit?.id,
             episodeNumber: nil,
-            seasonNumber: nil,
+            // 目录名**整个**就是季标记时(`第13季` / `Season 2` / `S0`)记下季号 ——
+            // 这是「剧目录下是季文件夹」那种存法的唯一线索,`BaiduPanSeriesLayout`
+            // 靠它把这一层判成一部剧、把这些子目录当季。⚠️ 用**原始目录名**判,
+            // 不是剥完标签的那个:标签与季标记可能同时出现。
+            seasonNumber: seasonNumber(fromDirectoryName: file.name),
             episodeTitle: nil,
             durationSeconds: nil,
             poster: nil,

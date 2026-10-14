@@ -81,10 +81,13 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let year: Int?
     /// 名称里**显式写出**的 TMDB id(`一拳超人 (2015) {tmdbid-63926}`)。
     ///
-    /// 来源:文件名或目录名里的 `{tmdbid-N}` / `[tmdbid-N]` 标签
-    /// (`BaiduPanMetadataSynthesizer.extractExplicitTMDBID`)。
-    /// 有了它刮削层就**直接按 id 查**,跳过搜索与标题匹配 —— 这是
-    /// tinyMediaManager / Jellyfin 一类媒体库的标准命名(`docs/KNOWN_ISSUES.md`)。
+    /// 来源有二:
+    /// 1. 文件名或目录名里的 `{tmdbid-N}` / `[tmdbid-N]` 标签
+    ///    (`BaiduPanMetadataSynthesizer.extractExplicitTMDBID`)。有了它刮削层就
+    ///    **直接按 id 查**,跳过搜索与标题匹配 —— 这是 tinyMediaManager / Jellyfin
+    ///    一类媒体库的标准命名(`docs/KNOWN_ISSUES.md`);
+    /// 2. **刮削命中后回填**(`withScrapedMetadata`):按标题搜到的 id 写回来,
+    ///    下游(详情页取演职员 / 剧级信息)就不必再搜一次。
     ///
     /// ⚠️ 标签本身**不区分影 / 剧**(TMDB 的两个 id 空间各自编号),
     /// 所以这一格只说「是这个 id」,由刮削层按上下文决定查哪个端点。
@@ -146,11 +149,16 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     /// ⚠️ 只补**原来没有值**的那几个:本地合成出来的东西优先。
     /// 最要紧的一条是封面 —— 网盘目录里放着的 `poster.jpg` 是用户**故意**配的,
     /// ⛔ 不能被 TMDB 的海报盖掉(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+    ///
+    /// - Parameter tmdbID: 搜索命中的 TMDB id。**回填它是为了下游**:详情页要按 id
+    ///   取剧级信息与演职员(`TMDBSeriesProfile`),有这一格就不必再搜一次标题。
+    ///   名称里本来就写了显式 id 时以**原来的**为准(那是权威标签)。
     func withScrapedMetadata(
         poster: ImageDescriptor?,
         overview: String?,
         year: Int?,
-        episodeTitle: String? = nil
+        episodeTitle: String? = nil,
+        tmdbID: Int? = nil
     ) -> SourceItem {
         SourceItem(
             ref: ref,
@@ -158,7 +166,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             kind: kind,
             overview: self.overview ?? overview,
             year: self.year ?? year,
-            tmdbID: tmdbID,
+            tmdbID: self.tmdbID ?? tmdbID,
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: self.episodeTitle ?? episodeTitle,

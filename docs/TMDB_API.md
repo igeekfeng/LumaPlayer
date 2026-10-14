@@ -218,3 +218,80 @@ https://image.tmdb.org/t/p/{file_size}/{still_path}
 (`BaiduPanMetadataScraper`:剧集条目按剧查;目录卡片先剧后影;单条视频先影后剧)。
 id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.notFound`,
 是**确定性**答案,可以记住不再重问。
+
+**响应字段(2026-10-14 对着同一份官方 OpenAPI 规格补核)**:
+
+| 字段 | 类型 | tv | movie | 说明 |
+|---|---|---|---|---|
+| `id` / `name` / `title` / `overview` / `poster_path` | — | ✅ | ✅ | 同 §3 |
+| `first_air_date` / `release_date` | string | ✅ | ✅ | 首播 / 上映日 |
+| `vote_average` / `vote_count` | number / int | ✅ | ✅ | 评分 |
+| `genres[]` | `{id,name}` | ✅ | ✅ | **类型名**。⚠️ 搜索响应里只有 `genre_ids`(数字),没有名字 —— 要显示类型就得走这个端点 |
+| `tagline` | string | ✅ | ✅ | 标语(可能为空串) |
+| `status` | string | ✅ | ✅ | 剧:`Returning Series` / `Ended`;电影:`Released` / `Rumored` 等 |
+| `production_companies[]` | `{id,name,logo_path,origin_country}` | ✅ | ✅ | 制片公司 |
+| `networks[]` | `{id,name,logo_path,origin_country}` | ✅ | ⛔ | 电视台(电影侧没有这个字段) |
+| `number_of_seasons` / `number_of_episodes` | int | ✅ | ⛔ | ⚠️ 本项目**不读** —— 季 / 集结构以**网盘目录**为准(⛔ 不让 TMDB 覆盖用户实际存的东西) |
+| `last_air_date` | string | ✅ | ⛔ | 完结日 |
+| `runtime` | int | ⛔ | ✅ | 片长(分钟) |
+| `homepage` / `popularity` / `original_language` / `production_countries` / `spoken_languages` / `adult` / `backdrop_path` | — | ✅ | ✅ | 本项目不读 |
+
+## 10. 演职员端点(演员列表 / 导演 / 编剧)
+
+`GET /3/tv/{series_id}/credits` 与 `GET /3/movie/{movie_id}/credits`
+
+同一份官方 OpenAPI 规格读出(2026-10-14 核实):
+
+| 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|---|
+| `series_id` / `movie_id` | path | int32 | ✅ | — | 剧 / 电影的 TMDB id |
+| `language` | query | string | | `en-US` | 同 §2 |
+
+⚠️ **为什么需要它**:`/3/search/*` 与 `/3/{tv\|movie}/{id}` 都**不给**演职员,
+而详情页要展示演员列表与主创(导演 / 编剧)。
+
+**响应顶层**:`id`、`cast:[…]`、`crew:[…]`(tv 与 movie **同形**)。
+
+`cast[]` 一个条目:
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | int | 人物的 TMDB id |
+| `name` | string | 演员名 |
+| `character` | string | 角色名(可能为空串) |
+| `profile_path` | string | 头像相对路径(**可能为 `null`**)→ 走 §4 拼法 |
+| `order` | int | TMDB 给的主要程度排序(0 起) |
+| `known_for_department` / `original_name` / `popularity` / `gender` / `adult` / `credit_id` | — | 本项目不读 |
+
+`crew[]` 一个条目:
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` / `name` / `profile_path` | — | 同 `cast[]` |
+| `job` | string | 职务(`Director` / `Writer` / `Producer` / …) |
+| `department` | string | 部门(`Directing` / `Writing` / `Production` / …) |
+| `known_for_department` / `original_name` / `popularity` / `gender` / `adult` / `credit_id` | — | 本项目不读 |
+
+⚠️ **解码立场同 §3**:除 `id` 外一律可选 —— 真实数据里 `character` 可能是空串、
+`profile_path` 可能是 `null`。⛔ 不把它们写成必填(会让整条解失败)。
+
+⚠️ **顺序按 TMDB 给的 `order`**,客户端只排序、⛔ 不自己重排主要程度。
+
+⚠️ **剧集用 `credits` 而不用 `aggregate_credits`。** 后者把同一演员的多季角色放进
+`roles[]` 数组(形状不同,没有 `character`),展示上要多一层拆解;`credits` 的
+`character` 是单个字符串,够用。⛔ 两个端点不要混用。
+
+⚠️ 该端点返回**整部剧 / 整部电影**的演职员,不是某一季的。
+分季 / 分集的演职员另有 `/3/tv/{id}/season/{n}/credits` 与
+`/3/tv/{id}/season/{n}/episode/{e}/credits`,本项目不用。
+
+## 11. 人物头像(profile)
+
+拼法与 §4 一致,路径来自 `cast[].profile_path` / `crew[].profile_path`:
+
+```
+https://image.tmdb.org/t/p/{file_size}/{profile_path}
+```
+
+档位本项目用 **`w185`**(头像卡片约 75pt 宽,与 `w500` 海报 / `w300` 剧照同一量级取舍)。
+`profile_path` 与 `poster_path` 一样**自带版本语义**,可直接进 `ImageDescriptor.cacheKey`。

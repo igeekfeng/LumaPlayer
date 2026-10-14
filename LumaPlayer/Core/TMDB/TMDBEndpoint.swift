@@ -40,6 +40,16 @@ enum TMDBEndpoint: Sendable, Equatable {
     /// 按**显式 id** 直取电影。与 `tvDetails` 成对 —— 标签只给 id,
     /// 是电影还是剧由调用方按上下文决定(见 `TMDBClient.details`)。
     case movieDetails(id: Int, language: String)
+    /// `GET /3/tv/{series_id}/credits?language=`
+    ///
+    /// 取**整部剧**的演职员(演员表 + 剧组),`docs/TMDB_API.md` §10。
+    /// ⚠️ 不用 `aggregate_credits`:那个端点把同一演员的多季角色放进 `roles[]`
+    /// 数组(形状不同),展示上要多一层拆解。
+    case tvCredits(id: Int, language: String)
+    /// `GET /3/movie/{movie_id}/credits?language=`
+    ///
+    /// 取**整部电影**的演职员。与 `tvCredits` 响应同形(§10)。
+    case movieCredits(id: Int, language: String)
 
     // MARK: - 形状
 
@@ -55,6 +65,8 @@ enum TMDBEndpoint: Sendable, Equatable {
             return "/3/tv/\(seriesID)/season/\(seasonNumber)"
         case .tvDetails(let id, _): return "/3/tv/\(id)"
         case .movieDetails(let id, _): return "/3/movie/\(id)"
+        case .tvCredits(let id, _): return "/3/tv/\(id)/credits"
+        case .movieCredits(let id, _): return "/3/movie/\(id)/credits"
         }
     }
 
@@ -68,6 +80,8 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .tvSeason: return "tv/season"
         case .tvDetails: return "tv/details"
         case .movieDetails: return "movie/details"
+        case .tvCredits: return "tv/credits"
+        case .movieCredits: return "movie/credits"
         }
     }
 
@@ -90,8 +104,9 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .tvSeason(_, _, let language):
             // 季详情的 series_id / season_number 走 **path**(§7),不进查询串
             return [("language", language)]
-        case .tvDetails(_, let language), .movieDetails(_, let language):
-            // 按 id 直取:id 走 path,只有语言进查询串
+        case .tvDetails(_, let language), .movieDetails(_, let language),
+             .tvCredits(_, let language), .movieCredits(_, let language):
+            // 按 id 取东西:id 走 path,只有语言进查询串
             return [("language", language)]
         }
     }

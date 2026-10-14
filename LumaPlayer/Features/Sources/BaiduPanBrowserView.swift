@@ -208,6 +208,14 @@ struct BaiduPanBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let failure = viewModel.directoryFailure {
             failurePane(failure)
+        } else if let structure = viewModel.directoryShape.seriesStructure {
+            // 这一层是一部剧(剧目录下直接是集文件,或下面是一层层的季文件夹)
+            // → 走详情页,而不是再铺一层文件网格。判定见 `BaiduPanSeriesLayout`。
+            BaiduPanSeriesDetailView(
+                viewModel: viewModel,
+                structure: structure,
+                store: store
+            )
         } else if viewModel.sortedItems.isEmpty, viewModel.resumeCards.isEmpty {
             // ⚠️ 判的是 `sortedItems` 不是 `items`:整目录都被隐藏时 `items` 非空,
             // 用它会既不画网格、也不给空状态,只剩一片白。

@@ -115,6 +115,13 @@ actor BaiduPanMetadataScraper {
     /// 传输类失败不写 —— 下次进目录要能重试。
     private var seasonCache: [SeasonKey: [Int: TMDBEpisode]] = [:]
 
+    /// 查过的**演职员**(详情页专用,`seriesProfile`)。与 `detailsCache` 同口径:
+    /// `nil` = 查过但这个端点没有这个 id(404 这种确定性失败),传输 / 认证类失败不写。
+    ///
+    /// ⚠️ 键复用 `DetailsKey`(id + 影 / 剧)—— 演职员与详情走的是**同一个 id 空间**,
+    /// 分开两套键只会多一处要同步的地方。
+    private var creditsCache: [DetailsKey: TMDBCredits?] = [:]
+
     /// 最后一次刮削失败的可读原因(nil = 没失败)。
     /// ⛔ 不上模型层:它只用来给界面提一句,不改变任何条目(`LocalResumeReporting` 同一处置)。
     private(set) var lastFailureDescription: String?
@@ -341,7 +348,10 @@ actor BaiduPanMetadataScraper {
         var result = items
         for (offset, match) in matches {
             guard let match else { continue }
-            result[offset] = Self.apply(match, to: items[offset])
+            // ⚠️ 只有**目录卡片**回填命中的 id:详情页要按它取剧级信息与演职员。
+            // 分集 / 单条视频不填 —— 填了会让下次刮削从「搜索」改走「按 id 直取」,
+            // 多一次请求而结果一样(见 `apply` 的注释)。
+            result[offset] = Self.apply(match, to: items[offset], fillTMDBID: true)
         }
         return result
     }
@@ -500,7 +510,16 @@ actor BaiduPanMetadataScraper {
     ///
     /// 封面按 `ImageDescriptor.remote` 走既有图片通路;`cacheKey` 用 `poster_path`
     /// 当版本段(`ImageDescriptor.tmdbPosterKey`)。
-    private static func apply(_ match: TMDBMatch, to item: SourceItem) -> SourceItem {
+    ///
+    /// - Parameter fillTMDBID: 要不要把命中的 id 写回条目。**只有目录卡片要**
+    ///   (`enrichFolders`)—— 详情页拿它去取剧级信息与演职员(`seriesProfile`)。
+    ///   分集 / 单条视频填了反而会让下次刮削从「搜索」改走「按 id 直取」:
+    ///   那一次请求的**结果一模一样**,只是白多一次往返。
+    private static func apply(
+        _ match: TMDBMatch,
+        to item: SourceItem,
+        fillTMDBID: Bool = false
+    ) -> SourceItem {
         var poster: ImageDescriptor?
         if let url = match.posterURL, let path = match.posterPath {
             poster = .remote(
@@ -518,7 +537,118 @@ actor BaiduPanMetadataScraper {
         return item.withScrapedMetadata(
             poster: poster,
             overview: match.overview,
-            year: match.year
+            year: match.year,
+            tmdbID: fillTMDBID ? match.tmdbID : nil
         )
+    }
+
+    // MARK: - 剧级扩展信息(详情页专用)
+
+    /// 取一部剧 / 一部电影的**剧级扩展信息 + 演职员**。
+    ///
+    /// ⚠️ 与 `enrich(_:)` 是**两件事**,⛔ 不要合并:
+    ///
+    /// | | `enrich` | 这里 |
+    /// |---|---|---|
+    /// | 何时跑 | 每次列目录(列表要的) | **只在详情页** |
+    /// | 按什么查 | **标题** + 年份(批量) | **id**(精确);没 id 才退标题 |
+    /// | 拿什么 | 封面 / 简介 / 年份 / 集名 | 类型 / 评分 / 标语 / 状态 / 制片公司 + 演职员 |
+    ///
+    /// 合并的代价很具体:一屏三十个目录会多烧六十次 TMDB 请求。
+    ///
+    /// ## 两种身份来源,id 优先
+    ///
+    /// 详情页手里的线索有两档,按可信度取:
+    ///
+    /// 1. **`tmdbID`**(目录名里写了 `{tmdbid-N}`,或父目录刮削时按标题严格命中后回填)
+    ///    —— 直接 `GET /3/{tv|movie}/{id}`,这是权威答案;
+    /// 2. 没有 id 就用**标题 + 年份**走一次搜索。
+    ///
+    /// ⚠️ 第 2 档**不是新引入的风险**:它的键与判据与 `enrichEpisodes` 完全一样
+    /// (`searchMatch` 的 `QueryKey` 是「标题 + 年份 + 是剧」),所以详情页用的就是
+    /// **已经贴在这一季分集上**的那部剧 —— 两者不可能指向不同的作品。
+    /// 而且因为搜索缓存共用,父目录/分集刮过之后这一档通常**零请求**。
+    ///
+    /// ⚠️ `tmdbID` **不区分影 / 剧**(两个 id 空间各自编号),所以先按剧取、
+    /// 404 再按电影取(与 `folderMatch` 同一处置);credits 端点跟着**命中的那一边**走。
+    ///
+    /// ⛔ 不抛错:失败折成 nil + `lastFailureDescription`,详情页降级成「没有这些块」。
+    ///
+    /// - Parameters:
+    ///   - tmdbID: 权威 id。给了就不再搜索。
+    ///   - title: 剧名(没给 id 时用于搜索)。空串 = 搜不了。
+    ///   - year: 首播 / 上映年。没给就按标题对齐(与 `selectMatch` 同规则)。
+    func seriesProfile(tmdbID: Int?, title: String, year: Int?) async -> TMDBSeriesProfile? {
+        let token: String
+        do {
+            guard let stored = try await credentials.tmdbReadAccessToken(),
+                  !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                // 没填 token = 用户没开刮削,不是失败
+                return nil
+            }
+            token = stored
+        } catch {
+            lastFailureDescription = "读取 TMDB 凭据失败"
+            return nil
+        }
+
+        let match: TMDBMatch?
+        if let tmdbID {
+            match = await seriesMatch(id: tmdbID, token: token)
+        } else {
+            guard !title.isEmpty,
+                  let searched = await searchMatch(
+                    title: title, year: year, isSeries: true, token: token) else {
+                return nil
+            }
+            // 类型 / 标语 / 状态 / 制片公司只有详情端点给(`docs/TMDB_API.md` §9),
+            // 而搜索命中里这些是空的 → 再按 id 取一次详情。
+            // ⚠️ 详情这一步失败就**退回搜索命中**:它已经给出标题 / 年份 / 简介 / 海报,
+            // 只是没有类型那几行 —— 好过整块都不显示(⛔ 不用别的剧来补)。
+            match = await seriesMatch(id: searched.tmdbID, token: token) ?? searched
+        }
+        guard let match else { return nil }
+        let credits = await creditsMatch(
+            id: match.tmdbID, isSeries: match.kind == .tv, token: token)
+        return TMDBSeriesProfile(
+            match: match,
+            cast: credits?.cast ?? [],
+            crew: credits?.crew ?? []
+        )
+    }
+
+    /// 按 id 取剧级详情:先当**剧**、404 再当**电影**(标签只给 id,不给影 / 剧)。
+    private func seriesMatch(id: Int, token: String) async -> TMDBMatch? {
+        if let series = await detailsMatch(id: id, isSeries: true, token: token) {
+            return series
+        }
+        return await detailsMatch(id: id, isSeries: false, token: token)
+    }
+
+    /// 查一次演职员(带缓存)。`nil` = 拿不到(没命中 / 这次失败)。
+    ///
+    /// ⚠️ 缓存口径与 `detailsMatch` 一致:404 这种**确定性**答案写缓存
+    /// (下次进详情页不重问),传输 / 认证类失败不写(要能重试)。
+    private func creditsMatch(id: Int, isSeries: Bool, token: String) async -> TMDBCredits? {
+        let key = DetailsKey(id: id, isSeries: isSeries)
+        if let cached = creditsCache[key] { return cached }
+
+        let credits: TMDBCredits
+        do {
+            credits = try await client.credits(id: id, isSeries: isSeries, token: token)
+        } catch is CancellationError {
+            // 用户换了目录 / 关了详情页:这次不算失败,也不写缓存(下次还要问)
+            return nil
+        } catch let error as TMDBError {
+            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响详情页的其它块**
+            lastFailureDescription = error.userMessage
+            if case .notFound = error { creditsCache.updateValue(nil, forKey: key) }
+            return nil
+        } catch {
+            lastFailureDescription = "刮削失败:\(error)"
+            return nil
+        }
+        creditsCache.updateValue(credits, forKey: key)
+        return credits
     }
 }

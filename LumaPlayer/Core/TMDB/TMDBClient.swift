@@ -141,6 +141,36 @@ struct TMDBClient: Sendable {
         return TMDBMatch(result: result, kind: isSeries ? .tv : .movie)
     }
 
+    // MARK: - 演职员
+
+    /// 取**整部剧 / 整部电影**的演职员(演员表 + 剧组),`docs/TMDB_API.md` §10。
+    ///
+    /// `id` 是 TMDB 条目 id(⛔ 不要拿文件名当 id)。`isSeries` 由调用方给 ——
+    /// 标签与搜索结果都**不区分影 / 剧**(见 `details`)。
+    ///
+    /// ⚠️ 返回的是**整部作品**的演职员,不是某一季 / 某一集的。
+    ///
+    /// 名字为空的条目一律滤掉:`TMDBPerson.name` 缺字段时是空串,端出去就是一张
+    /// 没有名字的头像卡(⛔ 不伪造一个名字补上)。`cast` 按 TMDB 的 `order` 排一次
+    /// —— 那是它给的主要程度,⛔ 不按别的字段重排。
+    func credits(
+        id: Int,
+        isSeries: Bool,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBCredits {
+        let endpoint: TMDBEndpoint = isSeries
+            ? .tvCredits(id: id, language: language)
+            : .movieCredits(id: id, language: language)
+        let data = try await send(endpoint, token: token)
+        let response: TMDBCreditsResponse = try decode(data, endpoint: endpoint)
+        return TMDBCredits(
+            cast: (response.cast ?? []).filter { !$0.name.isEmpty }
+                .sorted { $0.order < $1.order },
+            crew: (response.crew ?? []).filter { !$0.name.isEmpty }
+        )
+    }
+
     // MARK: - 传输与解码
 
     /// 发一次请求,返回响应体。只做传输层校验(HTTP 状态、是否 HTTP 响应)。

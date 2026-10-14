@@ -364,6 +364,184 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(TMDBImage.stillURL(path: ""))
     }
 
+    // MARK: - 按 id 直取 + 详情端点字段(§9)
+
+    /// id 走 **path**,只有 `language` 进查询串;token 不进 URL(§9)。
+    func testDetailsEndpointUsesIDInPath() throws {
+        let series = TMDBEndpoint.tvDetails(id: 1399, language: "zh-CN")
+        XCTAssertEqual(series.path, "/3/tv/1399")
+        XCTAssertEqual(series.name, "tv/details")
+        XCTAssertEqual(series.url?.query, "language=zh-CN")
+
+        let movie = TMDBEndpoint.movieDetails(id: 550, language: "zh-CN")
+        XCTAssertEqual(movie.path, "/3/movie/550")
+        XCTAssertEqual(movie.name, "movie/details")
+    }
+
+    /// 详情端点才给的字段(`genres` / `tagline` / `status` / `production_companies` / `networks`)
+    /// 要能解出来 —— 搜索响应里没有它们,所以这是详情页「类型」那一行唯一的来源。
+    func testDetailsDecodeExtendedFields() async throws {
+        MockEmbyURLProtocol.stub(.json(Self.detailsJSON), host: host, path: "/3/tv/1399")
+
+        let match = try await makeClient().details(id: 1399, isSeries: true, token: "T")
+
+        XCTAssertEqual(match.kind, .tv)
+        XCTAssertEqual(match.genres, ["剧情", "奇幻"])
+        XCTAssertEqual(match.tagline, "凛冬将至。")
+        XCTAssertEqual(match.status, "Ended")
+        XCTAssertEqual(match.statusText, "已完结")
+        XCTAssertEqual(match.productionCompanies, ["HBO"])
+        XCTAssertEqual(match.networks, ["HBO"])
+    }
+
+    /// 搜索响应里**没有**详情字段 → 一律为空(⛔ 不能拿 `genre_ids` 编一个名字出来)。
+    func testSearchMatchHasNoExtendedFields() async throws {
+        MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
+
+        let matches = try await makeClient().searchTV(title: "x", token: "T")
+        let match = try XCTUnwrap(matches.first)
+
+        XCTAssertTrue(match.genres.isEmpty)
+        XCTAssertTrue(match.productionCompanies.isEmpty)
+        XCTAssertTrue(match.networks.isEmpty)
+        XCTAssertNil(match.tagline)
+        XCTAssertNil(match.status)
+        XCTAssertNil(match.statusText)
+    }
+
+    /// 状态文案只映射**官方示例里出现过**的两个值,其余**原样显示英文**
+    /// —— 规格里 `status` 没有枚举定义,⛔ 不猜一个中文词盖上去。
+    func testStatusTextOnlyMapsKnownValues() {
+        XCTAssertEqual(Self.match(status: "Ended").statusText, "已完结")
+        XCTAssertEqual(Self.match(status: "Released").statusText, "已上映")
+        XCTAssertEqual(Self.match(status: "Returning Series").statusText, "Returning Series")
+        XCTAssertNil(Self.match(status: "").statusText)
+        XCTAssertNil(Self.match(status: nil).statusText)
+    }
+
+    // MARK: - 演职员(§10)
+
+    /// 两个 id 都走 path,诊断名不含凭据(§10)。
+    func testCreditsEndpointPaths() throws {
+        XCTAssertEqual(
+            TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path, "/3/tv/1399/credits")
+        XCTAssertEqual(
+            TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").name, "tv/credits")
+        XCTAssertEqual(
+            TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").path, "/3/movie/550/credits")
+        XCTAssertEqual(
+            TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").name, "movie/credits")
+        // credits 是**整部作品**的演职员,不是某一季的 → 路径里不该出现 season
+        XCTAssertFalse(TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path.contains("season"))
+    }
+
+    /// 演员给 `character`、剧组给 `job` + `department` —— 同一个类型两种填法(§10)。
+    func testCreditsDecodeCastAndCrew() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+
+        let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
+
+        // 名字为空的条目一律滤掉(端出去就是一张没有名字的头像卡)
+        XCTAssertEqual(credits.cast.count, 2)
+        XCTAssertEqual(credits.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
+        // cast 按 TMDB 的 order 升序
+        XCTAssertEqual(credits.cast.map(\.order), [0, 1])
+        XCTAssertEqual(credits.cast.first?.role, "Daenerys Targaryen")
+        XCTAssertEqual(credits.cast.first?.department, nil, "演员没有 department")
+
+        XCTAssertEqual(credits.crew.map(\.name), ["David Nutter"])
+        XCTAssertEqual(credits.crew.first?.role, "Director", "剧组的 role 取自 job")
+        XCTAssertEqual(credits.crew.first?.department, "Directing")
+    }
+
+    /// cast 按 `order` 排 —— 响应里的顺序不保证,客户端只排序、⛔ 不自己重排主要程度。
+    func testCastIsSortedByOrder() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(#"""
+            {"id":1,"cast":[
+             {"id":3,"name":"C","character":"c","order":2},
+             {"id":1,"name":"A","character":"a","order":0},
+             {"id":2,"name":"B","character":"b","order":1}],"crew":[]}
+            """#),
+            host: host, path: "/3/movie/1/credits")
+
+        let credits = try await makeClient().credits(id: 1, isSeries: false, token: "T")
+        XCTAssertEqual(credits.cast.map(\.name), ["A", "B", "C"])
+    }
+
+    /// 缺 `cast` / `crew` 不该让整条解失败(§3 的解码立场),⛔ 不抛错。
+    func testCreditsMissingArraysDecodeAsEmpty() async throws {
+        MockEmbyURLProtocol.stub(.json(#"{"id":1}"#), host: host, path: "/3/movie/1/credits")
+
+        let credits = try await makeClient().credits(id: 1, isSeries: false, token: "T")
+        XCTAssertTrue(credits.cast.isEmpty)
+        XCTAssertTrue(credits.crew.isEmpty)
+    }
+
+    /// `profile_path` 为 `null` 时没有头像 —— UI 退成 `person.fill`,⛔ 不拿别人的照片顶上。
+    func testPersonWithoutProfilePathHasNoAvatar() async throws {
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+
+        let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
+        let daenerys = try XCTUnwrap(credits.cast.first)
+        XCTAssertTrue(daenerys.hasProfile)
+        XCTAssertEqual(daenerys.profileURL?.absoluteString,
+                       "https://image.tmdb.org/t/p/w185/daenerys.jpg")
+
+        let director = try XCTUnwrap(credits.crew.first)
+        XCTAssertFalse(director.hasProfile)
+        XCTAssertNil(director.profileURL)
+    }
+
+    /// 头像档位是 `w185`(§11),与海报 `w500` / 剧照 `w300` 分开。
+    func testProfileURLUsesProfileSize() {
+        XCTAssertEqual(
+            TMDBImage.profileURL(path: "/daenerys.jpg")?.absoluteString,
+            "https://image.tmdb.org/t/p/w185/daenerys.jpg")
+        XCTAssertEqual(TMDBImage.profileSize, "w185")
+        XCTAssertNil(TMDBImage.profileURL(path: nil))
+        XCTAssertNil(TMDBImage.profileURL(path: ""))
+    }
+
+    /// 「导演 / 编剧」按职务取;没有就是空数组(详情页那一行整块不显示)。
+    func testCrewNamesFilterByJob() throws {
+        let credits = TMDBCredits(
+            cast: [],
+            crew: [
+                try Self.person(id: 1, name: "A", job: "Director"),
+                try Self.person(id: 2, name: "B", job: "Writer"),
+                try Self.person(id: 3, name: "C", job: "Director"),
+                try Self.person(id: 4, name: "", job: "Director"),
+            ])
+        XCTAssertEqual(credits.names(withJob: "Director"), ["A", "C"])
+        XCTAssertEqual(credits.names(withJob: "Writer"), ["B"])
+        XCTAssertTrue(credits.names(withJob: "Producer").isEmpty)
+
+        let profile = TMDBSeriesProfile(match: Self.match(status: nil), cast: [], crew: credits.crew)
+        XCTAssertEqual(profile.crewNames(withJob: "Director"), ["A", "C"])
+        XCTAssertTrue(profile.crewNames(withJob: "Composer").isEmpty)
+    }
+
+    // MARK: - 辅助构造
+
+    private static func person(id: Int, name: String, job: String) throws -> TMDBPerson {
+        // `TMDBPerson` 只有解码构造器(逐成员构造器被自定义 `init(from:)` 抑制),
+        // 所以这里就走解码 —— ⛔ 不为测试另开一个生产代码里用不到的开入口。
+        let json = #"{"id":\#(id),"name":"\#(name)","job":"\#(job),"order":0}"#
+        return try JSONDecoder().decode(TMDBPerson.self, from: Data(json.utf8))
+    }
+
+    private static func match(status: String?) -> TMDBMatch {
+        TMDBMatch(result: TMDBResult(
+            tmdbID: 1399, title: nil, originalTitle: nil, releaseDate: nil,
+            name: "Game of Thrones", originalName: nil, firstAirDate: "2011-04-17",
+            overview: nil, posterPath: nil, voteAverage: 8.4,
+            genres: nil, tagline: nil, status: status,
+            productionCompanies: nil, networks: nil
+        ), kind: .tv)
+    }
+
     // MARK: - fixture
 
     /// 取自官方规格 `/3/search/movie` 的 200 示例(`docs/TMDB_API.md` §3)。
@@ -397,5 +575,41 @@ final class TMDBTests: XCTestCase {
     {"air_date":"2011-04-24","episode_number":2,"id":63057,"name":"",
     "overview":null,"production_code":"","season_number":1,"still_path":"/still2.jpg",
     "vote_average":7.9,"vote_count":210}]}
+    """#
+
+    /// 详情端点响应形状(`/3/tv/{id}`,官方规格,`docs/TMDB_API.md` §9)。
+    /// ⚠️ 顶层就是条目本身(没有 `results` 包装),字段名与搜索结果同形 + 那几个扩展字段。
+    /// ⛔ 只留本项目**真正读**的字段 —— 规格示例里那些 `homepage` / `popularity` /
+    /// `production_countries` 一律不放(不读的字段进 fixture 只会误导)。
+    private static let detailsJSON = #"""
+    {"adult":false,"backdrop_path":"/suopoADq0k8YZr4dQXcU6pToj6s.jpg","created_by":[],
+    "episode_run_time":[60],"first_air_date":"2011-04-17","genres":[{"id":18,"name":"剧情"},
+    {"id":10765,"name":"奇幻"}],"id":1399,
+    "in_production":false,"languages":["en"],"last_air_date":"2019-05-19",
+    "name":"Game of Thrones","networks":[{"id":49,"name":"HBO",
+    "logo_path":"/tuomPhY2UtuPTqqFnKMVHvSb724.png","origin_country":"US"}],
+    "number_of_episodes":73,"number_of_seasons":8,"origin_country":["US"],
+    "original_language":"en","original_name":"Game of Thrones","overview":"七大家族争夺铁王座。",
+    "poster_path":"/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg",
+    "production_companies":[{"id":3268,"name":"HBO","logo_path":"/x.png","origin_country":"US"}],
+    "status":"Ended","tagline":"凛冬将至。","vote_average":8.4,"vote_count":21000}
+    """#
+
+    /// 演职员响应形状(`/3/tv/{id}/credits`,官方规格,`docs/TMDB_API.md` §10)。
+    /// ⚠️ 第 3 位演员 `name` 是空串 —— 覆盖「名字为空的条目一律滤掉」那条路径;
+    /// 导演的 `profile_path` 是 `null` —— 覆盖「没有头像就退成图标」。
+    private static let creditsJSON = #"""
+    {"id":1399,"cast":[{"adult":false,"gender":1,"id":1223786,
+    "known_for_department":"Acting","name":"Emilia Clarke","original_name":"Emilia Clarke",
+    "popularity":55.0,"profile_path":"/daenerys.jpg","character":"Daenerys Targaryen",
+    "credit_id":"c1","order":0},{"adult":false,"gender":2,"id":22970,
+    "known_for_department":"Acting","name":"Peter Dinklage","original_name":"Peter Dinklage",
+    "popularity":40.0,"profile_path":"/tyrion.jpg","character":"Tyrion Lannister",
+    "credit_id":"c2","order":1},{"adult":false,"gender":2,"id":99999,
+    "known_for_department":"Acting","name":"","original_name":"","popularity":0.1,
+    "profile_path":null,"character":"","credit_id":"c3","order":2}],
+    "crew":[{"adult":false,"gender":2,"id":9813,"known_for_department":"Directing",
+    "name":"David Nutter","original_name":"David Nutter","popularity":3.0,
+    "profile_path":null,"credit_id":"c4","department":"Directing","job":"Director"}]}
     """#
 }

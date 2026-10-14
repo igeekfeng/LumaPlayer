@@ -251,6 +251,20 @@ enum Metrics {
     /// 网格间距(= spacingL)
     static let gridSpacing: CGFloat = spacingL
 
+    // MARK: 详情页 hero
+
+    /// hero 背景的高度比例(按 `contentMaxWidth` 算高度,与 Emby 详情页同一口径)
+    static let heroAspectRatio: Double = 9.0 / 16.0
+    /// hero 背景的模糊半径。百度只有竖版海报、没有 Emby 那种宽幅 backdrop,
+    /// 直接把竖图铺满会很难看 —— 放大 + 模糊当背景,海报本身另画一份清晰的。
+    static let heroBackdropBlur: CGFloat = 24
+    /// 模糊会把边缘吃虚,放大一点把边补满
+    static let heroBackdropScale: CGFloat = 1.2
+    /// hero 背景的暗化程度(压暗之后压在上面的标题才读得清)
+    static let heroBackdropDimOpacity: Double = 0.45
+    /// hero 里标题区向上压进背景的比例
+    static let heroOverlapRatio: CGFloat = 0.45
+
     // MARK: 分集货架滚动条
 
     /// 滑块厚度(与系统覆盖式滚动条同量级;不画轨道,只有这一条)

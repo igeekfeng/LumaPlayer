@@ -402,6 +402,132 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(MockEmbyURLProtocol.recordedRequests().count, afterFirst, "第二次不该再发请求")
     }
 
+    // MARK: - 详情页的剧级扩展信息 + 演职员(`seriesProfile`)
+
+    /// 没填 token = 用户没开刮削,**不是失败**,而且一个请求都不发
+    /// (与 `enrich` 同一处置)。
+    func testSeriesProfileWithoutTokenIsSilent() async {
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(
+            tmdbID: 1399, title: "权力的游戏", year: 2011)
+
+        XCTAssertNil(profile)
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
+    /// 有**显式 id** 时只按 id 取:详情 + 演职员各一次,⛔ 不再按标题搜
+    /// (给了权威 id 还去搜既慢又可能搜错)。
+    func testSeriesProfileWithExplicitIDSkipsSearch() async throws {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(tmdbID: 1399, title: "不该被用到", year: nil)
+
+        let match = try XCTUnwrap(profile?.match)
+        XCTAssertEqual(match.tmdbID, 1399)
+        XCTAssertEqual(match.kind, .tv)
+        XCTAssertEqual(match.genres, ["剧情", "奇幻"])
+        XCTAssertEqual(match.statusText, "已完结")
+        XCTAssertEqual(match.productionCompanies, ["HBO"])
+        XCTAssertEqual(match.networks, ["HBO"])
+        XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke"])
+        XCTAssertEqual(profile?.crewNames(withJob: "Director"), ["David Nutter"])
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
+            ["/3/tv/1399", "/3/tv/1399/credits"],
+            "有 id 时只该发这两条")
+    }
+
+    /// 没有 id 就用**剧名 + 年份**:先搜一次,再按命中的 id 取详情 + 演职员。
+    ///
+    /// ⚠️ 这里必须用一个**新的**刮削器:上一个用例已经把 `/3/tv/1399` 那两条缓存住了,
+    /// 复用同一个就只剩搜索这一条,看不到「搜完再按 id 取」的完整形状。
+    func testSeriesProfileFallsBackToTitleSearch() async throws {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(tmdbID: nil, title: "权力的游戏", year: 2011)
+
+        XCTAssertEqual(profile?.match.tmdbID, 1399)
+        XCTAssertEqual(profile?.cast.count, 1)
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
+            ["/3/search/tv", "/3/tv/1399", "/3/tv/1399/credits"])
+    }
+
+    /// 同一部剧再问一次 → **零请求**(详情与演职员各有一层缓存)。
+    func testSeriesProfileIsCached() async throws {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        let scraper = Self.makeScraper(credentials)
+
+        _ = await scraper.seriesProfile(tmdbID: 1399, title: "", year: nil)
+        let afterFirst = MockEmbyURLProtocol.recordedRequests().count
+
+        let second = await scraper.seriesProfile(tmdbID: 1399, title: "", year: nil)
+
+        XCTAssertNotNil(second, "缓存命中也要交出结果")
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().count, afterFirst, "第二次不该再发请求")
+    }
+
+    /// id 与标题都没有 → nil,⛔ 一个请求都不发
+    /// (拿空标题去搜只会端回一堆无关的剧,那正是硬规则 4 要避免的)。
+    func testSeriesProfileWithoutAnyIdentitySendsNothing() async {
+        await save(token: "T")
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(tmdbID: nil, title: "", year: nil)
+
+        XCTAssertNil(profile)
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
+    /// 标签不区分影 / 剧:剧端点 404 → 退电影,演职员跟着**命中的那一边**走。
+    func testSeriesProfileFallsBackToMovieWhenTVNotFound() async throws {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.notFoundJSON, statusCode: 404),
+                                 host: host, path: "/3/tv/550")
+        MockEmbyURLProtocol.stub(.json(Self.movieDetailsJSON), host: host, path: "/3/movie/550")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/movie/550/credits")
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(tmdbID: 550, title: "", year: nil)
+
+        XCTAssertEqual(profile?.match.kind, .movie)
+        XCTAssertEqual(profile?.match.title, "Fight Club")
+        XCTAssertEqual(profile?.match.statusText, "已上映")
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
+            ["/3/movie/550", "/3/movie/550/credits", "/3/tv/550"],
+            "影 / 剧两个 id 空间各自编号,要分别试")
+    }
+
+    /// 两边都 404 → nil,⛔ 不拿别的作品来凑;详情都拿不到时也**不再去问演职员**。
+    func testSeriesProfileGivesUpWhenNeitherEndpointHasTheID() async {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.notFoundJSON, statusCode: 404),
+                                 host: host, path: "/3/tv/999999")
+        MockEmbyURLProtocol.stub(.json(Self.notFoundJSON, statusCode: 404),
+                                 host: host, path: "/3/movie/999999")
+        let scraper = Self.makeScraper(credentials)
+
+        let profile = await scraper.seriesProfile(tmdbID: 999999, title: "", year: nil)
+
+        XCTAssertNil(profile)
+        XCTAssertFalse(
+            MockEmbyURLProtocol.recordedRequests().map(\.url.path)
+                .contains("/3/tv/999999/credits"),
+            "详情拿不到就不该再去问演职员")
+    }
+
     // MARK: - 辅助
 
     private func save(token: String) async {
@@ -429,7 +555,14 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             firstAirDate: nil,
             overview: nil,
             posterPath: nil,
-            voteAverage: nil
+            voteAverage: nil,
+            // 详情端点才给的字段(`docs/TMDB_API.md` §9):搜索响应里没有它们,
+            // 所以这个「搜索结果」形状的 fixture 一律为 nil
+            genres: nil,
+            tagline: nil,
+            status: nil,
+            productionCompanies: nil,
+            networks: nil
         ), kind: .movie)
     }
 
@@ -479,19 +612,49 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     /// `/3/tv/{id}` 200 示例(按 id 直取剧):与 `/3/search/tv` 的 `results[]` 同字段名,
     /// 但顶层就是条目本身,没有 `results` 包装。
+    ///
+    /// ⚠️ 比搜索结果**多**的那几个字段(`genres` / `tagline` / `status` /
+    /// `production_companies` / `networks`)是详情端点独有的(`docs/TMDB_API.md` §9)
+    /// —— 详情页的「类型 / 评分 / 状态 / 制片公司」那一行就靠它们。
     private static let tvDetailsJSON = #"""
     {"adult":false,"id":1399,"origin_country":["US"],"original_language":"en",
     "original_name":"Game of Thrones","overview":"一部剧。",
     "poster_path":"/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg","first_air_date":"2011-04-17",
-    "name":"Game of Thrones","vote_average":8.4,"vote_count":21000}
+    "name":"Game of Thrones","vote_average":8.4,"vote_count":21000,
+    "genres":[{"id":18,"name":"剧情"},{"id":10765,"name":"奇幻"}],
+    "tagline":"凛冬将至。","status":"Ended",
+    "production_companies":[{"id":3268,"name":"HBO","logo_path":"/x.png","origin_country":"US"}],
+    "networks":[{"id":49,"name":"HBO","logo_path":"/y.png","origin_country":"US"}]}
     """#
 
-    /// `/3/movie/{id}` 200 示例(按 id 直取电影)
+    /// `/3/movie/{id}` 200 示例(按 id 直取电影)。同样带详情端点独有的字段。
     private static let movieDetailsJSON = #"""
     {"adult":false,"id":550,"original_language":"en","original_title":"Fight Club",
     "overview":"一部电影。","poster_path":"/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
     "release_date":"1999-10-15","title":"Fight Club","video":false,
-    "vote_average":8.433,"vote_count":26279}
+    "vote_average":8.433,"vote_count":26279,
+    "genres":[{"id":18,"name":"剧情"}],"tagline":"标语。","status":"Released",
+    "production_companies":[{"id":508,"name":"20th Century Fox","logo_path":"/f.png",
+    "origin_country":"US"}]}
+    """#
+
+    /// `/3/tv/{id}/credits` 200 示例(`docs/TMDB_API.md` §10):
+    /// ⚠️ 第 3 位演员 `name` 是空串 —— 覆盖「名字为空的条目一律滤掉」那条路径;
+    /// 导演的 `profile_path` 是 `null` —— 覆盖「没有头像就退成图标」。
+    private static let creditsJSON = #"""
+    {"id":1399,"cast":[{"id":1223786,"name":"Emilia Clarke",
+    "profile_path":"/daenerys.jpg","character":"Daenerys Targaryen","order":0},
+    {"id":22970,"name":"Peter Dinklage","profile_path":"/tyrion.jpg",
+    "character":"Tyrion Lannister","order":1},
+    {"id":99999,"name":"","profile_path":null,"character":"","order":2}],
+    "crew":[{"id":9813,"name":"David Nutter","profile_path":null,
+    "department":"Directing","job":"Director"}]}
+    """#
+
+    /// 404 响应体(`docs/TMDB_API.md` §5):`status_code: 34` = 资源不存在。
+    private static let notFoundJSON = #"""
+    {"status_code":34,"status_message":"The resource you requested could not be found.",
+    "success":false}
     """#
 
     /// `/3/tv/1399/season/1` 200 示例(`docs/TMDB_API.md` §7):
