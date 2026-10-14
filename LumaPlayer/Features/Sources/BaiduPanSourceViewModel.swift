@@ -121,6 +121,12 @@ final class BaiduPanSourceViewModel {
     /// 后者必须回到第一季。⛔ 不靠季号判断:两部剧都有「第 1 季」是常态。
     private var shapeDirectory: String?
 
+    /// 「继续观看」卡片点进详情页时,希望默认选中哪一季(`nil` = 没指定)。
+    ///
+    /// ⚠️ 它是一次**导航意图**,不是常驻状态:由 `openDetail(for:)` 写下、
+    /// `applyDirectoryShape` 消费一次即清 —— 留着会让下一次进别的目录时莫名选中某一季。
+    private var preferredSeasonNumber: Int?
+
     /// 当前选中的季
     private(set) var selectedSeason: BaiduPanSeason?
 
@@ -250,6 +256,8 @@ final class BaiduPanSourceViewModel {
         filesByID.removeAll()
         enteredSeriesItem = nil
         shapeDirectory = nil
+        // 结构性重载:上一次「继续观看」点进来的选季意图已经不作数了
+        preferredSeasonNumber = nil
         do {
             authorization = try await connection.authorization()
             // 目录名只用于展示。⛔ 这里的 `try?` 不是吞错:凭据文件读不出来时
@@ -517,6 +525,8 @@ final class BaiduPanSourceViewModel {
         // 记下这张目录卡片:若点进去的是一部剧,它就是这一部剧的剧级元数据来源
         // (标题 / TMDB 海报 / 简介 / 年份,见 `enteredSeriesItem`)。
         enteredSeriesItem = item
+        // 手点目录进来自带上下文,上一次「继续观看」留下的选季意图到此为止
+        preferredSeasonNumber = nil
         currentDirectory = file.path
         await loadFiles()
     }
@@ -531,6 +541,7 @@ final class BaiduPanSourceViewModel {
         currentDirectory = BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top
         // 退回上一层:上一层是什么形态要重新判,刚才那一部剧的剧级元数据也不再适用
         enteredSeriesItem = nil
+        preferredSeasonNumber = nil
         await loadFiles()
     }
 
@@ -543,6 +554,10 @@ final class BaiduPanSourceViewModel {
     private func applyDirectoryShape(directory: String) async {
         let shape = BaiduPanSeriesLayout.shape(of: items)
         directoryShape = shape
+        // 「继续观看」点进来时指定的那一季(见 `openDetail(for:)`)是一次性的导航意图:
+        // 这一层不是剧就丢掉 —— ⛔ 别让它漂到下一次进别的目录时生效。
+        let preferredSeasonNumber = self.preferredSeasonNumber
+        self.preferredSeasonNumber = nil
         guard let structure = shape.seriesStructure else {
             enteredSeriesItem = nil
             seriesItem = nil
@@ -559,7 +574,12 @@ final class BaiduPanSourceViewModel {
         seriesItem = enteredSeriesItem
             ?? Self.fallbackSeriesItem(directory: directory, sourceID: source.id)
         let previousSeasonID = isSameSeries ? selectedSeason?.id : nil
-        let target = structure.seasons.first { $0.id == previousSeasonID }
+        // 选中哪一季的优先级:「继续观看」指定的那一季 > 同一部剧刷新时保住的那一季 > 第一季。
+        // ⚠️ 指定的排最前:用户从续播卡片点进来时看的多半不是第 1 季,而详情页的播放主按钮
+        // 作用于「有进度的那一集」—— 落在第一季会让「继续播放」变成「播放第 1 集」。
+        let target = preferredSeasonNumber
+            .flatMap { number in structure.seasons.first { $0.number == number } }
+            ?? structure.seasons.first { $0.id == previousSeasonID }
             ?? structure.seasons.first
         await selectSeason(target)
         // 剧级扩展信息(类型 / 评分 / 演职员)是**另一趟**请求,不参与上面的加载。
@@ -878,6 +898,31 @@ final class BaiduPanSourceViewModel {
         return true
     }
 
+    /// 点「继续观看」卡片的**非播放**区域:进它的详情页。
+    ///
+    /// 与 `play(_ card:)` 的分工:那个是接着看(⛔ 不动 `currentDirectory`,
+    /// 点一下不该把浏览页换一屏),这个是**跳到那个目录**看详情 ——
+    /// 与 Emby 首页「继续观看」卡片点空白处打开详情页对齐。
+    ///
+    /// 落在**剧目录**上,而不是文件所在的季文件夹上:季文件夹存法
+    /// (`琅琊榜/第1季/01.mp4`)下后者会显示成一部只有一季、剧名还是「第1季」的剧
+    /// (见 `seriesDirectory(ofFilePath:)`)。那一层不是剧(单条视频 / 电影)时
+    /// 照常显示文件网格 —— 百度没有「单文件详情页」,文件所在目录就是能给的最近一层。
+    ///
+    /// ⚠️ 不越出这一页的最外层:用户把某一季设成了片库根时剧目录在它之上,
+    /// 那就退回文件所在目录(见 `detailDirectory(ofFilePath:topmost:)`)。
+    func openDetail(for card: BaiduResumeCard) async {
+        // 卡片那一集属于哪一季,点进去就默认选哪一季 —— 否则「继续播放」会变成
+        // 「播放第 1 集」(理由见 `applyDirectoryShape`)
+        preferredSeasonNumber = Self.seasonNumber(ofFilePath: card.path)
+        // 这次不是「从父目录那张卡片点进来的」,剧级元数据退回目录名兜底
+        // (已知取舍,见 `docs/KNOWN_ISSUES.md`「剧集详情页」一节)
+        enteredSeriesItem = nil
+        currentDirectory = Self.detailDirectory(
+            ofFilePath: card.path, topmost: topmostDirectory)
+        await loadFiles()
+    }
+
     /// 某个目录的内容:就是当前目录就直接复用(0 请求),否则补列一次。
     ///
     /// ⛔ 拿不到就返回 nil,**照常播放**,只是没有换集入口 —— 「继续观看」的语义是
@@ -907,6 +952,53 @@ final class BaiduPanSourceViewModel {
     /// 从文件全路径推出它所在的目录(续播快照只存了文件路径,没有目录字段)。
     static func directory(ofFilePath path: String) -> String {
         (path as NSString).deletingLastPathComponent
+    }
+
+    /// 从文件全路径推出**它所属那部剧的目录**(「继续观看」卡片点进详情页用)。
+    ///
+    /// 与 `directory(ofFilePath:)` 的差别:那个是**文件所在**的目录,这个是**剧**的目录 ——
+    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下两者差一层,直接落在季文件夹上会看到
+    /// 一部只有一季、剧名还是「第1季」的剧。
+    ///
+    /// 判据与合成器判定剧集文件夹的那条同源:父目录名**整个**是季标记
+    /// (`第1季` / `Season 2` / `S0`)时再往上一层
+    /// (`BaiduPanMetadataSynthesizer.seriesFolder` 的判据 1)。
+    /// ⚠️ 认不出来就不猜:退回父目录本身 —— 那一层不是剧就照常显示文件网格。
+    static func seriesDirectory(ofFilePath path: String) -> String {
+        let parent = directory(ofFilePath: path)
+        let parentName = (parent as NSString).lastPathComponent
+        guard BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) != nil else {
+            return parent
+        }
+        let grandparent = directory(ofFilePath: parent)
+        // 已经在根上(`/`):没有再上一层可言,退回父目录
+        return grandparent.isEmpty || grandparent == "/" ? parent : grandparent
+    }
+
+    /// 「继续观看」卡片点进详情页该落在哪一层(见 `openDetail(for:)`)。
+    ///
+    /// ⚠️ 剧目录若在**片库根之上**(用户把某一季设成了片库根),退回文件所在目录 ——
+    /// ⛔ 不越出这一页的最外层(与 `canGoUp` 同一把尺子)。
+    static func detailDirectory(ofFilePath path: String, topmost: String?) -> String {
+        let series = seriesDirectory(ofFilePath: path)
+        guard let topmost, !topmost.isEmpty else { return series }
+        return BaiduPanPath.isInside(series, applicationRoot: topmost)
+            ? series
+            : directory(ofFilePath: path)
+    }
+
+    /// 这一集属于第几季(`nil` = 认不出来)。只用于「点进详情页时默认选中哪一季」。
+    ///
+    /// 判据与合成器同源:父目录名整个是季标记时用它,否则看文件名里的 `SxxExx`。
+    /// 两样都没有就不给 —— 详情页退回第一季,与平铺存法(`琅琊榜/01.mp4` 一律算第 1 季)
+    /// 的口径一致。
+    static func seasonNumber(ofFilePath path: String) -> Int? {
+        let parentName = (directory(ofFilePath: path) as NSString).lastPathComponent
+        if let season = BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) {
+            return season
+        }
+        return BaiduPanMetadataSynthesizer.parse(
+            name: (path as NSString).lastPathComponent).season
     }
 
     /// 把一条移出「继续观看」:删掉本地进度记录(⛔ 不动网盘上的文件)。

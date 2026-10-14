@@ -338,6 +338,82 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(BaiduPanSourceViewModel.directory(ofFilePath: "/a.mp4"), "/")
     }
 
+    // MARK: - 续播卡片点进详情页
+
+    /// 「继续观看」卡片点空白处进的是**剧目录**,不是文件所在的季文件夹 ——
+    /// 落在季文件夹上会显示成一部只有一季、剧名还是「第1季」的剧。
+    /// 判据与合成器的剧集文件夹判定同源:父目录名整个是季标记才再上一层。
+    func testSeriesDirectorySkipsSeasonFolder() {
+        // 平铺存法:剧目录下直接摆集文件,父目录就是剧目录
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/apps/LumaPlayer/琅琊榜/01.mp4"),
+            "/apps/LumaPlayer/琅琊榜")
+        // 季文件夹存法:再上一层
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/第1季/01.mp4"),
+            "/apps/LumaPlayer/琅琊榜")
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/Season 2/01.mp4"),
+            "/apps/LumaPlayer/琅琊榜")
+        // 标准命名库:剧目录带 `{tmdbid-N}`,季文件夹在它下面
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(
+                ofFilePath: "/apps/LumaPlayer/一拳超人 (2015) {tmdbid-63926}/Season 1/01.mp4"),
+            "/apps/LumaPlayer/一拳超人 (2015) {tmdbid-63926}")
+        // 认不出季标记就不猜:父目录名是剧名(或分类目录名)时就是它自己
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/apps/LumaPlayer/电影/300.mp4"),
+            "/apps/LumaPlayer/电影")
+        // 已经到根:没有再上一层可言,退回父目录,⛔ 不返回空串
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/第1季/01.mp4"),
+            "/第1季")
+    }
+
+    /// 详情页落点不越出这一页的最外层(与 `canGoUp` 同一把尺子):
+    /// 用户把某一季设成片库根时,剧目录在它之上,那就退回文件所在目录。
+    func testDetailDirectoryStaysWithinTopmost() {
+        let path = "/apps/LumaPlayer/Videos/琅琊榜/第1季/01.mp4"
+
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.detailDirectory(
+                ofFilePath: path, topmost: "/apps/LumaPlayer/Videos"),
+            "/apps/LumaPlayer/Videos/琅琊榜", "剧目录在片库根之内 → 用它")
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.detailDirectory(
+                ofFilePath: path, topmost: "/apps/LumaPlayer/Videos/琅琊榜/第1季"),
+            "/apps/LumaPlayer/Videos/琅琊榜/第1季",
+            "剧目录在片库根之上 → 退回文件所在目录,⛔ 不越界")
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.detailDirectory(ofFilePath: path, topmost: nil),
+            "/apps/LumaPlayer/Videos/琅琊榜", "还没读到最外层时不做限制")
+    }
+
+    /// 点进详情页时默认选中卡片那一集所属的季 —— 落在第一季会让详情页的
+    /// 「继续播放」变成「播放第 1 集」。
+    func testSeasonNumberFromFilePath() {
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seasonNumber(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/第1季/01.mp4"), 1)
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seasonNumber(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/S0/01.mp4"), 0,
+            "第 0 季(特别篇)是合法季号,⛔ 不当「没解析出来」")
+        XCTAssertEqual(
+            BaiduPanSourceViewModel.seasonNumber(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/Show.S02E07.mkv"), 2,
+            "季号也能来自文件名")
+        XCTAssertNil(
+            BaiduPanSourceViewModel.seasonNumber(
+                ofFilePath: "/apps/LumaPlayer/琅琊榜/01.mp4"),
+            "平铺存法认不出季号 → 详情页退回第一季(与判定层同一口径)")
+        XCTAssertNil(
+            BaiduPanSourceViewModel.seasonNumber(
+                ofFilePath: "/apps/LumaPlayer/电影/300.mp4"))
+    }
+
     // MARK: - 夹具
 
     private func makeEpisodeItem(sourceID: UUID, index: Int) -> SourceItem {

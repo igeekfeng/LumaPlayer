@@ -15,6 +15,9 @@ import SwiftUI
 /// 这里的条目是**媒体文件本身**,不是 Emby 那种「进详情页再选集」的结构。
 /// 点目录就进目录,点文件就播 —— 与文件管理器一致,不需要中间那一层。
 ///
+/// ⚠️ 顶部的「继续观看」区是**例外**:它与 Emby 首页那一行是同一套交互 ——
+/// 悬停出播放按钮,点它直接续播;点卡片其余位置进详情页(见 `BaiduResumeCardView`)。
+///
 /// ## 顺序
 ///
 /// 目录顺序**由客户端排**(`BaiduPanSortOrder`),不用百度返回的顺序:
@@ -202,17 +205,22 @@ struct BaiduPanBrowserView: View {
 
     /// 顶部「继续观看」区:跨目录把看过的东西捞出来(Emby 首页那一行的对位物)。
     /// 数据来自本地续播库(百度没有服务端进度),见 `BaiduPanSourceViewModel.resumeCards`。
+    ///
+    /// ⚠️ 交互也与 Emby 那一行对齐(用户要求):点播放按钮直接续播,点卡片其余位置进详情页。
     private var resumeShelf: some View {
         MediaShelf(title: "继续观看") {
             ForEach(viewModel.resumeCards) { card in
                 BaiduResumeCardView(
                     card: card,
                     store: store,
-                    isPreparing: viewModel.preparingPlaybackFileID == card.fileID
-                ) {
-                    open(card)
-                }
+                    isPreparing: viewModel.preparingPlaybackFileID == card.fileID,
+                    onPlay: { play(card) },
+                    onOpenDetail: { openDetail(card) }
+                )
                 .contextMenu {
+                    Button("继续播放", systemImage: "play.fill") { play(card) }
+                    Button("显示详情", systemImage: "info.circle") { openDetail(card) }
+                    Divider()
                     Button("移出继续观看", systemImage: "eye.slash") {
                         Task { await viewModel.removeResumeCard(card) }
                     }
@@ -233,17 +241,23 @@ struct BaiduPanBrowserView: View {
         }
     }
 
-    /// 续播卡片 → 直接续播(起播位置由本地续播库给)。
+    /// 续播卡片的播放按钮 → 直接续播(起播位置由本地续播库给)。
     ///
     /// ⚠️ 起播前要先补列它所在的目录(换集入口要兄弟集,见
     /// `BaiduPanSourceViewModel.play(_ card:)`),所以这里等它一次再开窗 ——
     /// 顺序反了会先弹一个黑窗口。
-    private func open(_ card: BaiduResumeCard) {
+    private func play(_ card: BaiduResumeCard) {
         Task {
             if await viewModel.play(card) {
                 openWindow(id: PlayerSceneRoot.windowID)
             }
         }
+    }
+
+    /// 续播卡片其余位置 → 进它的详情页(与 Emby 首页那一行同一套交互)。
+    /// ⛔ 这里不 `openWindow`:详情页是主窗口里的一屏,不是播放窗口。
+    private func openDetail(_ card: BaiduResumeCard) {
+        Task { await viewModel.openDetail(for: card) }
     }
 
     /// 目录读失败。分两种处置:
@@ -464,73 +478,103 @@ private struct BaiduPanCard: View {
 
 /// 「继续观看」区的一张横版卡片。
 ///
-/// 与 `BaiduPanCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
+/// 交互与 Emby 首页那一行的 `LandscapeCard` **完全对齐**(用户要求):悬停时画面上
+/// 出现玻璃播放按钮,**点它直接续播**;**点卡片其余位置进详情页**。
+/// ⚠️ 点空白处不再直接播 —— 那是这一版之前的行为,与 Emby 不一致。
+///
+/// 视觉与 `BaiduPanCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
 /// 副标题固定报「已看到 mm:ss」、有总时长时在图上画进度条。
 private struct BaiduResumeCardView: View {
     let card: BaiduResumeCard
     let store: PosterImageStore
     /// 正在为这张卡片补列目录(换集入口要兄弟集)。转圈 + 禁止重复点击
     var isPreparing = false
-    let onOpen: () -> Void
+    /// 点播放按钮:直接续播
+    let onPlay: () -> Void
+    /// 点卡片其余位置:进详情页
+    let onOpenDetail: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: Metrics.spacingS) {
-                // 尺寸由 Color.clear 钉死,图片与进度条只当 overlay(与 `BaiduPanCard` 同理)
-                Color.clear
-                    .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
-                    .frame(width: Metrics.landscapeCardWidth)
-                    .overlay {
-                        PosterImage(
-                            descriptor: card.poster,
-                            store: store,
-                            placeholderSystemImage: "play.rectangle"
-                        )
-                    }
-                    .overlay {
-                        // 补列目录期间给一个明确的「正在准备」—— 那一步要发两次请求,
-                        // 没有它点了就像没反应
-                        if isPreparing {
-                            ZStack {
-                                Color.black.opacity(0.45)
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .overlay(alignment: .bottom) {
-                        if let fraction = progressFraction {
-                            CardProgressBar(fraction: fraction)
-                                .padding(Metrics.spacingS)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-                    .scaleEffect(isHovering ? Self.hoverScale : 1)
-                    .shadow(
-                        color: .black.opacity(isHovering ? 0.25 : 0),
-                        radius: Metrics.spacingS,
-                        y: Metrics.spacingXS
+        VStack(alignment: .leading, spacing: Metrics.spacingS) {
+            // 尺寸由 Color.clear 钉死,图片 / 播放按钮 / 进度条只当 overlay
+            // (与 `BaiduPanCard` 同理)
+            Color.clear
+                .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
+                .frame(width: Metrics.landscapeCardWidth)
+                .overlay {
+                    PosterImage(
+                        descriptor: card.poster,
+                        store: store,
+                        placeholderSystemImage: "play.rectangle"
                     )
-                VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                    Text(card.title)
-                        .font(.body)
-                        .lineLimit(1)
-                    Text(isPreparing ? "正在准备…" : card.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
-                .frame(width: Metrics.landscapeCardWidth, alignment: .leading)
+                .overlay {
+                    // 补列目录期间给一个明确的「正在准备」—— 那一步要发两次请求,
+                    // 没有它点了就像没反应
+                    if isPreparing {
+                        ZStack {
+                            Color.black.opacity(0.45)
+                            ProgressView()
+                        }
+                    }
+                }
+                .overlay {
+                    // 悬停才出现的播放按钮(与 `LandscapeCard` 同一画法):
+                    // 它是这张卡上**唯一**「点了就播」的地方,点别处去详情页
+                    if isHovering, !isPreparing {
+                        Button(action: onPlay) {
+                            Image(systemName: "play.fill")
+                                .font(.title2)
+                                .padding(Metrics.spacingM)
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .help("继续播放")
+                        .transition(.opacity)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if let fraction = progressFraction {
+                        CardProgressBar(fraction: fraction)
+                            .padding(Metrics.spacingS)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                .scaleEffect(isHovering ? Self.hoverScale : 1)
+                .shadow(
+                    color: .black.opacity(isHovering ? 0.25 : 0),
+                    radius: Metrics.spacingS,
+                    y: Metrics.spacingXS
+                )
+            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
+                Text(card.title)
+                    .font(.body)
+                    .lineLimit(1)
+                Text(isPreparing ? "正在准备…" : card.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+            .frame(width: Metrics.landscapeCardWidth, alignment: .leading)
         }
-        .buttonStyle(.plain)
-        .disabled(isPreparing)
+        // 卡片整体可点(进详情),播放按钮盖在上面并先吃掉点击 ——
+        // 与 `LandscapeCard` 同一个做法:Button 的命中优先于外层的手势。
         .contentShape(Rectangle())
+        .onTapGesture(perform: onOpenDetail)
+        // 补列目录期间整张卡不可点:此刻起播与跳转都还没准备好。
+        // ⚠️ 两个都要:`.disabled` 是给辅助功能/控件的那一层,而这张卡的主体是
+        // `onTapGesture`(不是 Button)—— 靠 `allowsHitTesting` 把命中一并关掉。
+        .disabled(isPreparing)
+        .allowsHitTesting(!isPreparing)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(card.title),\(card.subtitle)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onOpenDetail() }
+        .accessibilityAction(named: "播放") { onPlay() }
     }
 
     private static var hoverScale: CGFloat { 1.03 }

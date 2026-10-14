@@ -329,8 +329,13 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 - ✅ 百度来源页顶部加「继续观看」区(`BaiduPanBrowserView.resumeShelf`):
   跨目录列出本地有进度的条目,卡片显示标题 + 封面 + 「已看到 mm:ss」,可续播 /
   可「移出继续观看」。**这是 Emby 首页那一行的对位物**(决策见 §6.7)。
-- ⛔ `BrowseRoute` **未改**:本次形态下百度页是导航栈根页,续播卡片直接播,
-  不 push 任何路由 —— 泛化它没有消费者(见 §6.7)。
+- ✅ **2026-10-14 交互对齐 Emby 那一行**:点卡片上的播放按钮直接续播,
+  点卡片**其余位置**进详情页(此前点整张卡都是直接播)。落点在
+  `BaiduPanSourceViewModel.detailDirectory` —— 剧目录优先(季文件夹存法跳过季文件夹)、
+  并默认选中卡片那一集所属的季;不是剧的条目落在文件所在目录(⛔ 百度没有单文件详情页)。
+- ⛔ `BrowseRoute` **未改**:本次形态下百度页是导航栈根页,续播卡片不 push 任何路由 ——
+  「点卡片其余位置进详情页」是**本页内容换一屏**(与手点目录进去同一条路),
+  泛化它没有消费者(见 §6.7)。
 - 验收:`WatchProgressStoreTests`(快照合并 / 向后兼容 / `resumeEntries` 过滤与排序)、
   `BaiduPanSourceLifecycleTests`(组合根 `rememberResumeCard` 不丢进度、卡片重建)绿;
   全量 **614 项全绿**,0 warning。
