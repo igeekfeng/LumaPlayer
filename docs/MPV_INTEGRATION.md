@@ -135,8 +135,8 @@ idle ──load()──▶ loading ──首帧──▶ playing ⇄ paused
 - `shutdown()` 可重入;`destroyed` 之后任何调用抛 `MPVError.instanceDestroyed`,不静默。
 - 拆卸顺序不可换:先 `mpv_wakeup` 停事件循环 → `mpv_render_context_free` → `mpv_destroy`。
 - 一实例一 URL,不复用(复用会沿用上一轮的 `http-header-fields`,跨服务器即串台);播完是 `endFile(.eof)` 事件不是状态。
-- 拆卸后视图若还在屏上,画面定格在最后一帧(`MPVGLLayer.canDraw` 看 `canRender`)。播放页换集靠它不黑屏:
-  上一集的视频层盖在新一集上,等新实例发 `firstVideoFrameRendered`(第一帧非重绘的真实视频帧)再撤。
+- 拆卸后视图若还在屏上,画面定格在最后一帧(`MPVGLLayer.canDraw` 看 `canRender`)。换集 / 转码 seek / 重试靠它不黑屏:
+  上一个实例的视频层盖在新实例上,等新实例发 `firstVideoFrameRendered`(第一帧非重绘的真实视频帧)再撤。
 
 ## 9. 错误映射
 

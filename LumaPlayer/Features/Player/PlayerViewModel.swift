@@ -117,14 +117,27 @@ final class PlayerViewModel {
     /// track-list 已到、里面没有视频轨(纯音频文件):永远等不到第一帧
     private var hasNoVideoTrack = false
 
-    /// 这一集**会有画面、但还没出来**。播放页换集时据此把上一集的最后一帧
-    /// 留在屏上(`PlayerWindowView.lingeringPlayer`),一变假就撤掉。
+    /// 当前播放器**会有画面、但还没出来**。期间把上一个播放器的最后一帧留在屏上
+    /// (`lingeringPlayer`),一变假就撤掉。
     ///
-    /// 出错 / 播完 / 纯音频都算「不用再等」—— ⛔ 不能让上一集的定格画面
+    /// 出错 / 播完 / 纯音频都算「不用再等」—— ⛔ 不能让定格画面
     /// 一直压在一个出不了画面的会话上。
     var isAwaitingFirstVideoFrame: Bool {
         !hasRenderedFirstVideoFrame && !hasNoVideoTrack && failure == nil && !isEnded
     }
+
+    /// 上一个出过画面的播放器(已 shutdown)。`stop()` 时留下,新播放器出第一帧时放掉。
+    ///
+    /// 拆掉的 mpv 不再让 layer 画,画面停在最后一帧(`MPVPlayer.canRender`);
+    /// 把它的视频层盖在新播放器上面,转码 seek 重新起流 / 重试 / 换集就都不黑屏。
+    /// 换集时由播放页交给下一集的 ViewModel(`lastFramePlayer` → init)。
+    private var frozenPlayer: MPVPlayer?
+
+    /// 视频层要盖在当前播放器上面的定格画面;nil = 不用盖(见 `frozenPlayer`)
+    var lingeringPlayer: MPVPlayer? { isAwaitingFirstVideoFrame ? frozenPlayer : nil }
+
+    /// 换集交接用:不看「还等不等」,上一集结束时屏上最后那一帧就是它
+    var lastFramePlayer: MPVPlayer? { frozenPlayer }
     /// 本次播放可切换的剧集队列(上一集 / 下一集 / 选集面板的唯一数据源)。
     ///
     /// 来源有二,都在 `init` / `loadEpisodeQueue` 里定下:
@@ -292,6 +305,7 @@ final class PlayerViewModel {
         container: AppContainer,
         request: PlaybackRequest,
         carryOver: PageCarryOver? = nil,
+        lastFramePlayer: MPVPlayer? = nil,
         preparer: (any PlaybackSessionPreparing)? = nil,
         reporter: (any PlaybackReporting)? = nil,
         displaySleep: (any DisplaySleepInhibiting)? = nil
@@ -299,6 +313,7 @@ final class PlayerViewModel {
         self.container = container
         self.request = request
         self.carryOver = carryOver
+        self.frozenPlayer = lastFramePlayer
         self.showsStatistics = carryOver?.showsStatistics ?? false
         // 会话准备与进度出口都按来源装配(Emby → 决策器 + 服务端上报;
         // 百度 → 播放映射 + 本地续播库)。测试可注入替身 —— 接线规则不该依赖网络。
@@ -424,8 +439,6 @@ final class PlayerViewModel {
         isPaused = false
         isRestarting = false
         isEnded = false
-        hasRenderedFirstVideoFrame = false
-        hasNoVideoTrack = false
         // 新播放器 = 新上报会话:不复位的话,播放中途出错再重试,
         // 新会话既不会补 seek 到起播位置,也永远不会发 Playing。
         didApplyStartOffset = false
@@ -471,8 +484,16 @@ final class PlayerViewModel {
         isRestarting = false
         stopUpNextCountdown()
         scrubPreviewSeconds = nil
+        // 出过画面就留着它的最后一帧,盖到下一个播放器出画面为止(`frozenPlayer`);
+        // 没出过(起播中又停)就沿用更早那一帧。⛔ 必须与 `player = nil` 同步写:
+        // 隔一拍的话视频层先被拆掉,再挂回来就是一块空 layer。
+        if let player, player.hasRenderedVideoFrame {
+            frozenPlayer = player
+        }
         player?.shutdown()
         player = nil
+        hasRenderedFirstVideoFrame = false
+        hasNoVideoTrack = false
     }
 
     // MARK: - 控制
@@ -1433,6 +1454,7 @@ final class PlayerViewModel {
 
         case .firstVideoFrameRendered:
             hasRenderedFirstVideoFrame = true
+            frozenPlayer = nil
 
         case .timePos(let value):
             markTimeline(.firstFrame)

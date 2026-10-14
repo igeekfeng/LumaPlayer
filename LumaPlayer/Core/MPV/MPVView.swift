@@ -77,7 +77,7 @@ final class MPVGLLayer: CAOpenGLLayer {
 
     /// 没有活的渲染上下文就不画:CA 跳过这一帧、layer 保留上一次的画面
     /// (见 `MPVPlayer.canRender`)。播放器拆掉后画面因此定格在最后一帧而不是变黑 ——
-    /// 换集时播放页就靠它把上一集冻在屏上。
+    /// 换集 / 转码 seek / 重试就靠它不黑屏。
     override func canDraw(
         inCGLContext ctx: CGLContextObj,
         pixelFormat pf: CGLPixelFormatObj,

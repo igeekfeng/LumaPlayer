@@ -49,10 +49,6 @@ struct PlayerWindowView: View {
     @State private var nowPlaying = NowPlayingController()
     @State private var window = WindowBox()
     @State private var trackpad = TrackpadScrubMonitor()
-    /// 换集时上一集的播放器(已 shutdown):它的视频层留在屏上、盖在新一集上面,
-    /// 画面定格在最后一帧(`MPVGLLayer.canDraw`),新一集出第一帧后撤掉 ——
-    /// 换集不再黑一下。nil = 没有要留的。
-    @State private var lingeringPlayer: MPVPlayer?
 
     /// 控制层(标题栏 + 控制栏 + 红绿灯)是否可见
     @State private var controlsVisible = true
@@ -85,7 +81,7 @@ struct PlayerWindowView: View {
             // 按实例认视图:`MPVView` 一次性绑定 player(§8),换了实例必须重建 layer,
             // 否则新 mpv 永远等不到 GL 上下文。⛔ 不能拆成两个 `if`:上一集从「当前」
             // 挪到「定格」时会被当成另一个视图重建,新 layer 是空的 —— 定格画面就没了。
-            // 顺序即层级:当前一集在下,定格的上一集盖在上面。
+            // 顺序即层级:当前播放器在下,定格的上一个(`lingeringPlayer`)盖在上面。
             ForEach(videoLayers) { layer in
                 MPVView(player: layer.player)
             }
@@ -112,10 +108,6 @@ struct PlayerWindowView: View {
         .onDisappear(perform: tearDown)
         // 同一播放页里换了集(`pageID` 没变、`id` 变了):页内换会话
         .onChange(of: request.id) { switchSession() }
-        .onChange(of: viewModel.isAwaitingFirstVideoFrame) { _, awaiting in
-            // 新一集出画面了(或出错 / 纯音频,再等也没有画面):撤掉定格的上一集
-            if !awaiting { lingeringPlayer = nil }
-        }
         .onContinuousHover { phase in
             // 指针在窗口内移动:显示并**重新计时**,静止 `autoHideDelay`
             // 秒后自动隐藏。指针移出窗口:同样走计时(延迟更短,见 Metrics)。
@@ -237,9 +229,10 @@ struct PlayerWindowView: View {
         }
     }
 
-    /// 屏上的视频层(当前一集 + 换集时定格的上一集),见 `lingeringPlayer`
+    /// 屏上的视频层:当前播放器 + 定格的上一个(换集 / 转码 seek / 重试,
+    /// 见 `PlayerViewModel.lingeringPlayer`)
     private var videoLayers: [VideoLayer] {
-        [viewModel.player, lingeringPlayer].compactMap { $0 }.map(VideoLayer.init)
+        [viewModel.player, viewModel.lingeringPlayer].compactMap { $0 }.map(VideoLayer.init)
     }
 
     /// 系统「正在播放」的进度校准间隔(秒)
@@ -551,12 +544,12 @@ struct PlayerWindowView: View {
     private func switchSession() {
         let previous = viewModel
         let carryOver = previous.pageCarryOver
-        // 上一集出过画面就定格它;没出过(还在起播就又换了)就留着更早那一集的定格
-        if let player = previous.player, previous.hasRenderedFirstVideoFrame {
-            lingeringPlayer = player
-        }
         finish(previous)
-        let next = PlayerViewModel(container: container, request: request, carryOver: carryOver)
+        // 上一集的最后一帧接着盖在新一集上(stop 之后才定下来是哪一个,见 `lastFramePlayer`)。
+        // ⛔ 与 `viewModel = next` 在同一拍:定格层的视图身份不变,layer 才不会被重建成空的。
+        let next = PlayerViewModel(
+            container: container, request: request,
+            carryOver: carryOver, lastFramePlayer: previous.lastFramePlayer)
         viewModel = next
         // 远程命令绑在 ViewModel 上:update 发现换了对象会撤掉旧注册再按新的注册
         // (同时清掉上一集的封面)

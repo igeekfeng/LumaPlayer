@@ -253,6 +253,30 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertTrue(stale.isAwaitingFirstVideoFrame)
     }
 
+    /// 交接进来的定格画面(换集时上一集的最后一帧)只在「等第一帧」期间盖着:
+    /// 出画面就撤并放掉引用;出错时也不能再盖(错误页之下压着上一集没有意义)。
+    /// 转码 seek / 重试走的是 `stop()` 里同一个字段,但那条要真出过画面的 mpv,见
+    /// `MPVFrameHandoffTests`。
+    func testLingeringFrameShowsOnlyWhileAwaitingFirstFrame() throws {
+        let frozen = MPVPlayer()
+        defer { frozen.shutdown() }
+
+        let viewModel = try makeViewModel(lastFramePlayer: frozen)
+        XCTAssertTrue(viewModel.lingeringPlayer === frozen)
+        viewModel.handle(.firstVideoFrameRendered, generation: 0)
+        XCTAssertNil(viewModel.lingeringPlayer)
+        XCTAssertNil(viewModel.lastFramePlayer, "出画面后就该放掉上一帧")
+
+        let failed = try makeViewModel(lastFramePlayer: frozen)
+        failed.handle(.endFile(.error("拉流 401")), generation: 0)
+        XCTAssertNil(failed.lingeringPlayer)
+
+        // 还没出过画面就 stop(起播中又重试):沿用更早那一帧,不能丢
+        let restarted = try makeViewModel(lastFramePlayer: frozen)
+        restarted.stop()
+        XCTAssertTrue(restarted.lingeringPlayer === frozen)
+    }
+
     /// `makeBaiduViewModel` 最近一次装配的容器(换集用例要读它的 `nowPlaying`)
     private var baiduContainer: AppContainer?
 
@@ -411,7 +435,7 @@ final class PlayerViewModelTests: XCTestCase {
                  codec: nil, isExternal: false, isForced: false)
     }
 
-    private func makeViewModel() throws -> PlayerViewModel {
+    private func makeViewModel(lastFramePlayer: MPVPlayer? = nil) throws -> PlayerViewModel {
         let registry = try ServerRegistry(
             defaults: UserDefaults(suiteName: "test.LumaPlayer.player.\(UUID().uuidString)")!,
             credentials: credentials
@@ -431,8 +455,8 @@ final class PlayerViewModelTests: XCTestCase {
                 credentials: credentials,
                 preferences: UserDefaults(suiteName: "test.LumaPlayer.player.prefs.\(UUID().uuidString)")!
             ),
-            server: profile,
-            item: item,
+            request: PlaybackRequest(server: profile, item: item),
+            lastFramePlayer: lastFramePlayer,
             displaySleep: displaySleep
         )
     }

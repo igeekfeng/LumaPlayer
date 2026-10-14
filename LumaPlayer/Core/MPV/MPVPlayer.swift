@@ -700,7 +700,7 @@ final class MPVPlayer: @unchecked Sendable {
             let flags = mpv_render_context_update(renderContext)
             // 这一帧是不是 VO 送来的真实视频帧(第一帧判据,见 `firstVideoFrameRendered`)。
             // ⛔ 不能只看 UPDATE_FRAME:VO 刚建好时的重绘请求同样带它,那一帧还没有画面
-            // (vo_libmpv.c:`redraw || !current`),拿它当首帧会提前撤掉上一集的定格画面。
+            // (vo_libmpv.c:`redraw || !current`),拿它当首帧会提前撤掉定格画面。
             let isFirstVideoFrame = flags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) != 0
                 && !mutex.withLock({ state.hasRenderedVideoFrame })
                 && Self.nextFrameIsVideo(renderContext)
@@ -782,11 +782,16 @@ final class MPVPlayer: @unchecked Sendable {
     ///
     /// 没有活的渲染上下文(还没挂 GL / 已拆卸)时为假:layer 跳过这一帧,**保留上一次的画面**
     /// (CAOpenGLLayer 的契约,2026-10-14 用独立探针 + 截图实测,缩放窗口时也只是拉伸)。
-    /// 换集时播放页靠这一点把上一集的最后一帧冻在屏上,直到新一集出第一帧
-    /// (`PlayerWindowView.lingeringPlayer`)。之前没有这道判断时,拆掉后照常走 draw,
+    /// 换集 / 转码 seek / 重试时靠这一点把上一个播放器的最后一帧冻在屏上,直到新的出第一帧
+    /// (`PlayerViewModel.lingeringPlayer`)。之前没有这道判断时,拆掉后照常走 draw,
     /// 空 render + flush 出来的是黑帧。
     var canRender: Bool {
         mutex.withLock { state.handle != nil && state.renderContext != nil && !state.isStopping }
+    }
+
+    /// 画出过真实视频帧(拆卸后仍可读)。为假时 layer 上没有值得定格的画面。
+    var hasRenderedVideoFrame: Bool {
+        mutex.withLock { state.hasRenderedVideoFrame }
     }
 
     /// 统计快照(诊断用;目前 App 内没有调用方,排查渲染问题时临时读它)

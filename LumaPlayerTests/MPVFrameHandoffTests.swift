@@ -2,9 +2,9 @@ import AppKit
 import XCTest
 @testable import LumaPlayer
 
-/// 换集不黑屏的两条前提(`PlayerWindowView.lingeringPlayer`):
+/// 换集 / 转码 seek / 重试不黑屏的两条前提(`PlayerViewModel.lingeringPlayer`):
 /// - 已拆卸的播放器不再让 layer 画(`canRender` 为假 → 画面定格在最后一帧);
-/// - 新一集的视频层**被上一集的定格层整个盖住**时,照样能挂上 GL、画出第一帧真实视频帧
+/// - 新播放器的视频层**被上一个的定格层整个盖住**时,照样能挂上 GL、画出第一帧真实视频帧
 ///   并发出 `firstVideoFrameRendered`(播放页靠它撤掉定格层)。
 ///
 /// ⚠️ 覆盖边界(照实说):要真窗口 + GPU(本机有;无 GPU 的环境会失败而不是 skip)。
@@ -70,6 +70,13 @@ final class MPVFrameHandoffTests: XCTestCase {
         try fresh.load(url: url, headers: [:])
         await fulfillment(of: [firstFrame], timeout: 5)
         XCTAssertGreaterThan(fresh.statisticsSnapshot().renderedFrames, 0)
+
+        // 它再被拆掉(转码 seek / 重试 / 换集):仍记得出过画面 —— ViewModel 据此留它当定格层
+        XCTAssertTrue(fresh.hasRenderedVideoFrame)
+        fresh.shutdown()
+        XCTAssertTrue(fresh.hasRenderedVideoFrame)
+        XCTAssertFalse(fresh.canRender)
+        XCTAssertFalse(previous.hasRenderedVideoFrame, "从没播过的实例没有可定格的画面")
     }
 
     /// 测试 bundle 里资源可能被展平,也可能保留子目录:先按名字找,再递归搜
