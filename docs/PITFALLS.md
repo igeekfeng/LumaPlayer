@@ -214,6 +214,15 @@ per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓�
 
 **共用工具栏的「刷新」靠各页 `.task(id:)` 吃 `refreshToken`(Q36)。** 详情页曾漏接,刷新成空操作。每个新页面都要确认。
 
+**`.sheet(item:)` 的内容里 ⛔ 别用 `if let` 去取第二个 `@State`(第一次弹出的是空白面板)。** 百度「按 TMDB 命名重命名」曾这么写:一个状态装目录、
+另一个装流程 ViewModel,sheet 内容里 `if let viewModel`。后果是**第一次右键弹出一个空白面板** ——
+sheet 的内容闭包在状态提交落地之前就被求值,那次读到的还是上一次的值(nil),面板便建成了空的,而且不会再补内容。
+第二次点之所以看着"恢复正常",只是因为上一轮写进去的 ViewModel 还在,**显示的是上一部剧的进度**。
+做法:两样东西装进**同一个** `Identifiable` 载荷(`RenameRequest`)一起交给 `.sheet(item:)`,内容闭包只读它 ——
+也仍然满足「⛔ ViewModel 不在内容闭包里新建」(闭包会重算,每重算一次丢一次进度)。
+⚠️ 这种载荷的 `id` 要用 `UUID`,⛔ 别用目录的 `fs_id`:同一目录连着改两次时 id 相同,
+`BaiduPanRenameSeriesView` 的 `@State didStart` 会被复用,第二次不会重新走 `start`,面板卡在上一轮结果上。
+
 ## 5. 工具与环境
 
 **沙盒 App 写不了 `~/Library/Logs`。** 诊断日志在容器里(路径见 `CLAUDE.md`);系统日志

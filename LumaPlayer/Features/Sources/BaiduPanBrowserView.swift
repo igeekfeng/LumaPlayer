@@ -47,11 +47,29 @@ struct BaiduPanBrowserView: View {
     /// 待确认删除的条目(右键菜单里点了「删除…」)。
     /// 弹窗状态放 View 的 `@State` —— 与 `ServerListView` 同一惯例。
     @State private var pendingDeletion: SourceItem?
-    /// 要走「按 TMDB 命名重命名」的目录。
-    @State private var renameTarget: BaiduPanFile?
-    /// 重命名流程自己的 ViewModel。**与目录成对创建** ——
-    /// ⛔ 不放进 `sheet` 的内容闭包里:那个闭包可能重算,每次重算都会丢掉已经走到的进度。
-    @State private var renameViewModel: BaiduPanRenameSeriesViewModel?
+
+    /// 一次「按 TMDB 命名重命名」请求:要改的目录 + 这条流程自己的 ViewModel。
+    ///
+    /// ⚠️ 两样东西必须装在**同一个** `Identifiable` 载荷里交给 `.sheet(item:)`。
+    /// 早先拆成两个 `@State`(目录一个、ViewModel 一个)、再在 sheet 内容里
+    /// `if let` 取第二个,后果是**第一次右键弹出的是个空白面板**:sheet 的内容闭包
+    /// 在状态提交落地之前就被求值,那次读到的还是上一次的值(nil),面板便建成了空的;
+    /// 第二次点之所以看着"正常",只是因为上一轮写进去的那个 ViewModel 还在 ——
+    /// 显示出来的是**上一部剧的进度**,不是这次点的目录。
+    ///
+    /// ⚠️ `id` 用 `UUID` 而不是目录的 `fsID`:同一个目录连着改两次时若 id 相同,
+    /// `BaiduPanRenameSeriesView` 的 `@State didStart` 会被复用,第二次不会重新走
+    /// `start` —— 面板就卡在上一轮的结果上。
+    ///
+    /// ⛔ ViewModel 仍然**不放进 `sheet` 的内容闭包**里新建:那个闭包会重算,
+    /// 每重算一次就丢一次已经走到的进度。存成请求的一部分,闭包只读它。
+    private struct RenameRequest: Identifiable {
+        let id = UUID()
+        let directory: BaiduPanFile
+        let viewModel: BaiduPanRenameSeriesViewModel
+    }
+
+    @State private var renameRequest: RenameRequest?
     /// 删除失败的原因(面板关掉后由 alert 报出,见类型注释里的范式)。
     @State private var actionErrorMessage: String?
 
@@ -88,15 +106,13 @@ struct BaiduPanBrowserView: View {
                 actionErrorMessage = message
             }
         }
-        .sheet(item: $renameTarget) { file in
-            if let renameViewModel {
-                BaiduPanRenameSeriesView(
-                    viewModel: renameViewModel,
-                    directory: file
-                ) {
-                    // 名字全变了,缓存里的旧目录已经不对了
-                    Task { await viewModel.refreshFiles() }
-                }
+        .sheet(item: $renameRequest) { request in
+            BaiduPanRenameSeriesView(
+                viewModel: request.viewModel,
+                directory: request.directory
+            ) {
+                // 名字全变了,缓存里的旧目录已经不对了
+                Task { await viewModel.refreshFiles() }
             }
         }
         // 与 `ServerListView` 破坏性操作同一范式:确认面板关掉后再报失败
@@ -184,8 +200,9 @@ struct BaiduPanBrowserView: View {
                                     // 单集文件没有季 / 剧的上下文,改不出标准命名。
                                     if item.kind.isContainer, let file = viewModel.file(for: item) {
                                         Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
-                                            renameViewModel = viewModel.makeRenameViewModel()
-                                            renameTarget = file
+                                            renameRequest = RenameRequest(
+                                                directory: file,
+                                                viewModel: viewModel.makeRenameViewModel())
                                         }
                                     }
                                     Button("删除…", systemImage: "trash", role: .destructive) {
