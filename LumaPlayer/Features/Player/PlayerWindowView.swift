@@ -303,6 +303,7 @@ struct PlayerWindowView: View {
                 controlsLayer
                 // 选集抽屉压在最上层:从右侧滑出,和画面并存(不铺满)。
                 // 左侧留白不参与命中测试,点画面照样落到 `interactionLayer`。
+                // 它盖住控制栏右半段(含最右端的选集按钮),收起靠抽屉左缘的把手。
                 if isEpisodePanelPresented {
                     PlayerEpisodePanel(
                         episodes: viewModel.episodes,
@@ -392,11 +393,10 @@ struct PlayerWindowView: View {
     private var controlBar: some View {
         // 全宽触底:不再加水平 padding 与最大宽度,压暗衬底要一直铺到窗口边缘。
         // 内容的左右缩进在 `PlayerControlsView` 内部做(controlBarSideInset)。
-        // 换集入口(上一集 / 下一集 / 选集)由控制栏自己按 `viewModel` 的队列决定,
-        // 这里不再单独算一个 `playNext` 传进去。
+        // 换集与选集入口都由控制栏自己按 `viewModel` 的队列决定,这里不再单独传。
+        // 全屏只走 F / 双击画面(控制栏里没有全屏按钮,2026-10-14)。
         PlayerControlsView(
             viewModel: viewModel,
-            toggleFullScreen: { toggleFullScreen() },
             isSpeedPopoverPresented: $isSpeedPopoverPresented,
             isEpisodePanelPresented: $isEpisodePanelPresented,
             isMarkersEditorPresented: $isMarkersEditorPresented

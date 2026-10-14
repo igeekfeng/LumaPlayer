@@ -13,6 +13,10 @@ import SwiftUI
 /// 百度的兄弟集是**起播那一刻**装进请求的(`BaiduPanSourceViewModel.episodeQueue`),
 /// 回头再列一次网盘是白烧请求(配额见 `docs/BAIDU_PAN_API.md` §7)。
 /// 封面走 `PosterImage`(唯一允许发图请求的地方),缓存与海报墙共用。
+///
+/// 收起入口有两个:表头右端的 ✕,以及**左缘竖直居中的把手**(`collapseHandle`)。
+/// 后者的必要性来自控制栏的改版:选集按钮已挪到控制栏最右端,而抽屉一打开就盖住
+/// 那一段 —— 只留 ✕ 的话,收起得先跨过半屏去找表头(2026-10-14)。
 struct PlayerEpisodePanel: View {
     let episodes: [PlaybackEpisode]
     /// 当前这一集的来源内 id(高亮 + 打开时滚到它)
@@ -21,11 +25,15 @@ struct PlayerEpisodePanel: View {
     let onSelect: (PlaybackEpisode) -> Void
     let onClose: () -> Void
 
+    @State private var isHoveringCollapseHandle = false
+
     var body: some View {
         HStack(spacing: 0) {
             // 左侧留白让画面露出来:抽屉是「并存」不是「覆盖」。
             // Spacer 不参与命中测试,点左侧照样落到下面的画面交互层(单击暂停)。
             Spacer(minLength: 0)
+            // 把手与抽屉**并排**(不是叠在抽屉上):压不到剧照,也不占列表宽度。
+            collapseHandle
             drawer
         }
     }
@@ -45,6 +53,32 @@ struct PlayerEpisodePanel: View {
         .overlay(alignment: .leading) { Divider() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("选集面板")
+    }
+
+    /// 左缘竖直居中的收起把手:指向右的箭头(「推回右边」)。
+    ///
+    /// 背景用与抽屉同一档材质,而不是黑底或白底 —— 它浮在**亮度不可控的画面**上
+    /// (把手在抽屉左缘外侧,底下是视频),只有材质 + 深色外观能保证箭头一直读得出来。
+    private var collapseHandle: some View {
+        Button(action: onClose) {
+            Image(systemName: "chevron.right")
+                .font(.body.weight(.semibold))
+                .frame(
+                    width: Metrics.episodePanelCollapseHandleWidth,
+                    height: Metrics.episodePanelCollapseHandleHeight
+                )
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: Radius.card))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.card)
+                        .fill(.white.opacity(isHoveringCollapseHandle ? 0.18 : 0))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHoveringCollapseHandle = $0 }
+        .animation(.easeOut(duration: Metrics.animationFast), value: isHoveringCollapseHandle)
+        .help("收起选集")
+        .accessibilityLabel("收起选集")
     }
 
     private var header: some View {

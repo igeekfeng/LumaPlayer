@@ -1,7 +1,10 @@
 import SwiftUI
 
-/// 播放器底部控制栏(DesignTokens.swift「界面规则」的优先级:播放/暂停 → 换集 →
-/// 进度 → 音量 → 字幕/音轨 → 全屏 → 其他)。
+/// 播放器底部控制栏(DesignTokens.swift「界面规则」)。
+///
+/// 从左到右:播放 / 暂停(**上下集紧贴它左右**,外侧是 ±`seekStep` 跳转)→ 音量
+/// → 倍速 / 字幕 / 音轨 / 选项 → **选集(最右)**。⛔ 控制栏里不再有全屏图标 —— F 与双击画面
+/// 两条通路已经够用,把最右这个「离手最近」的位置让给播剧时要反复点的选集(2026-10-14 改)。
 ///
 /// **形态:全宽底部横条 + 渐变压暗,不是悬浮玻璃药丸。**
 ///
@@ -23,10 +26,9 @@ import SwiftUI
 /// 按钮行不跟着重绘(DesignTokens.swift「界面规则」)。
 struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
-    var toggleFullScreen: () -> Void
     /// 倍速浮层是否打开:打开期间控制栏不能自动隐藏,否则浮层连着控制栏一起消失
     @Binding var isSpeedPopoverPresented: Bool
-    /// 选集抽屉是否打开:同上,打开期间要钉住控制栏(抽屉本身也靠控制栏上的按钮收起)
+    /// 选集抽屉是否打开:同上,打开期间要钉住控制栏(收起靠抽屉左缘的把手)
     @Binding var isEpisodePanelPresented: Bool
     /// 手动片头片尾输入面板是否打开:同上,面板开着期间也要钉住控制栏
     @Binding var isMarkersEditorPresented: Bool
@@ -36,7 +38,6 @@ struct PlayerControlsView: View {
             PlayerScrubber(viewModel: viewModel)
             HStack(spacing: Metrics.spacingM) {
                 transport
-                episodeNav
                 PlayerVolumeControl(viewModel: viewModel)
                 Spacer(minLength: Metrics.spacingL)
                 PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
@@ -46,11 +47,7 @@ struct PlayerControlsView: View {
                     viewModel: viewModel,
                     isMarkersEditorPresented: $isMarkersEditorPresented
                 )
-                PlayerIconButton(
-                    systemImage: "arrow.up.left.and.arrow.down.right",
-                    label: "切换全屏",
-                    action: toggleFullScreen
-                )
+                episodePanelButton
             }
             .padding(.horizontal, Metrics.controlBarSideInset)
         }
@@ -76,51 +73,51 @@ struct PlayerControlsView: View {
         .accessibilityHidden(true)
     }
 
-    /// 播放 / 暂停位置固定在最左,不因其他控件出现与否而移动(5.2)。
+    /// 播放 / 暂停,左右**紧贴**上一集 / 下一集(2026-10-14 指定):播剧时换集比
+    /// ±`seekStep` 的跳转频繁得多,贴着播放键那一簇才找得到。±跳转留在这一簇的最外侧,
+    /// 播放键仍在视觉中心。
+    ///
+    /// ⚠️ 已知取舍:播放键不再固定最左 —— 电影 / 单条视频没有上下集时整簇收窄,
+    /// 播放键会向左移一个按钮位。这是「换集贴着播放键」的必然代价,⛔ 不要再「修」回去。
+    ///
+    /// 上下集各自按可用性出现(没有就不占位);队列由 `PlayerViewModel` 按来源装好
+    /// (百度复用目录已列条目,Emby 查当前季)。
     private var transport: some View {
         HStack(spacing: Metrics.spacingXS) {
             PlayerRepeatSkipButton(direction: .backward, viewModel: viewModel)
+            if viewModel.previousEpisode != nil {
+                PlayerIconButton(systemImage: "backward.end.fill", label: "上一集") {
+                    viewModel.playPreviousEpisode()
+                }
+            }
             PlayerIconButton(
                 systemImage: viewModel.isPaused ? "play.fill" : "pause.fill",
                 label: viewModel.isPaused ? "播放" : "暂停",
                 prominent: true
             ) { viewModel.togglePlayPause() }
+            if viewModel.nextEpisode != nil {
+                PlayerIconButton(systemImage: "forward.end.fill", label: "下一集") {
+                    viewModel.playNextEpisode()
+                }
+            }
             PlayerRepeatSkipButton(direction: .forward, viewModel: viewModel)
-        }
-    }
-
-    /// 剧集导航:上一集 / 下一集 / 选集。
-    ///
-    /// 放在 `transport` **右侧**,而不是原先的控制栏最右端(那里挨着全屏):
-    /// 换集是 transport 语义,贴着播放键那一簇才找得到。⛔ 不插到播放键**左边**
-    /// —— 那样播放 / 暂停会随「是不是剧集」左右横移,破坏上面那条「播放键固定最左」。
-    ///
-    /// 三个入口各自按可用性出现(没有就不占位):电影 / 单条视频三者全无。
-    /// 队列由 `PlayerViewModel` 按来源装好(百度复用目录已列条目,Emby 查当前季)。
-    @ViewBuilder
-    private var episodeNav: some View {
-        if viewModel.previousEpisode != nil {
-            PlayerIconButton(systemImage: "backward.end.fill", label: "上一集") {
-                viewModel.playPreviousEpisode()
-            }
-        }
-        if viewModel.nextEpisode != nil {
-            PlayerIconButton(systemImage: "forward.end.fill", label: "下一集") {
-                viewModel.playNextEpisode()
-            }
-        }
-        if viewModel.episodes.count > 1 {
-            episodePanelButton
         }
     }
 
     /// 选集:切换右侧滑出的分集抽屉(`PlayerEpisodePanel`),点任意一集直接切。
     ///
+    /// 放在控制栏**最右端**,也就是原先全屏图标的位置:全屏已有 F 与双击画面两条通路。
+    /// ⚠️ 抽屉一打开就盖住控制栏右半段(含这个按钮),那条开关通路就断了 ——
+    /// 收起由抽屉左缘的把手承担(见 `PlayerEpisodePanel.collapseHandle`)。
+    ///
     /// 用抽屉而不是 `Menu` / `popover`(第一版是 popover):几百集时菜单铺不开,
     /// 而抽屉里能放带剧照的可滚动列表,并把当前集滚到可见(理由见 `PlayerEpisodePanel`)。
+    @ViewBuilder
     private var episodePanelButton: some View {
-        PlayerIconButton(systemImage: "list.number", label: "选集") {
-            isEpisodePanelPresented.toggle()
+        if viewModel.episodes.count > 1 {
+            PlayerIconButton(systemImage: "list.number", label: "选集") {
+                isEpisodePanelPresented.toggle()
+            }
         }
     }
 }
