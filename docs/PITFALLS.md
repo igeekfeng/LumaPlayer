@@ -171,8 +171,14 @@ ffmpeg 自己跟随跳转,日志里只看得到最终的 403;`PlaybackFailurePro
 改档案的每条路径都要让缓存失效;地址变了要重新探测,探测不通不保存。
 
 **倍速:上报要带当前值、滑块要合并上报、新建播放器要设回去。** 改成连续滑块后一次拖动十几个请求 → `scheduleRateChangeReport()`
-延后 0.5s 互相取消。转码 seek、下一集、重开都会新建播放器(默认 1×)→ `PlaybackSpeedStore`(键 = 服务器 + `SeriesId`,电影退化成 Item Id),
+延后 0.5s 互相取消。转码 seek、下一集、重开都会新建播放器(默认 1×)→ `PlaybackSpeedStore`(键 = `PlaybackSpeedScope`),
 在**起事件泵之前**设回去;⛔ 不落 UserDefaults。凡是从离散改连续的控件,回头看副作用是按次还是按值触发。
+
+**「同一部剧沿用倍速」的键是来源无关的,百度那一路判错就会「点下一集被打回 1×」。** 键分两段(隔离 + 内容):
+Emby 是「服务器 id + `SeriesId`」(电影退化成 Item Id);百度是「账号常量 + **剧目录**」
+(`BaiduPanPath.seriesDirectory`,所以 `琅琊榜/第1季` → `第2季` 也跟得过去)。⚠️ 百度**不是剧集时要退化成 `fs_id`** ——
+一律用目录会让同一个目录下的几部电影互相串台。判「是不是剧集」只能看 `episodeQueue`:它由浏览页装配后随请求带进来,
+起播前就有值,⛔ 别去等列网盘。
 
 **播放有剧照的分集时崩溃。** `MPMediaItemArtwork` 的 `requestHandler` 写在 `@MainActor` 类型里继承了主线程隔离,
 MediaPlayer 在别的队列调它 → `EXC_BREAKPOINT`。交给系统框架在任意队列回调的闭包,在 `nonisolated static` 方法里创建。

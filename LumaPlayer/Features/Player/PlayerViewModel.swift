@@ -83,6 +83,21 @@ final class PlayerViewModel {
     /// 新建 mpv 时由 `applyRememberedSpeed` 设回去。
     private(set) var speed: Double = 1
 
+    /// 本次播放「算哪一部剧」的倍速键 —— 来源无关,由来源各自给出口径
+    /// (Emby 是 `SeriesId`;百度是剧目录,不是剧时退化成 `fs_id`)。
+    ///
+    /// 百度那一路要靠 `episodeQueue` 才知道「这是一部剧的一集」,所以它在**起播前**
+    /// 就必须有值 —— 队列由浏览页装配后随请求带进来(见 `PlaybackRequest.episodeQueue`),
+    /// ⛔ 不是等列完网盘才有。
+    private var speedScope: PlaybackSpeedScope {
+        switch request.source {
+        case .emby(let server, let item):
+            return .emby(serverID: server.id, item: item)
+        case .baiduPan(let file):
+            return .baiduPan(file: file, isEpisodeSeries: episodeQueue != nil)
+        }
+    }
+
     /// 本次起播要用的倍速:这部剧记过就用它(优先级最高),没记过用设置页的
     /// 「默认倍速」,再没有才是 1×。
     ///
@@ -90,9 +105,7 @@ final class PlayerViewModel {
     /// 「默认倍速」是用户显式设的长期偏好,所以要留得住。
     /// 仅供测试与日志观察,播放决策在 `applyRememberedSpeed` 里。
     var startupSpeed: Double {
-        guard let item, let server else { return container.preferences.defaultSpeed }
-        return container.playbackSpeeds.speed(for: item, on: server)
-            ?? container.preferences.defaultSpeed
+        container.playbackSpeeds.speed(for: speedScope) ?? container.preferences.defaultSpeed
     }
     /// 播放中因缓存不足暂停(mpv `paused-for-cache`)
     private(set) var isBuffering = false
@@ -420,12 +433,10 @@ final class PlayerViewModel {
     func setSpeed(_ value: Double) {
         let target = Self.clampedSpeed(value)
         do { try player?.setSpeed(target) } catch { return }
-        // 记住用户的选择:同一部剧的下一集、转码 seek 重新起流都从它起播。
+        // 记住用户的选择:同一部剧的下一集、转码 seek 重新起流都从它起播 ——
+        // 换集是**新建播放器**(一律 1×),不记就等于「点下一集倍速被打回 1×」。
         // 播放器还没建起来(仍在取播放信息)时照样记 —— 那个值会在新 mpv 上生效。
-        // ⛔ 百度来源没有「同一部剧」这个概念,不参与这个记忆。
-        if let item, let server {
-            container.playbackSpeeds.remember(target, for: item, on: server)
-        }
+        container.playbackSpeeds.remember(target, for: speedScope)
         flash(Self.speedText(target), systemImage: "gauge.with.dots.needle.67percent")
     }
 

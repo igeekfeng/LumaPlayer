@@ -888,7 +888,7 @@ final class BaiduPanSourceViewModel {
         preparingPlaybackFileID = card.fileID
         defer { preparingPlaybackFileID = nil }
 
-        let content = await directoryContent(for: Self.directory(ofFilePath: file.path))
+        let content = await directoryContent(for: BaiduPanPath.directory(ofFilePath: file.path))
         let queue = content.flatMap { content in
             content.items.first { $0.ref.itemID == String(file.fsID) }.flatMap { item in
                 Self.episodeQueue(selecting: item, in: content.items, filesByID: content.filesByID)
@@ -906,7 +906,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// 落在**剧目录**上,而不是文件所在的季文件夹上:季文件夹存法
     /// (`琅琊榜/第1季/01.mp4`)下后者会显示成一部只有一季、剧名还是「第1季」的剧
-    /// (见 `seriesDirectory(ofFilePath:)`)。那一层不是剧(单条视频 / 电影)时
+    /// (见 `BaiduPanPath.seriesDirectory(ofFilePath:)`)。那一层不是剧(单条视频 / 电影)时
     /// 照常显示文件网格 —— 百度没有「单文件详情页」,文件所在目录就是能给的最近一层。
     ///
     /// ⚠️ 不越出这一页的最外层:用户把某一季设成了片库根时剧目录在它之上,
@@ -949,42 +949,16 @@ final class BaiduPanSourceViewModel {
         }
     }
 
-    /// 从文件全路径推出它所在的目录(续播快照只存了文件路径,没有目录字段)。
-    static func directory(ofFilePath path: String) -> String {
-        (path as NSString).deletingLastPathComponent
-    }
-
-    /// 从文件全路径推出**它所属那部剧的目录**(「继续观看」卡片点进详情页用)。
-    ///
-    /// 与 `directory(ofFilePath:)` 的差别:那个是**文件所在**的目录,这个是**剧**的目录 ——
-    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下两者差一层,直接落在季文件夹上会看到
-    /// 一部只有一季、剧名还是「第1季」的剧。
-    ///
-    /// 判据与合成器判定剧集文件夹的那条同源:父目录名**整个**是季标记
-    /// (`第1季` / `Season 2` / `S0`)时再往上一层
-    /// (`BaiduPanMetadataSynthesizer.seriesFolder` 的判据 1)。
-    /// ⚠️ 认不出来就不猜:退回父目录本身 —— 那一层不是剧就照常显示文件网格。
-    static func seriesDirectory(ofFilePath path: String) -> String {
-        let parent = directory(ofFilePath: path)
-        let parentName = (parent as NSString).lastPathComponent
-        guard BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) != nil else {
-            return parent
-        }
-        let grandparent = directory(ofFilePath: parent)
-        // 已经在根上(`/`):没有再上一层可言,退回父目录
-        return grandparent.isEmpty || grandparent == "/" ? parent : grandparent
-    }
-
     /// 「继续观看」卡片点进详情页该落在哪一层(见 `openDetail(for:)`)。
     ///
     /// ⚠️ 剧目录若在**片库根之上**(用户把某一季设成了片库根),退回文件所在目录 ——
     /// ⛔ 不越出这一页的最外层(与 `canGoUp` 同一把尺子)。
     static func detailDirectory(ofFilePath path: String, topmost: String?) -> String {
-        let series = seriesDirectory(ofFilePath: path)
+        let series = BaiduPanPath.seriesDirectory(ofFilePath: path)
         guard let topmost, !topmost.isEmpty else { return series }
         return BaiduPanPath.isInside(series, applicationRoot: topmost)
             ? series
-            : directory(ofFilePath: path)
+            : BaiduPanPath.directory(ofFilePath: path)
     }
 
     /// 这一集属于第几季(`nil` = 认不出来)。只用于「点进详情页时默认选中哪一季」。
@@ -993,7 +967,7 @@ final class BaiduPanSourceViewModel {
     /// 两样都没有就不给 —— 详情页退回第一季,与平铺存法(`琅琊榜/01.mp4` 一律算第 1 季)
     /// 的口径一致。
     static func seasonNumber(ofFilePath path: String) -> Int? {
-        let parentName = (directory(ofFilePath: path) as NSString).lastPathComponent
+        let parentName = (BaiduPanPath.directory(ofFilePath: path) as NSString).lastPathComponent
         if let season = BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) {
             return season
         }
@@ -1069,7 +1043,7 @@ final class BaiduPanSourceViewModel {
         // 缓存要丢两层:被删的那一条自己(目录的话还有它的子层),
         // 以及**它所在的那一层** —— 后者还留着它的卡片,不丢就等于删了个寂寞。
         evictCachedDirectory(file.path)
-        evictCachedDirectory(Self.directory(ofFilePath: file.path))
+        evictCachedDirectory(BaiduPanPath.directory(ofFilePath: file.path))
         do {
             try await container.watchProgress.remove(fileID: item.ref.itemID)
         } catch {
@@ -1129,7 +1103,7 @@ final class BaiduPanSourceViewModel {
 
     static func seriesKey(title: String, locator: String) -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return "\(name)|\(Self.directory(ofFilePath: locator))"
+        return "\(name)|\(BaiduPanPath.directory(ofFilePath: locator))"
     }
 
     /// `SourceItem` 只是给 UI 的投影;播放与进目录要原始文件(`path` / 真实文件名)。

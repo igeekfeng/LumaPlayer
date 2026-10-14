@@ -333,9 +333,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
     /// 靠它决定去列哪一层(`play(_ card:)` 的 A1 路径)。
     func testDirectoryOfFilePath() {
         XCTAssertEqual(
-            BaiduPanSourceViewModel.directory(ofFilePath: "/apps/LumaPlayer/剧/第 1 集.mp4"),
+            BaiduPanPath.directory(ofFilePath: "/apps/LumaPlayer/剧/第 1 集.mp4"),
             "/apps/LumaPlayer/剧")
-        XCTAssertEqual(BaiduPanSourceViewModel.directory(ofFilePath: "/a.mp4"), "/")
+        XCTAssertEqual(BaiduPanPath.directory(ofFilePath: "/a.mp4"), "/")
     }
 
     // MARK: - 续播卡片点进详情页
@@ -346,29 +346,29 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
     func testSeriesDirectorySkipsSeasonFolder() {
         // 平铺存法:剧目录下直接摆集文件,父目录就是剧目录
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/apps/LumaPlayer/琅琊榜/01.mp4"),
+            BaiduPanPath.seriesDirectory(ofFilePath: "/apps/LumaPlayer/琅琊榜/01.mp4"),
             "/apps/LumaPlayer/琅琊榜")
         // 季文件夹存法:再上一层
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(
+            BaiduPanPath.seriesDirectory(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/第1季/01.mp4"),
             "/apps/LumaPlayer/琅琊榜")
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(
+            BaiduPanPath.seriesDirectory(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/Season 2/01.mp4"),
             "/apps/LumaPlayer/琅琊榜")
         // 标准命名库:剧目录带 `{tmdbid-N}`,季文件夹在它下面
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(
+            BaiduPanPath.seriesDirectory(
                 ofFilePath: "/apps/LumaPlayer/一拳超人 (2015) {tmdbid-63926}/Season 1/01.mp4"),
             "/apps/LumaPlayer/一拳超人 (2015) {tmdbid-63926}")
         // 认不出季标记就不猜:父目录名是剧名(或分类目录名)时就是它自己
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/apps/LumaPlayer/电影/300.mp4"),
+            BaiduPanPath.seriesDirectory(ofFilePath: "/apps/LumaPlayer/电影/300.mp4"),
             "/apps/LumaPlayer/电影")
         // 已经到根:没有再上一层可言,退回父目录,⛔ 不返回空串
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seriesDirectory(ofFilePath: "/第1季/01.mp4"),
+            BaiduPanPath.seriesDirectory(ofFilePath: "/第1季/01.mp4"),
             "/第1季")
     }
 

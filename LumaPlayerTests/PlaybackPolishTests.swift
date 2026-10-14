@@ -350,6 +350,75 @@ final class PlaybackPolishTests: XCTestCase {
             1)
     }
 
+    // MARK: - 倍速记忆(百度来源)
+
+    /// 百度来源同样沿用:点「下一集」进下一集时,倍速不能被打回 1×。
+    ///
+    /// 换集 = 新建 `MPVPlayer`(一律 1×),所以关键在**记的是同一格** ——
+    /// 百度没有 Emby 的 `SeriesId`,这一格取的是剧目录。
+    func testBaiduSpeedIsRememberedAcrossEpisodes() throws {
+        let container = try makeContainer()
+        let directory = "/apps/LumaPlayer/琅琊榜"
+
+        try makeBaiduViewModel(container: container, directory: directory, playing: 0).setSpeed(1.5)
+
+        XCTAssertEqual(
+            try makeBaiduViewModel(container: container, directory: directory, playing: 1).startupSpeed,
+            1.5, "同一部剧的下一集沿用")
+    }
+
+    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下,「同一部剧」是**剧目录**而不是季目录 ——
+    /// 从第 1 季换到第 2 季,倍速照样跟得过去。
+    func testBaiduSpeedFollowsAcrossSeasonFolders() throws {
+        let container = try makeContainer()
+        let series = "/apps/LumaPlayer/琅琊榜"
+
+        try makeBaiduViewModel(
+            container: container, directory: "\(series)/第1季", playing: 0).setSpeed(2)
+
+        XCTAssertEqual(
+            try makeBaiduViewModel(
+                container: container, directory: "\(series)/第2季", playing: 0).startupSpeed,
+            2)
+    }
+
+    /// 换一部剧不带过去。
+    func testBaiduSpeedIsScopedPerSeriesDirectory() throws {
+        let container = try makeContainer()
+
+        try makeBaiduViewModel(
+            container: container, directory: "/apps/LumaPlayer/琅琊榜", playing: 0).setSpeed(1.75)
+
+        XCTAssertEqual(
+            try makeBaiduViewModel(
+                container: container, directory: "/apps/LumaPlayer/庆余年", playing: 0).startupSpeed,
+            1)
+    }
+
+    /// 不是剧集(没有可切的兄弟集)时按 `fs_id` 各算各的。
+    ///
+    /// ⛔ 这条是「为什么不能一律用目录当键」:同一个目录下摆着几部电影,
+    /// 用目录就会互相串台 —— 设过 1.5× 的那部会让隔壁那部也用 1.5× 起播。
+    func testBaiduSpeedScopeFallsBackToFileIDWithoutASeries() {
+        func file(_ fsID: UInt64, _ name: String) -> BaiduPanFile {
+            BaiduPanFile(
+                fsID: fsID, path: "/apps/LumaPlayer/电影/\(name)", name: name,
+                sizeBytes: nil, isDirectory: false, category: nil,
+                modifiedAt: nil, thumbnailURL: nil)
+        }
+        let a = file(1, "A.mp4")
+        let b = file(2, "B.mp4")
+
+        XCTAssertNotEqual(
+            PlaybackSpeedScope.baiduPan(file: a, isEpisodeSeries: false),
+            PlaybackSpeedScope.baiduPan(file: b, isEpisodeSeries: false),
+            "同一个目录下的两部电影不能共用一格")
+        XCTAssertEqual(
+            PlaybackSpeedScope.baiduPan(file: a, isEpisodeSeries: true),
+            PlaybackSpeedScope.baiduPan(file: b, isEpisodeSeries: true),
+            "是剧集时同一层目录算同一部剧")
+    }
+
     // MARK: - 辅助
 
     private func chapter(_ seconds: Double, _ marker: String) -> EmbyChapter {
@@ -392,6 +461,39 @@ final class PlaybackPolishTests: XCTestCase {
             displayName: name,
             baseURL: testURL("https://\(name)"),
             deviceID: "DEVICE-UUID-1"
+        )
+    }
+
+    /// 一部百度来源的剧:`directory` 下摆着 `episodeCount` 集,当前播第 `playing` 集。
+    ///
+    /// 队列由浏览页装配后随请求带进播放页(与 `BaiduPanSourceViewModel.play(_ item:)`
+    /// 同一条路)—— 播放页据此才知道「这是一部剧的一集」。
+    private func makeBaiduViewModel(
+        container: AppContainer, directory: String, episodeCount: Int = 3, playing: Int = 0
+    ) throws -> PlayerViewModel {
+        let sourceID = UUID()
+        let items = (0..<episodeCount).map { index in
+            SourceItem(
+                ref: SourceItemRef(sourceID: sourceID, fsID: UInt64((index + 1) * 10)),
+                title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
+                episodeNumber: index + 1, seasonNumber: 1, episodeTitle: nil,
+                durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+        }
+        let files = Dictionary(uniqueKeysWithValues: items.compactMap { item -> (UInt64, BaiduPanFile)? in
+            guard let fsID = UInt64(item.ref.itemID) else { return nil }
+            let name = "\(item.episodeNumber ?? 0).mp4"
+            return (fsID, BaiduPanFile(
+                fsID: fsID, path: "\(directory)/\(name)", name: name,
+                sizeBytes: nil, isDirectory: false, category: nil,
+                modifiedAt: nil, thumbnailURL: nil))
+        })
+        let current = items[playing]
+        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
+            selecting: current, in: items, filesByID: files))
+        let file = try XCTUnwrap(files[UInt64(current.ref.itemID) ?? 0])
+        return PlayerViewModel(
+            container: container,
+            request: PlaybackRequest(source: .baiduPan(file: file), episodeQueue: queue)
         )
     }
 

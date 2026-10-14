@@ -212,6 +212,35 @@ enum BaiduPanPath {
         if path == root { return true }
         return path.hasPrefix(root + "/")
     }
+
+    /// 从文件全路径推出它所在的目录(续播快照只存了文件路径,没有目录字段)。
+    static func directory(ofFilePath path: String) -> String {
+        (path as NSString).deletingLastPathComponent
+    }
+
+    /// 从文件全路径推出**它所属那部剧的目录**。
+    ///
+    /// 与 `directory(ofFilePath:)` 的差别:那个是**文件所在**的目录,这个是**剧**的目录 ——
+    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下两者差一层,直接落在季文件夹上会看到
+    /// 一部只有一季、剧名还是「第1季」的剧。
+    ///
+    /// 判据与合成器判定剧集文件夹的那条同源:父目录名**整个**是季标记
+    /// (`第1季` / `Season 2` / `S0`)时再往上一层
+    /// (`BaiduPanMetadataSynthesizer.seriesFolder` 的判据 1)。
+    /// ⚠️ 认不出来就不猜:退回父目录本身 —— 那一层不是剧就照常显示文件网格。
+    ///
+    /// 用途不止一处:详情页落在哪一层(「继续观看」卡片点进去)、倍速记忆按什么认
+    /// 「同一部剧」(`PlaybackSpeedScope.baiduPan`),都是它。
+    static func seriesDirectory(ofFilePath path: String) -> String {
+        let parent = directory(ofFilePath: path)
+        let parentName = (parent as NSString).lastPathComponent
+        guard BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) != nil else {
+            return parent
+        }
+        let grandparent = directory(ofFilePath: parent)
+        // 已经在根上(`/`):没有再上一层可言,退回父目录
+        return grandparent.isEmpty || grandparent == "/" ? parent : grandparent
+    }
 }
 
 // MARK: - 线格式(Decodable)
