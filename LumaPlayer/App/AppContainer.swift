@@ -125,34 +125,35 @@ final class AppContainer {
         return fresh
     }
 
-    /// 添加百度网盘来源:先存配置 → 再落库。
+    /// 添加一个百度网盘来源:先存配置 → 再落库。
     ///
-    /// 一个 App 只对应开放平台上一份应用与一次授权,所以已存在百度来源时是
-    /// **更新它**,而不是再插一条 —— 否则来源列表会出现两条指向同一份授权的百度。
+    /// ## 为什么可以有多条
+    ///
+    /// 百度开放平台的授权是**应用级**的:一个 AppKey 只有一份 token
+    /// (`docs/BAIDU_PAN_API.md` §6 第 3 条 —— 第二次申请会让第一次失效),
+    /// 所以多个百度来源**共用同一份授权与密钥**,只是各自记住自己的片库根。
+    /// 新增来源不会重新扫码 —— 已经授权过就直接落库,没授权过由调用方先走扫码
+    /// (`BaiduPanAddView` 的流程)。
+    ///
+    /// ⚠️ 应用目录名 / AppKey 变了会让**所有**来源的片库根失效,这里一并清掉。
     ///
     /// 抛 `BaiduPanError`(配置不全等)与 `ServerRegistryError`。
     @discardableResult
     func addBaiduSource(
-        displayName: String = "百度网盘",
+        displayName: String = "",
         appKey: String,
         secretKey: String,
         folderName: String
     ) async throws -> BaiduPanSource {
-        try await baiduConnection().saveConfiguration(
+        let applicationChanged = try await baiduConnection().saveConfiguration(
             appKey: appKey, secretKey: secretKey, folderName: folderName)
-        let existing = try await existingBaiduSource()
-        let source: BaiduPanSource
-        if let existing {
-            source = BaiduPanSource(
-                id: existing.id,
-                displayName: displayName.isEmpty ? existing.displayName : displayName,
-                folderName: folderName,
-                lastUsedAt: existing.lastUsedAt
-            )
-            try await registry.update(.baiduPan(source))
-        } else {
-            source = BaiduPanSource(displayName: displayName, folderName: folderName)
-            try await registry.add(.baiduPan(source))
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = BaiduPanSource(
+            displayName: trimmedName.isEmpty ? await uniqueBaiduDisplayName() : trimmedName,
+            folderName: folderName)
+        try await registry.add(.baiduPan(source))
+        if applicationChanged {
+            await discardAllBaiduLibraryRoots()
         }
         state.serverListRevision += 1
         // ⛔ 不要再写 `state.currentServer = nil` —— 那个 setter 会把 currentSource
@@ -175,13 +176,65 @@ final class AppContainer {
             folderName: configuration.folderName)
     }
 
-    /// 库里已有的百度来源(没有则为 nil)。`try?` 不在这里:读不出来就当成没有,
-    /// 让 `add` 那条路去撞 `duplicateServer`,而不是在这里静默吞掉读失败。
-    private func existingBaiduSource() async throws -> BaiduPanSource? {
-        await registry.allSources().compactMap { source in
-            if case .baiduPan(let baidu) = source { return baidu }
-            return nil
-        }.first
+    /// 库里所有的百度来源(按添加顺序)。
+    func baiduSources() async -> [BaiduPanSource] {
+        await registry.allSources().compactMap(\.baiduPanSource)
+    }
+
+    /// 清掉**所有**百度来源的片库根 —— 应用目录变了之后它们全部失效。
+    ///
+    /// ⚠️ 是**落一个「没有」**而不是删键:删键会让旧版兼容(`baidu-library-root`)
+    /// 把这些片库根又继承回来,应用目录已经变了,继承回来的路径必然是废的。
+    private func discardAllBaiduLibraryRoots() async {
+        for source in await baiduSources() {
+            try? await credentials.saveBaiduPanLibraryRoot(nil, for: source.id)
+        }
+    }
+
+    /// 新百度来源的默认名:已有同名时往后编号(「百度网盘 2」「百度网盘 3」…),
+    /// 免得来源列表与工具栏菜单里出现两个一模一样的条目分不清。
+    private func uniqueBaiduDisplayName() async -> String {
+        let existing = Set(await baiduSources().map(\.displayName))
+        guard existing.contains("百度网盘") else { return "百度网盘" }
+        var index = 2
+        while existing.contains("百度网盘 \(index)") { index += 1 }
+        return "百度网盘 \(index)"
+    }
+
+    // MARK: - 百度片库根
+
+    /// 某个百度来源的片库根(**已校验**:落在应用目录之内;失效则当作没设)。
+    /// nil = 没设,进来时落在应用目录。
+    func libraryRoot(for source: BaiduPanSource) async throws -> BaiduPanLibraryRoot? {
+        try await baiduConnection().libraryRoot(for: source.id)
+    }
+
+    /// 写入某个来源的片库根(nil = 清除,回到应用目录)。越界路径会抛 `BaiduPanError`。
+    func setLibraryRoot(_ path: String?, for source: BaiduPanSource) async throws {
+        try await baiduConnection().setLibraryRoot(path, for: source.id)
+        state.serverListRevision += 1
+    }
+
+    /// 改某个百度来源的显示名(名称留空则回到「百度网盘」)。
+    func renameBaiduSource(_ source: BaiduPanSource, displayName: String) async throws {
+        var updated = source
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.displayName = trimmed.isEmpty ? "百度网盘" : trimmed
+        try await registry.update(.baiduPan(updated))
+        state.serverListRevision += 1
+        if state.currentSource?.id == source.id {
+            state.currentSource = .baiduPan(updated)
+        }
+    }
+
+    /// 解除百度授权(清本机保存的 token)。
+    ///
+    /// ⚠️ 授权是**所有百度来源共用**的,所以这一下对所有百度来源生效 ——
+    /// AppKey / 密钥 / 片库根都保留,重新扫码即可恢复。
+    /// (入口在设置 →「来源」→ 百度网盘 → 编辑…,见 `BaiduPanSourceSettingsView`。)
+    func signOutBaidu() async throws {
+        try await baiduConnection().signOut()
+        state.serverListRevision += 1
     }
 
     /// 切换当前来源。切换时清除旧来源的临时内容与播放器状态(CLAUDE.md「架构主线」)。
@@ -503,13 +556,17 @@ final class AppContainer {
             state.nowPlaying = nil
         }
         let target = await registry.allSources().first { $0.id == id }
-        if case .baiduPan = target {
-            // 百度来源:授权与密钥一起清(留着就是孤儿凭据),
-            // 连接实例也一并丢弃 —— 它缓存的账号信息已无意义
-            try? await credentials.deleteBaiduPanToken()
-            try? await credentials.deleteBaiduPanAppConfiguration()
-            try? await credentials.deleteBaiduPanLibraryRoot()
-            baiduConnectionInstance = nil
+        if let baidu = target?.baiduPanSource {
+            // 这个来源自己的片库根先清掉(它是按来源存的)
+            try? await credentials.deleteBaiduPanLibraryRoot(for: baidu.id)
+            // 授权与密钥是**所有百度来源共用**的:只有删掉最后一个才清 ——
+            // 否则会把还在用的其它来源一起弄成「需要重新授权」。
+            let remaining = await baiduSources().filter { $0.id != baidu.id }
+            if remaining.isEmpty {
+                try? await credentials.deleteBaiduPanToken()
+                try? await credentials.deleteBaiduPanAppConfiguration()
+                baiduConnectionInstance = nil
+            }
         }
         try await registry.remove(id: id)
         state.serverListRevision += 1

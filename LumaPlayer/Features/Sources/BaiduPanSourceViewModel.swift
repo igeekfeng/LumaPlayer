@@ -29,8 +29,13 @@ final class BaiduPanSourceViewModel {
     private(set) var folderName: String?
     /// 应用根目录 `/apps/{应用目录名}`。第三方应用能访问的**全部范围**
     private(set) var rootDirectory: String?
-    /// 片库根:用户在应用目录**内部**选定的起点。nil = 就用应用目录
-    private(set) var libraryRoot: String?
+    /// 这个来源配的片库根(**已校验**:失效时已当作没设)。
+    ///
+    /// ⚠️ 它同时是**本页能退到的最外层**(见 `canGoUp`)—— 片库根之上是应用目录,
+    /// 那里只看得见刚设的这个目录名,没有意义。
+    /// 它**不落盘到这里**:列表在设置里维护(`BaiduPanSourceSettingsView`),
+    /// 这里只是读出来用。nil = 没配,直接用应用目录。
+    private(set) var libraryRoot: BaiduPanLibraryRoot?
     /// 当前目录
     private(set) var currentDirectory: String?
     /// 当前目录的卡片(来源无关条目,带封面),**百度返回的原始顺序**。
@@ -58,34 +63,31 @@ final class BaiduPanSourceViewModel {
     /// 且封面图本身另有磁盘缓存兜底,所以不为过期另做处理。
     private var directoryCache: [String: BaiduPanSourceProvider.DirectoryContent] = [:]
 
-    /// 目录排序方式。默认**剧集顺序** —— 「看剧都是从前往后看的」。
+    /// 排好序、去掉隐藏项的条目 —— **界面用这个**。
     ///
-    /// ⚠️ 它是**展示层**状态:改它只重排已经取回的条目,⛔ 不重新请求目录
-    /// (配额见 `docs/BAIDU_PAN_API.md` §7)。
-    var sort: BaiduPanSortOrder = .episode {
-        didSet {
-            guard sort != oldValue else { return }
-            ascending = sort.defaultAscending
-        }
-    }
-    /// 排序方向。换排序方式时回到该档的自然方向(与 `LibraryViewModel` 同一条纪律)。
-    var ascending = true
-
-    /// 按当前排序排好的条目,**并去掉被隐藏的** —— **界面用这个**。
+    /// ## 顺序固定为「剧集顺序」
+    ///
+    /// 排序菜单已经去掉(浏览页不再暴露它):看剧都是从前往后看的,而这一档
+    /// 是唯一一个「认得出集号就按 (季, 集) 排、认不出就按自然名」的顺序
+    /// (`BaiduPanSortOrder.episode`)—— 字符串序下 `10.mp4` 会跑到 `2.mp4` 前面。
+    /// ⛔ 排的是**已经取回**的条目,不发任何请求(配额见 `docs/BAIDU_PAN_API.md` §7)。
     ///
     /// 为什么是计算属性而不是在 `loadFiles()` 里排一次:刮削回来会**整份换掉**
-    /// `items`(`startScrape`),排一次的做法会在那一刻把顺序丢掉;
-    /// 而且改排序不该触发任何网络请求。
+    /// `items`(`startScrape`),排一次的做法会在那一刻把顺序丢掉。
     ///
     /// 为什么隐藏过滤在这里而不是从 `items` 里真删:`items` 会被刮削整份换掉,
     /// 真删的做法会在那一刻把隐藏项又写回来。而且留着它,设置页点「恢复」
     /// 能立刻重新出现 —— 不必再等一次列目录(配额:2 次请求)。
     var sortedItems: [SourceItem] {
-        visible(sort.apply(to: items, filesByID: filesByID, ascending: ascending))
+        visible(BaiduPanSortOrder.episode.apply(to: items, filesByID: filesByID, ascending: true))
     }
 
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: BaiduPanDirectoryFailure?
+
+    /// 是否已经完成过一次完整的目录加载。工具栏「刷新」据此决定语义
+    /// (首次 = 结构性重载,之后 = 只重读当前目录),见 `refreshFromToolbar()`。
+    private(set) var hasLoadedOnce = false
 
     /// 用户主动要改配置时(多半是应用目录名填错了)预填给表单的现值。
     private(set) var configurationDraft: BaiduPanConfigurationDraft?
@@ -222,6 +224,19 @@ final class BaiduPanSourceViewModel {
         await task.value
     }
 
+    /// 工具栏「刷新」的入口。
+    ///
+    /// ⚠️ 与 `reload()` 的分工:首次进入(还没加载过)按结构性变化处理,
+    /// 回到片库根重新列;之后只重读**当前所在**的目录 —— 刷新不该把人踢回起点。
+    /// 两条路都会绕过会话缓存走网络(`refreshFiles`)。
+    func refreshFromToolbar() async {
+        if hasLoadedOnce {
+            await refreshFiles()
+        } else {
+            await reload()
+        }
+    }
+
     private func performReload() async {
         isLoading = true
         loadFailure = nil
@@ -243,12 +258,13 @@ final class BaiduPanSourceViewModel {
             switch authorization {
             case .authorized:
                 // ⚠️ 进这一屏一律**从片库根重新开始**:`reload()` 只在结构性变化后
-                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权 / 工具栏刷新)。
-                // 路径栏那个刷新按钮走 `refreshFiles()`,**不会**重置当前目录,
-                // 也不会清掉其它目录的会话缓存。
+                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权)。
+                // 工具栏刷新走 `refreshFromToolbar()` —— 首次进这一屏时等价于
+                // `reload()`,之后只重读当前目录,不会把人踢回起点。
                 guard loadsDirectory else { break }
                 currentDirectory = nil
                 await loadFiles()
+                hasLoadedOnce = true
             case .needsAuthorization, .unconfigured, nil:
                 break
             }
@@ -331,27 +347,10 @@ final class BaiduPanSourceViewModel {
         deviceCode = nil
     }
 
-    func signOut() async {
-        do {
-            try await connection.signOut()
-            // 正在跑的后台刮削也要停:解绑之后它写回来的卡片已经不属于这一屏
-            cancelScrape()
-            items = []
-            filesByID = [:]
-            currentDirectory = nil
-            // 剧集详情那一组状态同样作废(否则会拿着上一份授权的内容继续显示)
-            directoryShape = .directory
-            seriesItem = nil
-            enteredSeriesItem = nil
-            shapeDirectory = nil
-            clearEpisodeState()
-            // 片库根**保留**(与 AppKey / SecretKey 同一条理由):
-            // 重新扫码不该逼用户再选一次片库在哪。
-            await reload()
-        } catch {
-            loadFailure = LoadFailure(message: "解除授权失败:\(error)")
-        }
-    }
+    // ⚠️ 「解除授权」**不在这里**:它是低频的配置动作,已经搬进设置里的来源页
+    // (`AppContainer.signOutBaidu` + `BaiduPanSourceSettingsView`)。解除之后
+    // 浏览页不会自己知道 —— 下一次刷新(`refreshFromToolbar`)会撞上
+    // `notAuthorized`,由 `loadFiles` 切回扫码那一屏。
 
     /// 用户主动要改配置(典型场景:应用目录名填错,整页空着)。
     /// ⛔ 只把界面切回表单,**不动 token** —— 改个目录名不该连带重新扫码。
@@ -424,9 +423,12 @@ final class BaiduPanSourceViewModel {
         do {
             let root = try await connection.applicationDirectory()
             rootDirectory = root
-            let library = try await connection.libraryRoot()
-            libraryRoot = library
-            directory = currentDirectory ?? library ?? root
+            let stored = try await connection.libraryRoot(for: source.id)
+            libraryRoot = stored
+            // 进来先落在片库根;没配就落在应用目录。
+            // ⚠️ `currentDirectory` 优先:那是**导航**留下的位置(进目录 / 退回上层),
+            // 不该被一次刷新抹掉。
+            directory = currentDirectory ?? stored?.path ?? root
             currentDirectory = directory
             let provider = makeProvider()
             let content: BaiduPanSourceProvider.DirectoryContent
@@ -447,12 +449,19 @@ final class BaiduPanSourceViewModel {
             startScrape(items: content.items, provider: provider)
             return
         } catch let error as BaiduPanError {
-            // 片库根在网盘里被删了 / 改了名 → 丢掉这个偏好,回落到应用目录。
-            // ⛔ 不弹错误:它只是个「记住上次在哪」的便利,不值得为此打断浏览。
+            // token 没了(在设置里解除了授权 / 刷新失败被清)→ 回到扫码那一屏。
+            // ⛔ 不要停在一条「没权限」的目录错误上:那会让人以为网盘出了问题,
+            // 而真正要做的是重新授权。
+            if case .notAuthorized = error {
+                authorization = .needsAuthorization(folderName: folderName ?? "")
+                return
+            }
+            // 片库根在网盘里被删了 / 改了名 → 丢掉它,回落到应用目录。
+            // ⛔ 不弹错误:它只是个「进来先落在哪」的便利,不值得为此打断浏览。
             if allowFallback, error.isDirectoryUnavailable,
-               let library = libraryRoot, directory == library, directory != rootDirectory {
-                try? await connection.setLibraryRoot(nil)
-                libraryRoot = nil
+               let library = libraryRoot?.path, directory == library,
+               library != rootDirectory {
+                await clearLibraryRoot()
                 currentDirectory = nil
                 await loadFiles(allowingLibraryRootFallback: false, forceRefresh: forceRefresh)
                 return
@@ -513,11 +522,13 @@ final class BaiduPanSourceViewModel {
     }
 
     func goUp() async {
-        guard let current = currentDirectory, let root = rootDirectory,
-              current != root else { return }
+        guard let current = currentDirectory, let top = topmostDirectory,
+              current != top else { return }
         let parent = (current as NSString).deletingLastPathComponent
-        // ⛔ 不许退到应用目录之外:那以外的地方第三方应用访问不了
-        currentDirectory = parent.hasPrefix(root) ? parent : root
+        // ⛔ 不许退到最外层之上:配了片库根就是片库根,否则是应用目录。
+        // 片库根之上那一层只是「应用目录里有个叫 Videos 的文件夹」,退上去没意义;
+        // 应用目录再往外第三方应用也访问不到。
+        currentDirectory = BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top
         // 退回上一层:上一层是什么形态要重新判,刚才那一部剧的剧级元数据也不再适用
         enteredSeriesItem = nil
         await loadFiles()
@@ -725,61 +736,67 @@ final class BaiduPanSourceViewModel {
         )
     }
 
+    /// 本页能退到的**最外层**:配了片库根就是它,否则是应用目录。
+    ///
+    /// 用户把 `apps/LumaPlayer/Videos` 设为片库根时,根目录就是 `Videos` ——
+    /// 再往上是应用目录,那里只看得见「有个叫 Videos 的文件夹」,退上去没有意义。
+    private var topmostDirectory: String? {
+        libraryRoot?.path ?? rootDirectory
+    }
+
     var canGoUp: Bool {
-        guard let current = currentDirectory, let root = rootDirectory else { return false }
-        return current != root
+        guard let current = currentDirectory, let top = topmostDirectory else { return false }
+        return current != top
     }
 
     // MARK: - 动作:片库根
+    //
+    // 片库根是「进来先落在哪」的选择,不是授权范围 —— 授权范围由
+    // `/apps/{应用目录名}` 一个值决定,用户改不了,所以百度那边**没有**
+    // 「授权时选文件夹」这一步;能选的只有应用目录**里面**的起点。
+    //
+    // ⚠️ **一个来源一个**,在**设置**里维护(`BaiduPanSourceSettingsView`)——
+    // 顶部那条路径栏去掉之后,浏览页不再有「设为片库根」这个动作,也不再有
+    // 切换菜单(要两个起点就加两个来源:授权是应用级的,多来源共用同一份 token)。
+    // 这一节只剩「设置里改过之后,这一屏要跟着变」这一件事。
 
-    /// 片库根是「进来先落在哪」的选择,不是授权范围 —— 授权范围由
-    /// `/apps/{应用目录名}` 一个值决定,用户改不了,所以百度那边
-    /// **没有**「授权时选文件夹」这一步;能选的只有应用目录**里面**的起点。
-    var isCurrentDirectoryLibraryRoot: Bool {
-        guard let library = libraryRoot, let current = currentDirectory else { return false }
-        return current == library
+    /// 设置里改过片库根之后重新读一次。
+    ///
+    /// ⚠️ 只在**真的变了**时才重载目录:变了就意味着入口换了,留在旧目录里没有意义。
+    /// 没变就什么都不做 —— 来源列表的每一次变更(改名 / 增删 / 解除授权)都会
+    /// 触发这个调用,一律重载会白烧配额(一次列目录 = 2 次请求,§7)。
+    ///
+    /// ⚠️ `hasLoadedOnce` 那道闸是必需的:这个 `.task(id:)` 在**首次出现**时
+    /// 也会跑一次,而那时 `reload()` 还没把片库根读进来 —— 不加闸就会把
+    /// 「nil → 有值」误判成「变了」,开局白列一次目录。
+    func refreshLibraryRoot() async {
+        guard hasLoadedOnce else { return }
+        let stored = try? await connection.libraryRoot(for: source.id)
+        guard stored != libraryRoot else { return }
+        libraryRoot = stored
+        await reload()
     }
 
-    /// 应用目录本身就是默认起点,把它设成片库根没有意义(等于没设)。
-    var canSetLibraryRoot: Bool {
-        guard let current = currentDirectory, let root = rootDirectory, current != root else {
-            return false
+    /// 把失效的片库根清掉(网盘里那个目录没了 / 改名了),回落到应用目录。
+    /// ⛔ 不弹错误:它只是个「进来先落在哪」的便利,不值得为此打断浏览。
+    private func clearLibraryRoot() async {
+        libraryRoot = nil
+        // 写回设置,免得下次进来又撞同一个失效路径
+        try? await container.setLibraryRoot(nil, for: source)
+    }
+
+    /// 当前目录在标题栏上显示的名字。
+    ///
+    /// 应用目录根用应用目录名(或「百度网盘」);其余用路径最后一段 ——
+    /// 与 Emby 那边 `navigationTitle(媒体库名)` 的对位物。
+    /// 片库根那一层因此显示的就是那个目录名(设 `Videos` 为片库根 → 标题「Videos」)。
+    var currentDirectoryName: String {
+        guard let current = currentDirectory else { return "百度网盘" }
+        if let root = rootDirectory, current == root {
+            return folderName ?? "百度网盘"
         }
-        return !isCurrentDirectoryLibraryRoot
-    }
-
-    func setLibraryRootToCurrentDirectory() async {
-        guard let current = currentDirectory else { return }
-        do {
-            try await connection.setLibraryRoot(current)
-            libraryRoot = current
-        } catch let error as BaiduPanError {
-            notice = error.userMessage
-        } catch {
-            notice = "设置片库根失败:\(error)"
-        }
-    }
-
-    func clearLibraryRoot() async {
-        do {
-            try await connection.setLibraryRoot(nil)
-            libraryRoot = nil
-            currentDirectory = nil
-            await loadFiles()
-        } catch let error as BaiduPanError {
-            notice = error.userMessage
-        } catch {
-            notice = "清除片库根失败:\(error)"
-        }
-    }
-
-    /// 当前目录相对应用根目录的显示路径
-    var relativePath: String? {
-        guard let current = currentDirectory, let root = rootDirectory else { return nil }
-        if current == root { return "/" }
-        guard current.hasPrefix(root) else { return current }
-        let remainder = String(current.dropFirst(root.count))
-        return remainder.isEmpty ? "/" : remainder
+        let last = (current as NSString).lastPathComponent
+        return last.isEmpty ? "百度网盘" : last
     }
 
     /// - Parameter fromBeginning: 从头播放(详情页「从头播放」按钮用)。默认按本地进度续播。
@@ -944,6 +961,11 @@ final class BaiduPanSourceViewModel {
         }
 
         try await connection.deleteFile(at: file.path)
+
+        // 删掉的若是片库根,顺手清掉 —— 留着就是指向已不存在目录的悬空值
+        if libraryRoot?.path == file.path {
+            await clearLibraryRoot()
+        }
 
         // 只进内存:下一轮 `loadFiles` 会从库里重读(这一条从来没写进库),
         // 而那时目录缓存已经丢掉、条目来自网络 —— 删掉的自然不会再出现。

@@ -111,8 +111,10 @@ actor CredentialStore {
         static let appCredentials = "baidu-app-credentials"
         /// `BaiduPanTokenBundle` 的 JSON
         static let token = "baidu-token"
-        /// 片库根(用户在应用目录里选定的起点)
-        static let libraryRoot = "baidu-library-root"
+        /// **旧版**的片库根:曾是全 App 一份的单个值。**只读**,用于一次性兼容
+        /// (`baiduPanLibraryRoot(for:)` 第一次读新键时把它继承过来)。
+        /// ⛔ 不要再往这个 account 写东西。
+        static let legacyLibraryRoot = "baidu-library-root"
     }
 
     /// AppKey / SecretKey / 应用目录名。整体作为一个 JSON 落盘:
@@ -143,29 +145,59 @@ actor CredentialStore {
         try await storage.removeValue(forAccount: BaiduAccount.appCredentials)
     }
 
-    /// 片库根:用户在 `/apps/{应用目录名}` **内部**选定的一个子目录,作为进来时的起点。
+    /// 片库根(`BaiduPanLibraryRoot`):用户在 `/apps/{应用目录名}` **内部**
+    /// 选定的起点目录。**一个来源一个**(要两个起点就加两个来源)。
     ///
     /// ⛔ 它**不是**应用凭据,所以不塞进 `BaiduPanAppConfiguration`:
     /// 改片库根不该碰 AppKey / token,而改 AppKey 会连带作废 token
     /// (见 `BaiduPanConnection.saveConfiguration`)。两件事的生命周期不同。
-    struct BaiduPanLibraryRoot: Codable, Sendable, Equatable {
-        var path: String
+    ///
+    /// ⚠️ **按来源 id 分**:同一个百度授权下可以有多个来源
+    /// (`AppContainer.addBaiduSource`),各自记住自己的起点。
+    private static func libraryRootAccount(for sourceID: UUID) -> String {
+        "baidu-library-root:" + sourceID.uuidString
     }
 
-    func baiduPanLibraryRoot() async throws -> BaiduPanLibraryRoot? {
-        guard let data = try await storage.value(forAccount: BaiduAccount.libraryRoot) else {
+    /// 某个百度来源的片库根(nil = 没设,直接用应用目录)。
+    ///
+    /// ⚠️ 兼容旧版:片库根曾经是**全 App 一份**的单个值(account 固定
+    /// `baidu-library-root`,不带来源 id)。第一次读新键时把它继承过来 ——
+    /// 写过新键之后就不再回看旧键,于是用户清掉它也不会被「复活」。
+    /// (代价:老数据会被**每个**来源各继承一次;它本来就是全 App 一个值,
+    ///  没有「该归谁」的信息可依,再分也分不出对错。)
+    func baiduPanLibraryRoot(for sourceID: UUID) async throws -> BaiduPanLibraryRoot? {
+        if let data = try await storage.value(forAccount: Self.libraryRootAccount(for: sourceID)) {
+            return try JSONDecoder().decode(StoredLibraryRoot.self, from: data).root
+        }
+        guard let legacy = try await storage.value(forAccount: BaiduAccount.legacyLibraryRoot) else {
             return nil
         }
-        return try JSONDecoder().decode(BaiduPanLibraryRoot.self, from: data)
+        return try? JSONDecoder().decode(BaiduPanLibraryRoot.self, from: legacy)
     }
 
-    func saveBaiduPanLibraryRoot(_ root: BaiduPanLibraryRoot) async throws {
+    /// 写入某个来源的片库根(`nil` = 明确清空)。
+    ///
+    /// ⚠️ 清空是**写一个「没有」**而不是删键 —— 删键会让上面那条旧版兼容
+    /// 又把它继承回来,用户刚删掉的片库根下次进来会自己冒出来。
+    /// 真要连键一起抹掉用 `deleteBaiduPanLibraryRoot`(删来源时才用得上)。
+    func saveBaiduPanLibraryRoot(_ root: BaiduPanLibraryRoot?, for sourceID: UUID) async throws {
         try await storage.setValue(
-            JSONEncoder().encode(root), forAccount: BaiduAccount.libraryRoot)
+            JSONEncoder().encode(StoredLibraryRoot(root: root)),
+            forAccount: Self.libraryRootAccount(for: sourceID))
     }
 
-    func deleteBaiduPanLibraryRoot() async throws {
-        try await storage.removeValue(forAccount: BaiduAccount.libraryRoot)
+    /// 连键一起删。⛔ **别拿它当「清空片库根」用**(那会触发旧版继承,见上)。
+    func deleteBaiduPanLibraryRoot(for sourceID: UUID) async throws {
+        try await storage.removeValue(forAccount: Self.libraryRootAccount(for: sourceID))
+    }
+
+    /// 片库根落盘的形态:外面包一层,好区分「这个来源还没写过」与「写过,但清空了」。
+    ///
+    /// ⛔ 不能直接存 `BaiduPanLibraryRoot?`:JSON 里「键不存在」与「值是 null」
+    /// 在读的时候分不开,而这两件事在旧版兼容上含义**相反** —— 前者要继承旧键,
+    /// 后者绝不能(那会让用户刚清掉的片库根又冒出来)。
+    private struct StoredLibraryRoot: Codable {
+        var root: BaiduPanLibraryRoot?
     }
 
     func baiduPanToken() async throws -> BaiduPanTokenBundle? {

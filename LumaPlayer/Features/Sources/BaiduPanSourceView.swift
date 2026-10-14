@@ -24,7 +24,19 @@ struct BaiduPanSourceView: View {
 
     var body: some View {
         content
-            .task(id: refreshToken) { await viewModel.reload() }
+            // 授权那两屏(填密钥 / 扫码)也占着主窗口的标题栏 —— 给一个兜底标题,
+            // 免得空着。浏览屏自己有 `navigationTitle(当前目录名)`,更靠内层,
+            // 会覆盖这一条。
+            .navigationTitle("百度网盘")
+            // 工具栏「刷新」:首次进入 = 结构性重载(回片库根),之后只重读
+            // **当前所在**的目录 —— 刷新不该把人踢回起点(`refreshFromToolbar`)。
+            .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
+            // 设置里改过来源(片库根 / 显示名 / 增删来源)→ 重读片库根。
+            // ⚠️ 只在片库根**真的变了**时才重载目录 —— 其余变更(改名 / 增删来源)
+            // 不该白列一次目录(`refreshLibraryRoot`)。
+            .task(id: container.state.serverListRevision) {
+                await viewModel.refreshLibraryRoot()
+            }
             // 百度来源没有服务端进度上报(进度记在本地续播库),所以播完一场
             // 要自己重读一次,「已看到 mm:ss」才会立刻反映在列表上。
             // ⚠️ 只重读**本地**续播状态 —— ⛔ 不重新列目录(那是 2 次百度请求,

@@ -71,7 +71,11 @@ actor BaiduPanConnection {
         return configuration
     }
 
-    func saveConfiguration(appKey: String, secretKey: String, folderName: String) async throws {
+    /// - Returns: 已有的片库根是否已失效(换了 AppKey / SecretKey 或应用目录名)。
+    ///   调用方据此清掉各来源的片库根 —— 它们都指向旧的应用目录。
+    ///   ⚠️ 这里不自己清:片库根按**来源**存,这个 actor 不知道有哪些来源。
+    @discardableResult
+    func saveConfiguration(appKey: String, secretKey: String, folderName: String) async throws -> Bool {
         let previous = try? await credentials.baiduPanAppConfiguration()
         let next = CredentialStore.BaiduPanAppConfiguration(
             appKey: appKey.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -83,17 +87,13 @@ actor BaiduPanConnection {
         // 只改了「应用目录名」不必重新扫码:token 是那对密钥签发的,
         // 与目录名无关。⛔ 无条件删 token 会让人为了改个笔误再扫一次码。
         guard previous?.appKey != next.appKey || previous?.secretKey != next.secretKey else {
-            // 目录名换了 → 旧片库根必然落在新应用目录之外,直接清掉
-            // (不清也行:`libraryRoot()` 的前缀校验会兜住,但留着是垃圾)。
-            if previous?.folderName != next.folderName {
-                try? await credentials.deleteBaiduPanLibraryRoot()
-            }
-            return
+            // 目录名换了 → 旧片库根必然落在新应用目录之外,全部失效
+            return previous?.folderName != next.folderName
         }
         // 换了应用(AppKey / SecretKey 变了)就是换了一套授权,token 必须一起作废
         try await credentials.deleteBaiduPanToken()
-        try? await credentials.deleteBaiduPanLibraryRoot()
         cachedAccount = nil
+        return true
     }
 
     /// 第三方应用能访问的根目录:`/apps/{应用目录名}`(`docs/BAIDU_PAN_API.md` §3)。
@@ -104,33 +104,38 @@ actor BaiduPanConnection {
 
     // MARK: - 片库根
 
-    /// 用户在应用目录**内部**选定的起点。nil = 就用应用目录本身。
+    /// 某个来源的片库根(**已校验**:落在应用目录之内)。nil = 没设,用应用目录。
     ///
     /// ⛔ 存下来的路径**每次读都要重新校验**:用户可能回头改了「应用目录名」
     /// (改完旧路径整个失效),也可能在网盘里把那个子目录删了。
-    /// 校验不过时**静默回落**到应用目录 —— ⛔ 不报「配置损坏」:
+    /// 校验不过就**静默当作没设** —— ⛔ 不报「配置损坏」:
     /// 比起让人卡在一页打不开的错误上,回到能用的起点更有用。
-    func libraryRoot() async throws -> String? {
-        guard let stored = try await credentials.baiduPanLibraryRoot() else { return nil }
+    func libraryRoot(for sourceID: UUID) async throws -> BaiduPanLibraryRoot? {
+        guard let stored = try await credentials.baiduPanLibraryRoot(for: sourceID) else {
+            return nil
+        }
         let root = try await applicationDirectory()
-        guard Self.isValidLibraryRoot(stored.path, applicationRoot: root) else { return nil }
-        return stored.path
+        return Self.isValidLibraryRoot(stored.path, applicationRoot: root) ? stored : nil
     }
 
-    /// 记下片库根。`nil` = 清除(回到应用目录)。
-    func setLibraryRoot(_ path: String?) async throws {
+    /// 写入某个来源的片库根(`nil` = 清除,回到应用目录)。
+    ///
+    /// ⚠️ 清除是**落一个「没有」**,不是删键 —— 删键会让旧版兼容把它继承回来
+    /// (见 `CredentialStore.baiduPanLibraryRoot(for:)`)。
+    ///
+    /// ⛔ 越界的路径**直接拒绝**,不存、也不静默改写成 root:
+    /// 写出去一个和应用目录没关系的值,下次读要靠校验兜,多一条说不清的路。
+    func setLibraryRoot(_ path: String?, for sourceID: UUID) async throws {
         guard let path else {
-            try await credentials.deleteBaiduPanLibraryRoot()
+            try await credentials.saveBaiduPanLibraryRoot(nil, for: sourceID)
             return
         }
         let root = try await applicationDirectory()
-        // ⛔ 越界的路径**直接拒绝**,不存、也不静默改写成 root:
-        // 写出去一个和应用目录没关系的值,下次读要靠校验兜,多一条说不清的路。
         guard Self.isValidLibraryRoot(path, applicationRoot: root) else {
             throw BaiduPanError.configuration(
                 "「\(path)」不在应用目录 \(root) 之内,不能设为片库根。")
         }
-        try await credentials.saveBaiduPanLibraryRoot(.init(path: path))
+        try await credentials.saveBaiduPanLibraryRoot(.init(path: path), for: sourceID)
     }
 
     /// 片库根必须**落在应用目录之内**(或就是应用目录本身)。
@@ -227,11 +232,12 @@ actor BaiduPanConnection {
     ///
     /// ⚠️ **不可恢复**,而且删的是用户网盘里真东西,所以这里多两道闸:
     ///
-    /// 1. 路径必须**严格落在**应用目录之内。⛔ 不能直接信
-    ///    `BaiduPanPath.isInside`:它对「路径**等于**应用目录根」也返回 true,
-    ///    只靠它就能一键删掉整个 `/apps/{应用目录名}`;
-    /// 2. 删掉的若是片库根,顺手把书签清掉 —— 留着就是指向已不存在目录的悬空值
-    ///    (`loadFiles` 的静默回落虽然兜得住,路径栏会先闪一帧错的)。
+    /// 路径必须**严格落在**应用目录之内。⛔ 不能直接信
+    /// `BaiduPanPath.isInside`:它对「路径**等于**应用目录根」也返回 true,
+    /// 只靠它就能一键删掉整个 `/apps/{应用目录名}`。
+    ///
+    /// ⚠️ 「删掉的若是片库根,顺手清掉书签」这件事**不在这里**:片库根按**来源**存,
+    /// 这个 actor 不知道有哪些来源 —— 由调用方(`BaiduPanSourceViewModel.delete`)处置。
     ///
     /// 走 `withToken`:token 失效时它会刷新后重试一次。删除**不是幂等**操作,
     /// 但这里的重试只发生在「服务端说 token 失效」的码上 —— 那种情况下第一次
@@ -244,9 +250,6 @@ actor BaiduPanConnection {
         }
         try await withToken { [client] token in
             try await client.delete(path: path, accessToken: token)
-        }
-        if try await libraryRoot() == path {
-            try await setLibraryRoot(nil)
         }
     }
 

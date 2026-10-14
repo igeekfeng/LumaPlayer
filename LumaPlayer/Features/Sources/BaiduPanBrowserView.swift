@@ -18,8 +18,20 @@ import SwiftUI
 /// ## 顺序
 ///
 /// 目录顺序**由客户端排**(`BaiduPanSortOrder`),不用百度返回的顺序:
-/// 那个是纯字符串序,`10.mp4` 会排在 `2.mp4` 前面。默认按剧集顺序排,
-/// 排序菜单在路径栏右侧,改排序不发请求。
+/// 那个是纯字符串序,`10.mp4` 会排在 `2.mp4` 前面。**固定按剧集顺序**排
+/// (`BaiduPanSortOrder.episode`),不再暴露排序菜单。
+///
+/// ## 导航
+///
+/// 与 Emby 那边对齐:标题栏显示当前目录名(`navigationTitle`),返回上一层走
+/// 工具栏左侧按钮。⛔ 不再自绘路径栏 —— 账号名 / 面包屑 / 设为片库根 / 排序 /
+/// 刷新 / 解除授权那一条整个去掉了:刷新用主窗口工具栏的按钮
+/// (`refreshToken` 驱动),其余移进设置里的来源页(`BaiduPanSourceSettingsView`)。
+///
+/// ⚠️ 返回只退到**片库根为止**(`BaiduPanSourceViewModel.canGoUp`)—— 它就是这一页
+/// 的最外层。设 `apps/LumaPlayer/Videos` 为片库根时,根目录就是 `Videos`,
+/// 再往上是应用目录(那里只看得见「有个叫 Videos 的文件夹」),退上去没有意义。
+/// 没配片库根时最外层是应用目录。
 struct BaiduPanBrowserView: View {
     @Bindable var viewModel: BaiduPanSourceViewModel
     let store: PosterImageStore
@@ -46,8 +58,6 @@ struct BaiduPanBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            pathBar
-            Divider()
             if let notice = viewModel.notice {
                 OnboardingNotice(text: notice, style: .warning)
                     .padding(.horizontal, Metrics.spacingL)
@@ -64,6 +74,12 @@ struct BaiduPanBrowserView: View {
             }
             content
         }
+        // 导航与 Emby 那边对齐:标题栏显示**当前目录名**(对位 `LibraryView` 的
+        // `navigationTitle(媒体库名)`),返回上一层走工具栏左侧按钮 —— 不再自绘一条
+        // 路径栏(账号 / 面包屑 / 设为片库根 / 排序 / 刷新 / 解除授权那一条已拆掉:
+        // 刷新用主窗口工具栏的按钮,其余移进设置里的来源页)。
+        .navigationTitle(viewModel.currentDirectoryName)
+        .toolbar { toolbarContent }
         .sheet(item: $pendingDeletion) { item in
             BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
                 actionErrorMessage = message
@@ -90,10 +106,20 @@ struct BaiduPanBrowserView: View {
         }
     }
 
-    // MARK: - 路径栏
+    // MARK: - 工具栏
 
-    private var pathBar: some View {
-        HStack(spacing: Metrics.spacingS) {
+    /// 工具栏上**只有**「返回上一层」。
+    ///
+    /// ⚠️ 刷新**不在这里**:主窗口工具栏那个刷新按钮(`RefreshToolbarButton`)
+    /// 已经覆盖了这一页(经 `refreshToken` 驱动),再来一个只会多一个入口。
+    /// 排序也没有 —— 顺序固定为剧集顺序(`BaiduPanSourceViewModel.sortedItems`)。
+    /// 片库根切换也没有 —— 一个来源只有一个起点,换起点是**设置**里的事
+    /// (要两个起点就加两个来源)。
+    ///
+    /// ⚠️ 返回按钮退到**片库根为止**(`canGoUp`):片库根就是这一页的最外层。
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
             Button {
                 Task { await viewModel.goUp() }
             } label: {
@@ -101,99 +127,7 @@ struct BaiduPanBrowserView: View {
             }
             .disabled(!viewModel.canGoUp)
             .help("返回上一层")
-
-            if let account = viewModel.authorization?.accountName {
-                Label(account, systemImage: "person.crop.circle")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                Label("已授权", systemImage: "checkmark.circle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            libraryRootMark
-
-            Text(viewModel.relativePath ?? "/")
-                .font(.callout.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer()
-
-            libraryRootButton
-
-            sortMenu
-
-            Button {
-                Task { await viewModel.refreshFiles() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .disabled(viewModel.isLoadingFiles)
-            .help("刷新当前目录")
-
-            Button("解除授权") {
-                Task { await viewModel.signOut() }
-            }
-            .help("清除本机保存的百度授权,回到扫码那一屏")
         }
-        .padding(.horizontal, Metrics.spacingL)
-        .padding(.vertical, Metrics.spacingS)
-    }
-
-    // MARK: - 片库根
-
-    /// 当前目录就是片库根时,在路径前面挂一个书签标记。
-    @ViewBuilder
-    private var libraryRootMark: some View {
-        if viewModel.isCurrentDirectoryLibraryRoot {
-            Image(systemName: "bookmark.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .help("这里是片库根:每次打开百度网盘都会先落在这个目录")
-        }
-    }
-
-    @ViewBuilder
-    private var libraryRootButton: some View {
-        if viewModel.canSetLibraryRoot {
-            Button("设为片库根", systemImage: "bookmark") {
-                Task { await viewModel.setLibraryRootToCurrentDirectory() }
-            }
-            .help("把当前目录设为进入百度网盘时的起点")
-        } else if viewModel.isCurrentDirectoryLibraryRoot {
-            Button("取消片库根", systemImage: "bookmark.slash") {
-                Task { await viewModel.clearLibraryRoot() }
-            }
-            .help("回到应用目录作为进入时的起点")
-        }
-    }
-
-    // MARK: - 排序
-
-    /// 排序菜单(与 `LibraryView` 的工具栏同形)。
-    ///
-    /// ⚠️ 与 Emby 那边的**根本差别**:这里的排序全在本地做,选完立刻就变,
-    /// ⛔ 不会重新请求目录(配额见 §7)。所以**没有**「加载中」这一态。
-    private var sortMenu: some View {
-        Menu {
-            Picker("排序方式", selection: $viewModel.sort) {
-                ForEach(BaiduPanSortOrder.allCases) { order in
-                    Text(order.title).tag(order)
-                }
-            }
-            .pickerStyle(.inline)
-            Picker("顺序", selection: $viewModel.ascending) {
-                Text("升序").tag(true)
-                Text("降序").tag(false)
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Label("排序:\(viewModel.sort.title)", systemImage: "arrow.up.arrow.down")
-        }
-        .help("排序:\(viewModel.sort.title)(\(viewModel.ascending ? "升序" : "降序"))。目录恒在最前。")
     }
 
     // MARK: - 内容
@@ -366,7 +300,9 @@ struct BaiduPanBrowserView: View {
                 + "设置 →「已隐藏」里可以逐条恢复。"
         }
         let name = viewModel.folderName ?? "应用目录"
-        guard viewModel.relativePath == "/" else {
+        // 当前是应用目录根时,「空的」更可能是**整个应用目录还没建出来** ——
+        // 给一段「去网盘里建同名文件夹」的引导;子目录里空的就只是空的。
+        guard viewModel.currentDirectory == viewModel.rootDirectory else {
             return "这一层没有可播的文件。往上一级看看,或者把视频放进这个目录再回来刷新。"
         }
         return "第三方应用只能访问网盘里的「我的应用数据/\(name)」,访问不到其它地方。"

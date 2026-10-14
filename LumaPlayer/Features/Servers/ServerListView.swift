@@ -15,7 +15,8 @@ struct ServerListView: View {
     /// 已能免输入进入的 Emby 服务器(百度来源的授权状态由它自己那一页判断)
     @State private var loggedInServerIDs: Set<UUID> = []
     @State private var showsAddSheet = false
-    @State private var editingServer: ServerProfile?
+    /// 正在编辑的来源(Emby → `ServerSettingsView`;百度 → `BaiduPanSourceSettingsView`)
+    @State private var editingSource: SourceProfile?
     @State private var sourcePendingDeletion: SourceProfile?
     @State private var serverToLogin: ServerProfile?
     @State private var actionErrorMessage: String?
@@ -42,10 +43,15 @@ struct ServerListView: View {
         }) {
             AddSourceView(container: container, showsCancelButton: true)
         }
-        .sheet(item: $editingServer, onDismiss: {
+        .sheet(item: $editingSource, onDismiss: {
             Task { await reload() }
-        }) { server in
-            ServerSettingsView(container: container, server: server)
+        }) { source in
+            switch source {
+            case .emby(let server):
+                ServerSettingsView(container: container, server: server)
+            case .baiduPan(let baidu):
+                BaiduPanSourceSettingsView(container: container, source: baidu)
+            }
         }
         .sheet(item: $serverToLogin, onDismiss: {
             Task { await reload() }
@@ -91,7 +97,7 @@ struct ServerListView: View {
                         isLoggedIn: loggedInServerIDs.contains(source.id),
                         onSelect: { Task { await select(source) } },
                         onLogin: { if case .emby(let server) = source { serverToLogin = server } },
-                        onEdit: { if case .emby(let server) = source { editingServer = server } },
+                        onEdit: { editingSource = source },
                         onDelete: { sourcePendingDeletion = source }
                     )
                 }
@@ -302,14 +308,13 @@ private struct SourceRow: View {
 
     @ViewBuilder
     private var menuItems: some View {
-        // 编辑 / 登录只对 Emby 开放:百度来源的配置在它自己那一页里改
-        if case .emby = source {
-            if !isLoggedIn {
-                Button("登录…", systemImage: "person.crop.circle", action: onLogin)
-            }
-            Button("编辑…", systemImage: "pencil", action: onEdit)
-            Divider()
+        // 登录只有 Emby 有;「编辑…」两种来源都有 —— 各自打开自己的设置页
+        // (百度那边是片库根 / 显示名 / 解除授权,见 `BaiduPanSourceSettingsView`)。
+        if case .emby = source, !isLoggedIn {
+            Button("登录…", systemImage: "person.crop.circle", action: onLogin)
         }
+        Button("编辑…", systemImage: "pencil", action: onEdit)
+        Divider()
         Button("删除…", systemImage: "trash", role: .destructive, action: onDelete)
     }
 }

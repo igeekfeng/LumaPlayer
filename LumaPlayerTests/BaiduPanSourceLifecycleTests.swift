@@ -61,18 +61,36 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(container.state.route, .browse)
     }
 
-    /// 一个 App 只对应开放平台上一份授权:再添加一次是**更新**,不是插第二条。
-    func testAddingBaiduSourceTwiceUpdatesInsteadOfDuplicating() async throws {
+    /// 可以添加**多个**百度来源:授权是应用级的(一份 token),多个来源共用它,
+    /// 各自记住自己的显示名与片库根。
+    func testAddingBaiduSourceTwiceCreatesTwoSources() async throws {
         let container = try makeContainer()
         let first = try await container.addBaiduSource(
             appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
         let second = try await container.addBaiduSource(
-            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer2")
+            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
 
-        XCTAssertEqual(first.id, second.id)
+        XCTAssertNotEqual(first.id, second.id)
         let sources = await container.sources()
-        XCTAssertEqual(sources.count, 1)
-        XCTAssertEqual(sources.first?.baiduPanSource?.folderName, "LumaPlayer2")
+        XCTAssertEqual(sources.count, 2)
+        // 后添加的是当前来源
+        XCTAssertEqual(container.state.currentSource?.id, second.id)
+    }
+
+    /// 多个来源的片库根互不干扰(按来源 id 存,一个来源一个)。
+    func testLibraryRootIsScopedPerBaiduSource() async throws {
+        let container = try makeContainer()
+        let first = try await container.addBaiduSource(
+            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
+        let second = try await container.addBaiduSource(
+            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
+
+        try await container.setLibraryRoot("/apps/LumaPlayer/电影", for: first)
+
+        let forFirst = try await container.libraryRoot(for: first)
+        let forSecond = try await container.libraryRoot(for: second)
+        XCTAssertEqual(forFirst?.path, "/apps/LumaPlayer/电影")
+        XCTAssertNil(forSecond, "另一个来源不该看到这份片库根")
     }
 
     // MARK: - 切换 / 删除
@@ -131,28 +149,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(ignored, 0, "「从头播放」必须忽略续播位置")
     }
 
-    // MARK: - 目录排序
-
-    /// 默认**剧集顺序** —— 「看剧都是从前往后看的」。
-    /// 换排序方式回到该档的自然方向(与 `LibraryViewModel` 同一条纪律)。
-    func testDirectorySortDefaultsToEpisodeOrder() async throws {
-        let container = try makeContainer()
-        let source = try await container.addBaiduSource(
-            appKey: "KEY", secretKey: "SECRET", folderName: "LumaPlayer")
-        let viewModel = BaiduPanSourceViewModel(container: container, source: source)
-
-        XCTAssertEqual(viewModel.sort, .episode)
-        XCTAssertTrue(viewModel.ascending)
-
-        // 时间档的自然方向是「新的在前」
-        viewModel.sort = .modifiedDate
-        XCTAssertFalse(viewModel.ascending)
-
-        // 手动翻过方向之后换档,仍回到该档的自然方向
-        viewModel.ascending = true
-        viewModel.sort = .name
-        XCTAssertTrue(viewModel.ascending)
-    }
+    // ⚠️ 「目录排序」那一组测试已随排序菜单一起去掉:顺序现在**固定**为剧集顺序
+    // (`BaiduPanSourceViewModel.sortedItems` 直接调 `BaiduPanSortOrder.episode`),
+    // 排序算法本身仍由 `BaiduPanSortOrderTests` 覆盖。
 
     // MARK: - 续播卡片(「继续观看」区)
 

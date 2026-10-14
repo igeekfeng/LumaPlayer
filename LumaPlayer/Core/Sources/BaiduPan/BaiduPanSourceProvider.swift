@@ -40,14 +40,23 @@ actor BaiduPanSourceProvider: SourceProvider {
 
     // MARK: - SourceProvider
 
-    /// 百度来源只有一个「库」入口:进入时的起点(片库根,没设就是应用目录)。
+    /// 百度来源的「库」入口 = 它配的**片库根**(一个来源一个);
+    /// 没配时退回应用目录本身(标题用应用目录名)。
     func libraries() async throws -> [SourceLibrary] {
-        let root = try await connection.applicationDirectory()
-        let start = try await connection.libraryRoot() ?? root
+        guard let root = try await connection.libraryRoot(for: sourceID) else {
+            let directory = try await connection.applicationDirectory()
+            return [
+                SourceLibrary(
+                    ref: SourceLibraryRef(sourceID: sourceID, libraryID: directory),
+                    title: folderName.isEmpty ? "百度网盘" : folderName,
+                    kind: .folder
+                )
+            ]
+        }
         return [
             SourceLibrary(
-                ref: SourceLibraryRef(sourceID: sourceID, libraryID: start),
-                title: folderName.isEmpty ? "百度网盘" : folderName,
+                ref: SourceLibraryRef(sourceID: sourceID, libraryID: root.path),
+                title: root.displayName,
                 kind: .folder
             )
         ]
