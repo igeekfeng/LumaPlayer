@@ -32,6 +32,11 @@ struct BaiduPanBrowserView: View {
     /// 待确认删除的条目(右键菜单里点了「删除…」)。
     /// 弹窗状态放 View 的 `@State` —— 与 `ServerListView` 同一惯例。
     @State private var pendingDeletion: SourceItem?
+    /// 要走「按 TMDB 命名重命名」的目录。
+    @State private var renameTarget: BaiduPanFile?
+    /// 重命名流程自己的 ViewModel。**与目录成对创建** ——
+    /// ⛔ 不放进 `sheet` 的内容闭包里:那个闭包可能重算,每次重算都会丢掉已经走到的进度。
+    @State private var renameViewModel: BaiduPanRenameSeriesViewModel?
     /// 删除失败的原因(面板关掉后由 alert 报出,见类型注释里的范式)。
     @State private var actionErrorMessage: String?
 
@@ -62,6 +67,17 @@ struct BaiduPanBrowserView: View {
         .sheet(item: $pendingDeletion) { item in
             BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
                 actionErrorMessage = message
+            }
+        }
+        .sheet(item: $renameTarget) { file in
+            if let renameViewModel {
+                BaiduPanRenameSeriesView(
+                    viewModel: renameViewModel,
+                    directory: file
+                ) {
+                    // 名字全变了,缓存里的旧目录已经不对了
+                    Task { await viewModel.refreshFiles() }
+                }
             }
         }
         // 与 `ServerListView` 破坏性操作同一范式:确认面板关掉后再报失败
@@ -160,7 +176,7 @@ struct BaiduPanBrowserView: View {
     /// 排序菜单(与 `LibraryView` 的工具栏同形)。
     ///
     /// ⚠️ 与 Emby 那边的**根本差别**:这里的排序全在本地做,选完立刻就变,
-    /// ⛔ 不会重新请求目录(配额 10 次/小时)。所以**没有**「加载中」这一态。
+    /// ⛔ 不会重新请求目录(配额见 §7)。所以**没有**「加载中」这一态。
     private var sortMenu: some View {
         Menu {
             Picker("排序方式", selection: $viewModel.sort) {
@@ -219,6 +235,14 @@ struct BaiduPanBrowserView: View {
                                     open(item)
                                 }
                                 .contextMenu {
+                                    // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
+                                    // 单集文件没有季 / 剧的上下文,改不出标准命名。
+                                    if item.kind.isContainer, let file = viewModel.file(for: item) {
+                                        Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
+                                            renameViewModel = viewModel.makeRenameViewModel()
+                                            renameTarget = file
+                                        }
+                                    }
                                     Button("删除…", systemImage: "trash", role: .destructive) {
                                         pendingDeletion = item
                                     }

@@ -62,7 +62,7 @@ actor BaiduPanSourceProvider: SourceProvider {
     /// 为什么把原始文件一起交回去:合成后的 `SourceItem` 只保留展示所需字段,
     /// 而播放与「进目录」要的 `path` / 真实文件名不在里面。
     /// ⛔ 让调用方**再列一次目录**去拿它们是不可接受的 ——
-    /// 未审核应用配额 10 次/小时(`docs/BAIDU_PAN_API.md`)。
+    /// 配额见 §7(`docs/BAIDU_PAN_API.md`)。
     struct DirectoryContent: Sendable {
         let items: [SourceItem]
         /// `fs_id` → 原始文件

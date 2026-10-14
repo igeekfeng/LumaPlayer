@@ -364,6 +364,33 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season"))
     }
 
+    /// ★ **季号 0 是特别篇,不是「没解析出来」**(Q43)。
+    ///
+    /// `docs/TMDB_API.md` §7:TMDB 的第 0 季就是特别篇,标准命名库把特别篇放在
+    /// `S0` / `Season 00` / `第0季`。所以这里必须返回 `0`,⛔ 不能返回 `nil`
+    /// —— 一返回 `nil`,`seriesFolder` 就把剧名认成那个季文件夹名(`S0`)。
+    func testSeasonZeroIsRecognizedAsSpecials() {
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "S0"), 0)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season 0"), 0)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season 00"), 0)
+        XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第0季"), 0)
+    }
+
+    /// ★ 季文件夹是**强信号**:哪怕里面只有一集,也要认出剧名与季号。
+    ///
+    /// ⛔ 之前 `looksLikeEpisodeSequence` 的闸门也套在季文件夹分支上,于是
+    /// `一拳超人/S0/01.mp4`(特别篇只有一集)会被判成「剧名 = S0」—— 刮削直接配错片。
+    func testSingleEpisodeInSeasonDirectoryStillResolvesSeriesTitle() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("01.mp4", fsID: 1, inDirectory: "一拳超人/S0")],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.first?.item.title, "一拳超人")
+        XCTAssertEqual(synthesized.first?.item.seasonNumber, 0)
+        XCTAssertEqual(synthesized.first?.item.episodeNumber, 1)
+        XCTAssertEqual(synthesized.first?.item.kind, .episode)
+    }
+
     // MARK: - 显式 TMDB id(`{tmdbid-63926}`)
 
     /// 认标准命名里的 `{tmdbid-N}` / `[tmdbid-N]` / 裸写,键名 `tmdbid` 与 `tmdb`,

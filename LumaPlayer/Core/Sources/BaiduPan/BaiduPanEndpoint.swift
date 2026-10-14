@@ -42,7 +42,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     /// ⇒ 播放入口一律走这里;`method=meta` 本项目不再使用。
     ///
     /// `fsids` 本来就是**数组**(单文件是 `N = 1` 的特例)。批量不是为了好看:
-    /// 未审核应用的配额是 10 次/小时,逐个文件取封面会瞬间把配额烧光 ——
+    /// 配额见 §7,逐个文件取封面会瞬间把配额烧光 ——
     /// 一个目录一次请求是这个功能能不能用的前提。
     case fileMeta(accessToken: String, fsIDs: [UInt64])
     /// `GET /rest/2.0/xpan/file?method=streaming&path=&type=[&nom3u8=1][&adToken=]`。
@@ -70,13 +70,25 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     /// 而删除必须当场知道成没成。
     case deleteFile(accessToken: String, path: String)
 
+    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=rename`
+    /// —— 给一条文件或目录改名(`docs/BAIDU_PAN_API.md` §2.5)。
+    ///
+    /// 与 delete 的两处形状差异:
+    /// - `filelist` 是**对象数组** `{path, newname}`(delete 是路径字符串数组);
+    /// - rename 只改**最后一段名字**,不改父目录。
+    ///
+    /// ⚠️ **一次送多条是配额要求,不是优化**:配额见 §7,
+    /// 逐个文件改名会瞬间烧光。⛔ 但批次之间必须**自底向上**(§2.6)——
+    /// `path` 定位在父目录改名后立刻失效。
+    case renameFiles(accessToken: String, operations: [BaiduPanRenameOperation])
+
     // MARK: - 形状
 
     var host: String {
         switch self {
         case .deviceCode, .deviceToken, .refreshToken:
             return "openapi.baidu.com"
-        case .userInfo, .fileList, .fileMeta, .streaming, .deleteFile:
+        case .userInfo, .fileList, .fileMeta, .streaming, .deleteFile, .renameFiles:
             return "pan.baidu.com"
         }
     }
@@ -87,14 +99,14 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         case .deviceCode: return "/oauth/2.0/device/code"
         case .deviceToken, .refreshToken: return "/oauth/2.0/token"
         case .userInfo: return "/rest/2.0/xpan/nas"
-        case .fileList, .streaming, .deleteFile: return "/rest/2.0/xpan/file"
+        case .fileList, .streaming, .deleteFile, .renameFiles: return "/rest/2.0/xpan/file"
         case .fileMeta: return "/rest/2.0/xpan/multimedia"
         }
     }
 
     var method: String {
         switch self {
-        case .deleteFile: return "POST"
+        case .deleteFile, .renameFiles: return "POST"
         case .deviceCode, .deviceToken, .refreshToken,
              .userInfo, .fileList, .fileMeta, .streaming:
             return "GET"
@@ -112,6 +124,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         case .fileMeta: return "xpan/multimedia?method=filemetas"
         case .streaming: return "xpan/file?method=streaming"
         case .deleteFile: return "xpan/file?method=filemanager(opera=delete)"
+        case .renameFiles: return "xpan/file?method=filemanager(opera=rename)"
         }
     }
 
@@ -187,6 +200,12 @@ enum BaiduPanEndpoint: Sendable, Equatable {
                 ("access_token", accessToken),
                 ("opera", "delete"),
             ]
+        case .renameFiles(let accessToken, _):
+            return [
+                ("method", "filemanager"),
+                ("access_token", accessToken),
+                ("opera", "rename"),
+            ]
         }
     }
 
@@ -204,10 +223,46 @@ enum BaiduPanEndpoint: Sendable, Equatable {
                 ("async", "0"),
                 ("filelist", "[\"\(path)\"]"),
             ]
+        case .renameFiles(_, let operations):
+            let list = operations.map { operation in
+                "{\"path\":\(Self.jsonString(operation.path)),"
+                    + "\"newname\":\(Self.jsonString(operation.newName))}"
+            }
+            .joined(separator: ",")
+            return [
+                ("async", "0"),
+                ("filelist", "[\(list)]"),
+            ]
         case .deviceCode, .deviceToken, .refreshToken,
              .userInfo, .fileList, .fileMeta, .streaming:
             return nil
         }
+    }
+
+    /// JSON 字符串字面量(含两侧引号)。
+    ///
+    /// ⚠️ 手写而不是 `JSONEncoder`:这里要的是**不会失败**的转义
+    /// (`formFields` 是计算属性,不能 `throw`),而路径 / 新名里完全可能出现
+    /// `"` 与 `\`(电影名带引号很常见)。⛔ 不做转义的话整个 `filelist` 会变成非法 JSON,
+    /// 服务端回一个含糊的错误,排障时根本看不出是转义问题。
+    static func jsonString(_ text: String) -> String {
+        var out = "\""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if scalar.value < 0x20 {
+                    out += String(format: "\\u%04x", scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out + "\""
     }
 
     /// 编码好的 body;`nil` 表示不设 `httpBody`。
@@ -226,7 +281,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     /// body 的 `Content-Type`。只有带 body 的端点才有(§2.4)。
     var contentType: String? {
         switch self {
-        case .deleteFile: return "application/x-www-form-urlencoded"
+        case .deleteFile, .renameFiles: return "application/x-www-form-urlencoded"
         case .deviceCode, .deviceToken, .refreshToken,
              .userInfo, .fileList, .fileMeta, .streaming:
             return nil
@@ -242,7 +297,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     var headers: [String: String] {
         switch self {
         case .deviceCode, .deviceToken, .refreshToken, .userInfo, .fileList, .fileMeta,
-             .deleteFile:
+             .deleteFile, .renameFiles:
             return ["User-Agent": BaiduPanUserAgent.download]
         case .streaming:
             return ["User-Agent": BaiduPanUserAgent.streaming]
@@ -308,6 +363,28 @@ enum BaiduPanStreamType: String, Sendable, Equatable {
     static let video = BaiduPanStreamType.auto1080
     /// 音频:只有 `M3U8_HLS_MP3_128` 是通用 HLS
     static let audio = BaiduPanStreamType.audioHLSPM3
+}
+
+/// 一次改名:`opera=rename` 的 `filelist[]` 里的一项(`BAIDU_PAN_API.md` §2.5)。
+///
+/// ⚠️ **`path` 是「当前」路径**。提交批次的顺序因此被钉死在**自底向上**
+/// (集文件 → 季目录 → 剧根,§2.6):父目录一改,子文件的这个 `path` 就不再是它的了。
+struct BaiduPanRenameOperation: Sendable, Equatable {
+    /// 文件或目录的当前绝对路径
+    let path: String
+    /// 新的**名字**(只是最后一段,不含路径)
+    let newName: String
+
+    init(path: String, newName: String) {
+        self.path = path
+        self.newName = newName
+    }
+
+    /// 改完之后它应该在哪。⛔ 只是**推算**,不是服务端回的 ——
+    /// 用来更新本地缓存与进度快照,不用来当请求参数。
+    var renamedPath: String {
+        (path as NSString).deletingLastPathComponent + "/" + newName
+    }
 }
 
 /// 百度要的 `User-Agent` 字面量。

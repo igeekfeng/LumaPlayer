@@ -202,10 +202,13 @@ enum BaiduPanMetadataSynthesizer {
     /// 2. 否则父目录就是剧名(`琅琊榜/01.mp4`)→ 季号只能来自文件名(`Show.S02E07`);
     ///    文件名也没写季号时为 `nil`,⛔ 不在这里猜 1(`BaiduPanMetadataScraper` 决定怎么办)。
     ///
-    /// ⚠️ 后两条的前提缺一不可,否则会**配错剧**(那正是硬规则 4 要避免的假数据):
-    /// 文件名自己认不出剧名(否则以文件名为准);且这一层确实像个剧集序列
-    /// (`looksLikeEpisodeSequence`)—— 孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」。
-    /// 判据 0 不受这两条约束:显式 id 本身就是「这是哪部剧」的权威答案。
+    /// ⚠️ **成串闸门(`looksLikeEpisodeSequence`)只管判据 2**。
+    /// 它存在是为了挡住平铺存法里的误判 —— 孤零零一个 `300.mp4` 不能变成
+    /// 「《Movies》第 300 集」。但**判据 1 不需要它**:父目录整个就是一个季标记
+    /// (`S0` / `Season 2` / `第13季`),它自己就说明「这一层装的是某一季」,
+    /// 与同层有几集无关。⛔ 若把闸门也套在判据 1 上,特别篇季(常常只有一两集)
+    /// 就会漏判,进而**把剧名认成那个季文件夹名**(Q43:`一拳超人/S0/01.mp4` → 剧名变 `S0`)。
+    /// 判据 0 同样不受闸门约束:显式 id 本身就是「这是哪部剧」的权威答案。
     private static func seriesFolder(
         _ file: BaiduPanFile,
         parsed: ParsedName,
@@ -221,7 +224,6 @@ enum BaiduPanMetadataSynthesizer {
                 seriesTitle: annotated.title, season: season, tmdbID: annotated.tmdbID)
         }
 
-        guard looksLikeEpisodeSequence else { return nil }
         let isBareNumber = bareEpisodeNumber(file.name) != nil
         let isMarkedWithoutTitle = parsed.episode != nil && parsed.title.isEmpty
         guard isBareNumber || isMarkedWithoutTitle else { return nil }
@@ -229,13 +231,17 @@ enum BaiduPanMetadataSynthesizer {
         let parent = parentDirectoryName(file.path)
         guard !parent.isEmpty else { return nil }
         if let season = seasonNumber(fromDirectoryName: parent) {
+            // 判据 1:**不看** `looksLikeEpisodeSequence`(理由见类型注释)。
             let series = grandparentDirectoryName(file.path)
             // 季文件夹的上一层必须有个目录名才是剧名;拿不到就**不认**这一层,
-            // ⛔ 不拿季文件夹名(`第13季`)当剧名 —— 那样 TMDB 搜不到东西,
+            // ⛔ 不拿季文件夹名(`第13季` / `S0`)当剧名 —— 那样 TMDB 搜不到东西,
             // 也不会误配成别的剧。
             guard !series.isEmpty else { return nil }
             return SeriesFolder(seriesTitle: series, season: season)
         }
+        // 判据 2:平铺存法,没有季文件夹帮衬 → 只有成串的集号才敢当剧集。
+        // 季号只能来自文件名(`琅琊榜/Show.S02E07.mkv`),没写就是 `nil`(⛔ 不猜 1)。
+        guard looksLikeEpisodeSequence else { return nil }
         return SeriesFolder(seriesTitle: parent, season: parsed.season)
     }
 
@@ -266,13 +272,20 @@ enum BaiduPanMetadataSynthesizer {
     /// - `Season 13` / `season13` / `Season.13`(`.` `_` `-` 与空格都当分隔符);
     /// - `S13` / `s2`。
     ///
+    /// ⚠️ **季号 0 是合法值,不是「没解析出来」**:TMDB 的第 0 季是特别篇
+    /// (`docs/TMDB_API.md` §7),标准命名库把特别篇放在 `Season 00/` / `S0/`。
+    /// 所以这里认 `S0` / `Season 0` / `第0季`,返回 `0`。
+    /// ⛔ 反过来说,调用方**不能**用「季号非 0」当「认出来了」的判据 ——
+    /// 认没认出来要看返回值是不是 `nil`(Q43)。
+    ///
     /// ⚠️ 只认**整个目录名**就是季标记的写法:剧名与季号挤在一起的目录名
     /// (`琅琊榜 第13季`)不认 —— 与 `剧名.01.mp4` 一样,无法可靠切分剧名与季号
     /// (S §6.3 的取舍:认不出来就不认,不猜)。中文数字(`第十三季`)同理不认。
     static func seasonNumber(fromDirectoryName name: String) -> Int? {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         func number(_ text: Substring) -> Int? {
-            guard let value = Int(text), value > 0 else { return nil }
+            // `>= 0`:第 0 季(特别篇)要认,见上面的说明
+            guard let value = Int(text), value >= 0 else { return nil }
             return value
         }
         // `.` `_` `-` 与空格都当分隔符(`Season.13` / `season_13`)

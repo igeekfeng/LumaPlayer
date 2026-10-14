@@ -30,7 +30,7 @@ struct BaiduPanAPIClient: Sendable {
 
     private let session: URLSession
 
-    /// 一次列表最多取多少条。⛔ 别调大:未审核应用的频率限制极低(§7),
+    /// 一次列表最多取多少条。⛔ 别调大:应用的频率限制极低(§7),
     /// `/apps/{appname}` 下的片子也远不到这个量级。
     static let pageSize = 200
     /// 翻页上限。防御性的:万一服务端忽略 `start` 一直返满页,
@@ -129,7 +129,7 @@ struct BaiduPanAPIClient: Sendable {
 
     /// 批量取元信息(**含 `dlink`**)。
     ///
-    /// ⚠️ 批量是**配额要求**不是优化:未审核应用 10 次/小时
+    /// ⚠️ 批量是**配额要求**不是优化:配额见 §7
     /// (`docs/BAIDU_PAN_API.md`),逐条取封面会瞬间烧光。
     /// 返回的条目顺序**不保证**与传入一致,调用方要按 `fs_id` 自己配对。
     func metas(fsIDs: [UInt64], accessToken: String) async throws -> [BaiduPanFileMeta] {
@@ -165,6 +165,38 @@ struct BaiduPanAPIClient: Sendable {
         guard entry.errno == 0 else {
             throw BaiduPanError.server(errno: entry.errno, message: nil)
         }
+    }
+
+    // MARK: - 改名
+
+    /// 批量改名(`docs/BAIDU_PAN_API.md` §2.5)。
+    ///
+    /// - Returns: 逐条结果,**按请求顺序**与 `operations` 一一对应。
+    ///
+    /// ⚠️ 「顺序对应」是**未实测**的假设(§2.7 第 3 条):官方没写 `info[]` 的
+    /// 顺序语义,也没写 `path` 是旧名还是新名。所以这里加一道**条数校验**:
+    /// 条数必须与提交条数相等,不等就整批失败 ——
+    /// ⛔ 条数都对不上时「哪条是哪条」无从判断,猜就等于可能把成功说成失败
+    /// (CLAUDE.md 硬规则 4)。实测确认语义后回填文档再放宽。
+    func rename(
+        _ operations: [BaiduPanRenameOperation],
+        accessToken: String
+    ) async throws -> [BaiduPanFileManagerResponse.Info] {
+        guard !operations.isEmpty else { return [] }
+        let endpoint = BaiduPanEndpoint.renameFiles(
+            accessToken: accessToken, operations: operations)
+        let data = try await send(endpoint)
+        let response: BaiduPanFileManagerResponse = try decode(data, endpoint: endpoint)
+        guard let info = response.info else {
+            throw BaiduPanError.decoding(
+                endpoint: endpoint.name, detail: "响应里没有逐条改名结果")
+        }
+        guard info.count == operations.count else {
+            throw BaiduPanError.decoding(
+                endpoint: endpoint.name,
+                detail: "逐条结果 \(info.count) 条,与提交的 \(operations.count) 条对不上")
+        }
+        return info
     }
 
     // MARK: - 播放流探测

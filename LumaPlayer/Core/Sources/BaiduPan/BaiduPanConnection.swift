@@ -153,7 +153,7 @@ actor BaiduPanConnection {
     ///
     /// - 第一次请求前**先等一个 `interval`**:二维码刚画出来,用户还在掏手机,
     ///   立刻问一次必然是「还没确认」—— 白跑一次请求(配额很紧:
-    ///   未审核应用 10 次/小时,`docs/BAIDU_PAN_API.md` §7)。
+    ///   配额见 `docs/BAIDU_PAN_API.md` §7)。
     /// - 取消(token 已过期 / 用户关页)靠 `Task` 取消传播,不需要额外的信号。
     /// - 认不出来的 OAuth 错误码**继续等**,到点把最后一次错误带出来
     ///   (理由见 `BaiduPanError.isFatalOAuthCode`)。
@@ -250,11 +250,54 @@ actor BaiduPanConnection {
         }
     }
 
+    /// 批量改名(`docs/BAIDU_PAN_API.md` §2.5)。
+    ///
+    /// - Returns: 逐条结果,按提交顺序与入参一一对应(顺序语义见 §2.7 待实测第 3 条)。
+    ///
+    /// ⚠️ 两道闸(改的是用户网盘里的真东西,与删除同一级别):
+    /// 1. 每条 `path` 必须**严格落在应用目录之内**,且⛔ 不能是应用目录根本身
+    ///    (`isInside` 对「路径等于根」也返回 true,只靠它就能把 `/apps/{应用目录名}`
+    ///    整个改掉,整个片库瞬间失联);
+    /// 2. 新名非空、且不含 `/` —— rename 只改最后一段,带 `/` 说明调用方搞错了语义。
+    ///
+    /// 分片只为兜住「一次能放几条」这个**未实测**的上限(保守取 50,§2.7 第 1 条)。
+    /// ⛔ 分片**不跨层级**:怎么分批、按什么顺序提交由 `BaiduPanRenameExecutor` 决定,
+    ///   这里只管「同批的多条一起送」。
+    func rename(
+        _ operations: [BaiduPanRenameOperation]
+    ) async throws -> [BaiduPanFileManagerResponse.Info] {
+        guard !operations.isEmpty else { return [] }
+        let root = try await applicationDirectory()
+        for operation in operations {
+            guard BaiduPanPath.isInside(operation.path, applicationRoot: root),
+                  operation.path != root else {
+                throw BaiduPanError.configuration(
+                    "「\(operation.path)」不在应用目录 \(root) 之内,不能改名。")
+            }
+            guard !operation.newName.isEmpty, !operation.newName.contains("/") else {
+                throw BaiduPanError.configuration(
+                    "「\(operation.newName)」不是合法的名字:rename 只改最后一段,不能带 /。")
+            }
+        }
+
+        var results: [BaiduPanFileManagerResponse.Info] = []
+        for chunk in operations.chunked(into: Self.renameBatchLimit) {
+            let info = try await withToken { [client] token in
+                try await client.rename(chunk, accessToken: token)
+            }
+            results.append(contentsOf: info)
+        }
+        return results
+    }
+
+    /// 一次 `opera=rename` 最多送几条。**未实测**(§2.7 第 1 条),取保守值。
+    private static let renameBatchLimit = 50
+
     // MARK: - 播放
 
     /// 把一条文件变成可播的流。
     ///
-    /// 步骤(顺序有意如此,**为了少发请求** —— 配额 10 次/小时):
+    /// 步骤(顺序有意如此,**为了少发请求** —— 配额见 §7):
     /// 1. `multimedia?method=filemetas&dlink=1` 取直连地址(8 小时有效)与时长
     ///    —— ⛔ **不是** `file?method=meta`,那条路实测不给 `dlink`
     ///    (见 `BaiduPanEndpoint.fileMeta`);
@@ -313,7 +356,7 @@ actor BaiduPanConnection {
     ///
     /// ## 为什么必须批量
     ///
-    /// 未审核应用的配额是 **10 次/小时**(`docs/BAIDU_PAN_API.md`),
+    /// 配额见 §7(`docs/BAIDU_PAN_API.md`),
     /// 逐个文件取封面会把配额瞬间烧光 —— 一个目录只发一次请求是这个功能
     /// 能不能用的前提。分片只为兜住接口对 `fsids` 长度的限制。
     ///

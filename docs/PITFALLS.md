@@ -210,3 +210,4 @@ per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓�
 | Q5 / Q8 | 真实服务器都不是自己的 →「禁用转码的服务器」构造不了,用本地实例与 mock |
 | Q9 | `SecretRedactor` 脱敏 `api_key=`、`X-Emby-Token`、整行 `Authorization`、JSON 里的 `Pw` / `Password` |
 | Q10 | 登录体 `{"Username", "Pw"}` 与 `/System/Info/Public` 免认证已在 4.7.11.0 实测;不做小写 `pw` 重试 |
+| Q43 | `S0` / `Season 0` / `第0季` 认季号 **0**(特别篇,`TMDB_API.md` §7);季文件夹分支**不套** `looksLikeEpisodeSequence` 闸门 —— 套了会把剧名认成季文件夹名 |

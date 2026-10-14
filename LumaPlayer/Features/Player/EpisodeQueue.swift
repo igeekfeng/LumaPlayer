@@ -17,8 +17,8 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
     /// 本地续播库要记的展示快照来源。
     ///
     /// 百度来源带它(标题 / 封面就来自这个 `SourceItem`);Emby 走服务端进度,为 nil。
-    /// 换集时靠它补记「继续观看」的展示信息 —— ⛔ 不回头再列一遍网盘(未审核应用
-    /// 配额 10 次/小时,见 `docs/BAIDU_PAN_API.md`)。
+    /// 换集时靠它补记「继续观看」的展示信息 —— ⛔ 不回头再列一遍网盘(应用
+    /// 配额见 `docs/BAIDU_PAN_API.md` §7)。
     let resumeItem: SourceItem?
     /// 选集面板里的封面(16:9 剧照优先)。
     ///

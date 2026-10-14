@@ -40,7 +40,7 @@ actor WatchProgressStore {
     /// 「继续观看」要的是一张能看的卡片(标题 + 封面 + 已看到哪),而这些
     /// 在百度侧**不在进度里**:标题是文件名解析出来的,封面是同目录兄弟文件。
     /// 它们只在**播放那一刻**拿得到(浏览页刚合成过 `SourceItem`)。
-    /// 所以播放时顺手记一份 —— ⛔ 而不是回头再列一遍网盘(配额 10 次/小时)。
+    /// 所以播放时顺手记一份 —— ⛔ 而不是回头再列一遍网盘(配额见 §7)。
     struct Display: Codable, Sendable, Equatable {
         /// 哪个来源。多来源时按它过滤,删来源时按它整片清。
         var sourceID: UUID
@@ -189,6 +189,33 @@ actor WatchProgressStore {
         var current = entries()
         guard current.removeValue(forKey: id) != nil else { return }
         try persist(current)
+    }
+
+    /// 文件在网盘上被改名 / 挪位之后,更新**展示快照**里的定位信息。
+    ///
+    /// ## 为什么只改这两个字段
+    ///
+    /// 进度本身按 `fs_id` 存,改名后它照样对得上(**不会丢**);会失效的是
+    /// `Display.locator`(路径)与 `Display.fileName` —— 续播卡片靠它们重新起播。
+    /// 不更新的后果是:卡片还在「继续观看」里,点下去却定位不到文件。
+    ///
+    /// ⚠️ 没有展示快照的老记录直接跳过:它本来就没有定位信息可更新。
+    ///
+    /// ⛔ 不抛错:网盘那边已经改完了,本地快照写不进去不该推翻这个事实。
+    /// 写盘失败记进 `lastLoadFailureDescription`(⛔ 不静默吞,只是不打断流程)。
+    func relocate(fileID id: String, path: String, fileName: String) {
+        var current = entries()
+        guard var entry = current[id], var display = entry.display else { return }
+        display.locator = path
+        display.fileName = fileName
+        entry.display = display
+        current[id] = entry
+        do {
+            try persist(current)
+        } catch {
+            lastLoadFailureDescription = "更新续播快照失败:\(error)"
+            Self.logger.error("续播快照更新失败 \(String(describing: error), privacy: .public)")
+        }
     }
 
     // MARK: - 内部(actor 隔离内同步,不产生 await)

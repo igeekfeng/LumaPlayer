@@ -252,7 +252,7 @@ final class PlayerViewModel {
             self.startSeconds = 0
         }
         // 请求自带剧集队列(百度来源,或换集时带过来的):上一集 / 下一集当场就定,
-        // ⛔ 不用等网络 —— 百度也**不能再查**(未审核应用配额 10 次/小时)。
+        // ⛔ 不用等网络 —— 百度也**不能再查**(配额见 §7)。
         if let queue = request.episodeQueue {
             self.episodeQueue = queue
             self.nextEpisode = queue.next
