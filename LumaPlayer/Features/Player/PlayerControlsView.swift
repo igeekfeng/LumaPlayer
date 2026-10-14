@@ -774,6 +774,11 @@ struct PlayerRepeatSkipButton: View {
             let multiple = skipRepeat.advance(now: Date())
             viewModel.skip(by: direction.delta * viewModel.seekStep * Double(multiple))
         }
+        // 内核还没 file-loaded、或已经播完时不给按:那两种状态下 mpv 对 seek
+        // 必拒(PITFALLS),按了只会闪一句失败。
+        // ⛔ 门禁只取 `isReadyToSeek`,刻意不含 `seekStrategy` —— 拖不动的源
+        // 按下去要能听到一句「为什么不行」(`seek` 的 `.unsupported` 分支)。
+        .disabled(!viewModel.isReadyToSeek)
     }
 
     private var label: String {

@@ -164,10 +164,21 @@ final class PlayerViewModel {
     /// 转码模式下一次 seek 就是一次重新起流,不能边滑边 seek。
     private(set) var scrubPreviewSeconds: Double?
 
-    /// 这条会话能不能拖进度。由 `session.seekStrategy` 决定,
-    /// ⛔ 不按 `plan.method` 推(见 `PlaybackSeekStrategy`)。
+    /// 内核**这一刻**能不能接受 seek。两个判据缺一不可:
+    ///
+    /// - 内核里已有加载好的文件。mpv 在 `FILE_LOADED` 之前对 seek 命令一律返回
+    ///   `-12`(实测见 PITFALLS),而这个空窗每次起播都有 —— `prepareAndLoad` 里
+    ///   建实例到 file-loaded 之间还夹着 GL 挂接轮询,偏偏「刚开播想拖一下」正是
+    ///   最容易落进去的一两秒。`FILE_LOADED` 时 phase 进入 `.playing`,与 mpv
+    ///   认 seek 的时刻同刻。
+    /// - 还没播完。mpv 播完即卸载文件,而 phase 仍停在 `.playing`(§8 缺一个
+    ///   「已结束」态,见 Q7),所以只能靠 `isEnded` 判。
+    var isReadyToSeek: Bool { (phase == .playing || phase == .paused) && !isEnded }
+
+    /// 进度条要不要给拖动交互。在 `isReadyToSeek` 之上再加「这个源本身有没有可行方案」
+    /// (由 `session.seekStrategy` 决定,⛔ 不按 `plan.method` 推,见 `PlaybackSeekStrategy`)。
     /// 会话还没取到时按「能拖」——真正的判定在 `seek(to:)` 里,那时 `session` 已有值。
-    var allowsSeeking: Bool { session?.seekStrategy.allowsSeeking ?? true }
+    var allowsSeeking: Bool { (session?.seekStrategy.allowsSeeking ?? true) && isReadyToSeek }
 
     /// 拖不动时给用户看的理由(从会话取);能拖时为 nil。
     var seekUnavailableReason: String? { session?.seekStrategy.unavailableReason }
@@ -596,6 +607,9 @@ final class PlayerViewModel {
     /// 判据一律取 `session.seekStrategy`,⛔ 不按 `plan.method` 反推:
     /// 百度与 Emby 的转码流共用同一个 `.transcode`,但一个拖不动、一个能重起。
     ///
+    /// 交互侧只在 `isReadyToSeek` 时才放行(内核还没 file-loaded / 已播完时
+    /// mpv 必拒,PITFALLS);真失败也只提示一句,⛔ 不当成播放失败。
+    ///
     /// 转码这条路径**带合并**:一次重新起流是 ~4 个请求,而连点前进 / 后退
     /// 会把同一个动作按次触发 `seekRepeatMaxMultiple` 次。合并后连点只在
     /// 停下来时起一次流(`seekRestartMergeDelay`)。`positionSeconds` 仍
@@ -605,13 +619,18 @@ final class PlayerViewModel {
         let target = max(0, min(seconds, durationSeconds > 0 ? durationSeconds : seconds))
         switch session.seekStrategy {
         case .clientSeek:
-            positionSeconds = target
             do {
                 try player?.seek(to: target)
             } catch {
-                failure = LoadFailure(message: "拖动失败:\(error)")
+                // 内核没加载好文件时 mpv 对 seek 一律返回 -12(PITFALLS)。
+                // 那不是「播放失败」:底下还在正常播,⛔ 不能占播放失败位把整页
+                // 覆盖层压上去(错误位只留给播放本身),也 ⛔ 不能先把进度条跳过去
+                // —— 拖动没生效却把位置写成新点,连上报都会跟着错。
+                // 交互侧已按 `isReadyToSeek` 挡掉这个空窗,这里兜底剩下的竞态。
+                flash("拖动失败", systemImage: "exclamationmark.triangle")
                 return
             }
+            positionSeconds = target
             // 5.2:拖动结束立即上报,不等 10 秒定时器
             pushState()
             reportNow(.timeUpdate)

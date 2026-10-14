@@ -202,3 +202,7 @@
   在此之前,设置 →「播放 → 色彩」选「始终旧渲染器」是用户唯一能自己退回 legacy 的入口。
   按片源自动切换只在合成 fixture(只有 `dvcC`、无 RPU)上验过 VO 按 gpu-next 建起;⛔ 未验:真实 DV 片源经 DirectStream /
   转码时 mpv 能否读到配置记录(转码输出大概率不带 DV,会留在 legacy)、自动模式下 SDR 片源的实际能耗下降。
+- **Q44 「内核未就绪」的门禁靠 `phase`,留着毫秒级竞态。** `isReadyToSeek` = `phase ∈ {playing, paused}` + `!isEnded`,
+  而 phase 经事件桥异步投递:`FILE_LOADED` 与 UI 那一帧之间总有缝隙,恰在这一瞬松手的拖动仍会被 mpv 拒(已降级为一句 OSD)。
+  同理**流本身不可 seek**(无 `Range` / `moov` 在尾部,见 PITFALLS §2)时命令也失败,门禁看不出来 —— 那种情况重试多少次都一样。
+  结案:真实片源上专门在起播瞬间反复拖,确认只剩 OSD 提示、不再出现整页覆盖层;顺带定一下「这条流拖不动」要不要单独给判据。

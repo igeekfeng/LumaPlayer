@@ -48,10 +48,12 @@ struct PlayerCommands: Commands {
 
             Divider()
 
+            // 门禁取 `isReadyToSeek` 而不是 `session != nil`:内核还没 file-loaded
+            // 时 mpv 对 seek 必拒(PITFALLS),按下去只会闪一句失败。
             Button("Skip Back \(Int(seekStep)) Seconds") { player?.skip(by: -seekStep) }
-                .disabled(player?.session == nil)
+                .disabled(player?.isReadyToSeek != true)
             Button("Skip Forward \(Int(seekStep)) Seconds") { player?.skip(by: seekStep) }
-                .disabled(player?.session == nil)
+                .disabled(player?.isReadyToSeek != true)
 
             Divider()
 

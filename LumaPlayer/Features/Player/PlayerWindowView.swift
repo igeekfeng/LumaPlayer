@@ -168,11 +168,15 @@ struct PlayerWindowView: View {
         // 一次 seek 就是一次重新起流。
         .onKeyPress(.space) { viewModel.togglePlayPause(); return .handled }
         .onKeyPress(.leftArrow, phases: .down) { press in
+            // 内核还没 file-loaded / 已经播完时 mpv 对 seek 必拒(PITFALLS):
+            // 放行,不闪一句注定失败的提示。
+            guard viewModel.isReadyToSeek else { return .ignored }
             viewModel.skip(by: press.modifiers.contains(.shift)
                 ? -Metrics.seekStepLarge : -viewModel.seekStep)
             return .handled
         }
         .onKeyPress(.rightArrow, phases: .down) { press in
+            guard viewModel.isReadyToSeek else { return .ignored }
             viewModel.skip(by: press.modifiers.contains(.shift)
                 ? Metrics.seekStepLarge : viewModel.seekStep)
             return .handled

@@ -129,6 +129,16 @@ Q43 结案(2026-10-13):离屏 harness 丢帧 16–89 → 0;倍速观感、声道
 
 **测试媒体要 faststart(`-movflags +faststart`)。** moov 在尾部 + 服务器不支持 Range 时流不可 seek,首帧永不就绪。
 
+**mpv 的文件没加载好时,`seek` 命令一律返回 `-12`(`MPV_ERROR_COMMAND`)。** 返回值只说明「跑了但失败」,
+分不出「还没加载好」和「流真不可 seek」。本机 C 探针直接调 `mpv_command` 实测(`Vendor/mpv/prefix` 的 libmpv 2.5.0):
+没 loadfile → -12;`loadfile` 后未 `FILE_LOADED` → -12;**`FILE_LOADED` 那一刻起 → 0**;播完(`END_FILE` eof,
+mpv 已卸载文件、而 phase 仍停在 `.playing`)→ 又回到 -12。
+⚠️ `duration` 属性与 `FILE_LOADED` **同时**到达 —— 「时长已知」不能当「能 seek」用:百度源的总时长在会话准备阶段
+就填上了(比加载文件早得多),那一段时间进度条是可拖的。
+所以判据是**内核里有文件**(`FILE_LOADED` 后进入 `.playing`),不是时长;而拖动失败**绝不能再写进 `failure`**
+—— 那是整页覆盖层、且不拆播放器,会直接压在正常播放的画面上(2026-10-14 修的「刚开播拖进度条弹『拖动失败』,
+底下视频照常播」,判据见 `PlayerViewModel.isReadyToSeek` / `allowsSeeking`)。
+
 **沙盒 App 收不到 `open --args`,直接 exec 会 SIGTRAP。** 外部驱动只能靠 URL scheme;开发期 spike 的 scheme 已删(留着等于任何网页都能让 App 播任意 URL)。
 
 ## 3. Emby 接口

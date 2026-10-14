@@ -306,6 +306,34 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isPreventingDisplaySleep)
     }
 
+    // MARK: - 拖动门禁
+
+    /// 内核没加载好文件、以及已播完这两段时间,拖动必然失败:mpv 对 seek 命令
+    /// 一律返回 `-12`(PITFALLS)。门禁判据是 `isReadyToSeek`,⛔ 不是 `duration > 0`
+    /// —— 百度源的总时长在会话准备阶段就填好了,那时文件还没开始加载。
+    func testSeekGateFollowsKernelReadiness() throws {
+        let viewModel = try makeViewModel()
+
+        // 起播准备中:会话与播放器都已就位,但内核里还没有文件
+        viewModel.handle(.phaseChanged(.loading), generation: 0)
+        XCTAssertFalse(viewModel.isReadyToSeek)
+        XCTAssertFalse(viewModel.allowsSeeking, "加载中放行就等于让用户去踩一个必然失败的动作")
+
+        // FILE_LOADED:mpv 正是从这里开始接受 seek
+        viewModel.handle(.phaseChanged(.playing), generation: 0)
+        XCTAssertTrue(viewModel.isReadyToSeek)
+        XCTAssertTrue(viewModel.allowsSeeking)
+
+        viewModel.handle(.phaseChanged(.paused), generation: 0)
+        XCTAssertTrue(viewModel.isReadyToSeek, "暂停时同样能拖")
+
+        // 播完:mpv 已卸载文件,phase 却仍停在 .playing(§8 缺「已结束」态,Q7)
+        viewModel.handle(.phaseChanged(.playing), generation: 0)
+        viewModel.handle(.endFile(.eof), generation: 0)
+        XCTAssertEqual(viewModel.phase, .playing)
+        XCTAssertFalse(viewModel.isReadyToSeek, "播完之后拖必然失败")
+    }
+
     // MARK: - 辅助
 
     private func track(
