@@ -191,6 +191,71 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertNil(episode.resumeItem, "Emby 的进度走服务端,不带展示快照来源")
     }
 
+    // MARK: - 换集不重建播放页
+
+    /// 换集写出的新请求沿用本页的 `pageID`(播放窗口据此不重建播放页),
+    /// 但 `id` 是新的 —— 新一集仍是一次独立的播放会话(新 ViewModel、新 mpv、新上报)。
+    func testEpisodeSwitchKeepsPageButStartsNewSession() throws {
+        let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
+        let current = viewModel.playbackRequest
+
+        viewModel.playNextEpisode()
+
+        let next = try XCTUnwrap(baiduContainer?.state.nowPlaying)
+        XCTAssertEqual(next.pageID, current.pageID)
+        XCTAssertNotEqual(next.id, current.id)
+        XCTAssertEqual(next.baiduFile?.fsID, 20)
+        XCTAssertEqual(next.episodeQueue?.current?.id, "20", "百度的队列要原样带过去")
+    }
+
+    /// 播放器从没建起来时音量是占位值,⛔ 不能当成用户调过的音量带给下一集;
+    /// 统计面板是页面级开关,照样带。
+    func testCarryOverWithoutPlayerKeepsOnlyStatistics() throws {
+        let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
+        XCTAssertNil(viewModel.pageCarryOver, "什么都没动过就没有要带的")
+
+        viewModel.toggleStatistics()
+        let carryOver = try XCTUnwrap(viewModel.pageCarryOver)
+        XCTAssertEqual(carryOver, PlayerViewModel.PageCarryOver(
+            volume: Metrics.defaultVolume, isMuted: false, showsStatistics: true))
+
+        let next = PlayerViewModel(
+            container: try XCTUnwrap(baiduContainer),
+            request: viewModel.playbackRequest,
+            carryOver: carryOver,
+            displaySleep: displaySleep)
+        XCTAssertTrue(next.showsStatistics)
+    }
+
+    /// 换集时上一集的定格画面撤不撤,看 `isAwaitingFirstVideoFrame`:
+    /// 出了真实视频帧 → 撤;⛔ 出错 / 纯音频(永远等不到画面)也必须撤。
+    func testAwaitingFirstVideoFrameEndsOnFrameFailureOrAudioOnly() throws {
+        let rendered = try makeViewModel()
+        XCTAssertTrue(rendered.isAwaitingFirstVideoFrame)
+        rendered.handle(.firstVideoFrameRendered, generation: 0)
+        XCTAssertFalse(rendered.isAwaitingFirstVideoFrame)
+
+        let failed = try makeViewModel()
+        failed.handle(.endFile(.error("拉流 401")), generation: 0)
+        XCTAssertFalse(failed.isAwaitingFirstVideoFrame)
+
+        let audioOnly = try makeViewModel()
+        audioOnly.handle(.trackList([
+            MPVTrack(id: 1, type: .audio, selected: true, title: nil, lang: nil, codec: "aac",
+                     isExternal: false, isForced: false, isAlbumArt: false, dolbyVisionProfile: nil),
+        ]), generation: 0)
+        XCTAssertFalse(audioOnly.isAwaitingFirstVideoFrame)
+
+        // 上一个播放器(旧代次)的首帧不算数
+        let stale = try makeViewModel()
+        stale.stop()
+        stale.handle(.firstVideoFrameRendered, generation: 0)
+        XCTAssertTrue(stale.isAwaitingFirstVideoFrame)
+    }
+
+    /// `makeBaiduViewModel` 最近一次装配的容器(换集用例要读它的 `nowPlaying`)
+    private var baiduContainer: AppContainer?
+
     /// 一部百度来源的剧集:`episodeCount` 集,当前播第 `playingIndex` 集,
     /// 队列由浏览页装配后带进请求(与 `BaiduPanSourceViewModel.play(_ item:)` 同一条路)。
     private func makeBaiduViewModel(episodeCount: Int, playingIndex: Int) throws -> PlayerViewModel {
@@ -223,16 +288,18 @@ final class PlayerViewModelTests: XCTestCase {
             selecting: playing, in: items, filesByID: files))
         let playingFile = try XCTUnwrap(files[UInt64(playing.ref.itemID) ?? 0])
 
+        let container = AppContainer(
+            registry: registry,
+            credentials: credentials,
+            preferences: UserDefaults(
+                suiteName: "test.LumaPlayer.player.baidu.prefs.\(UUID().uuidString)")!,
+            watchProgress: WatchProgressStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appending(path: "player-queue-\(UUID().uuidString).json"))
+        )
+        baiduContainer = container
         return PlayerViewModel(
-            container: AppContainer(
-                registry: registry,
-                credentials: credentials,
-                preferences: UserDefaults(
-                    suiteName: "test.LumaPlayer.player.baidu.prefs.\(UUID().uuidString)")!,
-                watchProgress: WatchProgressStore(
-                    fileURL: FileManager.default.temporaryDirectory
-                        .appending(path: "player-queue-\(UUID().uuidString).json"))
-            ),
+            container: container,
             request: PlaybackRequest(
                 source: .baiduPan(file: playingFile), episodeQueue: queue),
             displaySleep: displaySleep

@@ -26,6 +26,9 @@ enum MPVPlayerEvent: Sendable, Equatable {
     case trackList([MPVTrack])
     /// 文件播放结束(eof=自然播完;stop=外部停止;error=加载/播放失败)
     case endFile(MPVEndFileReason)
+    /// 第一帧真实视频帧已画进 layer(每个实例只发一次;纯音频文件永远不发)。
+    /// 渲染线程发出,经桥投递到主线程。
+    case firstVideoFrameRendered
 }
 
 /// `MPV_EVENT_END_FILE` 的 reason 映射(client.h `mpv_end_file_reason`,§6.2)。

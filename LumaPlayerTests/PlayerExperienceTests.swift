@@ -241,7 +241,7 @@ final class PlayerExperienceTests: XCTestCase {
 
     // MARK: - 播放请求(独立窗口)
 
-    /// 同一项再点一次播放必须是新请求:播放窗口按 id 重建播放页,
+    /// 同一项再点一次播放必须是新请求:播放窗口按 pageID 重建播放页,
     /// id 相同就会被当成「没变」,旧会话继续、不会重新起播。
     func testPlayingSameItemTwiceMakesDistinctRequests() throws {
         let container = try makeContainer()
@@ -253,6 +253,9 @@ final class PlayerExperienceTests: XCTestCase {
         let second = try XCTUnwrap(container.state.nowPlaying)
         XCTAssertNotEqual(first.id, second.id)
         XCTAssertEqual(second.embyItem?.id, "M1")
+        // 从别处起播一律是新播放页;只有播放页内换集才沿用(PlayerViewModelTests)
+        XCTAssertEqual(second.pageID, second.id)
+        XCTAssertNotEqual(first.pageID, second.pageID)
     }
 
     /// DesignTokens.swift「界面规则」:切到另一台服务器时结束旧播放,不能让播放器

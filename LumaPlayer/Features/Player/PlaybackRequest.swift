@@ -38,11 +38,15 @@ enum PlaybackSource: Sendable, Equatable {
 /// 一次「请播放器窗口播这一项」的请求(`AppState.nowPlaying`)。
 ///
 /// 播放器是**单实例的独立窗口**(CLAUDE.md「架构主线」):详情页只负责
-/// 写入请求并唤起窗口,窗口按 `id` 重建播放页 —— 换一集 = 换一个请求,
-/// 旧播放页随之消失并走完收尾上报。`id` 每次新建都不同,所以同一项
-/// 再点一次播放也会得到一个新会话,而不是被当成「没变」忽略。
+/// 写入请求并唤起窗口。两个身份各管一层:
+/// - `id`:**一次播放会话**。每次新建都不同,所以同一项再点一次播放也会得到
+///   一个新会话(新 `PlayerViewModel`、新 mpv、新一轮上报),而不是被当成「没变」忽略。
+/// - `pageID`:**播放页**。窗口按它决定要不要重建播放页。从详情页 / 浏览页起播是新页;
+///   播放页里换集(`continuingPage`)沿用上一集的 —— 页面(全屏、控制层、选集抽屉)不动,
+///   只换里面那一集的会话,旧会话照样走完收尾上报。
 struct PlaybackRequest: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
+    let pageID: UUID
     let source: PlaybackSource
     /// 「从头播放」:忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
     var startFromBeginning = false
@@ -54,11 +58,17 @@ struct PlaybackRequest: Identifiable, Equatable {
     /// nil = 不是剧集 / 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
     var episodeQueue: EpisodeQueue?
 
+    /// - Parameter continuingPage: 播放页内换集时传当前请求的 `pageID`(沿用播放页);
+    ///   nil = 新开一个播放页。
     init(
         source: PlaybackSource,
         startFromBeginning: Bool = false,
-        episodeQueue: EpisodeQueue? = nil
+        episodeQueue: EpisodeQueue? = nil,
+        continuingPage: UUID? = nil
     ) {
+        let id = UUID()
+        self.id = id
+        self.pageID = continuingPage ?? id
         self.source = source
         self.startFromBeginning = startFromBeginning
         self.episodeQueue = episodeQueue
@@ -66,8 +76,7 @@ struct PlaybackRequest: Identifiable, Equatable {
 
     /// 既有 Emby 调用点的形状(首页 / 媒体库 / 详情 / 搜索)。
     init(server: ServerProfile, item: EmbyItem, startFromBeginning: Bool = false) {
-        self.source = .emby(server: server, item: item)
-        self.startFromBeginning = startFromBeginning
+        self.init(source: .emby(server: server, item: item), startFromBeginning: startFromBeginning)
     }
 
     init(
@@ -75,9 +84,10 @@ struct PlaybackRequest: Identifiable, Equatable {
         startFromBeginning: Bool = false,
         episodeQueue: EpisodeQueue? = nil
     ) {
-        self.source = .baiduPan(file: baiduFile)
-        self.startFromBeginning = startFromBeginning
-        self.episodeQueue = episodeQueue
+        self.init(
+            source: .baiduPan(file: baiduFile),
+            startFromBeginning: startFromBeginning,
+            episodeQueue: episodeQueue)
     }
 
     var embyServer: ServerProfile? { source.embyServer }

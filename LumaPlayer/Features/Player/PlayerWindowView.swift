@@ -3,9 +3,10 @@ import AppKit
 
 /// 播放器窗口的根视图(独立窗口,CLAUDE.md「架构主线」)。
 ///
-/// 窗口是单实例的:内容由 `AppState.nowPlaying` 决定,换请求就按新 `id`
-/// 重建播放页(旧的随 `onDisappear` 走完收尾上报)。没有请求时关窗 ——
-/// 切换 / 删除服务器会清空请求(DesignTokens.swift「界面规则」)。
+/// 窗口是单实例的:内容由 `AppState.nowPlaying` 决定。播放页按 `pageID` 认:
+/// 从别处起播是新页(旧页随 `onDisappear` 走完收尾上报);播放页里换集沿用
+/// 同一个 `pageID`,页面不重建,只在页内换会话(`PlayerWindowView.switchSession`)。
+/// 没有请求时关窗 —— 切换 / 删除服务器会清空请求(DesignTokens.swift「界面规则」)。
 struct PlayerSceneRoot: View {
     static let windowID = "player"
 
@@ -16,7 +17,7 @@ struct PlayerSceneRoot: View {
         Group {
             if let request = container.state.nowPlaying {
                 PlayerWindowView(container: container, request: request)
-                    .id(request.id)
+                    .id(request.pageID)
             } else {
                 Color.black
             }
@@ -37,6 +38,9 @@ struct PlayerSceneRoot: View {
 ///
 /// 视频层走 `MPVView`(libmpv 的 OpenGL 渲染路径,不经过 SwiftUI 管线),
 /// 其余是覆盖在上面的 SwiftUI 控件层。
+///
+/// 换集时本页保留(全屏、控制层、选集抽屉、屏显都不动),`viewModel` 换成新一集的
+/// —— ViewModel 与 mpv 仍是每集一份(§8 一实例一 URL),见 `switchSession`。
 struct PlayerWindowView: View {
     let container: AppContainer
     let request: PlaybackRequest
@@ -45,6 +49,10 @@ struct PlayerWindowView: View {
     @State private var nowPlaying = NowPlayingController()
     @State private var window = WindowBox()
     @State private var trackpad = TrackpadScrubMonitor()
+    /// 换集时上一集的播放器(已 shutdown):它的视频层留在屏上、盖在新一集上面,
+    /// 画面定格在最后一帧(`MPVGLLayer.canDraw`),新一集出第一帧后撤掉 ——
+    /// 换集不再黑一下。nil = 没有要留的。
+    @State private var lingeringPlayer: MPVPlayer?
 
     /// 控制层(标题栏 + 控制栏 + 红绿灯)是否可见
     @State private var controlsVisible = true
@@ -74,8 +82,12 @@ struct PlayerWindowView: View {
     var body: some View {
         ZStack {
             Color.black
-            if let player = viewModel.player {
-                MPVView(player: player)
+            // 按实例认视图:`MPVView` 一次性绑定 player(§8),换了实例必须重建 layer,
+            // 否则新 mpv 永远等不到 GL 上下文。⛔ 不能拆成两个 `if`:上一集从「当前」
+            // 挪到「定格」时会被当成另一个视图重建,新 layer 是空的 —— 定格画面就没了。
+            // 顺序即层级:当前一集在下,定格的上一集盖在上面。
+            ForEach(videoLayers) { layer in
+                MPVView(player: layer.player)
             }
             interactionLayer
             overlay
@@ -98,6 +110,12 @@ struct PlayerWindowView: View {
         .task { viewModel.start() }
         .task { await loadNowPlayingArtwork() }
         .onDisappear(perform: tearDown)
+        // 同一播放页里换了集(`pageID` 没变、`id` 变了):页内换会话
+        .onChange(of: request.id) { switchSession() }
+        .onChange(of: viewModel.isAwaitingFirstVideoFrame) { _, awaiting in
+            // 新一集出画面了(或出错 / 纯音频,再等也没有画面):撤掉定格的上一集
+            if !awaiting { lingeringPlayer = nil }
+        }
         .onContinuousHover { phase in
             // 指针在窗口内移动:显示并**重新计时**,静止 `autoHideDelay`
             // 秒后自动隐藏。指针移出窗口:同样走计时(延迟更短,见 Metrics)。
@@ -217,6 +235,11 @@ struct PlayerWindowView: View {
             toggleFullScreen()
             return .handled
         }
+    }
+
+    /// 屏上的视频层(当前一集 + 换集时定格的上一集),见 `lingeringPlayer`
+    private var videoLayers: [VideoLayer] {
+        [viewModel.player, lingeringPlayer].compactMap { $0 }.map(VideoLayer.init)
     }
 
     /// 系统「正在播放」的进度校准间隔(秒)
@@ -471,7 +494,9 @@ struct PlayerWindowView: View {
         window.toggleFullScreen()
     }
 
+    /// 触控板横滑绑的是**当前这一集**的 ViewModel:换集后要重装(`switchSession`)。
     private func installTrackpadScrubbing() {
+        trackpad.uninstall()
         let viewModel = viewModel
         let window = window
         trackpad.install(
@@ -485,6 +510,7 @@ struct PlayerWindowView: View {
     /// 走 `PosterImageStore`(带认证头,与海报墙共用缓存);没有图或加载失败就不设封面。
     /// ⚠️ 百度来源当前没有封面通路,直接跳过(见 `docs/SOURCE_ABSTRACTION_PLAN.md` P5)。
     private func loadNowPlayingArtwork() async {
+        let request = request
         guard let item = request.embyItem, let server = request.embyServer,
               let source = item.coverImage else { return }
         let spec = ImageSpec(
@@ -496,6 +522,8 @@ struct PlayerWindowView: View {
         )
         do {
             let image = try await container.posters.image(for: spec)
+            // 取图期间已换到别的集:这张是上一集的,不能盖到新一集上
+            guard viewModel.playbackRequest.id == request.id else { return }
             nowPlaying.setArtwork(image)
             nowPlaying.update(from: viewModel)
         } catch {
@@ -515,24 +543,41 @@ struct PlayerWindowView: View {
         }
     }
 
-    /// 视图离开(关窗 / 换集 / 切服务器)即拆播放器:MPVView 的
-    /// dismantleNSView 也会触发,两条路径都指向可重入的 shutdown()。
-    /// stop() 内部会补最后一次 Progress + Stopped(API_CONTRACT.md 5.4),
-    /// 发完后广播给详情页 / 首页重读进度(Q22)。
-    private func tearDown() {
-        hideTask?.cancel()
-        trackpad.uninstall()
-        nowPlaying.deactivate()
-        window.setTitlebarButtonsVisible(true)
+    /// 同一播放页里换集:旧一集收尾,新一集起播,页面本身(全屏、控制层、抽屉)不动。
+    ///
+    /// 旧 ViewModel 走与关窗同一条收尾(`finish`):最终 Progress + Stopped 发完再广播,
+    /// 详情页 / 首页据此重读进度(Q22)。新 ViewModel 建在**旧的 stop 之后**:
+    /// 两个 mpv 不同时存活,显示器休眠断言也不会叠两份。
+    private func switchSession() {
+        let previous = viewModel
+        let carryOver = previous.pageCarryOver
+        // 上一集出过画面就定格它;没出过(还在起播就又换了)就留着更早那一集的定格
+        if let player = previous.player, previous.hasRenderedFirstVideoFrame {
+            lingeringPlayer = player
+        }
+        finish(previous)
+        let next = PlayerViewModel(container: container, request: request, carryOver: carryOver)
+        viewModel = next
+        // 远程命令绑在 ViewModel 上:update 发现换了对象会撤掉旧注册再按新的注册
+        // (同时清掉上一集的封面)
+        nowPlaying.update(from: next)
+        installTrackpadScrubbing()
+        next.start()
+        revealControls()
+        Task { await loadNowPlayingArtwork() }
+    }
+
+    /// 结束一集的会话:拆播放器 + 收尾上报,发完后广播给详情页 / 首页重读进度(Q22)。
+    /// 关窗(`tearDown`)与页内换集(`switchSession`)共用。
+    private func finish(_ viewModel: PlayerViewModel) {
         viewModel.stop()
         let state = container.state
-        let request = request
+        let request = viewModel.playbackRequest
         // 用户直接关窗:清掉请求,下次 openWindow 不会把这一集又放一遍。
         // 换集时 nowPlaying 已是新请求,不能动它。
         if state.nowPlaying?.id == request.id {
             state.nowPlaying = nil
         }
-        let viewModel = viewModel
         Task {
             await viewModel.waitUntilReportingFinished()
             state.lastFinishedPlayback = FinishedPlayback(
@@ -542,6 +587,23 @@ struct PlayerWindowView: View {
             )
         }
     }
+
+    /// 视图离开(关窗 / 从别处起播换了页 / 切服务器)即拆播放器:MPVView 的
+    /// dismantleNSView 也会触发,两条路径都指向可重入的 shutdown()。
+    /// stop() 内部会补最后一次 Progress + Stopped(API_CONTRACT.md 5.4)。
+    private func tearDown() {
+        hideTask?.cancel()
+        trackpad.uninstall()
+        nowPlaying.deactivate()
+        window.setTitlebarButtonsVisible(true)
+        finish(viewModel)
+    }
+}
+
+/// `PlayerWindowView` 视频层的身份:按播放器实例认(见 `videoLayers`)
+private struct VideoLayer: Identifiable {
+    let player: MPVPlayer
+    var id: ObjectIdentifier { ObjectIdentifier(player) }
 }
 
 // MARK: - 标题栏 / 屏显提示 / 播完卡片

@@ -105,6 +105,8 @@ final class MPVPlayer: @unchecked Sendable {
         /// 同步等它——整整 5s 超时,UI 冻结。一次性写入的 isStopping
         /// 不会被任何 phase 迁移抹掉。
         var isStopping = false
+        /// 已画出过第一帧**真实视频帧**(`firstVideoFrameRendered` 只发一次)
+        var hasRenderedVideoFrame = false
         /// 最近的 mpv 日志(已脱敏、按条截断),环形缓冲。
         /// 只用于播放失败时留档:`Unrecognized file format` 之类的错误码本身看不出
         /// 服务端回的是媒体、HTML 还是 JSON 错误页,demuxer / ffmpeg 的日志才有线索。
@@ -696,6 +698,12 @@ final class MPVPlayer: @unchecked Sendable {
             guard let renderContext else { return }
 
             let flags = mpv_render_context_update(renderContext)
+            // 这一帧是不是 VO 送来的真实视频帧(第一帧判据,见 `firstVideoFrameRendered`)。
+            // ⛔ 不能只看 UPDATE_FRAME:VO 刚建好时的重绘请求同样带它,那一帧还没有画面
+            // (vo_libmpv.c:`redraw || !current`),拿它当首帧会提前撤掉上一集的定格画面。
+            let isFirstVideoFrame = flags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) != 0
+                && !mutex.withLock({ state.hasRenderedVideoFrame })
+                && Self.nextFrameIsVideo(renderContext)
             // 不能写死 fbo=0:CAOpenGLLayer 调 draw 时绑定的是 layer 自己的
             // 离屏 FBO,不是默认 framebuffer。画到 0 等于画进空气 —— 解码、
             // 音频、时钟全都正常,画面却永远是黑的(S2 只数了渲染次数没目检,
@@ -730,8 +738,24 @@ final class MPVPlayer: @unchecked Sendable {
                     state.stats.updateFrameFlags += 1
                 }
                 if err >= 0 { state.stats.renderedFrames += 1 }
+                if err >= 0, isFirstVideoFrame { state.hasRenderedVideoFrame = true }
             }
+            if err >= 0, isFirstVideoFrame { submitEvent(.firstVideoFrameRendered) }
         }
+    }
+
+    /// 待画的下一帧是不是一帧新视频(而不是重绘)。只在渲染线程、`renderMutex` 内调用。
+    private static func nextFrameIsVideo(_ renderContext: OpaquePointer) -> Bool {
+        var info = mpv_render_frame_info()
+        let err: Int32 = withUnsafeMutableBytes(of: &info) { infoPtr in
+            mpv_render_context_get_info(
+                renderContext,
+                mpv_render_param(type: MPV_RENDER_PARAM_NEXT_FRAME_INFO, data: infoPtr.baseAddress))
+        }
+        guard err >= 0 else { return false }
+        let present = info.flags & UInt64(MPV_RENDER_FRAME_INFO_PRESENT.rawValue) != 0
+        let redraw = info.flags & UInt64(MPV_RENDER_FRAME_INFO_REDRAW.rawValue) != 0
+        return present && !redraw
     }
 
     /// 事件出口(调用方提供;需在 load 之前挂好)
@@ -752,6 +776,17 @@ final class MPVPlayer: @unchecked Sendable {
     /// init 失败原因(仅 .failed 时可能有值)
     var initializationFailure: String? {
         mutex.withLock { state.initializationFailure }
+    }
+
+    /// layer 这一 vsync 要不要画(`MPVGLLayer.canDraw`)。
+    ///
+    /// 没有活的渲染上下文(还没挂 GL / 已拆卸)时为假:layer 跳过这一帧,**保留上一次的画面**
+    /// (CAOpenGLLayer 的契约,2026-10-14 用独立探针 + 截图实测,缩放窗口时也只是拉伸)。
+    /// 换集时播放页靠这一点把上一集的最后一帧冻在屏上,直到新一集出第一帧
+    /// (`PlayerWindowView.lingeringPlayer`)。之前没有这道判断时,拆掉后照常走 draw,
+    /// 空 render + flush 出来的是黑帧。
+    var canRender: Bool {
+        mutex.withLock { state.handle != nil && state.renderContext != nil && !state.isStopping }
     }
 
     /// 统计快照(诊断用;目前 App 内没有调用方,排查渲染问题时临时读它)

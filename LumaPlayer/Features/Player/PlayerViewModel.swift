@@ -73,7 +73,8 @@ final class PlayerViewModel {
     /// - 连按 Z / X 时读回值还没回来,按读回值步进会丢步。
     ///
     /// 只活在这一集里:延迟是「这个文件的字幕和画面差多少」,换一集(新 ViewModel)
-    /// 就是另一个文件,⛔ 不跨集沿用、不持久化 —— 与倍速的「同一部剧沿用」不同。
+    /// 就是另一个文件,⛔ 不跨集沿用(不进 `PageCarryOver`)、不持久化 ——
+    /// 与倍速的「同一部剧沿用」不同。
     private var requestedSubtitleDelay: Double = 0
 
     // MARK: - 体验打磨(倍速 / 缓冲 / 播完 / 下一集 / 屏显提示)
@@ -111,6 +112,19 @@ final class PlayerViewModel {
     private(set) var isBuffering = false
     /// 已自然播完(`end-file` reason = eof)。重播 / 重试时复位。
     private(set) var isEnded = false
+    /// 当前播放器已画出第一帧真实视频帧(`firstVideoFrameRendered`)。重试时复位。
+    private(set) var hasRenderedFirstVideoFrame = false
+    /// track-list 已到、里面没有视频轨(纯音频文件):永远等不到第一帧
+    private var hasNoVideoTrack = false
+
+    /// 这一集**会有画面、但还没出来**。播放页换集时据此把上一集的最后一帧
+    /// 留在屏上(`PlayerWindowView.lingeringPlayer`),一变假就撤掉。
+    ///
+    /// 出错 / 播完 / 纯音频都算「不用再等」—— ⛔ 不能让上一集的定格画面
+    /// 一直压在一个出不了画面的会话上。
+    var isAwaitingFirstVideoFrame: Bool {
+        !hasRenderedFirstVideoFrame && !hasNoVideoTrack && failure == nil && !isEnded
+    }
     /// 本次播放可切换的剧集队列(上一集 / 下一集 / 选集面板的唯一数据源)。
     ///
     /// 来源有二,都在 `init` / `loadEpisodeQueue` 里定下:
@@ -245,15 +259,47 @@ final class PlayerViewModel {
     /// 与 CLAUDE.md 对播放上报的要求同源:异步乱序到达必须靠代次号丢弃。
     private var generation = 0
 
+    /// 换集时从上一集带过来的**播放页级**状态。
+    ///
+    /// 播放页在换集时保留(见 `PlaybackRequest.pageID`),ViewModel 与 mpv 仍是每集一份
+    /// (§8 一实例一 URL)。页面上用户调过的东西不该因为换集被打回去:
+    /// - 音量 / 静音:新 mpv 默认 100、不静音,不带就会被打回设置页的「默认音量」;
+    /// - 统计面板:按 I 打开的诊断面板,换集后还要看。
+    ///
+    /// ⛔ 不带「这一集」的东西:字幕延迟(文件级)、续播位置、轨道选择(另一个文件的
+    /// 轨道 id 没有意义)。倍速另有 `PlaybackSpeedStore`(重开播放页也要沿用),不走这里。
+    struct PageCarryOver: Equatable {
+        var volume: Double
+        var isMuted: Bool
+        var showsStatistics: Bool
+    }
+
+    /// 本集交给下一集的页面级状态。播放器从没建起来(起播前就失败)时音量是
+    /// 初始占位值而不是 mpv 读回的,那时只带统计面板,音量交给下一集按默认值设。
+    var pageCarryOver: PageCarryOver? {
+        guard player != nil else {
+            return showsStatistics
+                ? PageCarryOver(volume: Metrics.defaultVolume, isMuted: false, showsStatistics: true)
+                : nil
+        }
+        return PageCarryOver(volume: volume, isMuted: isMuted, showsStatistics: showsStatistics)
+    }
+
+    /// 上一集带过来的页面级状态;nil = 新开的播放页。只在建 mpv 时读。
+    private let carryOver: PageCarryOver?
+
     init(
         container: AppContainer,
         request: PlaybackRequest,
+        carryOver: PageCarryOver? = nil,
         preparer: (any PlaybackSessionPreparing)? = nil,
         reporter: (any PlaybackReporting)? = nil,
         displaySleep: (any DisplaySleepInhibiting)? = nil
     ) {
         self.container = container
         self.request = request
+        self.carryOver = carryOver
+        self.showsStatistics = carryOver?.showsStatistics ?? false
         // 会话准备与进度出口都按来源装配(Emby → 决策器 + 服务端上报;
         // 百度 → 播放映射 + 本地续播库)。测试可注入替身 —— 接线规则不该依赖网络。
         self.preparer = preparer ?? container.makeSessionPreparer(for: request)
@@ -318,6 +364,9 @@ final class PlayerViewModel {
     /// 是另一个更权威的观察点,见 GitHub issue #1 的验收标准)。
     var isPreventingDisplaySleep: Bool { displaySleep.isHeld }
 
+    /// 本 ViewModel 播的那一次请求(播放页换集后据此给旧会话发收尾广播)
+    var playbackRequest: PlaybackRequest { request }
+
     /// 正在播的 Emby 项(Emby 来源才有;标题栏 / 系统「正在播放」用)
     var playingItem: EmbyItem? { item }
     var playingServer: ServerProfile? { server }
@@ -375,6 +424,8 @@ final class PlayerViewModel {
         isPaused = false
         isRestarting = false
         isEnded = false
+        hasRenderedFirstVideoFrame = false
+        hasNoVideoTrack = false
         // 新播放器 = 新上报会话:不复位的话,播放中途出错再重试,
         // 新会话既不会补 seek 到起播位置,也永远不会发 Playing。
         didApplyStartOffset = false
@@ -471,17 +522,18 @@ final class PlayerViewModel {
         }
     }
 
-    /// 新建的 mpv 音量是 100,把设置页的「默认音量」设上去。
-    /// 理由与时机同 `applyRememberedSpeed`(挂桥之前)。
+    /// 新建的 mpv 音量是 100、不静音:换集带过来的音量 / 静音优先(`PageCarryOver`),
+    /// 新开的播放页用设置页的「默认音量」。理由与时机同 `applyRememberedSpeed`(挂桥之前)。
     private func applyDefaultVolume(to player: MPVPlayer) {
-        let target = container.preferences.defaultVolume
-        guard target != Metrics.defaultVolume else { return }
+        let target = carryOver?.volume ?? container.preferences.defaultVolume
         do {
+            if carryOver?.isMuted == true { try player.setMuted(true) }
+            guard target != Metrics.defaultVolume else { return }
             try player.setVolume(target)
         } catch {
             let reason = String(describing: error)
             Self.logger.error(
-                "默认音量 \(target, privacy: .public) 设到新建播放器失败:\(reason, privacy: .public)")
+                "起播音量 \(target, privacy: .public) / 静音设到新建播放器失败:\(reason, privacy: .public)")
         }
     }
 
@@ -771,8 +823,9 @@ final class PlayerViewModel {
         }
     }
 
-    /// 换到下一集:写一个新的播放请求,播放窗口据此重建播放页,
-    /// 本页随之拆除并走完收尾上报(与关窗同一条路径)。
+    /// 换到下一集:写一个新的播放请求(沿用本页的 `pageID`)。播放页保留,
+    /// 只把本 ViewModel 换成新一集的(`PlayerWindowView.switchSession`);
+    /// 本 ViewModel 随之 `stop()`,照样走完收尾上报。
     func playNextEpisode() {
         switchToEpisode(nextEpisode)
     }
@@ -799,7 +852,9 @@ final class PlayerViewModel {
             Task { await container.rememberResumeCard(item: item, file: file) }
         }
         let carried = episode.source.baiduFile != nil ? episodeQueue?.selecting(episode) : nil
-        container.play(PlaybackRequest(source: episode.source, episodeQueue: carried))
+        // 沿用本页的 `pageID`:播放窗口据此只换会话、不重建播放页(见 `PlaybackRequest`)
+        container.play(PlaybackRequest(
+            source: episode.source, episodeQueue: carried, continuingPage: request.pageID))
     }
 
     // MARK: - 跳过片头 / 下一集提示
@@ -1376,6 +1431,9 @@ final class PlayerViewModel {
             pushState()
             reportNow(paused ? .pause : .unpause)
 
+        case .firstVideoFrameRendered:
+            hasRenderedFirstVideoFrame = true
+
         case .timePos(let value):
             markTimeline(.firstFrame)
             positionSeconds = value
@@ -1400,6 +1458,7 @@ final class PlayerViewModel {
             reportNow(.volumeChange)
 
         case .trackList(let tracks):
+            hasNoVideoTrack = !tracks.isEmpty && !tracks.contains { $0.type == .video }
             audioTracks = tracks.filter { $0.type == .audio }
             subtitleTracks = tracks.filter { $0.type == .sub }
             // 读回验证(第 7 节:设置 aid/sid 后要读回,不能假设设置即生效)。
