@@ -39,25 +39,28 @@ extension View {
     /// - Parameters:
     ///   - chrome: 全屏状态与自动隐藏(每个主窗口一份)
     ///   - scrim: 栏底的压暗方式(见 `BrowseChromeScrim`)
+    ///   - isLoading: 有内容页在加载 / 刷新 → 栏下沿走一条加载线(`ChromeLoadingLine`)
     ///   - bar: 栏里的内容(返回 / 搜索 / 来源…),由调用方按当前页决定
     func browseChrome<Bar: View>(
         _ chrome: BrowseChromeController,
         scrim: BrowseChromeScrim,
+        isLoading: Bool,
         @ViewBuilder bar: () -> Bar
     ) -> some View {
-        modifier(BrowseChromeModifier(chrome: chrome, scrim: scrim, bar: bar()))
+        modifier(BrowseChromeModifier(chrome: chrome, scrim: scrim, isLoading: isLoading, bar: bar()))
     }
 }
 
 private struct BrowseChromeModifier<Bar: View>: ViewModifier {
     let chrome: BrowseChromeController
     let scrim: BrowseChromeScrim
+    let isLoading: Bool
     let bar: Bar
 
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
-                BrowseChromeBarContainer(chrome: chrome, scrim: scrim, bar: bar)
+                BrowseChromeBarContainer(chrome: chrome, scrim: scrim, isLoading: isLoading, bar: bar)
             }
             // 整体铺到窗口最上沿:栏落在红绿灯那一带,内容的安全区从栏下沿算起
             .ignoresSafeArea(.container, edges: .top)
@@ -79,6 +82,7 @@ private struct BrowseChromeModifier<Bar: View>: ViewModifier {
 private struct BrowseChromeBarContainer<Bar: View>: View {
     @Bindable var chrome: BrowseChromeController
     let scrim: BrowseChromeScrim
+    let isLoading: Bool
     let bar: Bar
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -99,6 +103,13 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
                 .gesture(WindowDragGesture())
                 .allowsWindowActivationEvents(true)
         }
+        .overlay(alignment: .bottom) {
+            if isLoading {
+                ChromeLoadingLine()
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: Metrics.animationFast), value: isLoading)
         .onHover { chrome.setHovering($0) }
         .opacity(chrome.isVisible ? 1 : 0)
         // 栏藏起来时顶部整条不挡页面操作(滚动 / 点卡片)
@@ -189,6 +200,43 @@ struct ChromeSearchField: View {
         .help("搜索电影与剧集(⌘F,回车搜索)")
         .accessibilityElement(children: .contain)
         .accessibilityLabel("搜索电影与剧集")
+    }
+}
+
+/// 栏下沿的加载线:有内容页在加载 / 刷新时出现(DesignTokens.swift「界面规则」加载态)。
+///
+/// 一小段强调色在整条宽度上来回扫。用 `TimelineView` 按时间算位置(与旧的刷新图标同一做法):
+/// `isLoading` 一变假整条视图就移除,不会有停不干净的 `repeatForever` 动画。
+/// 「减少动态效果」下不扫,显示一条静止的半透明线。
+struct ChromeLoadingLine: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            if reduceMotion {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(Metrics.chromeLoadingLineStaticOpacity))
+            } else {
+                TimelineView(.animation) { timeline in
+                    let width = proxy.size.width * Metrics.chromeLoadingLineSegmentFraction
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: width)
+                        .offset(x: offset(at: timeline.date, total: proxy.size.width, segment: width))
+                }
+            }
+        }
+        .frame(height: Metrics.chromeLoadingLineHeight)
+        .allowsHitTesting(false)
+        .accessibilityElement()
+        .accessibilityLabel("正在加载")
+    }
+
+    /// 一个周期内从左外侧扫到右外侧(进出都不露头)
+    private func offset(at date: Date, total: CGFloat, segment: CGFloat) -> CGFloat {
+        let period = Metrics.chromeLoadingLinePeriod
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        return -segment + (total + segment) * phase
     }
 }
 

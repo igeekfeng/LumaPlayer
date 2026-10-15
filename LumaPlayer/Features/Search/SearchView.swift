@@ -37,7 +37,7 @@ struct SearchView: View {
             PageHeader(title: title)
             results
         }
-        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧结果做操作
+        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧结果做操作
         .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(title)
         // 换服务器后旧结果属于别的服务器:按新服务器重搜(不串台)

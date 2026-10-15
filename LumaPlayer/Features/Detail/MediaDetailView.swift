@@ -15,7 +15,7 @@ struct MediaDetailView: View {
     let item: EmbyItem
     /// 打开另一项(相似推荐):主窗口往导航栈上再 push 一页,返回栈可逐级退回。
     var onOpenItem: (EmbyItem) -> Void = { _ in }
-    /// 变化即重新加载(工具栏「刷新」)。同一项再次加载是原地刷新,保留已有内容。
+    /// 变化即重新加载(「Reload」(⌘R))。同一项再次加载是原地刷新,保留已有内容。
     var refreshToken: Int = 0
 
     /// 每个 push 出来的详情页自带一份:栈上同时存在多页时各读各的项,
@@ -57,7 +57,7 @@ struct MediaDetailView: View {
         }
         // 栈顶再 push 一页(相似推荐)时,返回按钮要有个名字可显示
         .navigationTitle(item.name)
-        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
         .task(id: "\(server.id.uuidString)-\(item.id)-\(refreshToken)") {
             viewModel.load(item: item, server: server)

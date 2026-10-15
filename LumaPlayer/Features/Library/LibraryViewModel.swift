@@ -95,7 +95,7 @@ final class LibraryViewModel {
     private var server: ServerProfile?
     private var view: EmbyView?
 
-    /// 首次加载或刷新进行中(工具栏刷新图标据此转圈)。
+    /// 首次加载或刷新进行中(顶栏加载线据此显示)。
     var isLoading: Bool { list?.isLoading ?? false }
 
     var sort: LibrarySort = .name {

@@ -10,7 +10,7 @@ struct LibraryView: View {
     let view: EmbyView?
     /// 打开某一项的详情(主窗口 push 详情页)
     var onOpenItem: (EmbyItem) -> Void
-    /// 变化即重新加载(工具栏「刷新」)
+    /// 变化即重新加载(「Reload」(⌘R))
     var refreshToken: Int = 0
 
     @State private var viewModel: LibraryViewModel
@@ -39,7 +39,7 @@ struct LibraryView: View {
             }
             pageContent
         }
-        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
         // 「窗口」菜单与调度中心里的窗口名
         .navigationTitle(title)

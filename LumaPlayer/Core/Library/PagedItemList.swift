@@ -62,7 +62,7 @@ final class PagedItemList {
     /// ⚠️ 带 `SearchTerm` 时不可信(Q24,恒为 0),搜索页不要显示它。
     var totalCount: Int? { totalRecordCount }
 
-    /// 首次加载或刷新进行中(工具栏刷新图标据此转圈)。
+    /// 首次加载或刷新进行中(顶栏加载线据此显示)。
     var isLoading: Bool { state.isLoading || isRefreshing }
 
     /// 标记已看 / 收藏成功后,用服务端返回的 UserData 就地替换这一项,不重拉整页。
@@ -91,7 +91,7 @@ final class PagedItemList {
     ///
     /// 与 `reload()` 的区别是查询条件没变,旧内容仍然有效 —— 只是用户按了「刷新」要
     /// 最新数据。因此不切回 `.loading`、不清空 `items`,只置 `isRefreshing`
-    /// (工具栏刷新图标据此转圈);新结果回来后整页替换,失败则保留旧内容
+    /// (顶栏加载线据此显示);新结果回来后整页替换,失败则保留旧内容
     /// (与首页 / 详情页的后台刷新同一立场)。翻过的后续页会丢掉,回到第一页。
     func refresh() {
         loadTask?.cancel()

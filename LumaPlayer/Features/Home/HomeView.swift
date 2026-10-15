@@ -22,7 +22,7 @@ struct HomeView: View {
     let onOpenItem: (EmbyItem) -> Void
     /// 打开某个媒体库(主窗口 push 媒体库页)
     let onOpenLibrary: (EmbyView) -> Void
-    /// 变化即重新加载(工具栏「刷新」)
+    /// 变化即重新加载(「Reload」(⌘R))
     let refreshToken: Int
 
     /// 首页是导航栈的根,push 别的页时不会销毁,ViewModel 一直留着;
@@ -67,7 +67,7 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("首页")
-        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
+        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
         .task(id: "\(server.id.uuidString)-\(refreshToken)") {
             viewModel.load(server: server)

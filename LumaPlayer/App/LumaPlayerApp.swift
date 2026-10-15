@@ -13,7 +13,10 @@ struct LumaPlayerApp: App {
         // (`BrowseChromeBar.swift`,DesignTokens.swift「界面规则」)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: Metrics.mainWindowWidth, height: Metrics.mainWindowHeight)
-        .commands { PlayerCommands() }
+        .commands {
+            BrowseCommands()
+            PlayerCommands()
+        }
 
         // 播放器:单实例独立窗口(CLAUDE.md「架构主线」)。内容由
         // `AppState.nowPlaying` 决定;不参与窗口恢复 —— 重启后没有播放请求,

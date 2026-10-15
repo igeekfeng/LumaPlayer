@@ -33,7 +33,7 @@ import Foundation
 /// | 播放上报 Progress | **不失效**:每 10 秒一次,失效会让播放期间的浏览永远打不到缓存 |
 /// | 登录成功 / 登出 | 整台作废 |
 /// | 删除服务器 | 内存 + 磁盘一起清(`purgeDisk`) |
-/// | 工具栏刷新 | 先作废再重载 |
+/// | 手动刷新(⌘R) | 先作废再重载 |
 ///
 /// ⛔ 登录时的访问验证(`verifyAccessWithFreshViews`)必须绕过缓存,否则失效 token / 被禁用户会假装登录成功。
 /// 可缓存端点是 allowlist(`EmbyEndpoint.isResponseCacheable`),图片 / 播放上报 / PlaybackInfo / 认证类不在内。

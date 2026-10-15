@@ -59,9 +59,22 @@ struct BrowseView: View {
         }
         // 顶栏挂在**导航栈外**,每一页共用一条(DesignTokens.swift「界面规则」)。
         // 详情页是一整页 hero:栏底换成很轻的黑色压暗,不在背景图上盖出一条窗口底色。
-        .browseChrome(chrome, scrim: isShowingDetail ? .hero : .page) {
+        .browseChrome(
+            chrome,
+            scrim: isShowingDetail ? .hero : .page,
+            // 状态由当前内容页经 `AppState.isPageLoading` 上报
+            isLoading: container.state.isPageLoading
+        ) {
             chromeBar
         }
+        // 菜单栏的 View →「Reload」(⌘R)与「Source」菜单(`BrowseCommands`)
+        .focusedSceneValue(\.browseActions, BrowseActions(
+            isLoading: container.state.isPageLoading,
+            reload: refresh,
+            sources: sources,
+            currentSourceID: container.state.currentSource?.id,
+            switchTo: { source in Task { await switchTo(source) } }
+        ))
         // 设置窗口里增 / 改 / 删来源后重读,菜单里的名称跟着变
         .task(id: container.state.serverListRevision) { await reloadSources() }
         .onChange(of: container.state.currentSource?.id) {
@@ -159,7 +172,10 @@ struct BrowseView: View {
 
     // MARK: - 顶栏
 
-    /// 顶栏内容:左边返回,右边搜索 / 来源 / 刷新。
+    /// 顶栏内容:左边返回,右边搜索 / 来源。
+    ///
+    /// ⛔ 不放刷新按钮:手动刷新是菜单栏「Reload」(⌘R),加载状态看栏下沿的加载线
+    /// (DesignTokens.swift「界面规则」加载态)。
     @ViewBuilder
     private var chromeBar: some View {
         HStack(spacing: Metrics.spacingM) {
@@ -176,13 +192,6 @@ struct BrowseView: View {
             if !isShowingDetail {
                 sourceMenu
             }
-            // 加载 / 刷新中图标转圈并禁用;状态由当前内容页经 `AppState.isPageLoading` 上报
-            RefreshToolbarButton(isLoading: container.state.isPageLoading) {
-                refresh()
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
         }
     }
 
@@ -213,7 +222,7 @@ struct BrowseView: View {
         .buttonBorderShape(.circle)
         .controlSize(.large)
         .fixedSize()
-        .help("来源:\(currentSourceName)。切换来源;「管理来源…」在设置窗口(⌘,)")
+        .help("来源:\(currentSourceName)。切换来源(⌘1…⌘9);「管理来源…」在设置窗口(⌘,)")
         .accessibilityLabel("来源:\(currentSourceName)")
     }
 

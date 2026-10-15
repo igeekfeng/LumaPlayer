@@ -297,7 +297,7 @@ final class AppContainer {
         disk: PosterDiskCache()
     )
 
-    /// 手动刷新(工具栏「刷新」按钮)时作废这台服务器的接口缓存:
+    /// 手动刷新(菜单「Reload」,⌘R)时作废这台服务器的接口缓存:
     /// 用户按刷新就是要最新数据,不吃 TTL 内的缓存
     /// (浏览路径仍吃缓存,只有显式刷新走这里,见 `EmbyResponseCache`)。
     func invalidateResponses(for server: ServerProfile) async {

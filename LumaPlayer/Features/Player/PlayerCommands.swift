@@ -30,6 +30,15 @@ extension FocusedValues {
 /// | 退出全屏 | Esc |
 /// | 拖进度 | 触控板双指横滑(松手才 seek,纵向不拦截) |
 ///
+/// 主窗口(浏览)的快捷键不在这张表里的菜单上,但同样记在这里:
+///
+/// | 操作 | 键 | 在哪 |
+/// |---|---|---|
+/// | 刷新当前页 | ⌘R | `BrowseCommands`(View →「Reload」) |
+/// | 切换来源 | ⌘1…⌘9 | `BrowseCommands`(「Source」菜单) |
+/// | 聚焦搜索框 | ⌘F | `ChromeSearchField`(浮动顶栏) |
+/// | 返回 | ⌘[ | `ChromeBackButton`(浮动顶栏) |
+///
 /// 方向键 seek ⛔ 不挂在菜单上:菜单快捷键按住会连发,而转码模式下
 /// 每次 seek 都是一次重新起流;方向键只在视图里按 `.down` 处理。
 struct PlayerCommands: Commands {

@@ -85,7 +85,7 @@ final class BaiduPanSourceViewModel {
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: BaiduPanDirectoryFailure?
 
-    /// 是否已经完成过一次完整的目录加载。工具栏「刷新」据此决定语义
+    /// 是否已经完成过一次完整的目录加载。「Reload」(⌘R)据此决定语义
     /// (首次 = 结构性重载,之后 = 只重读当前目录),见 `refreshFromToolbar()`。
     private(set) var hasLoadedOnce = false
 
@@ -230,7 +230,7 @@ final class BaiduPanSourceViewModel {
         await task.value
     }
 
-    /// 工具栏「刷新」的入口。
+    /// 「Reload」(⌘R)的入口。
     ///
     /// ⚠️ 与 `reload()` 的分工:首次进入(还没加载过)按结构性变化处理,
     /// 回到片库根重新列;之后只重读**当前所在**的目录 —— 刷新不该把人踢回起点。
@@ -247,7 +247,7 @@ final class BaiduPanSourceViewModel {
         isLoading = true
         loadFailure = nil
         defer { isLoading = false }
-        // 结构性变化(首次进入 / 换配置 / 换授权 / 用户点工具栏刷新):会话缓存作废,
+        // 结构性变化(首次进入 / 换配置 / 换授权 / 用户按 ⌘R 刷新):会话缓存作废,
         // 之后从片库根重新列起。⚠️ 放在这里而不是 `case .authorized` 里 ——
         // 解绑 / 换密钥之后会走到「需要授权」那一屏,那条路也得把旧缓存清掉。
         // ⚠️ `filesByID` 也要清:它是**合并**进去的(见 `loadFiles`),
@@ -267,7 +267,7 @@ final class BaiduPanSourceViewModel {
             case .authorized:
                 // ⚠️ 进这一屏一律**从片库根重新开始**:`reload()` 只在结构性变化后
                 // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权)。
-                // 工具栏刷新走 `refreshFromToolbar()` —— 首次进这一屏时等价于
+                // 手动刷新(⌘R)走 `refreshFromToolbar()` —— 首次进这一屏时等价于
                 // `reload()`,之后只重读当前目录,不会把人踢回起点。
                 guard loadsDirectory else { break }
                 currentDirectory = nil
@@ -565,7 +565,7 @@ final class BaiduPanSourceViewModel {
             clearEpisodeState()
             return
         }
-        // ⚠️ 同一部剧的**刷新**(工具栏刷新 / 播完回来)要保住用户正看着的那一季;
+        // ⚠️ 同一部剧的**刷新**(手动刷新(⌘R) / 播完回来)要保住用户正看着的那一季;
         // 换了一部剧才回到第一季。靠「上一轮判定的是哪个目录」区分这两件事。
         let isSameSeries = shapeDirectory == directory
         shapeDirectory = directory

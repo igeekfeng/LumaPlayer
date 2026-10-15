@@ -20,7 +20,8 @@ import Foundation
 /// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
 /// **加载态**:首屏无内容时用灰色骨架(`Skeleton*`)照真实布局占位;刷新时保留旧内容,
-/// 失败也保留;「在不在加载」只看工具栏刷新图标转圈;加载中整页不可点。
+/// 失败也保留;「在不在加载」只看顶栏下沿那条加载线(`ChromeLoadingLine`);加载中整页不可点。
+/// 手动刷新是菜单栏 View →「Reload」(⌘R),⛔ 不在顶栏放常驻的刷新按钮。
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、
@@ -100,6 +101,14 @@ enum Metrics {
     static let chromeScrimSolidFraction: Double = 0.55
     /// hero 页的栏底:顶端黑色的不透明度(只为让红绿灯与玻璃按钮读得出来)
     static let chromeHeroScrimOpacity: Double = 0.35
+    /// 栏下沿加载线的高度
+    static let chromeLoadingLineHeight: CGFloat = 2
+    /// 加载线里扫动那一段占整条宽度的比例
+    static let chromeLoadingLineSegmentFraction: CGFloat = 0.25
+    /// 扫一趟的时长(秒)
+    static let chromeLoadingLinePeriod: TimeInterval = 1.2
+    /// 「减少动态效果」下静止加载线的不透明度
+    static let chromeLoadingLineStaticOpacity: Double = 0.6
 
     // MARK: 设置窗口
 

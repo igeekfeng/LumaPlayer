@@ -28,7 +28,7 @@ final class MediaDetailViewModel {
     /// 正在写入 UserData 的条目 Id(按钮据此禁用,防止连点发出相反的两次请求)
     private(set) var updatingItemIDs: Set<String> = []
 
-    /// 详情页整体是否正在加载 / 刷新(工具栏刷新图标据此转圈)。
+    /// 详情页整体是否正在加载 / 刷新(顶栏加载线据此显示)。
     /// 刷新时 `detailState` 仍是 `.loaded`(保留旧内容),所以单看 `detailState` 不够。
     var isLoading: Bool {
         detailState.isLoading || seasonsState.isLoading || episodesState.isLoading || isRefreshing

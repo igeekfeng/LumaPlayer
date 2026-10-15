@@ -22,7 +22,7 @@ final class SearchViewModel {
     private var configuredServerID: UUID?
     private var configuredTerm: String?
 
-    /// 首次搜索或重新搜索进行中(工具栏刷新图标据此转圈)。
+    /// 首次搜索或重新搜索进行中(顶栏加载线据此显示)。
     var isLoading: Bool { list?.isLoading ?? false }
 
     init(container: AppContainer) {

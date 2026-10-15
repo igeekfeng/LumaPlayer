@@ -9,7 +9,7 @@ struct BaiduPanSourceView: View {
     let container: AppContainer
     /// 当前来源(决定 `sourceID` —— 封面缓存 key 按它分区)
     let source: BaiduPanSource
-    /// 工具栏「刷新」按钮的计数器:变化即重读授权状态与目录
+    /// 「Reload」菜单(⌘R)的计数器:变化即重读授权状态与目录
     let refreshToken: Int
 
     @State private var viewModel: BaiduPanSourceViewModel
@@ -28,7 +28,7 @@ struct BaiduPanSourceView: View {
             // 免得空着。浏览屏自己有 `navigationTitle(当前目录名)`,更靠内层,
             // 会覆盖这一条。
             .navigationTitle("百度网盘")
-            // 工具栏「刷新」:首次进入 = 结构性重载(回片库根),之后只重读
+            // 「Reload」(⌘R):首次进入 = 结构性重载(回片库根),之后只重读
             // **当前所在**的目录 —— 刷新不该把人踢回起点(`refreshFromToolbar`)。
             .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
             // 设置里改过来源(片库根 / 显示名 / 增删来源)→ 重读片库根。
