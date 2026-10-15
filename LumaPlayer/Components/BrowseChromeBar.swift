@@ -8,9 +8,13 @@ import AppKit
 // 系统工具栏是一条「栏」:有底色、有标题、有分隔,主窗口看起来像个文件管理器;
 // 原生全屏时系统还会把它整条搬进独立的 `NSToolbarFullScreenWindow`,
 // `.toolbarBackgroundVisibility` / `.scrollEdgeEffect*` / `.windowToolbarFullScreenVisibility`
-// 全都不生效(PITFALLS.md Q37)。所以主窗口**整条藏掉系统工具栏**(`.toolbar(.hidden, for: .windowToolbar)`,
-// 窗口本身 `.hiddenTitleBar`),返回 / 搜索 / 来源这些按钮画到内容上:没有「栏底」,
-// 只有浮在内容上的玻璃圆形按钮,下面垫一层渐变压暗。
+// 全都不生效(PITFALLS.md Q37)。所以主窗口**不让系统建工具栏**:窗口 `.hiddenTitleBar`,
+// 不声明任何 `.toolbar` 项、`.toolbar(removing: .title)`、push 页 `.navigationBarBackButtonHidden(true)`
+// (系统返回按钮会让 SwiftUI 建出一条 NSToolbar)。返回 / 搜索 / 来源这些按钮画到内容上:
+// 没有「栏底」,只有浮在内容上的玻璃圆形按钮,下面垫一层渐变压暗。
+//
+// ⛔ 不要用 `.toolbar(.hidden, for: .windowToolbar)`:在 `.hiddenTitleBar` 窗口上它会把整个
+// 标题栏容器设成 hidden,红绿灯跟着消失(2026-10-15 实测,PITFALLS.md)。
 //
 // ## 布局
 //
@@ -20,7 +24,8 @@ import AppKit
 //
 // ## 可见性规则
 //
-// - **窗口化:常驻**。左上角是系统红绿灯,栏内按钮让出红绿灯那一列(`Metrics.chromeBarLeading`)。
+// - **窗口化:常驻**。左上角是系统红绿灯,栏内按钮让出红绿灯那一列(`Metrics.chromeBarLeading`),
+//   按钮行的中心对齐红绿灯中心(从窗口里量,`trafficLightCenterY`)。
 // - **全屏:自动隐藏**,与播放控制栏同一套双规则(DesignTokens.swift「界面规则」):
 //   指针静止 `autoHideDelay` 藏、移出窗口 `autoHidePointerExitDelay` 藏,一动鼠标就回来;
 //   指针停在栏上 / 搜索框聚焦时钉住。
@@ -34,7 +39,7 @@ enum BrowseChromeScrim {
 }
 
 extension View {
-    /// 给主窗口导航栈挂上浮动顶栏,并整条隐藏系统窗口工具栏。
+    /// 给主窗口导航栈挂上浮动顶栏(系统窗口工具栏不建,见文件头)。
     ///
     /// - Parameters:
     ///   - chrome: 全屏状态与自动隐藏(每个主窗口一份)
@@ -64,7 +69,7 @@ private struct BrowseChromeModifier<Bar: View>: ViewModifier {
             }
             // 整体铺到窗口最上沿:栏落在红绿灯那一带,内容的安全区从栏下沿算起
             .ignoresSafeArea(.container, edges: .top)
-            .toolbar(.hidden, for: .windowToolbar)
+            .toolbar(removing: .title)
             // 指针追踪挂在整页上:在页面任何位置动鼠标都要把栏叫回来
             .onContinuousHover { phase in
                 switch phase {
@@ -91,11 +96,15 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
         GlassEffectContainer(spacing: Metrics.spacingM) {
             bar
         }
+        // 窗口化:按钮行的中心对齐红绿灯中心(否则在 52pt 里居中会比红绿灯低一截);
+        // 全屏没有红绿灯,在栏里居中
+        .frame(height: Metrics.chromeSearchHeight)
+        .padding(.top, rowTopInset)
         // 全屏没有红绿灯,不用让出那一列
         .padding(.leading, chrome.isFullScreen ? Metrics.spacingXL : Metrics.chromeBarLeading)
         .padding(.trailing, Metrics.spacingXL)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: Metrics.chromeBarHeight)
+        .frame(height: Metrics.chromeBarHeight, alignment: .top)
         .background {
             scrimView
                 // 隐藏标题栏后窗口只能靠这一条拖动(按钮之间的空白处)
@@ -118,6 +127,11 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
             reduceMotion ? nil : .easeInOut(duration: Metrics.animationStandard),
             value: chrome.isVisible
         )
+    }
+
+    private var rowTopInset: CGFloat {
+        let center = chrome.isFullScreen ? Metrics.chromeBarHeight / 2 : chrome.trafficLightCenterY
+        return max(0, center - Metrics.chromeSearchHeight / 2)
     }
 
     @ViewBuilder
@@ -282,6 +296,12 @@ final class BrowseChromeController: NSObject {
         window = newWindow
         guard let newWindow else { return }
         isFullScreen = newWindow.styleMask.contains(.fullScreen)
+        // 按钮要在下一轮布局之后才有位置
+        Task { @MainActor [weak self, weak newWindow] in
+            await Task.yield()
+            guard let self, let newWindow else { return }
+            self.measureTrafficLights(in: newWindow)
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(enteredFullScreen),
             name: NSWindow.didEnterFullScreenNotification, object: newWindow)
@@ -328,6 +348,20 @@ final class BrowseChromeController: NSObject {
             // 指针跟着栏一起藏,一动鼠标系统自动恢复(与播放控制栏一致)
             NSCursor.setHiddenUntilMouseMoves(true)
         }
+    }
+
+    /// 红绿灯中心距窗口上沿的距离(窗口化时栏内按钮行按它对齐)。
+    /// 读不到(还没布局 / 没有关闭按钮)就留默认值:栏高的一半(按钮行居中)。
+    private(set) var trafficLightCenterY: CGFloat = Metrics.chromeBarHeight / 2
+
+    private func measureTrafficLights(in window: NSWindow) {
+        guard let button = window.standardWindowButton(.closeButton),
+              let content = window.contentView,
+              button.window === window else { return }
+        let rect = button.convert(button.bounds, to: content)
+        let fromTop = content.isFlipped ? rect.midY : content.bounds.height - rect.midY
+        guard fromTop > 0, fromTop < Metrics.chromeBarHeight else { return }
+        trafficLightCenterY = fromTop
     }
 
     private func pinChanged() {

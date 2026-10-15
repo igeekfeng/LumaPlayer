@@ -212,9 +212,15 @@ per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓�
 **原生全屏下详情页那条工具栏背景去不掉(Q37)。** 全屏时系统把工具栏搬进独立的 `NSToolbarFullScreenWindow`,
 `.toolbarBackgroundVisibility` / `.scrollEdgeEffect*` / `.windowToolbarFullScreenVisibility` 都不生效;
 唯一生效的 `.toolbarVisibility(.hidden)` 会连按钮一起藏掉。⛔ 别再试这一类修饰符。
-2026-10-15 的做法:主窗口整条藏掉系统工具栏(`.toolbar(.hidden, for: .windowToolbar)` + 窗口 `.hiddenTitleBar`),
+2026-10-15 的做法:主窗口不让系统建工具栏(窗口 `.hiddenTitleBar`、不声明 `.toolbar` 项、push 页 `.navigationBarBackButtonHidden(true)`),
 返回 / 搜索 / 来源画成浮在内容上的玻璃按钮(`BrowseChromeBar.swift`),全屏下随指针自动隐藏。
 全屏下那条栏是否真的消失:**未视觉验证**(见 KNOWN_ISSUES.md B 节)。
+
+**`.hiddenTitleBar` 窗口上 ⛔ 别用 `.toolbar(.hidden, for: .windowToolbar)`:红绿灯会一起消失。** 它把整个标题栏容器
+(关闭按钮的 `superview.superview`)设成 hidden,按钮本身 `isHidden == false`、alpha 1,所以只查按钮查不出来(2026-10-15)。
+另:`NavigationStack` push 页带着系统返回按钮时,SwiftUI 会给窗口建一条 NSToolbar,红绿灯被挪进 52pt 工具栏带
+(按钮 y 从 9 变 19)、全屏又出现实色栏 —— 自绘返回的页面要 `.navigationBarBackButtonHidden(true)`。
+没有截图权限时,用 `NSLog` 打 `window.toolbar` 与 `standardWindowButton(.closeButton)` 的祖先 `isHidden` 来判断。
 
 **共用工具栏的「刷新」靠各页 `.task(id:)` 吃 `refreshToken`(Q36)。** 详情页曾漏接,刷新成空操作。每个新页面都要确认。
 

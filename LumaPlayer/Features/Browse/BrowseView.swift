@@ -124,6 +124,9 @@ struct BrowseView: View {
             )
             .navigationDestination(for: BrowseRoute.self) { route in
                 page(for: route, server: server)
+                    // ⛔ 系统返回按钮:有它 SwiftUI 就会给窗口建一条 NSToolbar,
+                    // 红绿灯被挪进 52pt 的工具栏带里、全屏又冒出实色栏(Q37)。返回在浮动顶栏上。
+                    .navigationBarBackButtonHidden(true)
             }
         case .some(.baiduPan(let source)):
             // ⛔ 百度来源没有 Emby 那套库 / 搜索 / 详情,所以顶栏不给搜索框;

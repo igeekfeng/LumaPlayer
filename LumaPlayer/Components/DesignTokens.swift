@@ -11,7 +11,8 @@ import Foundation
 /// 别处注释里写「DesignTokens.swift「界面规则」」的,指的就是这一节。
 ///
 /// **信息架构**:主窗口是单个 `NavigationStack`,首页是栈根,媒体库 / 搜索结果 / 详情都 push 上来。
-/// **没有系统工具栏与标题栏**(窗口 `.hiddenTitleBar` + `.toolbar(.hidden, for: .windowToolbar)`):
+/// **没有系统工具栏与标题栏**(窗口 `.hiddenTitleBar`,不声明 `.toolbar` 项,push 页隐藏系统返回按钮;
+/// ⛔ 不用 `.toolbar(.hidden, for: .windowToolbar)`,它会把红绿灯一起藏掉):
 /// 挂在栈外的浮动顶栏(`BrowseChromeBar.swift`)各页共用 —— 左边返回(⌘[),右边搜索胶囊(⌘F,
 /// 提交式,回车才搜;仅 Emby)、来源菜单、刷新,都是玻璃圆形按钮,栏底垫渐变不画「栏」;
 /// 全屏下随指针自动隐藏(与播放控制栏同一套双规则)。页面名称与页内工具(排序 / 筛选)在
