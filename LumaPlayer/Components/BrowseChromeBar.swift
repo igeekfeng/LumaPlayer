@@ -261,6 +261,9 @@ final class BrowseChromeController: NSObject {
     /// 页面自己的「返回」(导航栈之外的层级,目前只有百度目录的上一层)。
     /// nil = 页面没有自己的返回;导航栈不空时栈优先(见 `BrowseView.backAction`)。
     var pageBackAction: (@MainActor () -> Void)?
+    /// 首页顶部有没有 hero(`HomeHeroSlot` 上报)。有就把栏底换成 hero 的压暗
+    /// (`BrowseView` 只在栈空且来源是 Emby 时读它)。
+    var rootHasHero = false
 
     @ObservationIgnored private weak var window: NSWindow?
     /// 指针停在栏上 / 搜索框聚焦:到点也不藏(两样分开记,任一为真就钉住)

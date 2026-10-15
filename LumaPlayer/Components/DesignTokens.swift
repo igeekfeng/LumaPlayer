@@ -16,6 +16,8 @@ import Foundation
 /// 提交式,回车才搜;仅 Emby)、来源菜单、刷新,都是玻璃圆形按钮,栏底垫渐变不画「栏」;
 /// 全屏下随指针自动隐藏(与播放控制栏同一套双规则)。页面名称与页内工具(排序 / 筛选)在
 /// 各页的 `PageHeader` 大标题行里;首页与详情页不用它,hero 就是标题。
+/// 首页顶部 hero(`HomeHero`):继续观看里第一个有背景图的,其次各库「最新」;
+/// 数据只用首页已加载的行,⛔ 不另发列表请求、⛔ 不轮播;没有合格条目就不画。
 /// 详情页:hero 图透到窗口最上沿,顶栏不放来源菜单(切换会清掉导航栈)。
 /// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
@@ -25,7 +27,7 @@ import Foundation
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、
-/// 主窗口浮动顶栏的按钮与搜索胶囊、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)。
+/// 主窗口浮动顶栏的按钮与搜索胶囊、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 的播放 / 详情按钮。
 /// ⛔ 不用于:海报卡片、列表 / 剧集的每一行、长文本背景、全窗口背景、**播放器底部控制栏**
 /// (它是全宽横条 + 自下而上的黑色渐变压暗:HIG 要求玻璃压在媒体上配 dimming,
 /// 且 Apple TV / QuickTime / mpv OSC 默认都是全宽横条)。
@@ -299,6 +301,28 @@ enum Metrics {
     static let heroBackdropDimOpacity: Double = 0.45
     /// hero 里标题区向上压进背景的比例
     static let heroOverlapRatio: CGFloat = 0.45
+
+    // MARK: 首页 hero(`HomeHero`)
+
+    /// 高度 = 宽度 × 这个比例,再夹到上下限
+    static let homeHeroHeightRatio: CGFloat = 0.45
+    static let homeHeroMinHeight: CGFloat = 360
+    static let homeHeroMaxHeight: CGFloat = 620
+    /// 背景图请求的宽度档位(像素;Emby 按它缩放,必带,API_CONTRACT.md 3.3)
+    static let homeHeroImageMaxWidth: CGFloat = 1920
+    /// 文字区距 hero 底边的距离(占 hero 高的比例):要落在底部渐变开始之上
+    static let homeHeroInfoBottomFraction: CGFloat = 0.2
+    /// 底部渐变(到窗口底色)从 hero 高度的这个位置开始
+    static let homeHeroBottomFadeStart: Double = 0.8
+    /// 左侧文字区压暗:最左端黑色的不透明度
+    static let homeHeroSideScrimOpacity: Double = 0.6
+    /// 左侧压暗渐变到透明的位置(占宽度的比例)
+    static let homeHeroSideScrimEnd: Double = 0.7
+    /// Logo 的最大尺寸
+    static let homeHeroLogoMaxWidth: CGFloat = 360
+    static let homeHeroLogoMaxHeight: CGFloat = 120
+    /// 续播进度条宽度
+    static let homeHeroProgressWidth: CGFloat = 220
 
     // MARK: 分集货架滚动条
 

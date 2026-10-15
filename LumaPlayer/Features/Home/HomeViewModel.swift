@@ -57,6 +57,15 @@ final class HomeViewModel {
     }
 
     /// 一台服务器的首页各分区
+    /// `heroPick` 的结果
+    enum HeroPick: Equatable {
+        /// 决定它的行还在加载:hero 位置放骨架
+        case pending
+        /// 没有能上 hero 的条目:不画 hero,首页从普通页面的顶部开始
+        case none
+        case item(EmbyItem)
+    }
+
     @MainActor
     @Observable
     final class Sections {
@@ -281,6 +290,51 @@ final class HomeViewModel {
             if case .loaded(let items) = state { return items.isEmpty }
             return false
         }
+    }
+
+    /// 首页顶部 hero 选哪一项(纯函数,只读已经加载的行,⛔ 不为 hero 另发请求)。
+    ///
+    /// 顺序:继续观看里第一个有背景图的 → 各媒体库「最新」里(按媒体库顺序)第一个有背景图的 → 没有。
+    /// 排在前面的行还没回来时返回 `.pending`(先占住 hero 的高度,等它):
+    /// 不然后面的行先回来、hero 先显示了它,等前面的行回来又换掉,首屏会跳。
+    /// 失败的行跳过 —— 它自己那一行会报错,hero 不跟着空着。
+    static func heroPick(
+        views: LoadState<[EmbyView]>,
+        resume: LoadState<[EmbyItem]>,
+        latest: (EmbyView) -> LoadState<[EmbyItem]>
+    ) -> HeroPick {
+        switch resume {
+        case .idle, .loading:
+            return .pending
+        case .loaded(let items):
+            if let item = items.first(where: isHeroCandidate) { return .item(item) }
+        case .failed:
+            break
+        }
+        switch views {
+        case .idle, .loading:
+            return .pending
+        case .failed:
+            return .none
+        case .loaded(let views):
+            for view in latestViews(in: views) {
+                switch latest(view) {
+                case .idle, .loading:
+                    return .pending
+                case .loaded(let items):
+                    if let item = items.first(where: isHeroCandidate) { return .item(item) }
+                case .failed:
+                    continue
+                }
+            }
+            return .none
+        }
+    }
+
+    /// 能上 hero 的条目:必须有背景图(自己的或父级的,`backdropSource`)。
+    /// 只有海报的条目铺成整宽 hero 会被裁成一条,不选。
+    static func isHeroCandidate(_ item: EmbyItem) -> Bool {
+        item.backdropSource != nil
     }
 
     static func latestViews(in views: [EmbyView]) -> [EmbyView] {

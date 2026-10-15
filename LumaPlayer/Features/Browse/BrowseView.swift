@@ -58,10 +58,10 @@ struct BrowseView: View {
             rootPage
         }
         // 顶栏挂在**导航栈外**,每一页共用一条(DesignTokens.swift「界面规则」)。
-        // 详情页是一整页 hero:栏底换成很轻的黑色压暗,不在背景图上盖出一条窗口底色。
+        // 详情页与首页顶部是 hero:栏底换成很轻的黑色压暗,不在背景图上盖出一条窗口底色。
         .browseChrome(
             chrome,
-            scrim: isShowingDetail ? .hero : .page,
+            scrim: isOverHero ? .hero : .page,
             // 状态由当前内容页经 `AppState.isPageLoading` 上报
             isLoading: container.state.isPageLoading
         ) {
@@ -274,6 +274,13 @@ struct BrowseView: View {
     }
 
     // MARK: - 辅助
+
+    /// 顶栏压在 hero 图上:详情页,或栈空时首页顶部有 hero(百度来源的根页没有 hero)
+    private var isOverHero: Bool {
+        if isShowingDetail { return true }
+        guard path.isEmpty, case .emby? = container.state.currentSource else { return false }
+        return chrome.rootHasHero
+    }
 
     private var isShowingDetail: Bool {
         if case .detail = path.last { return true }

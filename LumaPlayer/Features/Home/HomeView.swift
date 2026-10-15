@@ -2,7 +2,8 @@ import SwiftUI
 
 /// 首页(主窗口导航栈的根页)。
 ///
-/// 自上而下:我的媒体 → 继续观看(横版)→ 每个媒体库的「最新」(海报)。
+/// 自上而下:hero(`HomeHero`,一项精选内容铺满顶部)→ 我的媒体 → 继续观看(横版)
+/// → 每个媒体库的「最新」(海报)。
 /// 与 Emby Web 一样,**加载成功但为空的分区整行不显示**(不放「没有内容」占位);
 /// 失败的分区照常显示错误与重试入口;全部为空时给一个整页空状态。
 ///
@@ -55,17 +56,22 @@ struct HomeView: View {
             onOpenLibrary: onOpenLibrary
         )
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
-                HomeLibrariesRow(row: sections.views, context: context)
-                HomeResumeRow(row: sections.resume, context: context)
-                ForEach(HomeViewModel.latestViews(in: sections.views.state.value ?? [])) { view in
-                    HomeLatestRow(view: view, row: sections.latest[view.id], context: context)
+            VStack(alignment: .leading, spacing: 0) {
+                // hero 铺到窗口最上沿(压在浮动顶栏下面);没有 hero 时它只留出顶栏的高度
+                HomeHeroSlot(sections: sections, context: context)
+                LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
+                    HomeLibrariesRow(row: sections.views, context: context)
+                    HomeResumeRow(row: sections.resume, context: context)
+                    ForEach(HomeViewModel.latestViews(in: sections.views.state.value ?? [])) { view in
+                        HomeLatestRow(view: view, row: sections.latest[view.id], context: context)
+                    }
+                    HomeEmptyState(sections: sections)
                 }
-                HomeEmptyState(sections: sections)
+                .padding(Metrics.spacingXL)
             }
-            .padding(Metrics.spacingXL)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .ignoresSafeArea(.container, edges: .top)
         .navigationTitle("首页")
         // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
@@ -100,6 +106,54 @@ private struct HomeRowContext {
     func play(_ item: EmbyItem, fromBeginning: Bool = false, openWindow: OpenWindowAction) {
         container.play(item, on: server, fromBeginning: fromBeginning)
         openWindow(id: PlayerSceneRoot.windowID)
+    }
+}
+
+// MARK: - hero
+
+/// hero 的位置。要读继续观看与各「最新」行的状态,所以单独成一个视图
+/// (与 `HomeEmptyState` 同理):任何一行变化只让它重新求值,不连带整页。
+///
+/// 首页整页 `ignoresSafeArea(edges: .top)`:有 hero(含加载中的骨架)时图铺到窗口最上沿;
+/// 没有 hero 时这里放一块顶栏高度的空白,货架从顶栏下沿开始。
+/// 有没有 hero 经 `BrowseChromeController.rootHasHero` 告诉顶栏(决定栏底压暗方式)。
+private struct HomeHeroSlot: View {
+    let sections: HomeViewModel.Sections
+    let context: HomeRowContext
+
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.browseChrome) private var chrome
+
+    var body: some View {
+        let pick = HomeViewModel.heroPick(
+            views: sections.views.state,
+            resume: sections.resume.state,
+            latest: { sections.latest[$0.id]?.state ?? .idle }
+        )
+        Group {
+            switch pick {
+            case .pending:
+                SkeletonBlock(cornerRadius: 0)
+                    .frame(height: HomeHero.height(forWidth: 0))
+            case .none:
+                Color.clear
+                    .frame(height: Metrics.chromeBarHeight)
+            case .item(let item):
+                HomeHero(
+                    item: item,
+                    serverID: context.server.id,
+                    store: context.container.posters,
+                    onPlay: { context.play(item, openWindow: openWindow) },
+                    onOpenDetail: { context.onOpenItem(item) }
+                )
+                // 换了一项就整块重建:Logo 取不到的标记不能带到下一项上
+                .id(item.id)
+            }
+        }
+        .onChange(of: pick != .none, initial: true) { _, hasHero in
+            chrome?.rootHasHero = hasHero
+        }
+        .onAppear { chrome?.rootHasHero = pick != .none }
     }
 }
 
