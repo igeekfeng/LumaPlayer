@@ -202,12 +202,7 @@ struct HomeHero: View {
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
                 }
-                if let meta {
-                    Text(meta)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                metaRow
                 if let overview {
                     Text(overview)
                         .font(.callout)
@@ -310,9 +305,41 @@ struct HomeHero: View {
         return [item.episodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// 电影 / 剧集:年份 · 片长 · 前两个类型
+    /// 元信息行:评分(星标)· 年份 · 片长 · 前两个类型。
+    ///
+    /// 评分放**行首**(2026-10-16 用户要求补上年份与评分):它是标题之下最想做
+    /// 决定依据的信息,和年份挨着当一组读。星标样式与详情页 `DetailMetaLine`
+    /// 同款(multicolor 黄星),不另造第二种。
+    /// 评分和各段都没有时整行不画。
+    @ViewBuilder
+    private var metaRow: some View {
+        let rating = MediaFormat.rating(item.communityRating)
+        if rating != nil || meta != nil {
+            HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingXS) {
+                if let rating {
+                    Label(rating, systemImage: "star.fill")
+                        .labelStyle(.titleAndIcon)
+                        .symbolRenderingMode(.multicolor)
+                        .accessibilityLabel("评分 \(rating)")
+                    if meta != nil {
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                }
+                if let meta {
+                    Text(meta)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.callout)
+            .lineLimit(1)
+        }
+    }
+
+    /// 年份 · 片长 · 前两个类型。分集也给(退路单张多半是「继续观看」的分集,
+    /// 它同样需要这两行元信息;类型那段在分集上自然为空 —— 列表接口没为它要 `Genres`)
     private var meta: String? {
-        guard item.kind != .episode else { return nil }
         let parts = [
             item.productionYear.map(String.init),
             MediaFormat.runtime(ticks: item.runTimeTicks),
