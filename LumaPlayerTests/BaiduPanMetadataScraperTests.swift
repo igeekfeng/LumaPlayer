@@ -433,7 +433,8 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(match.statusText, "已完结")
         XCTAssertEqual(match.productionCompanies, ["HBO"])
         XCTAssertEqual(match.networks, ["HBO"])
-        XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke"])
+        // fixture 里空名字那条被过滤,剩两个有名字的演员
+        XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
         XCTAssertEqual(profile?.crewNames(withJob: "Director"), ["David Nutter"])
         XCTAssertEqual(
             MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
@@ -455,7 +456,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         let profile = await scraper.seriesProfile(tmdbID: nil, title: "权力的游戏", year: 2011)
 
         XCTAssertEqual(profile?.match.tmdbID, 1399)
-        XCTAssertEqual(profile?.cast.count, 1)
+        XCTAssertEqual(profile?.cast.count, 2)
         XCTAssertEqual(
             MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
             ["/3/search/tv", "/3/tv/1399", "/3/tv/1399/credits"])

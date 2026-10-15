@@ -25,6 +25,9 @@ export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 cd Tools/emby-dev
 
 ./gen-media.sh              # 生成测试素材(约 1.5 分钟,约 360 MB)
+# 想把列表也填满(150 部电影 + 12 部剧,约 21 秒,磁盘只多 ~47 MB):
+#   PY="$HOME/.workbuddy/binaries/python/envs/default/bin/python"
+#   "$PY" gen-bulk-media.py
 docker compose up -d        # 启动(全新 config 要等 10~20 秒初始化数据库)
 ./setup-instance.sh         # 首次配置:走向导 + 建两个媒体库 + 建普通用户 + 调续播门槛
 curl -s localhost:8096/emby/System/Info/Public   # 冒烟:应返回含 Version 的 JSON
@@ -135,6 +138,79 @@ LumaPlayer 用的 17 个端点全是非管理员可访问的,所以正常流程�
 
 时长与分辨率可用环境变量覆盖,例如 `LONG_DUR=7200 ./gen-media.sh`(长片改 2 小时)、
 `WIDTH=1280 HEIGHT=720 ./gen-media.sh`。
+
+## 批量填充数据(`gen-bulk-media.py`)
+
+`gen-media.sh` 造的是**标本** —— 十来条,每条规格都不同,用来验判定/播放/字幕/转码。
+但列表滚动、分页、排序、筛选这些**只有量大才测得动**,标本撑不起来。
+填充是 `gen-bulk-media.py` 的活,两者互不干扰(它只加自己的目录,`--clean` 也只删自己的)。
+
+```bash
+# 需要 Pillow(macOS 自带的 python3 没有)
+PY="$HOME/.workbuddy/binaries/python/envs/default/bin/python"
+
+$PY gen-bulk-media.py                      # 150 部电影 + 12 部剧(默认,约 21 秒落盘)
+$PY gen-bulk-media.py --movies 40 --series 3   # 小批量
+$PY gen-bulk-media.py --pool-only          # 只生成基线素材池
+$PY gen-bulk-media.py --clean              # 按 manifest 删干净
+$PY gen-bulk-media.py --no-scan            # 只落文件,不触发扫描
+```
+
+### 灌进去的量(2026-10-15 实测)
+
+| 类型 | 灌之前 | 灌之后 |
+|---|---|---|
+| 电影 Movie | 6 | **156** |
+| 剧集 Series | 1 | **13** |
+| 季 Season | 3 | **40** |
+| 集 Episode | 6 | **234** |
+
+新增 150 部电影(其中 6 部是**双版本**:`片名 (年) - 1080p.mp4` + `- 720p.mp4`,
+Emby 会合并成 **1 个条目 / 2 个 `MediaSource`**)与 12 部剧共 228 集
+(每部 2–3 季,其中 4 部带 `Season 00` 特辑季,每季 4–10 集)。
+
+⚠️ 填充物**不是**新编码的素材。全部 378 个媒体文件都是**硬链接**,指向 6 条基线之一:
+
+| 基线 | 规格 | 时长 | 用途 |
+|---|---|---|---|
+| A / B / D / E | mp4 · h264 · 854x480(640x360) | 30s / 90s / 15s / 5min | 主流量;E 用来测续播门槛 |
+| C | mp4 · h264 · 1280x720 | 60s | 720p 那一档 |
+| F | **mkv** · h264 · 2 音轨(eng/chi) | 2min | 多音轨分支 |
+
+基线池在 `.bulk-pool/`(约 41 MB,同样刻意放在 `media/` 之外 ——
+放进去 Emby 会把它当成一部真电影)。成效:磁盘 404 MB → **451 MB**,
+条目数 16 → 443。要真副本(例如想让各项 `DateCreated` 不同)用 `--mode copy`,代价是几 GB。
+
+### 元数据:本地 `.nfo`,不赌在线刮削
+
+扫 400 多个条目不能把时间花在网络超时上,所以每条都就地写 Kodi 风格 `.nfo`,
+实测 Emby 4.9.5.0 会读(不依赖 TMDB/TVDB,结果可复现):
+
+| nfo 字段 | 落到的 Emby 字段 | 分布 |
+|---|---|---|
+| `title` / `originaltitle` | `Name` / `OriginalTitle` | 256 种组合,16 前缀 × 16 后缀 |
+| `year` / `premiered` | `ProductionYear` / `PremiereDate` | 1995–2026 |
+| `genre`(1–3 个) | `Genres` | 16 种题材 |
+| `rating` / `votes` | `CommunityRating` | 3.0–9.5 |
+| `mpaa` | `OfficialRating` | G / PG / PG-13 / R / TV-14 / TV-MA |
+| `plot` / `tagline` | `Overview` / `Taglines` | 每条都不同 |
+| `studio` / `director` / `actor` | `Studios` / `People` | 6 制片厂 / 8 导演 / 12 演员 |
+
+海报由 Pillow 就地画 `poster.jpg`(渐变底 + 片名 + 年份),所以**列表里看着是满的**,
+也不需要任何网络。剧集另有 `tvshow.nfo` + 海报,每季 `season.nfo` + 海报。
+
+### 这些填充物覆盖了什么
+
+- **列表 / 分页 / 排序**:156 部电影、13 部剧,年份 1995–2026 铺开
+- **多版本选择**:6 部双版本电影 —— 客户端挑哪一个 `MediaSource` 终于有样本了
+- **多音轨**:16 部电影是基线 F(eng/chi 双音轨)
+- **外挂字幕**:每 8 部电影一份 `.zh.srt`,每季首集一份 → 38 集带外挂字幕
+- **时长的两头**:15 秒(基线 D)到 5 分钟(基线 E),跨过默认 120 秒续播门槛
+- **特辑季**:`Season 00` 分别落在 4 部剧上
+
+⚠️ 与标本的区别:**填充物不「自证身份」**。视频画面只烧到「批量基线 X · 规格」,
+不带片名 —— 因为 378 个文件共用 6 份画面,本来就无法区分「点开第 137 部实际播的是谁」。
+要那种举证能力看上一节的标本。填充物的身份信息在**海报和 `.nfo`** 里,不在画面里。
 
 ## 已实测(2026-09-23,Emby 4.9.5.0 / arm64 容器)
 

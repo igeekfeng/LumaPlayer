@@ -528,7 +528,7 @@ final class TMDBTests: XCTestCase {
     private static func person(id: Int, name: String, job: String) throws -> TMDBPerson {
         // `TMDBPerson` 只有解码构造器(逐成员构造器被自定义 `init(from:)` 抑制),
         // 所以这里就走解码 —— ⛔ 不为测试另开一个生产代码里用不到的开入口。
-        let json = #"{"id":\#(id),"name":"\#(name)","job":"\#(job),"order":0}"#
+        let json = #"{"id":\#(id),"name":"\#(name)","job":"\#(job)","order":0}"#
         return try JSONDecoder().decode(TMDBPerson.self, from: Data(json.utf8))
     }
 

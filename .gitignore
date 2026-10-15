@@ -26,14 +26,20 @@ xcuserdata/
 .swiftpm/
 Package.resolved
 .*
+__pycache__/
 
 # ── 本地开发用 Emby 实例（Tools/emby-dev/）──
 # config 含自建实例的库配置与用户库，media 是生成的测试素材，都不入库。
 # .labels 是烧进素材的画面标签 PNG（放 media 之外，免得被 Emby 当海报收走）。
-# compose 脚本本身是开发资产，要提交。
+# .bulk-pool 是 gen-bulk-media.py 的基线素材池（填充条目全部硬链接到它），
+# .bulk-manifest.json 是它的清理清单 —— 都是本机产物，不入库。
+# （这两条本来就被上面的 `.*` 兜住，写出来是为了说明它们是什么。）
+# compose 脚本与生成脚本本身是开发资产，要提交。
 Tools/emby-dev/config/
 Tools/emby-dev/media/
 Tools/emby-dev/.labels/
+Tools/emby-dev/.bulk-pool/
+Tools/emby-dev/.bulk-manifest.json
 
 # ── 自编 libmpv（Scripts/build-libmpv.sh 产物）──
 # 源码 + 构建目录 + 安装前缀都是几百 MB 的本机产物，不入库。
