@@ -29,7 +29,9 @@ private struct DetailItem: Hashable {
 /// 主窗口:单个 `NavigationStack`,根页随**当前来源**变化
 /// (Emby → 首页;百度网盘 → 它的授权/浏览页),媒体库 / 搜索结果 / 详情 push 上来。
 ///
-/// 来源管理在设置窗口的「来源」标签页,切换在工具栏的来源菜单。
+/// 没有系统工具栏:返回 / 搜索 / 来源 / 刷新画在浮动顶栏上(`BrowseChromeBar.swift`),
+/// 页面名称与页内工具在各页自己的 `PageHeader` 里。
+/// 来源管理在设置窗口的「来源」标签页,切换在顶栏的来源菜单。
 struct BrowseView: View {
     let container: AppContainer
 
@@ -42,8 +44,10 @@ struct BrowseView: View {
     @State private var searchText = ""
     /// 搜索提交次数(见 `BrowseRoute.search`)
     @State private var searchSubmission = 0
-    /// 工具栏来源菜单里的「管理来源…」——打开设置窗口(⌘,)
+    /// 顶栏来源菜单里的「管理来源…」——打开设置窗口(⌘,)
     @Environment(\.openSettings) private var openSettings
+    /// 浮动顶栏的全屏 / 自动隐藏状态,以及页面登记的返回动作
+    @State private var chrome = BrowseChromeController()
 
     init(container: AppContainer) {
         self.container = container
@@ -53,12 +57,11 @@ struct BrowseView: View {
         NavigationStack(path: $path) {
             rootPage
         }
-        // 工具栏声明在**导航栈**上(而不是各页上):每一页共用;
-        // 来源切换器不上详情页(见 `toolbarContent`)。搜索框不在这里,见 `searchField`。
-        .toolbar { toolbarContent }
-        // 详情页是一整页 hero(详情页用 `backgroundExtensionEffect` 把背景图铺到标题栏下面):
-        // 标题栏不再铺自己的背景色,否则会在背景图上盖出一条同色栏(DesignTokens.swift「界面规则」)。
-        .toolbarBackgroundVisibility(isShowingDetail ? .hidden : .automatic, for: .windowToolbar)
+        // 顶栏挂在**导航栈外**,每一页共用一条(DesignTokens.swift「界面规则」)。
+        // 详情页是一整页 hero:栏底换成很轻的黑色压暗,不在背景图上盖出一条窗口底色。
+        .browseChrome(chrome, scrim: isShowingDetail ? .hero : .page) {
+            chromeBar
+        }
         // 设置窗口里增 / 改 / 删来源后重读,菜单里的名称跟着变
         .task(id: container.state.serverListRevision) { await reloadSources() }
         .onChange(of: container.state.currentSource?.id) {
@@ -106,14 +109,13 @@ struct BrowseView: View {
                 onOpenLibrary: { path.append(.library($0)) },
                 refreshToken: refreshToken
             )
-            .modifier(searchField)
             .navigationDestination(for: BrowseRoute.self) { route in
                 page(for: route, server: server)
-                    .modifier(searchField)
             }
         case .some(.baiduPan(let source)):
-            // ⛔ 百度来源没有 Emby 那套库 / 搜索 / 详情,所以不挂搜索框;
-            // 刷新走 `refreshToken`,由它自己重读授权状态与目录。
+            // ⛔ 百度来源没有 Emby 那套库 / 搜索 / 详情,所以顶栏不给搜索框;
+            // 刷新走 `refreshToken`,由它自己重读授权状态与目录;
+            // 「上一层」由它经 `BrowseChromeController.pageBackAction` 登记到顶栏。
             BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
         case .none:
             ContentUnavailableView(
@@ -155,57 +157,79 @@ struct BrowseView: View {
         }
     }
 
-    // MARK: - 工具栏
+    // MARK: - 顶栏
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        // 来源切换器不上详情页:详情页属于当前这台服务器,而切换会清掉
-        // 整个导航栈(见 `onChange(of: container.state.currentSource?.id)`),
-        // 在一页详情上切来源没有意义。
-        if !isShowingDetail {
-            ToolbarItem(placement: .navigation) {
-                Menu {
-                    // inline Picker:系统在当前来源那一项前画原生勾选标记
-                    Picker("来源", selection: currentSourceSelection) {
-                        ForEach(sources) { source in
-                            Text("\(source.displayName) · \(source.kindDescription)")
-                                .tag(Optional(source.id))
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    Divider()
-                    // 来源管理(增 / 改 / 删 / 登录)在设置窗口的「来源」标签页
-                    Button {
-                        openSettings()
-                    } label: {
-                        Label("管理来源…", systemImage: "gearshape")
-                    }
-                } label: {
-                    Label(currentSourceName, systemImage: currentSourceSymbol)
-                }
-                .help("切换来源;「管理来源…」在设置窗口(⌘,)")
+    /// 顶栏内容:左边返回,右边搜索 / 来源 / 刷新。
+    @ViewBuilder
+    private var chromeBar: some View {
+        HStack(spacing: Metrics.spacingM) {
+            if let backAction {
+                ChromeBackButton(action: backAction)
             }
-        }
-        ToolbarItem(placement: .primaryAction) {
+            Spacer(minLength: 0)
+            if case .emby? = container.state.currentSource {
+                ChromeSearchField(text: $searchText, chrome: chrome, onSubmit: submitSearch)
+            }
+            // 来源切换器不上详情页:详情页属于当前这台服务器,而切换会清掉
+            // 整个导航栈(见 `onChange(of: container.state.currentSource?.id)`),
+            // 在一页详情上切来源没有意义。
+            if !isShowingDetail {
+                sourceMenu
+            }
             // 加载 / 刷新中图标转圈并禁用;状态由当前内容页经 `AppState.isPageLoading` 上报
             RefreshToolbarButton(isLoading: container.state.isPageLoading) {
                 refresh()
             }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
         }
     }
 
-    /// 工具栏搜索框,栈根与每个 push 上来的页都要挂(PITFALLS.md 第 4 节)。
-    ///
-    /// ⚠️ 不能像 `.toolbar` 那样挂在 `NavigationStack` 外面:macOS 27 上那样挂
-    /// 搜索框整个不出现(2026-10-01 从 `NavigationSplitView` 改成 `NavigationStack` 时丢的)。
-    private var searchField: ToolbarSearchField {
-        ToolbarSearchField(text: $searchText) {
-            searchSubmission += 1
-            // 结果页直接叠在首页上(替换掉栈上原有的页):从详情页里搜索也不会被压在下面,
-            // 返回一次就回到首页
-            path = [.search(term: searchText, submission: searchSubmission)]
+    private var sourceMenu: some View {
+        Menu {
+            // inline Picker:系统在当前来源那一项前画原生勾选标记
+            Picker("来源", selection: currentSourceSelection) {
+                ForEach(sources) { source in
+                    Text("\(source.displayName) · \(source.kindDescription)")
+                        .tag(Optional(source.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Divider()
+            // 来源管理(增 / 改 / 删 / 登录)在设置窗口的「来源」标签页
+            Button {
+                openSettings()
+            } label: {
+                Label("管理来源…", systemImage: "gearshape")
+            }
+        } label: {
+            Label(currentSourceName, systemImage: currentSourceSymbol)
+                .labelStyle(.iconOnly)
         }
+        .menuIndicator(.hidden)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .fixedSize()
+        .help("来源:\(currentSourceName)。切换来源;「管理来源…」在设置窗口(⌘,)")
+        .accessibilityLabel("来源:\(currentSourceName)")
+    }
+
+    /// 返回:导航栈不空时弹栈;栈空时用页面自己登记的返回(百度目录的上一层);都没有就不显示。
+    private var backAction: (@MainActor () -> Void)? {
+        if !path.isEmpty {
+            return { path.removeLast() }
+        }
+        return chrome.pageBackAction
+    }
+
+    /// 搜索提交:结果页直接叠在首页上(替换掉栈上原有的页):从详情页里搜索也不会被压在下面,
+    /// 返回一次就回到首页
+    private func submitSearch() {
+        searchSubmission += 1
+        path = [.search(term: searchText, submission: searchSubmission)]
     }
 
     // MARK: - 动作
@@ -268,19 +292,5 @@ struct BrowseView: View {
         case .some(.baiduPan): return "cloud.fill"
         case .none: return "rectangle.stack.badge.plus"
         }
-    }
-}
-
-/// 系统搜索框放在工具栏(macOS 原生位置)。提交式:回车才搜,
-/// 不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
-/// 各页共用同一份 `text`,push / 返回时输入框里的字不丢。
-private struct ToolbarSearchField: ViewModifier {
-    @Binding var text: String
-    let onSubmit: () -> Void
-
-    func body(content: Content) -> some View {
-        content
-            .searchable(text: $text, placement: .toolbar, prompt: "搜索电影与剧集")
-            .onSubmit(of: .search, onSubmit)
     }
 }

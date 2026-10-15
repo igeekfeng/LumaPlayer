@@ -26,9 +26,10 @@ import SwiftUI
 ///
 /// ## 导航
 ///
-/// 与 Emby 那边对齐:标题栏显示当前目录名(`navigationTitle`),返回上一层走
-/// 工具栏左侧按钮。⛔ 不再自绘路径栏 —— 账号名 / 面包屑 / 设为片库根 / 排序 /
-/// 刷新 / 解除授权那一条整个去掉了:刷新用主窗口工具栏的按钮
+/// 与 Emby 那边对齐:页顶大标题是当前目录名(`PageHeader`,剧目录走详情页时不画,
+/// 详情页自己有剧名),返回上一层走主窗口浮动顶栏的返回按钮(经
+/// `BrowseChromeController.pageBackAction` 登记)。⛔ 不再自绘路径栏 —— 账号名 / 面包屑 /
+/// 设为片库根 / 排序 / 刷新 / 解除授权那一条整个去掉了:刷新用顶栏的按钮
 /// (`refreshToken` 驱动),其余移进设置里的来源页(`BaiduPanSourceSettingsView`)。
 ///
 /// ⚠️ 返回只退到**片库根为止**(`BaiduPanSourceViewModel.canGoUp`)—— 它就是这一页
@@ -43,6 +44,8 @@ struct BaiduPanBrowserView: View {
     /// 只是「请播放器播这一项」的请求,窗口不会因为写了请求自己出现 ——
     /// 少了 `openWindow` 就是点了播放毫无动静(Emby 那 4 个调用点同理)。
     @Environment(\.openWindow) private var openWindow
+    /// 主窗口顶栏:把「返回上一层」登记上去
+    @Environment(\.browseChrome) private var chrome
 
     /// 待确认删除的条目(右键菜单里点了「删除…」)。
     /// 弹窗状态放 View 的 `@State` —— 与 `ServerListView` 同一惯例。
@@ -79,6 +82,10 @@ struct BaiduPanBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 剧目录走详情页(`BaiduPanSeriesDetailView`),它自己有剧名,不再叠一行目录名
+            if viewModel.directoryShape.seriesStructure == nil {
+                PageHeader(title: viewModel.currentDirectoryName)
+            }
             if let notice = viewModel.notice {
                 OnboardingNotice(text: notice, style: .warning)
                     .padding(.horizontal, Metrics.spacingL)
@@ -95,12 +102,14 @@ struct BaiduPanBrowserView: View {
             }
             content
         }
-        // 导航与 Emby 那边对齐:标题栏显示**当前目录名**(对位 `LibraryView` 的
-        // `navigationTitle(媒体库名)`),返回上一层走工具栏左侧按钮 —— 不再自绘一条
-        // 路径栏(账号 / 面包屑 / 设为片库根 / 排序 / 刷新 / 解除授权那一条已拆掉:
-        // 刷新用主窗口工具栏的按钮,其余移进设置里的来源页)。
+        // 「窗口」菜单与调度中心里的窗口名(页上的目录名在 `PageHeader`)
         .navigationTitle(viewModel.currentDirectoryName)
-        .toolbar { toolbarContent }
+        // 返回上一层登记到主窗口顶栏。⚠️ 只退到**片库根为止**(`canGoUp`):片库根就是
+        // 这一页的最外层,到了就不登记,顶栏上也就没有返回按钮。
+        .onChange(of: viewModel.canGoUp, initial: true) { _, canGoUp in
+            registerBackAction(canGoUp: canGoUp)
+        }
+        .onDisappear { chrome?.pageBackAction = nil }
         .sheet(item: $pendingDeletion) { item in
             BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
                 actionErrorMessage = message
@@ -125,27 +134,16 @@ struct BaiduPanBrowserView: View {
         }
     }
 
-    // MARK: - 工具栏
+    // MARK: - 返回上一层
 
-    /// 工具栏上**只有**「返回上一层」。
-    ///
-    /// ⚠️ 刷新**不在这里**:主窗口工具栏那个刷新按钮(`RefreshToolbarButton`)
-    /// 已经覆盖了这一页(经 `refreshToken` 驱动),再来一个只会多一个入口。
-    /// 排序也没有 —— 顺序固定为剧集顺序(`BaiduPanSourceViewModel.sortedItems`)。
-    /// 片库根切换也没有 —— 一个来源只有一个起点,换起点是**设置**里的事
-    /// (要两个起点就加两个来源)。
-    ///
-    /// ⚠️ 返回按钮退到**片库根为止**(`canGoUp`):片库根就是这一页的最外层。
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button {
-                Task { await viewModel.goUp() }
-            } label: {
-                Image(systemName: "chevron.left")
-            }
-            .disabled(!viewModel.canGoUp)
-            .help("返回上一层")
+    private func registerBackAction(canGoUp: Bool) {
+        guard canGoUp else {
+            chrome?.pageBackAction = nil
+            return
+        }
+        let viewModel = viewModel
+        chrome?.pageBackAction = {
+            Task { await viewModel.goUp() }
         }
     }
 

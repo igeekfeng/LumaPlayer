@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 搜索结果页。
 ///
-/// 输入框是主窗口工具栏上的 `.searchable`(macOS 原生位置,⌘F 可达),
+/// 输入框在主窗口浮动顶栏上(`ChromeSearchField`,⌘F 可达),
 /// 本页只负责展示「已提交」的关键词的结果;提交式搜索,结果复用媒体库网格与分页。
 struct SearchView: View {
     let container: AppContainer
@@ -33,16 +33,21 @@ struct SearchView: View {
     }
 
     var body: some View {
-        results
-            // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧结果做操作
-            .allowsHitTesting(!viewModel.isLoading)
-            .navigationTitle(term.isEmpty ? "搜索" : "搜索「\(term)」")
-            // 换服务器后旧结果属于别的服务器:按新服务器重搜(不串台)
-            .task(id: "\(server.id.uuidString)-\(submission)-\(term)") {
-                viewModel.search(term, server: server)
-            }
-            .reportsPageLoading(viewModel.isLoading, page: .search, to: container.state)
+        VStack(spacing: 0) {
+            PageHeader(title: title)
+            results
+        }
+        // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧结果做操作
+        .allowsHitTesting(!viewModel.isLoading)
+        .navigationTitle(title)
+        // 换服务器后旧结果属于别的服务器:按新服务器重搜(不串台)
+        .task(id: "\(server.id.uuidString)-\(submission)-\(term)") {
+            viewModel.search(term, server: server)
+        }
+        .reportsPageLoading(viewModel.isLoading, page: .search, to: container.state)
     }
+
+    private var title: String { term.isEmpty ? "搜索" : "搜索「\(term)」" }
 
     @ViewBuilder
     private var results: some View {
@@ -87,7 +92,7 @@ struct SearchView: View {
             ContentUnavailableView(
                 "搜索",
                 systemImage: "magnifyingglass",
-                description: Text("在窗口右上角的搜索框输入关键词后按回车,在「\(server.displayName)」上搜索。")
+                description: Text("在窗口右上角的搜索框(⌘F)输入关键词后按回车,在「\(server.displayName)」上搜索。")
             )
         }
     }

@@ -9,6 +9,9 @@ struct LumaPlayerApp: App {
         WindowGroup {
             RootView(container: container)
         }
+        // 主窗口没有标题栏与系统工具栏:内容铺到最上沿,返回 / 搜索等画在浮动顶栏上
+        // (`BrowseChromeBar.swift`,DesignTokens.swift「界面规则」)
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: Metrics.mainWindowWidth, height: Metrics.mainWindowHeight)
         .commands { PlayerCommands() }
 

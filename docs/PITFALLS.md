@@ -207,10 +207,14 @@ per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓�
 延时任务的取消要同时给一道代次门。另:`isRestarting = true` 要写在 `stop()` 之后。
 
 **工具栏搜索框挂在 `NavigationStack` 外面就不出现(macOS 27)。** 挂到栈根和每个 `navigationDestination` 页上。改导航容器后逐项核对工具栏。
+(2026-10-15 起主窗口不再用系统工具栏与 `.searchable`,搜索框在浮动顶栏 `ChromeSearchField` 里;将来回到系统工具栏时这条仍然成立。)
 
-**原生全屏下详情页那条工具栏背景去不掉(Q37,定案保持现状)。** 全屏时系统把工具栏搬进独立的 `NSToolbarFullScreenWindow`,
+**原生全屏下详情页那条工具栏背景去不掉(Q37)。** 全屏时系统把工具栏搬进独立的 `NSToolbarFullScreenWindow`,
 `.toolbarBackgroundVisibility` / `.scrollEdgeEffect*` / `.windowToolbarFullScreenVisibility` 都不生效;
 唯一生效的 `.toolbarVisibility(.hidden)` 会连按钮一起藏掉。⛔ 别再试这一类修饰符。
+2026-10-15 的做法:主窗口整条藏掉系统工具栏(`.toolbar(.hidden, for: .windowToolbar)` + 窗口 `.hiddenTitleBar`),
+返回 / 搜索 / 来源画成浮在内容上的玻璃按钮(`BrowseChromeBar.swift`),全屏下随指针自动隐藏。
+全屏下那条栏是否真的消失:**未视觉验证**(见 KNOWN_ISSUES.md B 节)。
 
 **共用工具栏的「刷新」靠各页 `.task(id:)` 吃 `refreshToken`(Q36)。** 详情页曾漏接,刷新成空操作。每个新页面都要确认。
 

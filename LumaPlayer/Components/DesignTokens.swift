@@ -11,17 +11,20 @@ import Foundation
 /// 别处注释里写「DesignTokens.swift「界面规则」」的,指的就是这一节。
 ///
 /// **信息架构**:主窗口是单个 `NavigationStack`,首页是栈根,媒体库 / 搜索结果 / 详情都 push 上来。
-/// 工具栏声明在栈上(各页共用);搜索框(提交式,回车才搜)挂在栈根和每个 push 页上 —— 挂在栈外面
-/// macOS 27 上不出现。详情页头部只有返回与搜索:不放服务器切换器(切换会清掉导航栈)、
-/// 不铺工具栏背景色(hero 图透到标题栏下;原生全屏下那条栏去不掉,`PITFALLS.md` Q37)。
-/// 服务器切换在内容页工具栏菜单里,管理在设置窗口「服务器」页。
+/// **没有系统工具栏与标题栏**(窗口 `.hiddenTitleBar` + `.toolbar(.hidden, for: .windowToolbar)`):
+/// 挂在栈外的浮动顶栏(`BrowseChromeBar.swift`)各页共用 —— 左边返回(⌘[),右边搜索胶囊(⌘F,
+/// 提交式,回车才搜;仅 Emby)、来源菜单、刷新,都是玻璃圆形按钮,栏底垫渐变不画「栏」;
+/// 全屏下随指针自动隐藏(与播放控制栏同一套双规则)。页面名称与页内工具(排序 / 筛选)在
+/// 各页的 `PageHeader` 大标题行里;首页与详情页不用它,hero 就是标题。
+/// 详情页:hero 图透到窗口最上沿,顶栏不放来源菜单(切换会清掉导航栈)。
+/// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
 /// **加载态**:首屏无内容时用灰色骨架(`Skeleton*`)照真实布局占位;刷新时保留旧内容,
 /// 失败也保留;「在不在加载」只看工具栏刷新图标转圈;加载中整页不可点。
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、
-/// 服务器切换器、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)。
+/// 主窗口浮动顶栏的按钮与搜索胶囊、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)。
 /// ⛔ 不用于:海报卡片、列表 / 剧集的每一行、长文本背景、全窗口背景、**播放器底部控制栏**
 /// (它是全宽横条 + 自下而上的黑色渐变压暗:HIG 要求玻璃压在媒体上配 dimming,
 /// 且 Apple TV / QuickTime / mpv OSC 默认都是全宽横条)。
@@ -82,6 +85,21 @@ enum Metrics {
     /// 主窗口默认尺寸;内容页与详情页都是整页(见上方「界面规则」),不再有列宽。
     static let mainWindowWidth: CGFloat = 1280
     static let mainWindowHeight: CGFloat = 800
+
+    // MARK: 主窗口浮动顶栏(`BrowseChromeBar.swift`)
+
+    /// 顶栏高度。普通页面的内容从这里往下排;hero 页的图铺满,栏压在图上。
+    static let chromeBarHeight: CGFloat = 52
+    /// 窗口化时栏内容的左缩进:让出系统红绿灯那一列
+    static let chromeBarLeading: CGFloat = 84
+    /// 搜索胶囊里输入框的宽度
+    static let chromeSearchWidth: CGFloat = 180
+    /// 搜索胶囊高度(与 `.large` 玻璃圆形按钮等高)
+    static let chromeSearchHeight: CGFloat = 32
+    /// 普通页面的栏底:窗口底色实色部分占栏高的比例,再往下渐变到透明
+    static let chromeScrimSolidFraction: Double = 0.55
+    /// hero 页的栏底:顶端黑色的不透明度(只为让红绿灯与玻璃按钮读得出来)
+    static let chromeHeroScrimOpacity: Double = 0.35
 
     // MARK: 设置窗口
 

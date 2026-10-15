@@ -32,26 +32,17 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        Group {
-            switch viewModel.list?.state ?? .idle {
-            case .idle, .loading:
-                // 首屏还没有内容:灰色骨架占位,不闪白屏(刷新时 state 仍是 .loaded,不会走到这)
-                SkeletonGrid()
-            case .failed(let failure):
-                ErrorStateView(
-                    failure: failure,
-                    retry: { viewModel.list?.reload() },
-                    login: { container.state.serverNeedingLogin = server }
-                )
-            case .loaded:
-                loadedContent
+        VStack(spacing: 0) {
+            // 页名与排序 / 筛选在页内大标题行(主窗口没有系统工具栏,见 `BrowseChromeBar.swift`)
+            PageHeader(title: title, subtitle: countText) {
+                pageTools
             }
+            pageContent
         }
         // 加载 / 刷新中整页不可点(刷新按钮也在转圈),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
-        .navigationTitle(view?.name ?? "媒体库")
-        .navigationSubtitle(countText)
-        .toolbar { toolbarContent }
+        // 「窗口」菜单与调度中心里的窗口名
+        .navigationTitle(title)
         .alert(
             "操作失败",
             isPresented: Binding(
@@ -69,6 +60,23 @@ struct LibraryView: View {
             viewModel.configure(server: server, view: view)
         }
         .reportsPageLoading(viewModel.isLoading, page: .library, to: container.state)
+    }
+
+    @ViewBuilder
+    private var pageContent: some View {
+        switch viewModel.list?.state ?? .idle {
+        case .idle, .loading:
+            // 首屏还没有内容:灰色骨架占位,不闪白屏(刷新时 state 仍是 .loaded,不会走到这)
+            SkeletonGrid()
+        case .failed(let failure):
+            ErrorStateView(
+                failure: failure,
+                retry: { viewModel.list?.reload() },
+                login: { container.state.serverNeedingLogin = server }
+            )
+        case .loaded:
+            loadedContent
+        }
     }
 
     @ViewBuilder
@@ -106,11 +114,14 @@ struct LibraryView: View {
         }
     }
 
-    // MARK: - 工具栏:排序 / 筛选
+    // MARK: - 页内工具:排序 / 筛选
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
+    private var title: String { view?.name ?? "媒体库" }
+
+    /// 排序 / 筛选菜单,放在 `PageHeader` 右侧(无边框按钮,不是玻璃:它们不浮在媒体上)
+    @ViewBuilder
+    private var pageTools: some View {
+        HStack(spacing: Metrics.spacingM) {
             Menu {
                 Picker("排序方式", selection: $viewModel.sort) {
                     ForEach(LibrarySort.allCases) { sort in
@@ -145,6 +156,9 @@ struct LibraryView: View {
             }
             .help("筛选:\(viewModel.filter.title)")
         }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .fixedSize()
     }
 
     /// 「共 42 项」。总数没给就不显示(不填 0,API_CONTRACT.md 8.1)。
