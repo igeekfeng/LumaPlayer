@@ -14,6 +14,11 @@ import SwiftUI
 /// ⛔ 不要写 `.frame(width: w).aspectRatio(比, contentMode: .fit)`:宽度被 frame 钉死、
 /// 高度却由 aspectRatio 按外层(往往是 `nil`)的提议去算,结果高度失控 —— 灰色块会被
 /// 上下拉长(2026-10-10 踩过)。
+///
+/// ⚠️ 呼吸动画必须用**限定作用域**的 `.animation(_:body:)`,只动 body 里那一个 opacity。
+/// ⛔ 不要写回 `.animation(.repeatForever…, value:)`:那种写法会把同一事务里的**位置变化**
+/// 也卷进无限循环 —— 骨架出现后上方的行加载完把它往下推,它就在旧位置和新位置之间
+/// 永远来回晃(首页「继续观看」一带上下晃动的灰色卡片,2026-10-15 录屏确认)。
 struct SkeletonBlock: View {
     var cornerRadius: CGFloat = Radius.card
 
@@ -22,11 +27,11 @@ struct SkeletonBlock: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(Color.secondary.opacity(isDim ? 0.10 : 0.18))
-            .animation(
-                reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
-                value: isDim
-            )
+            .fill(Color.secondary)
+            // 只动透明度(见类型注释的 ⚠️):位置 / 尺寸变化不进这个无限循环的动画
+            .animation(reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                $0.opacity(isDim ? 0.10 : 0.18)
+            }
             .onAppear { if !reduceMotion { isDim = true } }
             .accessibilityHidden(true)
     }
