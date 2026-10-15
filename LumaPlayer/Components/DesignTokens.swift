@@ -13,8 +13,8 @@ import Foundation
 /// **信息架构**:主窗口是单个 `NavigationStack`,首页是栈根,媒体库 / 搜索结果 / 详情都 push 上来。
 /// **没有系统工具栏与标题栏**(窗口 `.hiddenTitleBar`,不声明 `.toolbar` 项,push 页隐藏系统返回按钮;
 /// ⛔ 不用 `.toolbar(.hidden, for: .windowToolbar)`,它会把红绿灯一起藏掉):
-/// 挂在栈外的浮动顶栏(`BrowseChromeBar.swift`)各页共用 —— 左边返回(⌘[),右边搜索胶囊(⌘F,
-/// 提交式,回车才搜;仅 Emby)、来源菜单、刷新,都是玻璃圆形按钮,栏底垫渐变不画「栏」;
+/// 挂在栈外的浮动顶栏(`BrowseChromeBar.swift`)各页共用 —— 左边返回(⌘[,无底 chevron,与红绿灯同高),右边搜索胶囊(⌘F,
+/// 提交式,回车才搜;仅 Emby)、来源菜单,是玻璃按钮,栏底垫渐变不画「栏」;
 /// 全屏下随指针自动隐藏(与播放控制栏同一套双规则)。页面名称与页内工具(排序 / 筛选)在
 /// 各页的 `PageHeader` 大标题行里;首页与详情页不用它,hero 就是标题。
 /// 首页顶部 hero(`HomeHero`):继续观看里第一个有背景图的,其次各库「最新」;
@@ -94,8 +94,12 @@ enum Metrics {
 
     /// 顶栏高度。普通页面的内容从这里往下排;hero 页的图铺满,栏压在图上。
     static let chromeBarHeight: CGFloat = 52
-    /// 窗口化时栏内容的左缩进:让出系统红绿灯那一列
-    static let chromeBarLeading: CGFloat = 84
+    /// 窗口化时返回按钮的左缩进:让出系统红绿灯那一列(红绿灯右缘约在 63pt)
+    static let chromeBarLeading: CGFloat = 72
+    /// 返回 chevron 的点击区域边长(图标本身小,点击区要够大)
+    static let chromeBackHitSize: CGFloat = 28
+    /// 返回 chevron 平时的不透明度;悬停时到 1(无底按钮靠这个给悬停反馈)
+    static let chromeBackIdleOpacity: Double = 0.75
     /// 搜索胶囊里输入框的宽度
     static let chromeSearchWidth: CGFloat = 180
     /// 搜索胶囊高度(与 `.large` 玻璃圆形按钮等高)

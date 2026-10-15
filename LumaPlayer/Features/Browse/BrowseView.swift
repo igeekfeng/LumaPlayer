@@ -63,7 +63,8 @@ struct BrowseView: View {
             chrome,
             scrim: isOverHero ? .hero : .page,
             // 状态由当前内容页经 `AppState.isPageLoading` 上报
-            isLoading: container.state.isPageLoading
+            isLoading: container.state.isPageLoading,
+            back: backAction
         ) {
             chromeBar
         }
@@ -175,16 +176,13 @@ struct BrowseView: View {
 
     // MARK: - 顶栏
 
-    /// 顶栏内容:左边返回,右边搜索 / 来源。
+    /// 顶栏右侧:搜索 / 来源(返回由 `browseChrome(back:)` 单独定位在红绿灯旁)。
     ///
     /// ⛔ 不放刷新按钮:手动刷新是菜单栏「Reload」(⌘R),加载状态看栏下沿的加载线
     /// (DesignTokens.swift「界面规则」加载态)。
     @ViewBuilder
     private var chromeBar: some View {
         HStack(spacing: Metrics.spacingM) {
-            if let backAction {
-                ChromeBackButton(action: backAction)
-            }
             Spacer(minLength: 0)
             if case .emby? = container.state.currentSource {
                 ChromeSearchField(text: $searchText, chrome: chrome, onSubmit: submitSearch)
