@@ -278,11 +278,11 @@ struct BrowseView: View {
 
     // MARK: - 辅助
 
-    /// 顶栏压在 hero 图上:详情页,或栈空时首页顶部有 hero(百度来源的根页没有 hero)
+    /// 顶栏压在 hero 图上:详情页,或栈空时根页顶部有 hero(Emby 首页 / 百度剧集详情)
     private var isOverHero: Bool {
         if isShowingDetail { return true }
-        guard path.isEmpty, case .emby? = container.state.currentSource else { return false }
-        return chrome.rootHasHero
+        guard path.isEmpty, let source = container.state.currentSource?.id else { return false }
+        return chrome.heroRootSources.contains(source)
     }
 
     private var isShowingDetail: Bool {

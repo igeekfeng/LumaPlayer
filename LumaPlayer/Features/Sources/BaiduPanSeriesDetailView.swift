@@ -51,6 +51,9 @@ struct BaiduPanSeriesDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // hero 铺到窗口最上沿(压在主窗口浮动顶栏下),与 Emby 详情页一致;
+        // 不铺的话顶栏那一段露出窗口底色,是一条白条
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     // MARK: - Hero

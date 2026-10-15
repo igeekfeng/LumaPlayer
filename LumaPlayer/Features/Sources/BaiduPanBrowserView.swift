@@ -109,7 +109,14 @@ struct BaiduPanBrowserView: View {
         .onChange(of: viewModel.canGoUp, initial: true) { _, canGoUp in
             registerBackAction(canGoUp: canGoUp)
         }
-        .onDisappear { chrome?.pageBackAction = nil }
+        .onDisappear {
+            chrome?.pageBackAction = nil
+            chrome?.setRootHasHero(false, source: viewModel.sourceID)
+        }
+        // 剧目录走详情页(有 hero):顶栏栏底换成 hero 的压暗
+        .onChange(of: viewModel.directoryShape.seriesStructure != nil, initial: true) { _, isSeries in
+            chrome?.setRootHasHero(isSeries, source: viewModel.sourceID)
+        }
         .sheet(item: $pendingDeletion) { item in
             BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
                 actionErrorMessage = message

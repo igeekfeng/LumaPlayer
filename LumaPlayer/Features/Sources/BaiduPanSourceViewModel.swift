@@ -187,6 +187,8 @@ final class BaiduPanSourceViewModel {
     private let container: AppContainer
     /// 这个页面属于哪个百度来源(决定 `sourceID`,也就决定了封面缓存 key)
     private let source: BaiduPanSource
+    /// 这个来源的 id(主窗口顶栏按它登记「根页有 hero」)
+    var sourceID: UUID { source.id }
     /// 进到「已授权」那一屏时要不要顺带列目录。
     /// 添加流程传 `false`:`authorization()` 一变 `.authorized` 就会落库并切页,
     /// 此刻还照常列目录的话,那次请求(含封面)会被立刻丢掉 —— 白烧一次配额。

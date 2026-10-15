@@ -116,7 +116,7 @@ private struct HomeRowContext {
 ///
 /// 首页整页 `ignoresSafeArea(edges: .top)`:有 hero(含加载中的骨架)时图铺到窗口最上沿;
 /// 没有 hero 时这里放一块顶栏高度的空白,货架从顶栏下沿开始。
-/// 有没有 hero 经 `BrowseChromeController.rootHasHero` 告诉顶栏(决定栏底压暗方式)。
+/// 有没有 hero 经 `BrowseChromeController.setRootHasHero` 告诉顶栏(决定栏底压暗方式)。
 private struct HomeHeroSlot: View {
     let sections: HomeViewModel.Sections
     let context: HomeRowContext
@@ -151,9 +151,8 @@ private struct HomeHeroSlot: View {
             }
         }
         .onChange(of: pick != .none, initial: true) { _, hasHero in
-            chrome?.rootHasHero = hasHero
+            chrome?.setRootHasHero(hasHero, source: context.server.id)
         }
-        .onAppear { chrome?.rootHasHero = pick != .none }
     }
 }
 

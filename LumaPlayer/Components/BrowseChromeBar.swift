@@ -24,8 +24,8 @@ import AppKit
 //
 // ## 可见性规则
 //
-// - **窗口化:常驻**。左上角是系统红绿灯,栏内按钮让出红绿灯那一列(`Metrics.chromeBarLeading`),
-//   按钮行的中心对齐红绿灯中心(从窗口里量,`trafficLightCenterY`)。
+// - **窗口化:常驻**。左上角是系统红绿灯,栏内按钮让出红绿灯那一列(`Metrics.chromeBarLeading`);
+//   按钮行在栏高里垂直居中(上方留边距,不贴窗口上沿;2026-10-15 用户要求)。
 // - **全屏:自动隐藏**,与播放控制栏同一套双规则(DesignTokens.swift「界面规则」):
 //   指针静止 `autoHideDelay` 藏、移出窗口 `autoHidePointerExitDelay` 藏,一动鼠标就回来;
 //   指针停在栏上 / 搜索框聚焦时钉住。
@@ -96,15 +96,12 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
         GlassEffectContainer(spacing: Metrics.spacingM) {
             bar
         }
-        // 窗口化:按钮行的中心对齐红绿灯中心(否则在 52pt 里居中会比红绿灯低一截);
-        // 全屏没有红绿灯,在栏里居中
-        .frame(height: Metrics.chromeSearchHeight)
-        .padding(.top, rowTopInset)
         // 全屏没有红绿灯,不用让出那一列
         .padding(.leading, chrome.isFullScreen ? Metrics.spacingXL : Metrics.chromeBarLeading)
         .padding(.trailing, Metrics.spacingXL)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: Metrics.chromeBarHeight, alignment: .top)
+        // 按钮行在栏里垂直居中:上方留出边距,不贴窗口上沿
+        .frame(height: Metrics.chromeBarHeight)
         .background {
             scrimView
                 // 隐藏标题栏后窗口只能靠这一条拖动(按钮之间的空白处)
@@ -127,11 +124,6 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
             reduceMotion ? nil : .easeInOut(duration: Metrics.animationStandard),
             value: chrome.isVisible
         )
-    }
-
-    private var rowTopInset: CGFloat {
-        let center = chrome.isFullScreen ? Metrics.chromeBarHeight / 2 : chrome.trafficLightCenterY
-        return max(0, center - Metrics.chromeSearchHeight / 2)
     }
 
     @ViewBuilder
@@ -275,9 +267,20 @@ final class BrowseChromeController: NSObject {
     /// 页面自己的「返回」(导航栈之外的层级,目前只有百度目录的上一层)。
     /// nil = 页面没有自己的返回;导航栈不空时栈优先(见 `BrowseView.backAction`)。
     var pageBackAction: (@MainActor () -> Void)?
-    /// 首页顶部有没有 hero(`HomeHeroSlot` 上报)。有就把栏底换成 hero 的压暗
-    /// (`BrowseView` 只在栈空且来源是 Emby 时读它)。
-    var rootHasHero = false
+    /// 根页顶部有 hero 的来源(Emby 首页 `HomeHeroSlot`、百度剧集详情 `BaiduPanBrowserView` 上报)。
+    /// 有就把栏底换成 hero 的压暗;`BrowseView` 只在栈空时读。
+    ///
+    /// 按**来源 id** 登记而不是一个布尔:换来源时新根页「有 hero」与旧根页「没了」的上报
+    /// 先后不定,布尔会被后到的那个覆盖;按 id 各记各的,读的时候只看当前来源。
+    private(set) var heroRootSources: Set<UUID> = []
+
+    func setRootHasHero(_ hasHero: Bool, source: UUID) {
+        if hasHero {
+            heroRootSources.insert(source)
+        } else {
+            heroRootSources.remove(source)
+        }
+    }
 
     @ObservationIgnored private weak var window: NSWindow?
     /// 指针停在栏上 / 搜索框聚焦:到点也不藏(两样分开记,任一为真就钉住)
@@ -296,12 +299,6 @@ final class BrowseChromeController: NSObject {
         window = newWindow
         guard let newWindow else { return }
         isFullScreen = newWindow.styleMask.contains(.fullScreen)
-        // 按钮要在下一轮布局之后才有位置
-        Task { @MainActor [weak self, weak newWindow] in
-            await Task.yield()
-            guard let self, let newWindow else { return }
-            self.measureTrafficLights(in: newWindow)
-        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(enteredFullScreen),
             name: NSWindow.didEnterFullScreenNotification, object: newWindow)
@@ -348,20 +345,6 @@ final class BrowseChromeController: NSObject {
             // 指针跟着栏一起藏,一动鼠标系统自动恢复(与播放控制栏一致)
             NSCursor.setHiddenUntilMouseMoves(true)
         }
-    }
-
-    /// 红绿灯中心距窗口上沿的距离(窗口化时栏内按钮行按它对齐)。
-    /// 读不到(还没布局 / 没有关闭按钮)就留默认值:栏高的一半(按钮行居中)。
-    private(set) var trafficLightCenterY: CGFloat = Metrics.chromeBarHeight / 2
-
-    private func measureTrafficLights(in window: NSWindow) {
-        guard let button = window.standardWindowButton(.closeButton),
-              let content = window.contentView,
-              button.window === window else { return }
-        let rect = button.convert(button.bounds, to: content)
-        let fromTop = content.isFlipped ? rect.midY : content.bounds.height - rect.midY
-        guard fromTop > 0, fromTop < Metrics.chromeBarHeight else { return }
-        trafficLightCenterY = fromTop
     }
 
     private func pinChanged() {
