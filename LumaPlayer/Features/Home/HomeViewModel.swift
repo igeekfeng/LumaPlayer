@@ -1,6 +1,6 @@
 import Foundation
 
-/// 首页:我的媒体 / 继续观看 / 每个媒体库的「最新」。
+/// 首页:我的媒体 / 继续观看 / 每个媒体库的「最新」,外加顶部 hero 的**随机推荐池**。
 ///
 /// 没有跨剧集的「下一集」行(2026-10-02 去掉):用户所有服务器上它都是加载一下就消失,
 /// 见 `docs/PITFALLS.md` Q31。
@@ -16,6 +16,18 @@ import Foundation
 final class HomeViewModel {
     /// 首页每个分区取多少条。不是设计 token,与布局无关。
     static let sectionLimit = 20
+
+    /// 顶部 hero 的推荐池一次取多少条(:而非直接取轮播要的张数)。
+    ///
+    /// 不是设计 token,与布局无关。取 20 是给「必须带背景图」那道筛选留余量:
+    /// 2026-10-15 本机 4.9.5.0 实测,随机 6 条里只有 1 条带 `BackdropImageTags`
+    /// (顶层 `Series` 通常有,`Movie` 常常只有竖版海报)。只取 5 条的话
+    /// 十有八九筛完是空的。
+    static let recommendationPoolLimit = 20
+
+    /// hero 轮播最多几张。轮播的每一张都要一张 1920 宽的背景图,
+    /// 张数越多首屏的图片请求越多 —— 见 `HomeHeroCarousel`。
+    static let heroCarouselLimit = 5
 
     /// 首页为之显示「最新」的媒体库类型。音乐 / 有声书 / 直播不在首版范围内
     /// (CLAUDE.md「非目标」),`CollectionType` 为 null 的混合库照常显示。
@@ -63,7 +75,9 @@ final class HomeViewModel {
         case pending
         /// 没有能上 hero 的条目:不画 hero,首页从普通页面的顶部开始
         case none
-        case item(EmbyItem)
+        /// 铺满顶部的一项或多项。**只有一张**(退路)时轮播自然退化成静默的单张,
+        /// 不给箭头 / 圆点(`HomeHeroCarousel`)。
+        case items([EmbyItem])
     }
 
     @MainActor
@@ -73,6 +87,9 @@ final class HomeViewModel {
         /// (DesignTokens.swift「界面规则」)。「最新」的行也按它来,所以先回来它才发「最新」的请求
         let views = Row<[EmbyView]>()
         let resume = Row<[EmbyItem]>()
+        /// hero 轮播的候选池(`SortBy=Random`)。⛔ 它**不驱动**任何货架 ——
+        /// `HomeView` 的行列表里没有它,只有 hero 读。
+        let recommended = Row<[EmbyItem]>()
         /// 每个媒体库的「最新」,键是 View 的 Id。只在库的集合变了时整体替换,
         /// 行对象跨刷新复用(刷新只改行内的 `state`)
         private(set) var latest: [String: Row<[EmbyItem]>] = [:]
@@ -122,8 +139,8 @@ final class HomeViewModel {
 
     /// 加载(或切换服务器 / 刷新后重新加载)全部分区。
     ///
-    /// 「继续观看」与媒体库列表并行;「最新」等媒体库列表回来再按库发,
-    /// 每个库只请求一次。
+    /// 媒体库列表、继续观看、hero 的推荐池三路**并行**;「最新」等媒体库列表
+    /// 回来再按库发,每个库只请求一次。
     func load(server: ServerProfile) {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
@@ -134,10 +151,12 @@ final class HomeViewModel {
         let sections = self.sections(for: server.id)
         sections.views.markLoading()
         sections.resume.markLoading()
+        sections.recommended.markLoading()
 
         let connection = container.connection(for: server)
         // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
         let limit = Self.sectionLimit
+        let poolLimit = Self.recommendationPoolLimit
         track { try await connection.userViews() } apply: { [weak self] new in
             guard let self else { return }
             sections.views.receive(new)
@@ -146,6 +165,9 @@ final class HomeViewModel {
         }
         track { try await connection.resume(limit: limit).items } apply: { new in
             sections.resume.receive(new)
+        }
+        track { try await connection.recommendations(limit: poolLimit) } apply: { new in
+            sections.recommended.receive(new)
         }
     }
 
@@ -277,6 +299,11 @@ final class HomeViewModel {
     /// 所有分区都加载完且都为空。
     ///
     /// 媒体库列表还没回来时不算空:「最新」的行要等它回来才知道有几行。
+    ///
+    /// ⛔ **推荐行(`recommended`)刻意不参与**。它空不代表这台服务器没内容,
+    /// 而「空」该不该报整页空状态由**货架**决定(hero 只是顶部一块装饰)。
+    /// 不会出现「hero 有内容却报整页空」:推荐查询是不带 `ParentId` 的根查询,
+    /// 媒体库列表为空时它必然也是空 —— 两者同源。
     static func isEverythingEmpty(
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
@@ -292,13 +319,44 @@ final class HomeViewModel {
         }
     }
 
-    /// 首页顶部 hero 选哪一项(纯函数,只读已经加载的行,⛔ 不为 hero 另发请求)。
+    /// 首页顶部 hero 铺哪几项。**纯函数**:只读已经加载的行,自己一个请求都不发 ——
+    /// 推荐池由 `load` 里那一路 `recommendations` 填(hero 从此**有**自己的请求了,
+    /// 但取数不在这个函数里,所以它照旧可以纯单测)。
     ///
-    /// 顺序:继续观看里第一个有背景图的 → 各媒体库「最新」里(按媒体库顺序)第一个有背景图的 → 没有。
-    /// 排在前面的行还没回来时返回 `.pending`(先占住 hero 的高度,等它):
-    /// 不然后面的行先回来、hero 先显示了它,等前面的行回来又换掉,首屏会跳。
+    /// **首选随机推荐**(`SortBy=Random`,见 `ServerConnection.recommendations`):
+    /// 池子里筛出带背景图的,最多 `heroCarouselLimit` 张交给轮播。
+    ///
+    /// **推荐行还没回来时返回 `.pending`**:先占住 hero 的高度等它,
+    /// 不然退路先显示了别的、等推荐回来又换掉,首屏会跳。
+    ///
+    /// **推荐为空 / 失败时退回老逻辑**:继续观看里第一个有背景图的 →
+    /// 各媒体库「最新」里(按媒体库顺序)第一个有背景图的 → 没有。
+    /// 这时只给**一张**,`HomeHeroCarousel` 会自动退化成静默的单张。
+    /// 留这条退路是因为「推荐拿不到图」在真实服务器上很常见:
+    /// 库没刮削过元数据时 `BackdropImageTags` 就是空的(DTS 那种静默删轨同理)。
     /// 失败的行跳过 —— 它自己那一行会报错,hero 不跟着空着。
     static func heroPick(
+        recommended: LoadState<[EmbyItem]>,
+        views: LoadState<[EmbyView]>,
+        resume: LoadState<[EmbyItem]>,
+        latest: (EmbyView) -> LoadState<[EmbyItem]>
+    ) -> HeroPick {
+        switch recommended {
+        case .idle, .loading:
+            return .pending
+        case .loaded(let items):
+            let picks = Array(items.lazy.filter(isHeroCandidate).prefix(heroCarouselLimit))
+            if !picks.isEmpty { return .items(picks) }
+        case .failed:
+            break
+        }
+        return fallbackHeroPick(views: views, resume: resume, latest: latest)
+    }
+
+    /// 推荐拿不到时的退路(2026-10-15 之前 hero 的唯一逻辑)。
+    /// 只给一张 —— 轮播的箭头 / 圆点需要用户能预期「下一张是什么」,
+    /// 退路这几项之间没有那种关系,摊成轮播反而像随机跳。
+    private static func fallbackHeroPick(
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
         latest: (EmbyView) -> LoadState<[EmbyItem]>
@@ -307,7 +365,7 @@ final class HomeViewModel {
         case .idle, .loading:
             return .pending
         case .loaded(let items):
-            if let item = items.first(where: isHeroCandidate) { return .item(item) }
+            if let item = items.first(where: isHeroCandidate) { return .items([item]) }
         case .failed:
             break
         }
@@ -322,7 +380,7 @@ final class HomeViewModel {
                 case .idle, .loading:
                     return .pending
                 case .loaded(let items):
-                    if let item = items.first(where: isHeroCandidate) { return .item(item) }
+                    if let item = items.first(where: isHeroCandidate) { return .items([item]) }
                 case .failed:
                     continue
                 }

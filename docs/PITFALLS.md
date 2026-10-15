@@ -156,6 +156,23 @@ mpv 已卸载文件、而 phase 仍停在 `.playing`)→ 又回到 -12。
 **「继续观看」里电影没封面(Q35)。** 电影常常只有 `ImageTags["Primary"]`;有的服务器把 Primary 的 tag 回填进
 `BackdropImageTags` 但 Backdrop 实际 404。`EmbyItem.coverImage` + `coverImageFallback` 两级交给 `PosterImage`。
 
+**`/Movies/Recommendations` 恒返回空,首页推荐改用 `SortBy=Random`(2026-10-15)。** 端点官方参考里确实有
+(`dev.emby.media` MoviesService,参数 `categoryLimit` / `itemLimit` / `userId` / `parentId`),但语义是
+「因为你看了 X」:取最近 7 部已看电影,按「More Like This」那套算相似片 —— 只覆盖**电影**、不带剧集,
+且依赖服务端 `Genres` / `ProviderIds`。本机 4.9.5.0 实测:空库返回 `[]`,**把一部电影标成已看后仍返回 `[]`**。
+`/Users/{uid}/Recommendations` 直接 404(该端点不存在)。`/Items/{Id}/Similar` 能用,但它需要**一个种子条目**,
+当首页的推荐源无从下手。⇒ 首页 hero 走通用查询 `Recursive=true&IncludeItemTypes=Movie,Series&SortBy=Random&Filters=IsUnplayed`
+(`SortBy=Random` 本来就在 `API_CONTRACT.md` 3.2 的 `SortBy` 白名单里,零新增端点、零新增参数名)。
+⚠️ `Limit` 要**大于**轮播张数:hero 要求带背景图,而真实服务器上 `Movie` 常常只有竖版海报
+(本机实测随机 6 条里只有 1 条带 `BackdropImageTags`)。
+
+**`SortBy=Random` 的结果会被响应缓存钉住 1 小时 —— 这是有意为之,别去"修"。** `.items` 在
+`EmbyResponseCache` 的白名单里,而缓存 key 含完整 query(`serverID|method|path|queryItems`),
+所以同一批「随机」在 TTL 内是**稳定**的;换一批只发生在手动刷新(⌘R)与播放上报 Playing / Stopped ——
+那三处都整台作废。理由:每次回首页都换主角会让首屏很跳,而且白白多发一次请求。
+⛔ 别因此改 `isResponseCacheable`、也别让推荐请求绕缓存(绕缓存有先例,`ServerConnection.verifyAccessWithFreshViews`,
+要用得先想清楚"每次进首页都新随机"到底是不是想要的)。
+
 **`/Shows/NextUp` 路径里没有 `{Id}`(Q25)。** 剧集页定位 = NextUp → 可续播 → 第一集。
 
 **首页「下一集」在用户服务器上 400 `SeriesId is required`(Q31)。** 后来所有服务器上这一行都「加载一下就消失」,已去掉;
@@ -194,6 +211,13 @@ Emby 是「服务器 id + `SeriesId`」(电影退化成 Item Id);百度是「账
 MediaPlayer 在别的队列调它 → `EXC_BREAKPOINT`。交给系统框架在任意队列回调的闭包,在 `nonisolated static` 方法里创建。
 
 **全屏无效(Q19)。** `Window` 场景的 `collectionBehavior` 是 `.fullScreenAuxiliary`;`WindowBox` 每次切换前设为 `.fullScreenPrimary`。
+
+**hero 从前写死「⛔ 不轮播」,而它给的理由是错的(2026-10-15)。** 理由写的是「轮播要么多发图片请求,
+要么换图时首屏跳」。核对后**「首屏跳」不成立**:`HomeHero.height(forWidth:)` 是按窗口宽度算的固定值
+(`homeHeroHeightRatio` 夹在 360…620),标题 / 简介 / 进度 / 按钮全是 overlay,换图不改动任何布局。
+⇒ 只剩图片请求一条代价,靠「只轮几张(`heroCarouselLimit`)+ 提前预取下一张背景图」按住。
+⛔ 别再拿「会跳」当理由禁轮播。轮播自身的三个「停」的条件(减弱动态效果 / 指针悬停 / 窗口非 key)见
+`HomeHeroCarousel.shouldAutoAdvance`,那是可单测的纯函数。
 
 **缓存:登录验证必须绕过缓存**(否则失效 token 假装登录成功);写操作作废整台缓存时,之前发出的读请求回来仍会写旧数据 →
 per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓存用 LRU,别超限全清(会让另一台服务器的海报陪葬)。

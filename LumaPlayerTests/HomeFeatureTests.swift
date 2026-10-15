@@ -47,9 +47,10 @@ final class HomeFeatureTests: XCTestCase {
 
     // MARK: - 一次加载(避免重复请求)
 
-    /// 一次 `load`:媒体库列表、继续观看各请求**一次**,列表回来后每个视频库
-    /// 的「最新」各请求一次(2026-09-24 诊断日志里同一 NextUp 1 秒内打了两遍,别回退)。
-    /// 跨剧集的 NextUp 已随「下一集」行一起去掉(PITFALLS.md Q31),首页不再请求它。
+    /// 一次 `load`:媒体库列表、继续观看、hero 的随机推荐各请求**一次**,
+    /// 列表回来后每个视频库的「最新」各请求一次(2026-09-24 诊断日志里同一 NextUp
+    /// 1 秒内打了两遍,别回退)。跨剧集的 NextUp 已随「下一集」行一起去掉
+    /// (PITFALLS.md Q31),首页不再请求它。
     func testLoadRequestsEachSectionOnce() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("user_views_mixed_synthetic.json")),
@@ -62,15 +63,70 @@ final class HomeFeatureTests: XCTestCase {
 
         let views = try XCTUnwrap(viewModel.sections(for: server.id).views.state.value)
         XCTAssertEqual(views.count, 3)
-        let paths = MockEmbyURLProtocol.recordedRequests().map(\.url.path)
+        let requests = MockEmbyURLProtocol.recordedRequests()
+        let paths = requests.map(\.url.path)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Views") }.count, 1)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Items/Resume") }.count, 1)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Shows/NextUp") }.count, 0)
-        let latestParents = MockEmbyURLProtocol.recordedRequests()
+        let latestParents = requests
             .filter { $0.url.path.hasSuffix("/Items/Latest") }
             .compactMap { queryValue($0.url, "ParentId") }
         XCTAssertEqual(Set(latestParents), Set(views.map(\.id)))
         XCTAssertEqual(latestParents.count, views.count)
+
+        // hero 的随机推荐:一次,参数就是「随机 + 没看过 + 顶层影剧」。
+        // ⛔ 不带 ParentId —— 推荐池要跨全部媒体库,限定成某一个库就只是那个库的随机
+        let recommendations = requests.filter { $0.url.path.hasSuffix("/Users/USER-1/Items") }
+        XCTAssertEqual(recommendations.count, 1)
+        let pick = try XCTUnwrap(recommendations.first)
+        XCTAssertEqual(queryValue(pick.url, "Recursive"), "true")
+        XCTAssertEqual(queryValue(pick.url, "IncludeItemTypes"), "Movie,Series")
+        XCTAssertEqual(queryValue(pick.url, "SortBy"), "Random")
+        XCTAssertEqual(queryValue(pick.url, "Filters"), "IsUnplayed")
+        XCTAssertEqual(queryValue(pick.url, "Limit"), String(HomeViewModel.recommendationPoolLimit))
+        XCTAssertNil(queryValue(pick.url, "ParentId"))
+    }
+
+    // MARK: - hero 的随机推荐(`ServerConnection.recommendations`)
+
+    /// 推荐落到 `Sections.recommended`,并成为 hero 的首选
+    func testRecommendationsFeedHero() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Items":[{"Id":"REC-1","Name":"推荐剧","Type":"Series","BackdropImageTags":["b1"]},{"Id":"REC-2","Name":"推荐片","Type":"Movie","BackdropImageTags":["b2"]}],"TotalRecordCount":2}"#),
+            path: "/emby/Users/USER-1/Items"
+        )
+        let (viewModel, server) = try await makeHomeViewModel()
+
+        viewModel.load(server: server)
+        await viewModel.waitUntilIdle()
+
+        let expected = [
+            try recItem("REC-1", "推荐剧", "Series", "b1"),
+            try recItem("REC-2", "推荐片", "Movie", "b2"),
+        ]
+        XCTAssertEqual(heroPick(viewModel, server: server), .items(expected))
+    }
+
+    /// 推荐请求失败时 hero 退回「继续观看」那张,不是空着 ——
+    /// 「一条请求打不通就整块 hero 消失」是首屏最贵的一种回归。
+    /// 且退路只给**一张**:轮播要退化成静默单张(见 `HomeHeroPickTests`)
+    func testRecommendationFailureFallsBackToResumeHero() async throws {
+        MockEmbyURLProtocol.stub(.status(500), path: "/emby/Users/USER-1/Items")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Items":[{"Id":"R-1","Name":"看了一半","Type":"Movie","BackdropImageTags":["rb"]}],"TotalRecordCount":1}"#),
+            path: "/emby/Users/USER-1/Items/Resume"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Items":[],"TotalRecordCount":0}"#),
+            path: "/emby/Users/USER-1/Views"
+        )
+        let (viewModel, server) = try await makeHomeViewModel()
+
+        viewModel.load(server: server)
+        await viewModel.waitUntilIdle()
+
+        let expected = [try recItem("R-1", "看了一半", "Movie", "rb")]
+        XCTAssertEqual(heroPick(viewModel, server: server), .items(expected))
     }
 
     /// 刷新时复用「最新」的行对象:每行视图只观察自己那一个 `Row`,
@@ -316,6 +372,27 @@ final class HomeFeatureTests: XCTestCase {
     }
 
     // MARK: - 辅助
+
+    /// 按当前各行的状态算一次 hero 该铺什么 —— `HomeView.HomeHeroSlot` 走的是同一个入口
+    private func heroPick(_ viewModel: HomeViewModel, server: ServerProfile) -> HomeViewModel.HeroPick {
+        let sections = viewModel.sections(for: server.id)
+        return HomeViewModel.heroPick(
+            recommended: sections.recommended.state,
+            views: sections.views.state,
+            resume: sections.resume.state,
+            latest: { sections.latest[$0.id]?.state ?? .idle }
+        )
+    }
+
+    /// 造一条带背景图的 Emby 条目(推荐 / 续播的断言都要背景图才上得了 hero)
+    private func recItem(_ id: String, _ name: String, _ type: String, _ backdropTag: String) throws -> EmbyItem {
+        try JSONDecoder().decode(
+            EmbyItem.self,
+            from: Data(
+                #"{"Id":"\#(id)","Name":"\#(name)","Type":"\#(type)","BackdropImageTags":["\#(backdropTag)"]}"#.utf8
+            )
+        )
+    }
 
     private func loadedResumeItems(_ viewModel: HomeViewModel, server: ServerProfile) throws -> [EmbyItem] {
         let state = viewModel.sections(for: server.id).resume.state

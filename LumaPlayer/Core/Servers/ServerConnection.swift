@@ -216,6 +216,37 @@ actor ServerConnection {
         return try await authenticated(.resume(userID: userID, query: query))
     }
 
+    /// `GET /Users/{UserId}/Items` —— 首页顶部的**随机推荐池**(API_CONTRACT.md 3.2)。
+    ///
+    /// ⛔ **不是** Emby 的 `/Movies/Recommendations`。那个端点官方参考里确实有
+    /// (`dev.emby.media` MoviesService),但它的语义是「因为你看了 X」:拿最近几部
+    /// 已看电影算相似片。三条硬伤 —— 只覆盖电影不带剧集、依赖服务端 `Genres` /
+    /// `ProviderIds` 算相似度、**本机 4.9.5.0 实测把电影标成已看后仍恒返回 `[]`**
+    /// (2026-10-15,见 `PITFALLS.md` 第 3 节「首页推荐」)。`/Items/{Id}/Similar`
+    /// 同理不可用:它需要**一个种子条目**,当首页的推荐源无从下手。
+    ///
+    /// 所以走已登记的通用查询,零新增端点、零新增参数名:
+    /// `SortBy=Random` 本来就写在 API_CONTRACT.md 3.2 的 `SortBy` 白名单里,
+    /// 实测每次给不同的一批。`Filters=IsUnplayed` 不把已看的推上来;
+    /// `IncludeItemTypes` 只要**顶层**的 Movie / Series —— 推一集太碎。
+    /// ⛔ 不传 `Fields`:hero 只显示标题 / 年份 / 片长,这三个默认就有
+    /// (`Overview` 那些是列表接口要显式要的,hero 不用)。
+    ///
+    /// ⚠️ **会被响应缓存钉住**:`.items` 在 `EmbyResponseCache` 的白名单里,
+    /// 而缓存 key 含完整 query,所以同一个 TTL(1 小时)窗口内这一批是**稳定**的;
+    /// 换一批只发生在手动刷新(⌘R)与播放上报 Playing / Stopped —— 那三处都会
+    /// 整台作废(见 `EmbyResponseCache` 的失效规则表)。这是有意为之,不是漏了:
+    /// 每次回首页都换主角会让首屏很跳。登记在 `PITFALLS.md`。
+    func recommendations(limit: Int) async throws -> [EmbyItem] {
+        var query = EmbyItemsQuery()
+        query.recursive = true
+        query.includeItemTypes = ["Movie", "Series"]
+        query.sortBy = ["Random"]
+        query.filters = ["IsUnplayed"]
+        query.limit = limit
+        return try await items(query).items
+    }
+
     /// `GET /Users/{UserId}/Items/Latest` —— 最近添加(API_CONTRACT.md 3.2)。
     ///
     /// 该端点没有 StartIndex / SortBy(官方 OpenAPI 核实),所以这里不给分页。

@@ -127,6 +127,7 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 | GET | `/Shows/{SeriesId}/Seasons` | 季 | ✅ |
 | GET | `/Shows/{SeriesId}/Episodes` | 分集 | ✅ |
 | GET | `/Items/{Id}/Similar` | 更多类似 | ✅ |
+| GET | `/Movies/Recommendations` | ❌ **不用** | 官方参考里有(`categoryLimit` `itemLimit` `userId` `parentId`),但语义是「因为你看了 X」:只覆盖**电影**、靠最近已看电影算相似度、依赖服务端 `Genres`/`ProviderIds`;本机 4.9.5.0 实测(含把电影标成已看)恒返 `[]`。首页推荐改走本表第一行的 `SortBy=Random`,见 `PITFALLS.md` 第 3 节 |
 
 响应:`Latest` 是 `BaseItemDto[]`;`Items/{Id}` 是单个 `BaseItemDto`;其余都是
 `{"Items": [...], "TotalRecordCount": n}`。⛔ 不要按其他列表端点类推 `Latest`(Q23)。
@@ -141,6 +142,10 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 - ⚠️ `Filters=IsResumable` **只在带 `ParentId` 时可信**:4.7.11.0 上不带 `ParentId` 返回的是媒体库条目(Q28)。
 - ⚠️ `IncludeItemTypes` 用在 `Resume` 上只能填可播放叶子类型,掺进 Series / Season / BoxSet 就归零。
 - 列表接口字段比单项少,要 `Overview` 等必须显式 `Fields=`。
+- **首页 hero 的「随机推荐」用的就是这个端点**(2026-10-15):`Recursive=true` +
+  `IncludeItemTypes=Movie,Series` + `SortBy=Random` + `Filters=IsUnplayed`,`Limit` = 推荐池大小。
+  ⛔ **不带 `ParentId`**(要跨全部媒体库);⛔ `Limit` 要**大于**轮播张数(hero 必须带背景图,
+  随机几页里带 `BackdropImageTags` 的往往只有一两条);⛔ 不改用 `/Movies/Recommendations`(理由见上表)。
 
 ### 3.3 图片 ✅
 

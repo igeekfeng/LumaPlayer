@@ -1,9 +1,22 @@
 import SwiftUI
 
-/// 首页顶部的 hero:一项内容的整宽背景图 + 标题(有 Logo 用 Logo)+ 继续播放 / 详情。
+/// 首页顶部的 hero:**一项**内容的整宽背景图 + 标题(有 Logo 用 Logo)+ 播放按钮。
 ///
-/// 选哪一项见 `HomeViewModel.heroPick`(继续观看优先,其次各库最新),数据全部来自首页
-/// 已经加载的行,⛔ 不为 hero 另发列表请求,⛔ 不轮播(轮播要么多发图片请求,要么换图时首屏跳)。
+/// 按钮只有一个,而且只有电影 / 分集才有;「进详情」靠**点整块画面**
+/// (剧集的 hero 因此一个按钮都没有,见 `actions` 的注释)。
+///
+/// 这里只负责「渲染一项」。轮播(自动切换 / 箭头 / 圆点 / 预取下一张背景图)
+/// 在 `HomeHeroCarousel`,它按顺序把这一项换成下一项 —— 分开是为了让本视图保持
+/// 「输入一项、画一项」,定时器与选取状态不进这里。
+///
+/// 选哪几项见 `HomeViewModel.heroPick`(随机推荐优先,拿不到图才退回
+/// 「继续观看 → 各库最新」),数据全部来自首页已经加载的行,
+/// ⛔ 不为 hero 另发列表请求。
+///
+/// ⚠️ 这里以前写死「⛔ 不轮播」,理由是「多发图片请求 / 换图时首屏跳」。
+/// 2026-10-15 核对:「首屏跳」不成立(`height(forWidth:)` 是按宽度算的固定值,
+/// 换图不改布局),只剩图片请求一条代价,已由轮播层的预取按住。理由与取舍
+/// 记在 `HomeHeroCarousel` 的类型注释里,⛔ 别把旧注释抄回来。
 ///
 /// 图层自下而上:
 /// 1. 模糊放大的海报(`heroBackdropBlur` / `heroBackdropScale`,与百度详情页 hero 同一做法)——
@@ -39,7 +52,7 @@ struct HomeHero: View {
             .overlay { artwork }
             .clipped()
             .overlay { scrims }
-            // 点图本身进详情(按钮之外的地方)
+            // 点图本身进详情 —— 这是**唯一**的「进详情」入口(2026-10-15 起没有详情按钮了)
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpenDetail)
             .overlay(alignment: .bottomLeading) {
@@ -50,6 +63,8 @@ struct HomeHero: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("精选:\(title)")
+            // 鼠标那条路是「点画面」,辅助功能看不见画面 —— 动作得单独给
+            .accessibilityAction(named: Text("查看详情")) { onOpenDetail() }
     }
 
     // MARK: - 图层
@@ -114,8 +129,11 @@ struct HomeHero: View {
                     }
                 }
             }
-            actions
-                .padding(.top, Metrics.spacingXS)
+            // 只有电影 / 分集能直接播;剧集要先进详情定位到哪一集,所以这里什么都不给
+            if isPlayable {
+                playButton
+                    .padding(.top, Metrics.spacingXS)
+            }
         }
         .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
     }
@@ -140,31 +158,25 @@ struct HomeHero: View {
         }
     }
 
-    private var actions: some View {
+    /// 唯一的按钮:「播放 / 继续播放」。调用方用 `if isPlayable` 挡着(见 `info`)。
+    ///
+    /// ⛔ 不再有「详情 / 查看详情」按钮(2026-10-15 用户要求去掉):hero 整块本来就是可点的
+    /// (根视图的 `.contentShape` + `onTapGesture(onOpenDetail)`),再来一个按钮只是把
+    /// 一个已经存在的动作画第二遍;而且在剧集上它是**唯一**的按钮、铺成一整条横排,
+    /// 压在标题旁边很难看。进详情这条路只保留「点画面」。
+    /// 无障碍那边补了同名的 `accessibilityAction`(见 `body`),⛔ 别让辅助功能
+    /// 因为少了一个按钮就丢掉这条路径。
+    ///
+    /// ⚠️ 剧集的 hero 因此**一个按钮都没有** —— 有意为之:它确实没有「直接播」这个动作
+    /// (要先在详情页里定位到哪一集),而「看详情」点画面即可。
+    private var playButton: some View {
         GlassEffectContainer(spacing: Metrics.spacingM) {
-            HStack(spacing: Metrics.spacingM) {
-                if isPlayable {
-                    Button(action: onPlay) {
-                        Label(item.progressFraction == nil ? "播放" : "继续播放", systemImage: "play.fill")
-                            .padding(.horizontal, Metrics.spacingS)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    Button(action: onOpenDetail) {
-                        Label("详情", systemImage: "info.circle")
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                } else {
-                    // 剧集本身不可直接播(要先定位到哪一集,那在详情页里)
-                    Button(action: onOpenDetail) {
-                        Label("查看详情", systemImage: "info.circle")
-                            .padding(.horizontal, Metrics.spacingS)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                }
+            Button(action: onPlay) {
+                Label(item.progressFraction == nil ? "播放" : "继续播放", systemImage: "play.fill")
+                    .padding(.horizontal, Metrics.spacingS)
             }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
         }
     }
 

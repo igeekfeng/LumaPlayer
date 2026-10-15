@@ -2,10 +2,14 @@ import SwiftUI
 
 /// 首页(主窗口导航栈的根页)。
 ///
-/// 自上而下:hero(`HomeHero`,一项精选内容铺满顶部)→ 我的媒体 → 继续观看(横版)
-/// → 每个媒体库的「最新」(海报)。
+/// 自上而下:hero(`HomeHeroCarousel`,几项**随机推荐**轮流铺满顶部)→ 我的媒体
+/// → 继续观看(横版)→ 每个媒体库的「最新」(海报)。
 /// 与 Emby Web 一样,**加载成功但为空的分区整行不显示**(不放「没有内容」占位);
 /// 失败的分区照常显示错误与重试入口;全部为空时给一个整页空状态。
+///
+/// ⚠️ 「继续观看」**既是一行货架,也曾是 hero 的数据源**(旧 `heroPick` 抢第一个
+/// 有背景图的)。2026-10-15 起 hero 改吃随机推荐,这一行不再喂 hero,位置也不变 ——
+/// 「看一半接着看」是刚需,不能因为没有 hero 就不露出。
 ///
 /// 「我的媒体」是媒体库的唯一入口,所以它的加载态与失败态必须露出来 ——
 /// 失败时静默少一行,用户只会以为这台服务器没有媒体库。
@@ -126,6 +130,7 @@ private struct HomeHeroSlot: View {
 
     var body: some View {
         let pick = HomeViewModel.heroPick(
+            recommended: sections.recommended.state,
             views: sections.views.state,
             resume: sections.resume.state,
             latest: { sections.latest[$0.id]?.state ?? .idle }
@@ -138,16 +143,18 @@ private struct HomeHeroSlot: View {
             case .none:
                 Color.clear
                     .frame(height: Metrics.chromeBarHeight)
-            case .item(let item):
-                HomeHero(
-                    item: item,
+            case .items(let items):
+                HomeHeroCarousel(
+                    items: items,
                     serverID: context.server.id,
                     store: context.container.posters,
-                    onPlay: { context.play(item, openWindow: openWindow) },
-                    onOpenDetail: { context.onOpenItem(item) }
+                    onPlay: { context.play($0, openWindow: openWindow) },
+                    onOpenDetail: { context.onOpenItem($0) }
                 )
-                // 换了一项就整块重建:Logo 取不到的标记不能带到下一项上
-                .id(item.id)
+                // 换了一批就整块重建(轮播回到第一张,各项的 Logo 标记也不串)。
+                // 同一批不重建:行对象被刷新(⌘R 之外的重新加载)时用户停在第 3 张,
+                // 不该被弹回第 1 张 —— 所以 id 取的是**条目 id 列表**,不是行对象
+                .id(items.map(\.id).joined(separator: ","))
             }
         }
         .onChange(of: pick != .none, initial: true) { _, hasHero in
