@@ -20,7 +20,8 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 # ── 白名单:公开的示例域与官方域,允许出现在仓库里 ──
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example)$'
+# （白名单里的 shields 徽章图床是公开服务,与服务器无关。）
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|.*\.shields\.io)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。
