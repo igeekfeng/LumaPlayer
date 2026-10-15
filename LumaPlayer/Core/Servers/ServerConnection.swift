@@ -229,8 +229,8 @@ actor ServerConnection {
     /// `SortBy=Random` 本来就写在 API_CONTRACT.md 3.2 的 `SortBy` 白名单里,
     /// 实测每次给不同的一批。`Filters=IsUnplayed` 不把已看的推上来;
     /// `IncludeItemTypes` 只要**顶层**的 Movie / Series —— 推一集太碎。
-    /// ⛔ 不传 `Fields`:hero 只显示标题 / 年份 / 片长,这三个默认就有
-    /// (`Overview` 那些是列表接口要显式要的,hero 不用)。
+    /// `Fields=Overview,Genres`:hero 显示两行简介和前两个类型,列表接口默认不给这两个
+    /// (3.2;两个字段名都在 3.2 的 `Fields` 白名单里)。
     ///
     /// ⚠️ **会被响应缓存钉住**:`.items` 在 `EmbyResponseCache` 的白名单里,
     /// 而缓存 key 含完整 query,所以同一个 TTL(1 小时)窗口内这一批是**稳定**的;
@@ -243,6 +243,7 @@ actor ServerConnection {
         query.includeItemTypes = ["Movie", "Series"]
         query.sortBy = ["Random"]
         query.filters = ["IsUnplayed"]
+        query.fields = ["Overview", "Genres"]
         query.limit = limit
         return try await items(query).items
     }
@@ -293,6 +294,21 @@ actor ServerConnection {
             // 上面已注明:NextUp 拿不到就走下一条路,不是把错误吞掉。
         }
         return try await resumableEpisode(seriesID: seriesID)
+    }
+
+    /// 剧集「直接播放」该播哪一集(首页 hero 的播放按钮用):
+    /// `focusEpisode`(NextUp → 可续播)→ 第一季的第一集 → nil(这部剧没有分集)。
+    ///
+    /// 与详情页定位初始集**同一套规则**(`MediaDetailViewModel` 的 `loadSeasons`):
+    /// 看过就接着看,没看过就从头。「第一季」取 `/Shows/{Id}/Seasons` 的第一项,
+    /// 与详情页一致 —— 服务器把「特别篇」(第 0 季)排在最前时,两边都会落到它。
+    ///
+    /// 只在用户点「播放」时调用,⛔ 不要在 hero 渲染 / 轮播切换时预先调用:
+    /// 最坏要三个请求(NextUp、可续播、季 + 分集),每张轮播都发一遍是在白白打服务器。
+    func seriesPlaybackEpisode(seriesID: String) async throws -> EmbyItem? {
+        if let focus = try await focusEpisode(seriesID: seriesID) { return focus }
+        guard let firstSeason = try await seasons(seriesID: seriesID).first else { return nil }
+        return try await episodes(seriesID: seriesID, seasonID: firstSeason.id).first
     }
 
     /// `GET /Users/{UserId}/Items` —— 某部剧里**最近播放且可续播**的那一集。

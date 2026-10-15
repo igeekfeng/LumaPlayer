@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// 首页顶部的 hero:**一项**内容的整宽背景图 + 标题(有 Logo 用 Logo)+ 播放按钮。
+/// 首页顶部的 hero:**一项**内容的整宽背景图 + 标题(Logo + 文字)+ 播放按钮。
 ///
-/// 按钮只有一个,而且只有电影 / 分集才有;「进详情」靠**点整块画面**
-/// (剧集的 hero 因此一个按钮都没有,见 `actions` 的注释)。
+/// 按钮只有一个「播放」(电影 / 分集 / 剧集都有,剧集播哪一集见 `playButton`);
+/// 「进详情」靠**点整块画面**。
 ///
 /// 这里只负责「渲染一项」。轮播(自动切换 / 箭头 / 圆点 / 预取下一张背景图)
 /// 在 `HomeHeroCarousel`,它按顺序把这一项换成下一项 —— 分开是为了让本视图保持
@@ -18,13 +18,26 @@ import SwiftUI
 /// 换图不改布局),只剩图片请求一条代价,已由轮播层的预取按住。理由与取舍
 /// 记在 `HomeHeroCarousel` 的类型注释里,⛔ 别把旧注释抄回来。
 ///
-/// 图层自下而上:
-/// 1. 模糊放大的海报(`heroBackdropBlur` / `heroBackdropScale`,与百度详情页 hero 同一做法)——
-///    背景图取不到时的退路:有的服务器在 `BackdropImageTags` 里回填 `Primary` 的 tag,
-///    请求 Backdrop 直接 404(`EmbyItem.coverImageFallback` 的注释);
-/// 2. 背景图本身,取不到就透明(露出第 1 层),⛔ 不画灰色占位;
-/// 3. 左侧黑色压暗(文字区)+ 底部渐变到窗口底色(与下面的货架接上)。
+/// 布局:上面是**图片区**(`imageHeight(forWidth:)`),下面是一段**过渡带**(`homeHeroFadeBand`),
+/// 合起来是 `height(forWidth:)`。
 ///
+/// 图层自下而上:
+/// 1. 模糊海报(`homeHeroFallbackBlur`)—— 背景图取不到时的退路,只当「色调」:
+///    有的服务器在 `BackdropImageTags` 里回填 `Primary` 的 tag,请求 Backdrop 直接 404
+///    (`EmbyItem.coverImageFallback` 的注释)。轮播里取不到背景图的项会被跳过
+///    (`onBackdropUnavailable`),所以这一层通常只在「只剩这一项」时露出来;
+/// 2. **同一张**背景图重度模糊后铺满整块(`homeHeroAmbientBlur`,含过渡带)—— 清晰图左边
+///    空出来的地方与过渡带都靠它,颜色和清晰图连得上。同一 spec,命中图片缓存,不多发请求。
+///    ⚠️ 模糊必须重:它是**整张图放大**铺的,模糊一轻就看得出和右边是同一批人物。
+///    镜像接边、拉伸边缘一条都试过(2026-10-15),前者照样认得出人物、后者遇到自带黑边的图
+///    接缝很难看,用户决定退回重度模糊;
+/// 3. 清晰的背景图:按图片区高度**完整**摆放、靠右(宽 = 高 × 16:9,窗口更窄时才裁两侧),
+///    左边缘与下边缘用渐变遮罩融进第 2 层。⛔ 不铺满整宽(会放大 + 裁掉上下四分之一,
+///    `homeHeroImageAspect` 的注释);取不到就透明,⛔ 不画灰色占位;
+/// 4. 左侧黑色压暗(只在图片区,过渡带里淡掉)+ 过渡带渐变到窗口底色(缓动曲线,不是线性)。
+///    ⛔ 不在图片区底边硬切(太生硬),⛔ 不让清晰图直接线性淡成白雾(2026-10-15 两版的教训)。
+///
+/// 文字区:竖版小封面(仅电影 / 剧集)+ 标题(Logo 与文字同时出现,见 `titleView`)/ 元信息 / 两行简介 / 播放按钮。
 /// 文字固定深色外观(白字):它永远压在压暗过的图上,与系统深浅色无关。
 /// ⛔ 不从图里取色做 tint(DesignTokens.swift「界面规则」)。
 struct HomeHero: View {
@@ -32,33 +45,44 @@ struct HomeHero: View {
     let serverID: UUID
     let store: PosterImageStore
     let onPlay: () -> Void
+    /// 剧集正在定位要播的分集(按钮转圈、不可点,见 `HomeViewModel.playSeries`)
+    var isResolvingPlayback = false
     let onOpenDetail: () -> Void
+    /// 背景图试过且没拿到(轮播据此跳过这一项)
+    var onBackdropUnavailable: () -> Void = {}
 
     @State private var width: CGFloat = 0
     /// Logo 取不到(或没有)时用文字标题
     @State private var isLogoUnavailable = false
 
-    /// hero 高度:按宽度算,夹在上下限之间(窗口很宽时不至于占满一屏,很窄时不至于扁成一条)
-    static func height(forWidth width: CGFloat) -> CGFloat {
+    /// 图片区高度:按宽度算,夹在上下限之间(窗口很宽时不至于占满一屏,很窄时不至于扁成一条)
+    static func imageHeight(forWidth width: CGFloat) -> CGFloat {
         min(max(width * Metrics.homeHeroHeightRatio, Metrics.homeHeroMinHeight), Metrics.homeHeroMaxHeight)
+    }
+
+    /// hero 总高 = 图片区 + 过渡带。只跟宽度有关,换图不改布局(轮播不跳的前提)
+    static func height(forWidth width: CGFloat) -> CGFloat {
+        imageHeight(forWidth: width) + Metrics.homeHeroFadeBand
     }
 
     var body: some View {
         let height = Self.height(forWidth: width)
+        let imageHeight = Self.imageHeight(forWidth: width)
         Color.clear
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .overlay { artwork }
+            .overlay(alignment: .topTrailing) { artwork(imageHeight: imageHeight) }
             .clipped()
-            .overlay { scrims }
+            .overlay { scrims(imageFraction: height > 0 ? imageHeight / height : 1) }
             // 点图本身进详情 —— 这是**唯一**的「进详情」入口(2026-10-15 起没有详情按钮了)
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpenDetail)
             .overlay(alignment: .bottomLeading) {
                 info
                     .padding(.horizontal, Metrics.spacingXL)
-                    .padding(.bottom, height * Metrics.homeHeroInfoBottomFraction)
+                    // 文字落在图片区底部,不进过渡带(那里浅色模式下会变白)
+                    .padding(.bottom, Metrics.homeHeroFadeBand + Metrics.spacingS)
                     .environment(\.colorScheme, .dark)
             }
             .accessibilityElement(children: .contain)
@@ -69,31 +93,89 @@ struct HomeHero: View {
 
     // MARK: - 图层
 
-    private var artwork: some View {
-        ZStack {
-            if let posterSpec {
-                PosterImage(spec: posterSpec, store: store, showsPlaceholder: false)
-                    .blur(radius: Metrics.heroBackdropBlur)
-                    .scaleEffect(Metrics.heroBackdropScale)
-            } else {
-                Color.black
+    private func artwork(imageHeight: CGFloat) -> some View {
+        // 清晰图的宽度:完整的 16:9;窗口比它还窄时就是整宽(这时裁两侧,不留空)
+        let sharpWidth = min(width, imageHeight * Metrics.homeHeroImageAspect)
+        let isInset = sharpWidth < width
+        return ZStack(alignment: .topTrailing) {
+            // 两层模糊底图都用 `Color.clear.overlay` 包:`.fill` 的图会按**图片自己**的比例上报尺寸,
+            // 竖版海报铺满整宽能把 ZStack 撑到 2000+pt 高,清晰图跟着被挤出可见区
+            // (2026-10-15 实测 ZStack 高 2592)。`Color.clear` 只吃提议的尺寸,图在 overlay 里溢出再裁掉
+            Color.black
+                .overlay {
+                    if let posterSpec {
+                        PosterImage(spec: posterSpec, store: store, showsPlaceholder: false)
+                            .blur(radius: Metrics.homeHeroFallbackBlur)
+                            .scaleEffect(Metrics.heroBackdropScale)
+                    }
+                }
+                // 同一张图整宽铺满、重度模糊:清晰图左边空出来的地方与过渡带都靠它
+                .overlay {
+                    PosterImage(spec: backdropSpec, store: store, showsPlaceholder: false)
+                        .blur(radius: Metrics.homeHeroAmbientBlur)
+                        .scaleEffect(Metrics.heroBackdropScale)
+                }
+                .clipped()
+            PosterImage(spec: backdropSpec, store: store, showsPlaceholder: false) { loaded in
+                if !loaded { onBackdropUnavailable() }
             }
-            PosterImage(spec: backdropSpec, store: store, showsPlaceholder: false)
+            .frame(width: sharpWidth, height: imageHeight)
+            .clipped()
+            // 左边缘:只有没铺满整宽时才融进模糊底图
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: isInset ? .clear : .black, location: 0),
+                        .init(color: .black, location: isInset ? 0.3 : 0),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            // 下边缘:融进模糊底图,再由过渡带接到窗口底色
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0.65),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
         }
         .accessibilityHidden(true)
     }
 
-    private var scrims: some View {
-        ZStack {
+    /// - Parameter imageFraction: 图片区占 hero 总高的比例(过渡带从这里开始)
+    private func scrims(imageFraction: Double) -> some View {
+        let windowColor = Color(nsColor: .windowBackgroundColor)
+        let band = 1 - imageFraction
+        return ZStack {
+            // 文字区压暗,只在图片区;过渡带里淡掉,否则浅色模式下过渡带左半边是灰的
             LinearGradient(
                 colors: [.black.opacity(Metrics.homeHeroSideScrimOpacity), .clear],
                 startPoint: .leading,
                 endPoint: UnitPoint(x: Metrics.homeHeroSideScrimEnd, y: 0.5)
             )
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: imageFraction - band * 0.5),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            // 过渡带:缓动(ease-in-out)而不是线性,开头几乎看不出、结尾贴着窗口底色收住
             LinearGradient(
                 stops: [
-                    .init(color: Color(nsColor: .windowBackgroundColor).opacity(0), location: Metrics.homeHeroBottomFadeStart),
-                    .init(color: Color(nsColor: .windowBackgroundColor), location: 1),
+                    .init(color: windowColor.opacity(0), location: imageFraction - band * 0.5),
+                    .init(color: windowColor.opacity(0.15), location: imageFraction),
+                    .init(color: windowColor.opacity(0.55), location: imageFraction + band * 0.4),
+                    .init(color: windowColor.opacity(0.9), location: imageFraction + band * 0.75),
+                    .init(color: windowColor, location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -105,60 +187,89 @@ struct HomeHero: View {
     // MARK: - 文字与按钮
 
     private var info: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacingM) {
-            titleView
-            if let subtitle {
-                Text(subtitle)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
+        HStack(alignment: .bottom, spacing: Metrics.spacingXL) {
+            if let coverSpec {
+                PosterImage(spec: coverSpec, store: store, showsPlaceholder: false)
+                    .frame(width: Metrics.homeHeroPosterWidth, height: Metrics.homeHeroPosterWidth * 1.5)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                    .shadow(color: .black.opacity(0.5), radius: Metrics.spacingM, y: Metrics.spacingXS)
+                    .accessibilityHidden(true)
             }
-            if let meta {
-                Text(meta)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            if let progress = item.progressFraction {
-                HStack(spacing: Metrics.spacingS) {
-                    CardProgressBar(fraction: progress)
-                        .frame(width: Metrics.homeHeroProgressWidth)
-                    if let remaining = MediaFormat.remaining(for: item) {
-                        Text(remaining)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Metrics.spacingS) {
+                titleView
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                }
+                if let meta {
+                    Text(meta)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let overview {
+                    Text(overview)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .frame(maxWidth: Metrics.homeHeroOverviewMaxWidth, alignment: .leading)
+                }
+                if let progress = item.progressFraction {
+                    HStack(spacing: Metrics.spacingS) {
+                        CardProgressBar(fraction: progress)
+                            .frame(width: Metrics.homeHeroProgressWidth)
+                        if let remaining = MediaFormat.remaining(for: item) {
+                            Text(remaining)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-            }
-            // 只有电影 / 分集能直接播;剧集要先进详情定位到哪一集,所以这里什么都不给
-            if isPlayable {
-                playButton
-                    .padding(.top, Metrics.spacingXS)
+                // 电影 / 分集 / 剧集都能直接播(剧集由调用方先定位分集);其余类型不给
+                if isPlayable {
+                    playButton
+                        .padding(.top, Metrics.spacingS)
+                }
             }
         }
-        .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
+        .frame(maxWidth: Metrics.contentMaxWidth + Metrics.homeHeroPosterWidth, alignment: .leading)
     }
 
-    @ViewBuilder
+    /// 标题:**Logo 与文字标题同时出现**(Logo 在上、文字在下)。
+    ///
+    /// ⛔ 不再「有 Logo 就只画 Logo」(2026-10-15 用户反馈):不少 Logo 是花体 / 图形化的
+    /// 艺术字,甚至就是个圆形徽章,单看根本认不出片名。文字标题始终在,有 Logo 时字号降一级,
+    /// 让 Logo 当装饰、文字负责可读。
     private var titleView: some View {
-        if let logoSpec, !isLogoUnavailable {
-            PosterImage(spec: logoSpec, store: store, showsPlaceholder: false) { loaded in
-                if !loaded { isLogoUnavailable = true }
+        VStack(alignment: .leading, spacing: Metrics.spacingS) {
+            if let logoSpec, !isLogoUnavailable {
+                PosterImage(spec: logoSpec, store: store, showsPlaceholder: false) { loaded in
+                    if !loaded { isLogoUnavailable = true }
+                }
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: Metrics.homeHeroLogoMaxWidth, maxHeight: Metrics.homeHeroLogoMaxHeight, alignment: .bottomLeading)
+                .accessibilityHidden(true)
             }
-            .aspectRatio(contentMode: .fit)
-            .frame(maxWidth: Metrics.homeHeroLogoMaxWidth, maxHeight: Metrics.homeHeroLogoMaxHeight, alignment: .bottomLeading)
-            .accessibilityElement()
-            .accessibilityLabel(title)
-            .accessibilityAddTraits(.isHeader)
-        } else {
             Text(title)
-                .font(.largeTitle.bold())
+                .font(hasLogo ? .title.bold() : .largeTitle.bold())
                 .lineLimit(2)
                 .shadow(color: .black.opacity(0.4), radius: Metrics.spacingS)
                 .accessibilityAddTraits(.isHeader)
         }
     }
 
+    private var hasLogo: Bool { logoSpec != nil && !isLogoUnavailable }
+
     /// 唯一的按钮:「播放 / 继续播放」。调用方用 `if isPlayable` 挡着(见 `info`)。
+    ///
+    /// **剧集也有**(2026-10-15 用户要求):点了由 `HomeViewModel.playSeries` 定位分集 ——
+    /// 看过就接着看(NextUp → 可续播),没看过就第一季第一集,与详情页同一套规则
+    /// (`ServerConnection.seriesPlaybackEpisode`)。定位要发请求,所以只在点击时做,
+    /// 期间按钮转圈。剧集一律叫「播放」:点之前不知道会落到哪一集、有没有进度,
+    /// ⛔ 不为了换文案在渲染时预先去查。
+    /// 不带 tint 的透明玻璃(`.glass`,文字区强制深色外观 → 白字)。⛔ 不用 `.glassProminent`
+    /// (吃系统强调色,一块饱和蓝压在照片上很突兀),也 ⛔ 不用白底实心胶囊(试过,用户要透明玻璃)。
     ///
     /// ⛔ 不再有「详情 / 查看详情」按钮(2026-10-15 用户要求去掉):hero 整块本来就是可点的
     /// (根视图的 `.contentShape` + `onTapGesture(onOpenDetail)`),再来一个按钮只是把
@@ -167,22 +278,27 @@ struct HomeHero: View {
     /// 无障碍那边补了同名的 `accessibilityAction`(见 `body`),⛔ 别让辅助功能
     /// 因为少了一个按钮就丢掉这条路径。
     ///
-    /// ⚠️ 剧集的 hero 因此**一个按钮都没有** —— 有意为之:它确实没有「直接播」这个动作
-    /// (要先在详情页里定位到哪一集),而「看详情」点画面即可。
     private var playButton: some View {
-        GlassEffectContainer(spacing: Metrics.spacingM) {
-            Button(action: onPlay) {
-                Label(item.progressFraction == nil ? "播放" : "继续播放", systemImage: "play.fill")
-                    .padding(.horizontal, Metrics.spacingS)
+        Button(action: onPlay) {
+            HStack(spacing: Metrics.spacingS) {
+                if isResolvingPlayback {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "play.fill")
+                }
+                Text(item.progressFraction == nil ? "播放" : "继续播放")
             }
-            .buttonStyle(.glassProminent)
-            .controlSize(.large)
+            .padding(.horizontal, Metrics.spacingS)
         }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .disabled(isResolvingPlayback)
     }
 
     // MARK: - 数据
 
-    private var isPlayable: Bool { item.kind == .movie || item.kind == .episode }
+    private var isPlayable: Bool { item.kind == .movie || item.kind == .episode || item.kind == .series }
 
     /// 分集显示剧名(副标题是「S1E3 · 集名」),其余显示自己的名字
     private var title: String {
@@ -194,14 +310,22 @@ struct HomeHero: View {
         return [item.episodeLabel, item.name].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// 电影 / 剧集:年份 · 片长
+    /// 电影 / 剧集:年份 · 片长 · 前两个类型
     private var meta: String? {
         guard item.kind != .episode else { return nil }
         let parts = [
             item.productionYear.map(String.init),
             MediaFormat.runtime(ticks: item.runTimeTicks),
+            item.genres.flatMap { $0.isEmpty ? nil : $0.prefix(2).joined(separator: " / ") },
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 简介。只有随机推荐那批显式要了 `Overview`(`ServerConnection.recommendations`),
+    /// 退回「继续观看 / 最新」时没有,这一行就不画
+    private var overview: String? {
+        guard let text = item.overview?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
     }
 
     private var backdropSpec: ImageSpec? {
@@ -217,6 +341,11 @@ struct HomeHero: View {
             ImageSpec(serverID: serverID, itemID: item.id, type: .primary, tag: $0,
                       maxWidth: Int(Metrics.posterMinWidth * 2))
         }
+    }
+
+    /// 标题左边的竖版小封面。分集不给:分集的 `Primary` 是 16:9 剧照,塞进 2:3 只剩中间一条
+    private var coverSpec: ImageSpec? {
+        item.kind == .episode ? nil : posterSpec
     }
 
     /// 分集用剧的 Logo(`logoSource` 自带父级回退)

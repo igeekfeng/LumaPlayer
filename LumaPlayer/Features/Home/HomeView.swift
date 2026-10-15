@@ -49,6 +49,10 @@ struct HomeView: View {
         self._viewModel = State(initialValue: HomeViewModel(container: container))
     }
 
+    /// hero 还垫在顶栏底下(没被滚出去)。滚出去之后顶栏下面是货架,
+    /// 栏底要换回窗口底色那种压暗,否则白底货架直接从按钮底下穿过
+    @State private var isHeroUnderChrome = true
+
     var body: some View {
         // 只取当前服务器的那份:切服务器后、新一轮 `load` 之前,也不会露出别台的内容
         let sections = viewModel.sections(for: server.id)
@@ -62,7 +66,7 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // hero 铺到窗口最上沿(压在浮动顶栏下面);没有 hero 时它只留出顶栏的高度
-                HomeHeroSlot(sections: sections, context: context)
+                HomeHeroSlot(sections: sections, context: context, isUnderChrome: isHeroUnderChrome)
                 LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
                     HomeLibrariesRow(row: sections.views, context: context)
                     HomeResumeRow(row: sections.resume, context: context)
@@ -76,6 +80,16 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .ignoresSafeArea(.container, edges: .top)
+        // ⛔ 关掉顶部的系统滚动边缘效果:它在 hero 顶上盖出一条窗口底色的柔边(浅色模式下是
+        // 白带,2026-10-15 截图)。顶栏自己垫压暗(`BrowseChromeScrim`),滚过 hero 后换成
+        // 窗口底色那种,见 `isHeroUnderChrome`
+        .scrollEdgeEffectHidden(true, for: .top)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            let scrolled = geometry.contentOffset.y + geometry.contentInsets.top
+            return scrolled < HomeHero.height(forWidth: geometry.containerSize.width) - Metrics.chromeBarHeight
+        } action: { _, under in
+            isHeroUnderChrome = under
+        }
         .navigationTitle("首页")
         // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
@@ -94,6 +108,14 @@ struct HomeView: View {
             Button("好", role: .cancel) { }
         } message: {
             Text(viewModel.resumeActionError ?? "")
+        }
+        .alert("无法播放", isPresented: Binding(
+            get: { viewModel.seriesPlayError != nil },
+            set: { if !$0 { viewModel.seriesPlayError = nil } }
+        )) {
+            Button("好", role: .cancel) { }
+        } message: {
+            Text(viewModel.seriesPlayError ?? "")
         }
     }
 }
@@ -120,10 +142,12 @@ private struct HomeRowContext {
 ///
 /// 首页整页 `ignoresSafeArea(edges: .top)`:有 hero(含加载中的骨架)时图铺到窗口最上沿;
 /// 没有 hero 时这里放一块顶栏高度的空白,货架从顶栏下沿开始。
-/// 有没有 hero 经 `BrowseChromeController.setRootHasHero` 告诉顶栏(决定栏底压暗方式)。
+/// 有没有 hero 经 `BrowseChromeController.setRootHasHero` 告诉顶栏(决定栏底压暗方式);
+/// hero 被滚出顶栏之后也报「没有」(`isUnderChrome`,由 `HomeView` 按滚动位置算)。
 private struct HomeHeroSlot: View {
     let sections: HomeViewModel.Sections
     let context: HomeRowContext
+    let isUnderChrome: Bool
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.browseChrome) private var chrome
@@ -148,7 +172,17 @@ private struct HomeHeroSlot: View {
                     items: items,
                     serverID: context.server.id,
                     store: context.container.posters,
-                    onPlay: { context.play($0, openWindow: openWindow) },
+                    onPlay: { item in
+                        // 剧集先定位该播的分集(看过接着看,没看过第一集),再起播
+                        if item.kind == .series {
+                            context.viewModel.playSeries(item, server: context.server) { episode in
+                                context.play(episode, openWindow: openWindow)
+                            }
+                        } else {
+                            context.play(item, openWindow: openWindow)
+                        }
+                    },
+                    resolvingItemID: context.viewModel.resolvingSeriesID,
                     onOpenDetail: { context.onOpenItem($0) }
                 )
                 // 换了一批就整块重建(轮播回到第一张,各项的 Logo 标记也不串)。
@@ -157,10 +191,19 @@ private struct HomeHeroSlot: View {
                 .id(items.map(\.id).joined(separator: ","))
             }
         }
-        .onChange(of: pick != .none, initial: true) { _, hasHero in
-            chrome?.setRootHasHero(hasHero, source: context.server.id)
+        // ⚠️ 监听的是「服务器 + 有没有 hero」,不只是那个布尔值:切服务器时这个视图不重建,
+        // 前后两台都有 hero 的话布尔值一直是 true,`onChange` 不触发,新服务器的 id 就从没
+        // 登记过 —— 顶栏退回窗口底色那种压暗,hero 顶上一条白带(2026-10-15 截图复现)
+        .onChange(of: HeroReport(source: context.server.id, hasHero: pick != .none && isUnderChrome), initial: true) { _, report in
+            chrome?.setRootHasHero(report.hasHero, source: report.source)
         }
     }
+}
+
+/// `HomeHeroSlot` 上报给顶栏的内容(见那里 `onChange` 的注释)
+private struct HeroReport: Equatable {
+    let source: UUID
+    let hasHero: Bool
 }
 
 // MARK: - 我的媒体

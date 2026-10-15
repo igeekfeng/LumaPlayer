@@ -22,8 +22,10 @@ import Foundation
 /// 8 秒自动轮播,可点箭头 / 圆点手动切,指针悬停或窗口非 key 时停;没有合格条目就不画。
 /// ⚠️ 2026-10-15 之前是「继续观看第一项、单张、⛔ 不轮播」,那条已作废(旧理由「换图会跳」不成立,
 /// 见 `PITFALLS.md` 第 4 节)。
-/// hero 上**只有播放按钮**(仅电影 / 分集),⛔ 不给「详情」按钮 —— 进详情靠点整块画面,
-/// 剧集的 hero 因此一个按钮都没有。
+/// hero 文字区:竖版小封面 + 标题 / 元信息 / 两行简介;清晰背景图按 16:9 完整靠右摆放,
+/// 其余由同一张图的模糊版铺满,下方一段过渡带缓动渐变到窗口底色(细节见 `HomeHero` 类型注释);首页 ScrollView 关掉顶部滚动边缘效果(那是顶上的白带)。
+/// hero 上**只有播放按钮**(透明玻璃;电影 / 分集直接播,剧集点了再定位分集:看过接着看、
+/// 没看过第一集),⛔ 不给「详情」按钮 —— 进详情靠点整块画面。
 /// 详情页:hero 图透到窗口最上沿,顶栏不放来源菜单(切换会清掉导航栈)。
 /// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
@@ -33,7 +35,9 @@ import Foundation
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、
-/// 主窗口浮动顶栏的按钮与搜索胶囊、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 的播放按钮。
+/// 主窗口浮动顶栏的按钮与搜索胶囊、字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、
+/// 首页 hero 的播放按钮(**不带 tint 的透明玻璃** `.glass`,⛔ 不用 `.glassProminent`:它吃系统强调色,
+/// 一块饱和蓝压在照片上很突兀;中间试过白底实心胶囊,用户要透明玻璃,2026-10-15)。
 /// ⛔ 不用于:海报卡片、列表 / 剧集的每一行、长文本背景、全窗口背景、**播放器底部控制栏**
 /// (它是全宽横条 + 自下而上的黑色渐变压暗:HIG 要求玻璃压在媒体上配 dimming,
 /// 且 Apple TV / QuickTime / mpv OSC 默认都是全宽横条)。
@@ -314,25 +318,44 @@ enum Metrics {
 
     // MARK: 首页 hero(`HomeHero`)
 
-    /// 高度 = 宽度 × 这个比例,再夹到上下限
-    static let homeHeroHeightRatio: CGFloat = 0.45
-    static let homeHeroMinHeight: CGFloat = 360
-    static let homeHeroMaxHeight: CGFloat = 620
+    /// **图片区**高度 = 宽度 × 这个比例,再夹到上下限(hero 总高再加 `homeHeroFadeBand`)。
+    /// 2026-10-15 用户嫌 0.5 / 上限 720 占版面太大,压到 0.32 / 500:1728pt 宽的窗口里
+    /// hero 总高约 570,首屏能露出「我的媒体」和「继续观看」两行。清晰图跟着变窄
+    /// (宽 = 高 × 16:9),左边多出来的由模糊底图接住,不影响比例
+    static let homeHeroHeightRatio: CGFloat = 0.32
+    static let homeHeroMinHeight: CGFloat = 300
+    static let homeHeroMaxHeight: CGFloat = 500
     /// 背景图请求的宽度档位(像素;Emby 按它缩放,必带,API_CONTRACT.md 3.3)
     static let homeHeroImageMaxWidth: CGFloat = 1920
-    /// 文字区距 hero 底边的距离(占 hero 高的比例):要落在底部渐变开始之上
-    static let homeHeroInfoBottomFraction: CGFloat = 0.2
-    /// 底部渐变(到窗口底色)从 hero 高度的这个位置开始
-    static let homeHeroBottomFadeStart: Double = 0.8
+    /// backdrop 的标准宽高比(Emby / TMDB 的背景图都是 16:9)。清晰的那张按图片区高度
+    /// **完整**摆放、靠右,宽度 = 高 × 这个比例,⛔ 不铺满整宽:1280×720 的图铺到 1728pt 宽
+    /// 要放大 1.35 倍、上下裁掉四分之一,看着就是「被放大、只看到一部分」(2026-10-15 实测像素)
+    static let homeHeroImageAspect: CGFloat = 16.0 / 9.0
+    /// 清晰图左边剩下的地方,由**同一张图**整宽铺满后重度模糊填上(同一 spec,命中缓存,不多发请求)。
+    /// ⛔ 别调轻:铺的是整张图放大后的样子,模糊一轻就看得出和右边是同一批人物
+    /// (2026-10-15 试过 28 / 14,以及镜像、拉伸边缘两种接边,用户决定退回 60)
+    static let homeHeroAmbientBlur: CGFloat = 60
+    /// 图片区下方的过渡带:模糊底图在这里柔和地渐变到窗口底色,货架从它下面接上。
+    /// ⛔ 不在图片区底边硬切成白色(太生硬),也 ⛔ 不让清晰图直接线性淡出成白雾(第一版的问题)
+    static let homeHeroFadeBand: CGFloat = 72
     /// 左侧文字区压暗:最左端黑色的不透明度
-    static let homeHeroSideScrimOpacity: Double = 0.6
+    static let homeHeroSideScrimOpacity: Double = 0.55
     /// 左侧压暗渐变到透明的位置(占宽度的比例)
-    static let homeHeroSideScrimEnd: Double = 0.7
-    /// Logo 的最大尺寸
-    static let homeHeroLogoMaxWidth: CGFloat = 360
-    static let homeHeroLogoMaxHeight: CGFloat = 120
+    static let homeHeroSideScrimEnd: Double = 0.6
+    /// 标题左边那张竖版小封面的宽度(2:3)。与海报卡片同宽,图片档位相同 → 直接命中卡片的图片缓存
+    static let homeHeroPosterWidth: CGFloat = posterMinWidth
+    /// 简介的最大宽度(两行)
+    static let homeHeroOverviewMaxWidth: CGFloat = 560
+    /// Logo 的最大尺寸。Logo 只是装饰(文字标题始终在它下面,`HomeHero.titleView`),
+    /// 所以比单独当标题时小一号
+    static let homeHeroLogoMaxWidth: CGFloat = 280
+    static let homeHeroLogoMaxHeight: CGFloat = 72
     /// 续播进度条宽度
     static let homeHeroProgressWidth: CGFloat = 220
+    /// backdrop 取不到时,模糊海报底图的模糊半径。比详情页的 `heroBackdropBlur` 重得多:
+    /// 一张 300 宽的竖图被拉到整窗宽,轻模糊下看得出放大的五官(2026-10-15 截图),
+    /// 这里只要它当「色调」,清晰的那张由小封面负责
+    static let homeHeroFallbackBlur: CGFloat = 80
     /// 轮播分页圆点的直径(`HomeHeroCarousel`)。比系统 `PageControl` 的小一号,
     /// 它压在图上、只是位置提示,不该抢文字区的注意力
     static let heroDotSize: CGFloat = 7

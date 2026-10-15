@@ -10,6 +10,11 @@ import SwiftUI
 /// 换图不改动任何布局。所以只剩图片请求这一条代价,靠「只轮几张 + 提前预取
 /// 下一张的背景图」把它按住。⛔ 旧理由不再成立,别照抄回去。
 ///
+/// **背景图取不到的项会被跳过**:列表里有 backdrop tag 不等于真取得到(有的服务器回填的是
+/// `Primary` 的 tag,请求直接 404,`EmbyItem.coverImageFallback`)。`HomeHero` 回报失败后
+/// 这一项从轮播里拿掉 —— 否则那一页只剩一张被拉满整宽的模糊海报。全部失败时保留原列表,
+/// 用 `HomeHero` 的模糊底图 + 小封面兜着,不让 hero 整块消失。
+///
 /// 一张时自动退化成静默的单张(推荐拿不到、退回「继续观看 / 各库最新」那张):
 /// 不给箭头也不给圆点 —— 只有一个点的分页控件纯属噪音。
 ///
@@ -22,6 +27,8 @@ struct HomeHeroCarousel: View {
     let serverID: UUID
     let store: PosterImageStore
     let onPlay: (EmbyItem) -> Void
+    /// 正在定位分集的剧集 id(`HomeViewModel.resolvingSeriesID`),对应那一项的按钮转圈
+    var resolvingItemID: String?
     let onOpenDetail: (EmbyItem) -> Void
 
     /// 自动切换间隔。不是设计 token,与布局无关;8 秒是 Emby Web hero 与
@@ -29,25 +36,35 @@ struct HomeHeroCarousel: View {
     static let interval: Duration = .seconds(8)
 
     @State private var index = 0
+    /// 背景图试过且没拿到的项(见类型注释)
+    @State private var backdropUnavailable: Set<String> = []
     /// 指针在 hero 上(暂停自动切换,见类型注释)
     @State private var isHovering = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
 
-    private var canRotate: Bool { items.count > 1 }
+    /// 实际参与轮播的项:去掉背景图取不到的;全去掉了就退回原列表
+    private var shownItems: [EmbyItem] {
+        let usable = items.filter { !backdropUnavailable.contains($0.id) }
+        return usable.isEmpty ? items : usable
+    }
+
+    private var canRotate: Bool { shownItems.count > 1 }
 
     var body: some View {
         ZStack {
             // 同时只挂当前这一项:其余项不进视图树,它们的背景图也就不会被请求
-            ForEach(Array(items.enumerated()), id: \.element.id) { offset, item in
-                if offset == index {
+            ForEach(Array(shownItems.enumerated()), id: \.element.id) { offset, item in
+                if offset == min(index, shownItems.count - 1) {
                     HomeHero(
                         item: item,
                         serverID: serverID,
                         store: store,
                         onPlay: { onPlay(item) },
-                        onOpenDetail: { onOpenDetail(item) }
+                        isResolvingPlayback: resolvingItemID == item.id,
+                        onOpenDetail: { onOpenDetail(item) },
+                        onBackdropUnavailable: { backdropUnavailable.insert(item.id) }
                     )
                     // 换了一项就整块重建:Logo 取不到的标记不能带到下一项上
                     .id(item.id)
@@ -58,6 +75,9 @@ struct HomeHeroCarousel: View {
         .animation(.easeInOut(duration: Metrics.animationSlow), value: index)
         .overlay(alignment: .trailing) { arrows }
         .overlay(alignment: .bottomTrailing) { dots }
+        .onChange(of: shownItems.count) { _, count in
+            if index >= count { index = 0 }
+        }
         .onHover { isHovering = $0 }
         .onChange(of: index) { _, new in prefetchBackdrop(after: new) }
         .task(id: autoAdvanceToken) { await autoAdvance() }
@@ -77,6 +97,8 @@ struct HomeHeroCarousel: View {
                 arrowButton("chevron.right", label: "下一张推荐") { step(1) }
             }
             .padding(.trailing, Metrics.spacingXL)
+            // 在图片区里垂直居中,不算下面的过渡带
+            .padding(.bottom, Metrics.homeHeroFadeBand)
             .environment(\.colorScheme, .dark)
         }
     }
@@ -91,21 +113,18 @@ struct HomeHeroCarousel: View {
         .accessibilityLabel(label)
     }
 
-    /// 分页圆点,贴右下角。
-    ///
-    /// 用**自适应**的 `Color.primary`(不是强制白色的箭头那套):这一带已经在
-    /// `homeHeroBottomFadeStart` 之后的底部渐变里,几乎就是窗口底色,所以要跟着
-    /// 窗口深浅色走 —— 白色圆点压在浅色底上等于看不见。
+    /// 分页圆点,贴图片区右下角(过渡带之上)。压在照片上,所以和箭头一样强制白色;
+    /// ⛔ 别挪进过渡带 —— 那里浅色模式下渐变成白色,白点看不见。
     @ViewBuilder
     private var dots: some View {
         if canRotate {
             HStack(spacing: Metrics.spacingS) {
-                ForEach(items.indices, id: \.self) { offset in
+                ForEach(shownItems.indices, id: \.self) { offset in
                     Button {
                         index = offset
                     } label: {
                         Circle()
-                            .fill(Color.primary.opacity(offset == index ? 1 : 0.3))
+                            .fill(Color.white.opacity(offset == index ? 1 : 0.35))
                             .frame(width: Metrics.heroDotSize, height: Metrics.heroDotSize)
                     }
                     .buttonStyle(.plain)
@@ -114,7 +133,7 @@ struct HomeHeroCarousel: View {
                 }
             }
             .padding(.trailing, Metrics.spacingXL)
-            .padding(.bottom, Metrics.spacingL)
+            .padding(.bottom, Metrics.homeHeroFadeBand + Metrics.spacingM)
         }
     }
 
@@ -144,7 +163,7 @@ struct HomeHeroCarousel: View {
     /// 自动切换的开关组合。`.task(id:)` 据此重建任务:
     /// 「减弱动态效果」打开 / 指针进入 / 窗口失去 key 都会让它立刻停下来。
     private var autoAdvanceToken: String {
-        "\(items.count)|\(reduceMotion)|\(isHovering)|\(isWindowActive)"
+        "\(shownItems.count)|\(reduceMotion)|\(isHovering)|\(isWindowActive)"
     }
 
     private var isWindowActive: Bool {
@@ -156,7 +175,7 @@ struct HomeHeroCarousel: View {
 
     private var canAutoAdvance: Bool {
         Self.shouldAutoAdvance(
-            itemCount: items.count,
+            itemCount: shownItems.count,
             reduceMotion: reduceMotion,
             isHovering: isHovering,
             isWindowActive: isWindowActive
@@ -176,7 +195,7 @@ struct HomeHeroCarousel: View {
 
     private func step(_ delta: Int) {
         guard canRotate else { return }
-        index = Self.wrap(index, by: delta, count: items.count)
+        index = Self.wrap(index, by: delta, count: shownItems.count)
     }
 
     /// 提前把**下一张的背景图**拉进缓存,换过去时不白屏。
@@ -188,6 +207,7 @@ struct HomeHeroCarousel: View {
     /// 结果不关心:预取失败就退化成「换过去时现拉」,与完全没预取一样,
     /// 而 `PosterImage` 本来就会在失败时停在模糊底图上(不弹窗、不重试风暴)。
     private func prefetchBackdrop(after index: Int) {
+        let items = shownItems
         guard canRotate, items.indices.contains(index),
               let source = items[(index + 1) % items.count].backdropSource else { return }
         let spec = ImageSpec(

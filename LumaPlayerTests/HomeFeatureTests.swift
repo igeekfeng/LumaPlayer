@@ -83,6 +83,8 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(queryValue(pick.url, "IncludeItemTypes"), "Movie,Series")
         XCTAssertEqual(queryValue(pick.url, "SortBy"), "Random")
         XCTAssertEqual(queryValue(pick.url, "Filters"), "IsUnplayed")
+        // hero 要显示简介与类型,列表接口默认不给,必须显式要
+        XCTAssertEqual(queryValue(pick.url, "Fields"), "Overview,Genres")
         XCTAssertEqual(queryValue(pick.url, "Limit"), String(HomeViewModel.recommendationPoolLimit))
         XCTAssertNil(queryValue(pick.url, "ParentId"))
     }

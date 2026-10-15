@@ -111,6 +111,10 @@ final class HomeViewModel {
     private(set) var updatingResumeIDs: Set<String> = []
     /// 「移出继续观看」失败的提示(写操作失败必须让用户知道,不能静默回滚)
     var resumeActionError: String?
+    /// hero 上剧集「播放」定位分集失败时的提示(`playSeries`)
+    var seriesPlayError: String?
+    /// 正在为哪部剧定位分集(hero 的播放按钮据此转圈、防连点)
+    private(set) var resolvingSeriesID: String?
 
     private var generation = 0
     private var tasks: [Task<Void, Never>] = []
@@ -280,6 +284,39 @@ final class HomeViewModel {
                 guard let self, myGeneration == self.generation else { return }
                 resume.replace(with: snapshot)
                 self.resumeActionError = "移出继续观看失败,请稍后重试。"
+            }
+        })
+    }
+
+    /// hero 上剧集的「播放」:定位该播的那一集(规则见 `ServerConnection.seriesPlaybackEpisode`),
+    /// 定位到了交给 `onResolved` 起播。
+    ///
+    /// 失败照实提示(硬规则:不静默吞错),⛔ 不退回去随便播一集;剧里没有分集也明说。
+    /// 定位期间同一部剧不重复发起(按钮转圈,连点无效)。
+    func playSeries(_ series: EmbyItem, server: ServerProfile, onResolved: @escaping @MainActor (EmbyItem) -> Void) {
+        guard resolvingSeriesID == nil else { return }
+        resolvingSeriesID = series.id
+        let myGeneration = generation
+        let connection = container.connection(for: server)
+        tasks.append(Task { [weak self] in
+            defer {
+                if let self, self.resolvingSeriesID == series.id { self.resolvingSeriesID = nil }
+            }
+            do {
+                let episode = try await connection.seriesPlaybackEpisode(seriesID: series.id)
+                guard let self, myGeneration == self.generation else { return }
+                if let episode {
+                    onResolved(episode)
+                } else {
+                    self.seriesPlayError = "「\(series.name)」还没有可播放的分集。"
+                }
+            } catch let error as EmbyAPIError {
+                guard let self, myGeneration == self.generation, error != .cancelled else { return }
+                if error == .unauthorized { self.container.state.serverNeedingLogin = server }
+                self.seriesPlayError = "找不到要播放的分集:\(error.userMessage)"
+            } catch {
+                guard let self, myGeneration == self.generation else { return }
+                self.seriesPlayError = "找不到要播放的分集,请稍后重试。"
             }
         })
     }

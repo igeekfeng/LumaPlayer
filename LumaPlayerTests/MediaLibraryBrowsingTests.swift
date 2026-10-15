@@ -229,6 +229,70 @@ final class MediaLibraryBrowsingTests: XCTestCase {
         XCTAssertEqual(queryValue(request.url, "Filters"), "IsResumable")
     }
 
+    // MARK: - hero 剧集「播放」(`seriesPlaybackEpisode`)
+
+    /// 看过(NextUp 有结果)就播那一集,不去拉季 / 分集
+    func testSeriesPlaybackEpisodeUsesFocusEpisodeWhenWatched() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_resumable_episode_synthetic.json")),
+            path: "/emby/Shows/NextUp"
+        )
+        let connection = try await makeConnection()
+
+        let episode = try await connection.seriesPlaybackEpisode(seriesID: "SERIES-1")
+
+        XCTAssertEqual(episode?.id, "00000000-0000-0000-0000-000000000202")
+        XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Seasons"))
+    }
+
+    /// 没看过(NextUp、可续播都为空)就播第一季的第一集
+    func testSeriesPlaybackEpisodeFallsBackToFirstEpisodeOfFirstSeason() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_empty_synthetic.json")),
+            path: "/emby/Shows/NextUp"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_empty_synthetic.json")),
+            path: "/emby/Users/\(Self.userID)/Items"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_seasons_synthetic.json")),
+            path: "/emby/Shows/SERIES-1/Seasons"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_episodes_synthetic.json")),
+            path: "/emby/Shows/SERIES-1/Episodes"
+        )
+        let connection = try await makeConnection()
+
+        let episode = try await connection.seriesPlaybackEpisode(seriesID: "SERIES-1")
+
+        XCTAssertEqual(episode?.id, "00000000-0000-0000-0000-000000000201")
+        let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Episodes"))
+        XCTAssertEqual(queryValue(request.url, "SeasonId"), "00000000-0000-0000-0000-000000000210")
+    }
+
+    /// 一季都没有:返回 nil(调用方提示「没有可播放的分集」),不编一集出来
+    func testSeriesPlaybackEpisodeReturnsNilWithoutSeasons() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_empty_synthetic.json")),
+            path: "/emby/Shows/NextUp"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_empty_synthetic.json")),
+            path: "/emby/Users/\(Self.userID)/Items"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_empty_synthetic.json")),
+            path: "/emby/Shows/SERIES-1/Seasons"
+        )
+        let connection = try await makeConnection()
+
+        let episode = try await connection.seriesPlaybackEpisode(seriesID: "SERIES-1")
+
+        XCTAssertNil(episode)
+    }
+
     func testResumableEpisodeReturnsNilWhenNothingResumable() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_empty_synthetic.json")),
