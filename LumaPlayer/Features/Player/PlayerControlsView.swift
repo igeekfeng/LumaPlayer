@@ -32,6 +32,8 @@ struct PlayerControlsView: View {
     @Binding var isEpisodePanelPresented: Bool
     /// 手动片头片尾输入面板是否打开:同上,面板开着期间也要钉住控制栏
     @Binding var isMarkersEditorPresented: Bool
+    /// 手动选择弹幕的面板是否打开:同上
+    @Binding var isDanmakuPickerPresented: Bool
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
@@ -42,6 +44,7 @@ struct PlayerControlsView: View {
                 Spacer(minLength: Metrics.spacingL)
                 PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
                 PlayerSubtitleMenu(viewModel: viewModel)
+                PlayerDanmakuMenu(viewModel: viewModel, isPickerPresented: $isDanmakuPickerPresented)
                 PlayerAudioMenu(viewModel: viewModel)
                 PlayerOptionsMenu(
                     viewModel: viewModel,

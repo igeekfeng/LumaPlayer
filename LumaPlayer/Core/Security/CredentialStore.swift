@@ -240,4 +240,27 @@ actor CredentialStore {
     func deleteTMDBReadAccessToken() async throws {
         try await storage.removeValue(forAccount: Self.tmdbReadAccessTokenAccount)
     }
+
+    // MARK: - 弹弹play 弹幕(docs/DANDANPLAY_API.md §1)
+
+    /// AppId + AppSecret,整体一个 JSON(理由同 `BaiduPanAppConfiguration`:
+    /// 分开存会留下「有 AppId 没 Secret」的半截配置)。全 App 一份,不按来源分。
+    /// ⚠️ AppSecret 只用来本地算签名,⛔ 不作为请求头发出去(见 `DandanplayClient`)。
+    private static let dandanplayCredentialsAccount = "dandanplay-app-credentials"
+
+    func dandanplayCredentials() async throws -> DandanplayCredentials? {
+        guard let data = try await storage.value(forAccount: Self.dandanplayCredentialsAccount) else {
+            return nil
+        }
+        return try JSONDecoder().decode(DandanplayCredentials.self, from: data)
+    }
+
+    func saveDandanplayCredentials(_ credentials: DandanplayCredentials) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(credentials), forAccount: Self.dandanplayCredentialsAccount)
+    }
+
+    func deleteDandanplayCredentials() async throws {
+        try await storage.removeValue(forAccount: Self.dandanplayCredentialsAccount)
+    }
 }

@@ -7,6 +7,8 @@ enum SettingsTab: String {
     case general
     case playback
     case subtitles
+    /// 弹幕:弹弹play 凭据 + 外观
+    case danmaku
     case servers
     /// 被隐藏的条目(只在本机隐藏的那些,可恢复)
     case hidden
@@ -14,11 +16,12 @@ enum SettingsTab: String {
     static let storageKey = "settings.selectedTab"
 }
 
-/// 设置窗口(⌘,)。五个标签页:
+/// 设置窗口(⌘,)。六个标签页:
 ///
 /// - **通用**:网络(自定义 User-Agent);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
+/// - **弹幕**:弹弹play 的 AppId / AppSecret 与弹幕外观(`DanmakuSettingsView`);
 /// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`);
 /// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复。
 ///
@@ -40,6 +43,9 @@ struct AppSettingsView: View {
             SubtitleSettingsView(store: container.subtitleStyles)
                 .tabItem { Label("字幕", systemImage: "captions.bubble") }
                 .tag(SettingsTab.subtitles)
+            DanmakuSettingsView(credentials: container.credentials, store: container.danmakuSettings)
+                .tabItem { Label("弹幕", systemImage: "text.bubble") }
+                .tag(SettingsTab.danmaku)
             ServerListView(container: container)
                 .tabItem { Label("来源", systemImage: "rectangle.stack.badge.plus") }
                 .tag(SettingsTab.servers)
@@ -273,7 +279,7 @@ private struct PlaybackSettingsView: View {
 }
 
 /// 设置页的数值滑杆:标题在左,滑块与等宽数值在右(数值宽度固定,不随位数跳动)。
-private struct SettingsValueSlider: View {
+struct SettingsValueSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>

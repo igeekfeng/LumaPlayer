@@ -25,6 +25,7 @@ extension FocusedValues {
 /// | 上一集 / 下一集 | ⌘← / ⌘→ |
 /// | 跳过片头(只在片头区间内生效) | S |
 /// | 统计信息 | I |
+/// | 显示 / 隐藏弹幕 | D |
 /// | 窗口置顶 | ⌥⌘T |
 /// | 全屏 | F,或双击画面 |
 /// | 退出全屏 | Esc |
@@ -124,11 +125,17 @@ struct PlayerCommands: Commands {
                 set: { _ in player.toggleStatistics() }
             ))
             .keyboardShortcut("i", modifiers: [])
+            Toggle("Show Danmaku", isOn: Binding(
+                get: { player.danmaku.isVisible },
+                set: { player.danmaku.setVisible($0) }
+            ))
+            .keyboardShortcut("d", modifiers: [])
         } else {
             Toggle("Skip Intro Automatically", isOn: .constant(false)).disabled(true)
             Toggle("Play Next Episode Automatically", isOn: .constant(false)).disabled(true)
             Toggle("Float on Top", isOn: .constant(false)).disabled(true)
             Toggle("Show Statistics", isOn: .constant(false)).disabled(true)
+            Toggle("Show Danmaku", isOn: .constant(false)).disabled(true)
         }
     }
 

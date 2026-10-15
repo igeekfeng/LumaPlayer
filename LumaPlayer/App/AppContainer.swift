@@ -37,6 +37,12 @@ final class AppContainer {
     /// 与字幕外观同样的理由必须是同一个实例 —— 设置里改了步长 / 默认倍速,
     /// 下一次起播就要用上。
     let preferences: PlaybackPreferences
+    /// 弹幕外观偏好(`DanmakuSettingsStore`,UserDefaults)。理由同 `subtitleStyles`:
+    /// 设置窗口与播放窗口必须共用同一个实例。
+    let danmakuSettings: DanmakuSettingsStore
+    /// 弹幕编排(弹弹play)。**全 App 一份**:它带作品剧集列表的进程内记忆,
+    /// 绑定库 / 弹幕缓存也只该有一个写入方。凭据在用时向 `credentials` 取 —— 设置页刚填就生效。
+    let danmaku: DanmakuService
     /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话
     private let session: URLSession
 
@@ -47,7 +53,8 @@ final class AppContainer {
         preferences: UserDefaults = .standard,
         watchProgress: WatchProgressStore? = nil,
         hiddenItems: HiddenItemsStore? = nil,
-        manualMarkers: ManualMarkersStore? = nil
+        manualMarkers: ManualMarkersStore? = nil,
+        danmaku: DanmakuService? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
@@ -60,6 +67,11 @@ final class AppContainer {
             ?? HiddenItemsStore(fileURL: HiddenItemsStore.defaultFileURL)
         self.manualMarkers = manualMarkers
             ?? ManualMarkersStore(fileURL: ManualMarkersStore.defaultFileURL)
+        self.danmakuSettings = DanmakuSettingsStore(defaults: preferences)
+        self.danmaku = danmaku ?? DanmakuService(
+            credentials: credentials,
+            bindings: DanmakuBindingStore(fileURL: DanmakuBindingStore.defaultFileURL),
+            cache: DanmakuCommentCache(directory: DanmakuCommentCache.defaultDirectory))
     }
 
     /// 生产组装:沙盒容器里的凭据文件 + UserDefaults(.standard)。

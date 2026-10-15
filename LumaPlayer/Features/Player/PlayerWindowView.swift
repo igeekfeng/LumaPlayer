@@ -61,6 +61,8 @@ struct PlayerWindowView: View {
     @State private var isEpisodePanelPresented = false
     /// 手动片头片尾输入面板打开中:同理,面板开着期间钉住控制栏
     @State private var isMarkersEditorPresented = false
+    /// 手动选择弹幕的面板打开中:同理钉住控制栏
+    @State private var isDanmakuPickerPresented = false
     /// 正在显示的屏显提示(比 `viewModel.osd` 晚一拍清空)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -85,6 +87,15 @@ struct PlayerWindowView: View {
             ForEach(videoLayers) { layer in
                 MPVView(player: layer.player)
             }
+            // 弹幕在视频之上、所有控件之下,⛔ 不吃点击(单击 / 双击画面要落到 interactionLayer)
+            DanmakuOverlayView(
+                controller: viewModel.danmaku,
+                settings: container.danmakuSettings.settings,
+                positionSeconds: viewModel.positionSeconds,
+                isPaused: viewModel.isPaused || viewModel.isBuffering,
+                speed: viewModel.speed)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
             interactionLayer
             overlay
         }
@@ -164,6 +175,12 @@ struct PlayerWindowView: View {
             // 选集抽屉同理:开着的时候控制栏不能自己收走
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
+        .onChange(of: isDanmakuPickerPresented) { _, presented in
+            if presented { revealControls(autoHide: false) } else { revealControls() }
+        }
+        .sheet(isPresented: $isDanmakuPickerPresented) {
+            DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
+        }
         .sheet(isPresented: $isMarkersEditorPresented) {
             // 手动片头片尾:表单在窗口上呈现(sheet 比 popover 稳,菜单点开就收起来了)
             PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
@@ -207,6 +224,7 @@ struct PlayerWindowView: View {
             return .handled
         }
         .onKeyPress("i") { viewModel.toggleStatistics(); return .handled }
+        .onKeyPress("d") { viewModel.danmaku.setVisible(!viewModel.danmaku.isVisible); return .handled }
         // 字幕延迟:Z 提前 / X 延后,⇧ 为大步长。按 characters 匹配,⇧ 时收到的是大写
         .onKeyPress(characters: CharacterSet(charactersIn: "zxZX"), phases: [.down, .repeat]) { press in
             guard viewModel.canAdjustSubtitleDelay else { return .ignored }
@@ -392,7 +410,8 @@ struct PlayerWindowView: View {
             viewModel: viewModel,
             isSpeedPopoverPresented: $isSpeedPopoverPresented,
             isEpisodePanelPresented: $isEpisodePanelPresented,
-            isMarkersEditorPresented: $isMarkersEditorPresented
+            isMarkersEditorPresented: $isMarkersEditorPresented,
+            isDanmakuPickerPresented: $isDanmakuPickerPresented
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -467,6 +486,7 @@ struct PlayerWindowView: View {
             && !isSpeedPopoverPresented
             && !isEpisodePanelPresented
             && !isMarkersEditorPresented
+            && !isDanmakuPickerPresented
             && viewModel.scrubPreviewSeconds == nil
     }
 

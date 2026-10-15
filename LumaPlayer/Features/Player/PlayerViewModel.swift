@@ -322,6 +322,10 @@ final class PlayerViewModel {
         // 显示器休眠断言:App 里用真的 IOKit 断言,单测注入替身
         // (与 reporter 同一个理由:被测逻辑不该依赖系统资源的可用性)。
         self.displaySleep = displaySleep ?? DisplaySleepAssertion()
+        self.danmaku = DanmakuController(
+            query: DanmakuMediaQuery.make(for: request.source),
+            service: container.danmaku,
+            enabledByDefault: container.danmakuSettings.settings.isEnabled)
         // 起播位置。
         // - Emby:进度就在响应里(`UserData.PlaybackPositionTicks`),同步可算 ——
         //   保持既有行为(UI 与测试都依赖 init 后 `resumeStartSeconds` 就是对的)。
@@ -397,6 +401,9 @@ final class PlayerViewModel {
 
     private var nextEpisodeTask: Task<Void, Never>?
 
+    /// 这一集的弹幕(`docs/DANMAKU.md`)。每集一份,换集随 ViewModel 一起换新。
+    let danmaku: DanmakuController
+
     // MARK: - 生命周期
 
     func start() {
@@ -417,6 +424,12 @@ final class PlayerViewModel {
         if nextEpisodeTask == nil, episodeQueue == nil, item?.kind == .episode {
             nextEpisodeTask = Task { [weak self] in await self?.loadEpisodeQueue() }
         }
+        // 弹幕同样与播放本身无关,只在第一次 start() 发起(`startIfNeeded` 自己判重)
+        danmaku.durationProvider = { [weak self] in
+            guard let duration = self?.durationSeconds, duration > 0 else { return nil }
+            return duration
+        }
+        danmaku.startIfNeeded()
     }
 
     /// 起播位置:Emby 读服务端 `UserData`,百度读本地续播库 —— 由组合根按来源给
