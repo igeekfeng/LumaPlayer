@@ -36,7 +36,11 @@ struct SearchView: View {
         VStack(spacing: 0) {
             PageHeader(title: title)
             results
+                // 空态 / 引导页(`ContentUnavailableView`)在 macOS 上不吃满剩余高度:
+                // 不撑开的话整页按内容高度排、被窗口垂直居中,顶栏跟着掉到窗口中间
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧结果做操作
         .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(title)
