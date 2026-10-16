@@ -2,7 +2,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2027%2B%20%7C%20arm64-lightgrey)
 ![Swift](https://img.shields.io/badge/Swift-6-orange)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Signing](https://img.shields.io/badge/signing-ad--hoc%20%7C%20not%20notarized-yellow)
 
 macOS 原生 Emby 客户端。SwiftUI 写界面，自编 libmpv（gpu-next）负责解码播放，直接对接你自己（或朋友的）Emby 服务器；百度网盘也可以作为播放来源接入。
@@ -145,6 +145,9 @@ Scripts/          构建、打包、部署、隐私自检脚本
 - **弹弹play 开放平台** —— 弹幕数据来源
 - **TMDB** —— 剧集数据来源
 - **Emby**
+
 ## 许可证
 
-[MIT](LICENSE)
+本项目以 [GPL-3.0](LICENSE) 发布。Copyright (C) 2026 LumaPlayer contributors。
+
+之所以不是 MIT 之类的宽松许可：播放内核 **libmpv**、以及随 App 一起打包进 `Contents/Frameworks/` 的 **FFmpeg 系列动态库**，都是 **GPL 构建**（见 `Scripts/build-libmpv.sh` 中的 `-Dgpl=true`，以及该脚本复用 Homebrew ffmpeg 的说明）。链接 GPL 库意味着整个作品要跟着 GPL 走，因此本项目的分发条款必须与之一致。

@@ -288,7 +288,7 @@
 				INFOPLIST_FILE = LumaPlayer/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumaPlayer;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 LumaPlayer contributors";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -323,7 +323,7 @@
 				INFOPLIST_FILE = LumaPlayer/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumaPlayer;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 LumaPlayer contributors";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
