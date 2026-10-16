@@ -172,8 +172,3 @@ X-Emby-Token: {accessToken}
 - 不在 `UserDefaults`、日志、诊断文件里存 token / 密码;日志与错误消息经 `SecretRedactor`(脱敏 `api_key`、token、`Authorization`、`Pw`)。
 - 错误消息可含 host 与状态码,⛔ 不含完整带认证参数的 URL。
 - 默认 HTTPS;局域网 http 回退的服务器在 UI 标「未加密连接」;⛔ 不实现「接受任意证书」。
-
-### 非目标
-
-下载 / 离线;直播、音乐、有声书;投屏(Chromecast / DLNA);客户端自己转码;局域网自动发现服务器;
-为每个 Emby 版本写独立分支;没在真实服务器验证就承诺「所有 Emby 实例兼容」。

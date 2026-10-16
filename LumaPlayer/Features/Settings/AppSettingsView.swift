@@ -18,7 +18,7 @@ enum SettingsTab: String {
 
 /// 设置窗口(⌘,)。六个标签页:
 ///
-/// - **通用**:网络(自定义 User-Agent);
+/// - **通用**:网络(自定义 User-Agent)+ 首页顶部推荐开关 + 元数据刮削(TMDB token);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
 /// - **弹幕**:弹弹play 的 AppId / AppSecret 与弹幕外观(`DanmakuSettingsView`);
@@ -34,7 +34,10 @@ struct AppSettingsView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            GeneralSettingsView(credentials: container.credentials)
+            GeneralSettingsView(
+                credentials: container.credentials,
+                homeAppearance: container.homeAppearance
+            )
                 .tabItem { Label("通用", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
             PlaybackSettingsView(preferences: container.preferences)
@@ -57,9 +60,10 @@ struct AppSettingsView: View {
     }
 }
 
-/// 通用:网络(自定义 User-Agent)+ 元数据刮削(TMDB token)。
+/// 通用:网络(自定义 User-Agent)+ 首页 + 元数据刮削(TMDB token)。
 private struct GeneralSettingsView: View {
     let credentials: CredentialStore
+    let homeAppearance: HomeAppearancePreferences
 
     @AppStorage(ClientUserAgent.customKey) private var customUserAgent = ""
 
@@ -78,10 +82,31 @@ private struct GeneralSettingsView: View {
                 Text("部分服务器只放行白名单播放器,按 User-Agent 拒绝其余客户端拉流(表现为能登录浏览、播放报无法识别的文件格式)。填写后对所有服务器的请求与播放生效,改完立即生效。请只在确有需要时使用,并自行承担服务器方的处置风险。")
             }
 
+            HomeAppearanceSection(preferences: homeAppearance)
+
             MetadataScrapeSettingsView(credentials: credentials)
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// 首页:顶部那一大块随机推荐。
+///
+/// 关掉是**整块 hero 不显示**(首页直接从「我的媒体」开始),⛔ 不是退回去显示
+/// 「继续观看 / 各库最新」那一张 —— 那是请求**失败**时的容错,不是用户的选择。
+/// 关掉时也顺带不发那个推荐请求。
+private struct HomeAppearanceSection: View {
+    @Bindable var preferences: HomeAppearancePreferences
+
+    var body: some View {
+        Section {
+            Toggle("显示首页推荐", isOn: $preferences.showsHeroRecommendations)
+        } header: {
+            Text("首页")
+        } footer: {
+            Text("首页顶部轮播的随机推荐(每次给不同的一批没看过的内容)。关掉后首页顶部不显示这一块,也不再请求推荐数据;「我的媒体」「继续观看」和各媒体库的「最新」不受影响。对所有服务器生效,改完回到首页立即生效。")
+        }
     }
 }
 

@@ -5,7 +5,7 @@ import Foundation
 // 公开信息端点探测(`/emby` 前缀判定)在 `ServerConnection.probeServer`。
 //
 // 注意:本文件名 ServerDiscovery 指的是「手动添加服务器时的地址处理」,
-// 不包含局域网自动发现(UDP 7359 属非目标,CLAUDE.md「非目标」)。
+// 不包含局域网自动发现(UDP 7359 属非目标,清单见 README.md「已知限制」)。
 
 /// `normalizeServerURL` 的返回值。
 ///

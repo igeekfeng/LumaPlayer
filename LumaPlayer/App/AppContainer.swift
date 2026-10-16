@@ -37,6 +37,9 @@ final class AppContainer {
     /// 与字幕外观同样的理由必须是同一个实例 —— 设置里改了步长 / 默认倍速,
     /// 下一次起播就要用上。
     let preferences: PlaybackPreferences
+    /// 首页外观偏好(`HomeAppearancePreferences`,UserDefaults):要不要显示顶部 hero 推荐。
+    /// 设置窗口改、首页读,必须是同一个实例,改完回到首页立即生效。
+    let homeAppearance: HomeAppearancePreferences
     /// 弹幕外观偏好(`DanmakuSettingsStore`,UserDefaults)。理由同 `subtitleStyles`:
     /// 设置窗口与播放窗口必须共用同一个实例。
     let danmakuSettings: DanmakuSettingsStore
@@ -61,6 +64,7 @@ final class AppContainer {
         self.session = session
         self.subtitleStyles = SubtitleStyleStore(defaults: preferences)
         self.preferences = PlaybackPreferences(defaults: preferences)
+        self.homeAppearance = HomeAppearancePreferences(defaults: preferences)
         self.watchProgress = watchProgress
             ?? WatchProgressStore(fileURL: WatchProgressStore.defaultFileURL)
         self.hiddenItems = hiddenItems

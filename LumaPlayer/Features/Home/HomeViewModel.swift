@@ -30,7 +30,7 @@ final class HomeViewModel {
     static let heroCarouselLimit = 5
 
     /// 首页为之显示「最新」的媒体库类型。音乐 / 有声书 / 直播不在首版范围内
-    /// (CLAUDE.md「非目标」),`CollectionType` 为 null 的混合库照常显示。
+    /// (非目标清单见 README.md「已知限制」),`CollectionType` 为 null 的混合库照常显示。
     static let latestCollectionTypes: Set<String?> = [nil, "movies", "tvshows", "homevideos", "musicvideos", "mixed"]
 
     /// 「最新」同时最多在途几个请求。媒体库 20+ 的服务器上,一次刷新不该把
@@ -155,12 +155,10 @@ final class HomeViewModel {
         let sections = self.sections(for: server.id)
         sections.views.markLoading()
         sections.resume.markLoading()
-        sections.recommended.markLoading()
 
         let connection = container.connection(for: server)
         // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
         let limit = Self.sectionLimit
-        let poolLimit = Self.recommendationPoolLimit
         track { try await connection.userViews() } apply: { [weak self] new in
             guard let self else { return }
             sections.views.receive(new)
@@ -170,9 +168,48 @@ final class HomeViewModel {
         track { try await connection.resume(limit: limit).items } apply: { new in
             sections.resume.receive(new)
         }
-        track { try await connection.recommendations(limit: poolLimit) } apply: { new in
+        if container.homeAppearance.showsHeroRecommendations {
+            loadRecommendations(sections: sections, connection: connection)
+        } else {
+            // 关掉了就不发这个请求。行置空,下次打开开关时从干净状态开始
+            // (hero 本身另由 `heroPick` 短路成 `.none`)
+            sections.recommended.replace(with: .loaded([]))
+        }
+    }
+
+    /// 首页顶部的随机推荐池(`SortBy=Random`,`ServerConnection.recommendations`)。
+    ///
+    /// 调用方**只在开关打开时**调这里 —— 关掉时不发这个请求(少一次往返,
+    /// 也少一批 1920 宽的背景图),由 `load` / `recommendationsPreferenceChanged` 判断。
+    private func loadRecommendations(sections: Sections, connection: ServerConnection) {
+        sections.recommended.markLoading()
+        // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
+        let poolLimit = Self.recommendationPoolLimit
+        track { try await connection.recommendations(limit: poolLimit) } apply: { [weak self] new in
+            // 请求在途时用户把开关关了:结果丢弃。hero 反正不画,留着只会让下次
+            // 打开开关时露出上一批已经过时的内容
+            guard let self, self.container.homeAppearance.showsHeroRecommendations else { return }
             sections.recommended.receive(new)
         }
+    }
+
+    /// 首页顶部推荐的开关变了(设置 → 通用 →「显示首页推荐」)。只动推荐这一路,
+    /// ⛔ 不重新加载媒体库列表、继续观看与各「最新」—— 用户改的是一个显示开关,
+    /// 不是要刷新整页。
+    func recommendationsPreferenceChanged(server: ServerProfile) {
+        let sections = self.sections(for: server.id)
+        guard container.homeAppearance.showsHeroRecommendations else {
+            // 关掉:不发请求,行也置空。`heroPick` 同样直接短路成 `.none` ——
+            // 用户主动关掉的,不该又从「继续观看 / 各库最新」里找一张顶上来当替补
+            sections.recommended.replace(with: .loaded([]))
+            return
+        }
+        // 刚打开:先占住 hero 的高度(`heroPick` 对 `.loading` 返回 `.pending`)。
+        // ⛔ 不能只靠 `loadRecommendations` 里的 `markLoading()` —— 它见状态是 `.loaded`
+        // 就不动(刷新时保留旧内容的规则),这里会停在 `.loaded([])`,退路先显示一张、
+        // 等推荐回来又换掉,首屏会跳
+        sections.recommended.replace(with: .loading)
+        loadRecommendations(sections: sections, connection: container.connection(for: server))
     }
 
     /// 每个视频类媒体库一行「最新」。列表里已没有的库顺手丢掉。
@@ -360,6 +397,10 @@ final class HomeViewModel {
     /// 推荐池由 `load` 里那一路 `recommendations` 填(hero 从此**有**自己的请求了,
     /// 但取数不在这个函数里,所以它照旧可以纯单测)。
     ///
+    /// **用户关掉推荐(`HomeAppearancePreferences.showsHeroRecommendations` = false)
+    /// 时直接 `.none`**,⛔ 不走退路 —— 用户主动关掉的,不该又从「继续观看 / 各库
+    /// 最新」里找一张顶上来当替补。
+    ///
     /// **首选随机推荐**(`SortBy=Random`,见 `ServerConnection.recommendations`):
     /// 池子里筛出带背景图的,最多 `heroCarouselLimit` 张交给轮播。
     ///
@@ -376,8 +417,10 @@ final class HomeViewModel {
         recommended: LoadState<[EmbyItem]>,
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
-        latest: (EmbyView) -> LoadState<[EmbyItem]>
+        latest: (EmbyView) -> LoadState<[EmbyItem]>,
+        recommendationsEnabled: Bool = true
     ) -> HeroPick {
+        guard recommendationsEnabled else { return .none }
         switch recommended {
         case .idle, .loading:
             return .pending

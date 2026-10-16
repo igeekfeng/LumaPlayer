@@ -35,7 +35,7 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertEqual(query.queryItems, [EmbyQueryItem("UserId", "U"), EmbyQueryItem("SeriesId", "S")])
     }
 
-    /// 音乐 / 有声书 / 直播不在首版范围(CLAUDE.md「非目标」),首页不给它们「最新」行;
+    /// 音乐 / 有声书 / 直播不在首版范围(非目标清单见 README.md「已知限制」),首页不给它们「最新」行;
     /// CollectionType 为 null 的混合库照常给(不猜它是什么库)。
     func testLatestRowsOnlyForVideoLibraries() throws {
         let views = try [

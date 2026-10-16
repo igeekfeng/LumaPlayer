@@ -96,6 +96,14 @@ struct HomeView: View {
         .task(id: "\(server.id.uuidString)-\(refreshToken)") {
             viewModel.load(server: server)
         }
+        // 设置窗口在**另一个场景**里,改完开关这里不会自动重新 `load`。
+        // hero 的显示本身是自动的(`HomeHeroSlot` 读了 `@Observable` 的这一项),
+        // 但推荐数据得有人去发这一路请求 / 把旧行清掉。
+        // ⛔ 不在这里整页 `load` —— 改的是一个显示开关,不该把媒体库、继续观看、
+        // 各「最新」全部重来一遍(真实服务器使用纪律:低频率)
+        .onChange(of: container.homeAppearance.showsHeroRecommendations) {
+            viewModel.recommendationsPreferenceChanged(server: server)
+        }
         .reportsPageLoading(viewModel.isLoading, page: .home, to: container.state)
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
             guard let finished, finished.serverID == server.id else { return }
@@ -157,7 +165,9 @@ private struct HomeHeroSlot: View {
             recommended: sections.recommended.state,
             views: sections.views.state,
             resume: sections.resume.state,
-            latest: { sections.latest[$0.id]?.state ?? .idle }
+            latest: { sections.latest[$0.id]?.state ?? .idle },
+            // 设置 → 通用 →「首页推荐」关掉时整块 hero 不画(⛔ 不走退路,见 `heroPick`)
+            recommendationsEnabled: context.container.homeAppearance.showsHeroRecommendations
         )
         Group {
             switch pick {
