@@ -52,7 +52,7 @@ module map 与 `OTHER_LDFLAGS` 都指向那里。`brew upgrade` 换了 ffmpeg / 
 **头文件是 `<mpv/...>`,不是 `<libmpv/...>`。** opengl-cb 自 0.33 已失效,`--wid` 在 macOS 不稳定,网上旧教程别照抄。
 
 **每次 draw 都 `update()` + 无条件 `render()`。** 非 ADVANCED_CONTROL 下 `mpv_render_context_update()` 的 flags 从不置位,
-拿它 gate `render()` 会死锁(显示时钟不推进)。
+拿它 gate `render()` 会死锁(显示时钟不推进)。要省掉重画同一帧,用 update 回调置标志、在 `canDraw` 把关(`MPVPlayer.needsRender`)。
 
 **FBO 不能写死 0 —— 「有声音、黑屏」。** `CAOpenGLLayer` draw 时绑的是 layer 自己的 FBO(实测 1/7/8 不等),每帧
 `glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING)` 传给 mpv。这个 bug 能骗过所有计数指标。mpv render 完会把绑定还原成 0,探针直接读会误判。

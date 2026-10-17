@@ -19,9 +19,19 @@ final class MPVGLLayer: CAOpenGLLayer {
 
     override init() {
         super.init()
-        // 异步模式:CA 按 vsync 频率调 draw(主线程 runloop 定时器,不是独立渲染线程);draw 内轮询
-        // mpv_render_context_update(),无新帧时直接返回。
+        // 异步模式:CA 每个 vsync 问一次 canDraw(主线程 runloop 定时器,不是独立渲染线程),
+        // 只有 mpv 送来新帧 / 尺寸变了才真的 draw(`MPVPlayer.needsRender`)。
         isAsynchronous = true
+    }
+
+    /// 尺寸 / 像素密度一变就要按新尺寸重画:mpv 不知道 layer 变了,不会为此发 update 回调。
+    /// `needsDisplayOnBoundsChange` 只触发 display,过不了 `canDraw` 这道门。
+    override var bounds: CGRect {
+        didSet { if bounds.size != oldValue.size { player?.requestRender() } }
+    }
+
+    override var contentsScale: CGFloat {
+        didSet { if contentsScale != oldValue { player?.requestRender() } }
     }
 
     required init?(coder: NSCoder) {
@@ -75,16 +85,16 @@ final class MPVGLLayer: CAOpenGLLayer {
         return context
     }
 
-    /// 没有活的渲染上下文就不画:CA 跳过这一帧、layer 保留上一次的画面
-    /// (见 `MPVPlayer.canRender`)。播放器拆掉后画面因此定格在最后一帧而不是变黑 ——
-    /// 换集 / 转码 seek / 重试就靠它不黑屏。
+    /// 没有新东西要画就不画:CA 跳过这一帧、layer 保留上一次的画面(见 `MPVPlayer.needsRender`)。
+    /// 两层含义:播放中只按片源帧率画,不按屏幕刷新率重画同一帧;播放器拆掉后(`canRender` 为假)
+    /// 画面定格在最后一帧而不是变黑 —— 换集 / 转码 seek / 重试就靠它不黑屏。
     override func canDraw(
         inCGLContext ctx: CGLContextObj,
         pixelFormat pf: CGLPixelFormatObj,
         forLayerTime t: CFTimeInterval,
         displayTime ts: UnsafePointer<CVTimeStamp>?
     ) -> Bool {
-        player?.canRender ?? false
+        player?.needsRender ?? false
     }
 
     override func draw(

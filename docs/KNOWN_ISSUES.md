@@ -232,11 +232,12 @@
 - **Q49 `video-timing-offset=0`(2026-10-17)的副作用只验了一半。** 改它是为了让 render 不再阻塞主线程(PITFALLS「渲染阻塞主线程」)。
   ✅ 已验(真实播放、窗口可见、同屏约 40 条弹幕):弹幕从约 115 帧 / 5 s 回到约 585 帧 / 5 s,帧间隔 p95 8.3 ms,
   余量多数 −2 到 +1.6 ms;用户目测滚动不再卡。
-  ⛔ 未量化:GPU / 能耗。阻塞没了以后 `canDraw` 恒真 → `CAOpenGLLayer` 按屏幕刷新率(120 Hz)每次都 render,多数是重画同一帧;
-  用户看活动监视器觉得「一会高一会低、和改前差不多」,没有数字。⛔ 未验:60 fps 片源与 gpu-next 下的表现、音画同步(理论上最多晚一个刷新周期)。
-  剩余掉帧约每秒 3 次(多为单个刷新),可能是主线程每次刷新都在重画视频。
-  若要再降 GPU 或掉帧:注册 `mpv_render_context_set_update_callback`,只在有新帧 / 尺寸变化时让 `canDraw` 为真
-  (⛔ 别回到「用 `update()` 的 flags gate render」,见 PITFALLS §2 第二条)。
+  当时阻塞没了以后 `canDraw` 恒真,`CAOpenGLLayer` 按屏幕刷新率每次都 render,多数是重画同一帧。
+  2026-10-17 已改为注册 `mpv_render_context_set_update_callback`,只在 mpv 送来新帧 / 重绘请求或 layer 尺寸变化时画
+  (`MPVPlayer.needsRender`)。✅ 已验(`MPVRenderGateTests`,24 fps 合成 fixture、测试窗口):播放 0.4 s 内 render 次数 ≤ 18
+  (去掉这道门时是 48),暂停期间 0 次(去掉时 0.5 s 内 58 次),改尺寸后会重画。
+  ⛔ 未在真实播放验证:GPU / 能耗实际降了多少(没有数字)、剩余约每秒 3 次的掉帧是否消失、缩放 / 全屏 / 换屏时画面是否跟上尺寸、
+  60 fps 片源与 gpu-next 下的表现、音画同步(理论上最多晚一个刷新周期)。
 - **Q44 「内核未就绪」的门禁靠 `phase`,留着毫秒级竞态。** `isReadyToSeek` = `phase ∈ {playing, paused}` + `!isEnded`,
   而 phase 经事件桥异步投递:`FILE_LOADED` 与 UI 那一帧之间总有缝隙,恰在这一瞬松手的拖动仍会被 mpv 拒(已降级为一句 OSD)。
   同理**流本身不可 seek**(无 `Range` / `moov` 在尾部,见 PITFALLS §2)时命令也失败,门禁看不出来 —— 那种情况重试多少次都一样。

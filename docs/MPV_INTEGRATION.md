@@ -34,9 +34,11 @@ PlayerViewModel (@MainActor) → PlaybackSessionCoordinator → MPVPlayer (Core/
 
 ## 2. 渲染路径
 
-`MPVView`(`NSViewRepresentable`)承载 `MPVLayerView`,后者 `makeBackingLayer` 返回 `CAOpenGLLayer`。每次 draw:
-`mpv_render_context_update()` + **无条件** `render()`;FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;
-传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。
+`MPVView`(`NSViewRepresentable`)承载 `MPVLayerView`,后者 `makeBackingLayer` 返回 `CAOpenGLLayer`。
+画不画由 `canDraw` 决定(`MPVPlayer.needsRender`):`mpv_render_context_set_update_callback` 的回调(VO 送来新帧 / 重绘请求)
+或 layer 尺寸 / 缩放比变化置位,draw 时清掉;回调里只翻原子标志,⛔ 不调 mpv API、不等锁(回调在 mpv 内部锁里调)。
+暂停时一次都不画,layer 保留上一次的画面。每次 draw:`mpv_render_context_update()` + **无条件** `render()`;
+FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。
 
 `CAOpenGLLayer` 的异步模式由**主线程 runloop 上的定时器**驱动,draw 与 `mpv_render_context_render` 都在主线程执行
 (2026-10-17 采样实测)。所以 render 不能阻塞:`video-timing-offset=0`(§3),否则 render 画完会等到这一帧的上屏时刻,
@@ -139,7 +141,7 @@ idle ──load()──▶ loading ──首帧──▶ playing ⇄ paused
 - `shutdown()` 可重入;`destroyed` 之后任何调用抛 `MPVError.instanceDestroyed`,不静默。
 - 拆卸顺序不可换:先 `mpv_wakeup` 停事件循环 → `mpv_render_context_free` → `mpv_destroy`。
 - 一实例一 URL,不复用(复用会沿用上一轮的 `http-header-fields`,跨服务器即串台);播完是 `endFile(.eof)` 事件不是状态。
-- 拆卸后视图若还在屏上,画面定格在最后一帧(`MPVGLLayer.canDraw` 看 `canRender`)。换集 / 转码 seek / 重试靠它不黑屏:
+- 拆卸后视图若还在屏上,画面定格在最后一帧(`MPVGLLayer.canDraw` 经 `needsRender` 看 `canRender`)。换集 / 转码 seek / 重试靠它不黑屏:
   上一个实例的视频层盖在新实例上,等新实例发 `firstVideoFrameRendered`(第一帧非重绘的真实视频帧)再撤。
 
 ## 9. 错误映射

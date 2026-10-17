@@ -3,6 +3,7 @@ import OpenGL
 import OpenGL.GL3
 import os
 import mpv
+import Synchronization
 
 /// `MPVPlayer` 的生命周期状态机(MPV_INTEGRATION.md §8)。
 ///
@@ -133,6 +134,23 @@ final class MPVPlayer: @unchecked Sendable {
     /// 仅在 `mutex` 内访问(字段含 C 指针,无 Sendable 约束)
     private var state = MutableState()
     private let mutex = Mutex()
+
+    /// 「有东西要画」标志:mpv 的 update 回调、layer 尺寸变化置位,draw 取走(`needsRender`)。
+    ///
+    /// 为什么是原子量而不放进 `state`:update 回调由 mpv 的 VO 线程在**持有 mpv 内部锁**时调用
+    /// (vo_libmpv.c `update()`),而 `shutdown()` / 换后端是在持有 `mutex` 时调 `mpv_render_context_free`,
+    /// 后者要等 VO 线程退出 —— 回调里抢 `mutex` 就是互等死锁。
+    private final class RenderRequest: Sendable {
+        /// 初值为真:渲染上下文刚建好时先画一次
+        private let pending = Atomic<Bool>(true)
+        func set() { pending.store(true, ordering: .releasing) }
+        var isSet: Bool { pending.load(ordering: .acquiring) }
+        func take() { pending.store(false, ordering: .releasing) }
+    }
+
+    /// 生命周期 ≥ 渲染上下文:回调上下文按 unretained 指针交给 mpv,而渲染上下文在 `shutdown()`
+    /// (含 deinit 兜底,属性此时尚未释放)里 free,free 返回后 mpv 不再调回调。
+    private let renderRequest = RenderRequest()
 
     /// 渲染上下文专用锁:只在 GL draw 线程的 render、`attachGLContext`
     /// 的 create、`shutdown()` 的 free 三者之间互斥。
@@ -528,16 +546,35 @@ final class MPVPlayer: @unchecked Sendable {
         let first = createRenderContext(
             handle: handle, framework: framework,
             backend: target == .gpuNext ? MPVRenderBackend.gpuNext.rawValue : nil)
+        let built: Result<(context: OpaquePointer, backend: MPVRenderBackend), MPVError>
         switch first {
         case .success(let context):
-            return .success((context, target))
+            built = .success((context, target))
         case .failure(let error) where target == .gpuNext:
             logLine("[MPV] gpu-next 后端创建失败(\(error)),回退 legacy gpu 渲染器")
-            return createRenderContext(handle: handle, framework: framework, backend: nil)
+            built = createRenderContext(handle: handle, framework: framework, backend: nil)
                 .map { ($0, .legacy) }
         case .failure(let error):
-            return .failure(error)
+            built = .failure(error)
         }
+        if case .success(let result) = built {
+            registerUpdateCallback(on: result.context)
+        }
+        return built
+    }
+
+    /// mpv 有新帧 / 重绘请求时置位 `renderRequest`,layer 据此决定这一 vsync 画不画(`needsRender`)。
+    /// 注册时 mpv 会立即调一次回调(vo_libmpv.c),等于「新上下文先画一帧」。
+    ///
+    /// 回调约束(render.h「Threading」):任意 mpv 线程、持锁调用,⛔ 不得调 mpv API、不得等锁 —— 只翻原子标志。
+    private func registerUpdateCallback(on renderContext: OpaquePointer) {
+        mpv_render_context_set_update_callback(
+            renderContext,
+            { context in
+                guard let context else { return }
+                Unmanaged<RenderRequest>.fromOpaque(context).takeUnretainedValue().set()
+            },
+            Unmanaged.passUnretained(renderRequest).toOpaque())
     }
 
     /// 用指定后端建 mpv 渲染上下文。`backend` 为 nil = 不传该参数,用 mpv 默认。
@@ -683,10 +720,11 @@ final class MPVPlayer: @unchecked Sendable {
     /// GL draw 线程调用:把当前帧渲染到 layer 当前绑定的 framebuffer。
     ///
     /// 官方模式(render.h 638-643、687-688;示例 sdl.c 的 on_redraw):
-    /// 每 vsync 调 update() 后**无条件** render()——render() 自己从内部
-    /// 队列拉帧,无新帧时重画上一帧;update() 在非 ADVANCED_CONTROL 下
+    /// update 回调通知后(`needsRender`,由 layer 的 `canDraw` 把关)调 update() 再**无条件** render()——
+    /// render() 自己从内部队列拉帧,无新帧时重画上一帧;update() 在非 ADVANCED_CONTROL 下
     /// 是可选的,返回 flags 不能拿来 gate render()。S2 实测教训:按
     /// flags gate 后 flags 恒 0、一帧都渲不出。
+    /// 标志在 render **之前**清:render 期间 VO 送来下一帧,回调会重新置位,不会漏。
     /// 锁:整帧只持有 `renderMutex`(仅与 attach / free 互斥),`mutex` 只在
     /// 取指针和回写统计这两个瞬间短暂持有。之前整帧持有 `mutex` 会让
     /// MainActor 侧的 `phase` / `pause()` / `seek()` 排队等一次 GPU 提交
@@ -701,6 +739,7 @@ final class MPVPlayer: @unchecked Sendable {
             }
             guard let renderContext else { return }
 
+            renderRequest.take()
             let flags = mpv_render_context_update(renderContext)
             // 这一帧是不是 VO 送来的真实视频帧(第一帧判据,见 `firstVideoFrameRendered`)。
             // ⛔ 不能只看 UPDATE_FRAME:VO 刚建好时的重绘请求同样带它,那一帧还没有画面
@@ -791,6 +830,21 @@ final class MPVPlayer: @unchecked Sendable {
     /// 空 render + flush 出来的是黑帧。
     var canRender: Bool {
         mutex.withLock { state.handle != nil && state.renderContext != nil && !state.isStopping }
+    }
+
+    /// layer 这一 vsync 要不要画:`canRender` 且自上次 draw 以来 mpv 送来过新帧 / 重绘请求,
+    /// 或 layer 尺寸变了(`requestRender()`)。
+    ///
+    /// 不加这道门时 `CAOpenGLLayer` 按屏幕刷新率每次都 render(120 Hz 屏上 24 fps 片源约 5 次里 4 次
+    /// 重画同一帧),而且 draw 跑在主线程(Q49)。暂停时一次都不画,layer 保留上一次的画面。
+    var needsRender: Bool {
+        renderRequest.isSet && canRender
+    }
+
+    /// 要求下一个 vsync 重画:mpv 不知道 layer 的尺寸变化(缩放窗口、全屏、换屏),
+    /// 新尺寸只在下一次 render 时传进去(`renderIntoBoundFramebuffer`)。任意线程可调。
+    func requestRender() {
+        renderRequest.set()
     }
 
     /// 画出过真实视频帧(拆卸后仍可读)。为假时 layer 上没有值得定格的画面。
