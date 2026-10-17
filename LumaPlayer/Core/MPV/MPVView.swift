@@ -19,7 +19,7 @@ final class MPVGLLayer: CAOpenGLLayer {
 
     override init() {
         super.init()
-        // 异步模式:CA 按 vsync 频率在渲染线程调 draw;draw 内轮询
+        // 异步模式:CA 按 vsync 频率调 draw(主线程 runloop 定时器,不是独立渲染线程);draw 内轮询
         // mpv_render_context_update(),无新帧时直接返回。
         isAsynchronous = true
     }
@@ -176,7 +176,8 @@ final class MPVLayerView: NSView {
 
 /// libmpv 视频的 SwiftUI 承载(MPV_INTEGRATION.md §2 渲染路径)。
 /// 图片之外的唯一例外:视频层不经过 SwiftUI 渲染管线,
-/// 每帧绘制由 CAOpenGLLayer 的渲染线程驱动。
+/// 每帧绘制由 CAOpenGLLayer 的异步定时器驱动 —— 定时器挂在**主线程** runloop 上,
+/// draw(含 `mpv_render_context_render`)也在主线程执行(2026-10-17 采样实测),渲染路径里不能阻塞。
 struct MPVView: NSViewRepresentable {
 
     let player: MPVPlayer

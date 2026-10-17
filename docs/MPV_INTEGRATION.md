@@ -38,10 +38,14 @@ PlayerViewModel (@MainActor) → PlaybackSessionCoordinator → MPVPlayer (Core/
 `mpv_render_context_update()` + **无条件** `render()`;FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;
 传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。
 
+`CAOpenGLLayer` 的异步模式由**主线程 runloop 上的定时器**驱动,draw 与 `mpv_render_context_render` 都在主线程执行
+(2026-10-17 采样实测)。所以 render 不能阻塞:`video-timing-offset=0`(§3),否则 render 画完会等到这一帧的上屏时刻,
+主线程被压到视频帧率(`PITFALLS.md`「渲染阻塞主线程」)。
+
 ## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer` 里的表)
 
 `config=no`、`load-scripts=no`、`terminal=no`(libmpv 默认即如此,防御性显式设置)、`msg-level`、`vo=libmpv`、
-`hwdec=auto`、`cache=yes`、`demuxer-max-bytes=128MiB`(未按码率标定,M2)。
+`hwdec=auto`、`cache=yes`、`demuxer-max-bytes=128MiB`(未按码率标定,M2)、`video-timing-offset=0`(render 不阻塞,§2)。
 任何 `mpv_set_option_string` 失败都当致命。⛔ 不设 `tls-verify=no` 及任何跳过证书校验的选项。
 
 ### 3.1 hwdec

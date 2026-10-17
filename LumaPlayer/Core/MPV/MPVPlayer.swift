@@ -187,6 +187,10 @@ final class MPVPlayer: @unchecked Sendable {
         ("cache", "yes"),
         // 128 MiB 起点(§3:值待 M2 用真实码率流实测后调整)
         ("demuxer-max-bytes", "134217728"),
+        // 不提前渲染再等:默认 0.05 时 `mpv_render_context_render` 画完要阻塞到这一帧的上屏时刻,
+        // 而 `CAOpenGLLayer` 的 draw 跑在主线程 → 播放时主线程约 78% 时间卡在等待里,
+        // 界面与弹幕被压到视频帧率(render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
+        ("video-timing-offset", "0"),
     ]
 
     /// §6.1 需要观察的属性(demuxer-cache-state 未使用)。

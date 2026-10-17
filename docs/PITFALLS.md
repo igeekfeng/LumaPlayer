@@ -57,6 +57,12 @@ module map 与 `OTHER_LDFLAGS` 都指向那里。`brew upgrade` 换了 ffmpeg / 
 **FBO 不能写死 0 —— 「有声音、黑屏」。** `CAOpenGLLayer` draw 时绑的是 layer 自己的 FBO(实测 1/7/8 不等),每帧
 `glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING)` 传给 mpv。这个 bug 能骗过所有计数指标。mpv render 完会把绑定还原成 0,探针直接读会误判。
 
+**渲染阻塞主线程:播放时界面和弹幕被压到视频帧率。** `CAOpenGLLayer` 异步模式的 draw 跑在主线程(runloop 定时器,
+不是独立渲染线程);`mpv_render_context_render` 默认 `BLOCK_FOR_TARGET_TIME = 1`,画完阻塞到这一帧的上屏时刻
+(最长 `video-timing-offset`,默认 0.05 s)。实测 24 fps 片源播放时主线程 78% 的样本卡在 render 里的 `pthread_cond_wait`,
+弹幕 displayLink 只剩约 24 Hz、每次晚 30–40 ms;不播视频时 120 Hz。解:启动选项 `video-timing-offset=0`(render.h 推荐的替代做法)。
+⚠️ 窗口被遮挡时这个定时器不跑,采样看不到这条路径 —— 取证要先确认窗口可见。
+
 **画面偏移。** `MPVLayerView` 走 `makeBackingLayer`,渲染尺寸取 GL viewport,别让 `layout()` 把 layer 拽到父 layer 原点。
 
 **认证头:`MPV_FORMAT_NODE` 数组,`mpv_initialize()` 之后、`loadfile` 之前设 `http-header-fields`。** 值里自带逗号。
