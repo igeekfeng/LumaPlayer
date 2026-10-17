@@ -107,8 +107,10 @@
 ## 6. 取舍与后续
 
 - **不算文件 Hash**:`/match` 的精确匹配要文件前 16 MB 的 MD5,两路来源都只能经网络流拿字节。
-  为匹配多拉 16 MB 对别人的 Emby / 百度配额都是负担。若以后要提高命中率,优先考虑 Emby 的 `ProviderIds.Tmdb`
-  + `/search/episodes?tmdbId=` 这条路(需先按 `API_CONTRACT.md` 0.2 核实并回填 `ProviderIds` 的用法)。
+  为匹配多拉 16 MB 对别人的 Emby / 百度配额都是负担。但服务端**硬性要求** `fileHash` 是 32 位串
+  (少了直接 `errorCode 2`,见 `DANDANPLAY_API.md` §2),所以填 32 个 `0` 占位:查不到 Hash 记录就按文件名匹配,
+  正是要走的路径。若以后要提高命中率,优先考虑 Emby 的 `ProviderIds.Tmdb` + `/search/episodes?tmdbId=` 这条路
+  (需先按 `API_CONTRACT.md` 0.2 核实并回填 `ProviderIds` 的用法)。
 - **Emby 拿不到文件名**:`MediaSource.Path` 按契约不用,只能合成名字(Q45)。手选一次后同剧其它集走剧绑定,不再依赖它。
 - **弹幕数量**:不做「最多显示 N 条」的截断,密度由行数自然控制。
 - **屏蔽词 / 合并重复**:未做。

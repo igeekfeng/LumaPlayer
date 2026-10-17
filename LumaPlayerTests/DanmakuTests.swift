@@ -97,8 +97,7 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(json["matchMode"] as? String, "fileNameOnly")
         XCTAssertNil(json["fileHash"])
         XCTAssertNil(json["fileSize"])
-        XCTAssertNil(json["videoDuration"])
-    }
+        XCTAssertNil(json["videoDuration"])    }
 
     func testEndpointNamesExcludeUserContent() {
         XCTAssertEqual(DandanplayEndpoint.searchEpisodes(anime: "私密标题", episode: nil).name, "search/episodes")
@@ -130,7 +129,30 @@ final class DanmakuTests: XCTestCase {
             _ = try await makeClient().searchEpisodes(anime: "ab", episode: nil, credentials: credentials)
             XCTFail("应当抛错")
         } catch {
-            XCTAssertEqual(error as? DandanplayError, .api(code: 1001, message: "参数错误"))
+            XCTAssertEqual(error as? DandanplayError, .api(code: 1001, message: "参数错误", detail: nil))
+        }
+    }
+
+    /// 参数校验失败时服务端会给 `errorDetail` 指向具体字段,要如实带进用户可见的错误(`ResponseBase`)。
+    func testAPIFailureCarriesErrorDetail() async {
+        MockEmbyURLProtocol.stub(
+            .json(#"""
+                {"isMatched":false,"matches":null,"errorCode":2,"success":false,
+                 "errorMessage":"一个或多个参数不符合规则","errorDetail":"fileHash"}
+                """#),
+            host: host, path: "/api/v2/match")
+        do {
+            _ = try await makeClient().match(
+                DandanplayMatchRequest(
+                    fileName: "某番 01", fileHash: nil, fileSize: nil, videoDuration: nil,
+                    matchMode: DandanplayMatchRequest.fileNameOnly),
+                credentials: credentials)
+            XCTFail("应当抛错")
+        } catch let error as DandanplayError {
+            XCTAssertEqual(error, .api(code: 2, message: "一个或多个参数不符合规则", detail: "fileHash"))
+            XCTAssertTrue(error.userMessage.contains("fileHash"), error.userMessage)
+        } catch {
+            XCTFail("错误类型不对:\(error)")
         }
     }
 
@@ -254,6 +276,8 @@ final class DanmakuTests: XCTestCase {
         let body = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/match")?.body)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["videoDuration"] as? Int, 1420)
+        XCTAssertEqual(json["fileHash"] as? String, DandanplayMatchRequest.placeholderFileHash)
+        XCTAssertEqual((json["fileHash"] as? String)?.count, 32, "服务端要求 32 位,少一位就回 errorCode 2")
     }
 
     /// 模糊结果 ⛔ 不自动取第一个,交给用户挑。

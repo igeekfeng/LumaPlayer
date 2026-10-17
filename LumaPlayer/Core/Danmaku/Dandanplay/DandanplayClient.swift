@@ -74,7 +74,9 @@ struct DandanplayClient: Sendable {
         let response: DandanplayBangumiResponse =
             try await fetch(.bangumi(animeID: animeID), credentials: credentials)
         guard let bangumi = response.bangumi else {
-            throw DandanplayError.api(code: response.errorCode, message: response.errorMessage ?? "作品不存在")
+            throw DandanplayError.api(
+                code: response.errorCode, message: response.errorMessage ?? "作品不存在",
+                detail: response.errorDetail)
         }
         return bangumi
     }
@@ -117,7 +119,8 @@ struct DandanplayClient: Sendable {
             throw DandanplayError.decoding(detail: "\(endpoint.name):\(Self.describe(error))")
         }
         if let status = decoded as? any DandanplayStatusResponse, status.success == false {
-            throw DandanplayError.api(code: status.errorCode, message: status.errorMessage)
+            throw DandanplayError.api(
+                code: status.errorCode, message: status.errorMessage, detail: status.errorDetail)
         }
         return decoded
     }

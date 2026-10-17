@@ -94,7 +94,8 @@ actor DanmakuService {
 
         let request = DandanplayMatchRequest(
             fileName: query.matchFileName,
-            fileHash: nil,
+            // ⚠️ 必须带 32 位 Hash 串,否则服务端直接回 errorCode 2(见 `placeholderFileHash`)
+            fileHash: DandanplayMatchRequest.placeholderFileHash,
             fileSize: query.fileSize,
             videoDuration: durationSeconds.flatMap { $0.isFinite && $0 > 0 ? Int32(exactly: $0.rounded()) : nil },
             matchMode: DandanplayMatchRequest.fileNameOnly)

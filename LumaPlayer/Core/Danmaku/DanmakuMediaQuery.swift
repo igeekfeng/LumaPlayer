@@ -13,7 +13,8 @@ import Foundation
 ///   ⚠️ 弹弹play 的文件名解析对这种形状的命中率**未在真实服务验证**(`KNOWN_ISSUES.md` Q45)。
 ///   手动选一次之后按剧记住作品(`seriesKey`),后续集数不再依赖它。
 /// - **Hash**:接口要「文件前 16 MB 的 MD5」。两路来源都只能经网络流拿到字节,
-///   为了匹配多拉 16 MB(对别人的 Emby / 百度配额都是负担)不划算 → 恒不传,只用 `fileNameOnly`。
+///   为了匹配多拉 16 MB(对别人的 Emby / 百度配额都是负担)不划算 → 不算真实 Hash,
+///   按服务端的硬要求填 32 位占位串(`DandanplayMatchRequest.placeholderFileHash`),仍只用 `fileNameOnly`。
 struct DanmakuMediaQuery: Sendable, Equatable {
 
     /// 这**一集 / 一部**的绑定键:用户手选过的弹幕库按它记住。

@@ -13,7 +13,8 @@ import Foundation
 struct DandanplayMatchRequest: Encodable, Sendable, Equatable {
     /// 视频文件名,**不含文件夹名与扩展名**
     let fileName: String
-    /// 文件前 16 MB 的 MD5。本项目拿不到(见 `DanmakuMediaQuery` 的注释),恒为 nil
+    /// 文件前 16 MB 的 MD5(32 位十六进制)。本项目不算真实 Hash,恒填
+    /// `placeholderFileHash`(理由见那个常量)
     let fileHash: String?
     /// 文件总长度(字节);未知时不传
     let fileSize: Int64?
@@ -24,13 +25,28 @@ struct DandanplayMatchRequest: Encodable, Sendable, Equatable {
 
     /// 没有 Hash 时只能按文件名匹配
     static let fileNameOnly = "fileNameOnly"
+
+    /// 占位 Hash:32 个 `0`。
+    ///
+    /// ⚠️ **服务端实际要求 `fileHash` 是 32 位字符串,即使是 `fileNameOnly` 也一样**
+    /// (规格没写,少了就回 `errorCode 2` 「一个或多个参数不符合规则」并带 `matches: null`)。
+    /// 来源:第三方客户端按线上接口核对后记录(`open-ani/animeko#3506`),2026-10 仍如此;
+    /// 本项目**未用自有凭据复验**(`KNOWN_ISSUES.md` Q48)。
+    ///
+    /// 为什么可以给假值:服务端先按 Hash 查记录,查不到才回落到文件名模糊匹配 —— 本项目要的正是
+    /// 文件名这条路。全 `0` 是官方旧文档示例里的「无 Hash」写法,不会命中任何真实文件。
+    /// 算真 Hash 要多拉 16 MB(见 `DanmakuMediaQuery` 的注释),不划算。
+    static let placeholderFileHash = String(repeating: "0", count: 32)
 }
 
-/// 带 `ResponseBase` 的响应共有的状态字段(`errorCode` / `success` / `errorMessage`)。
+/// 带 `ResponseBase` 的响应共有的状态字段(`errorCode` / `success` / `errorMessage` / `errorDetail`)。
+///
+/// `errorDetail` 只在参数校验失败时有值,给出**能定位到具体字段**的补充信息(规格 `ResponseBase`)。
 protocol DandanplayStatusResponse {
     var errorCode: Int? { get }
     var success: Bool? { get }
     var errorMessage: String? { get }
+    var errorDetail: String? { get }
 }
 
 /// `POST /api/v2/match` 的响应(规格 `MatchResponseV2`)。
@@ -38,6 +54,8 @@ struct DandanplayMatchResponse: Decodable, Sendable, DandanplayStatusResponse {
     let errorCode: Int?
     let success: Bool?
     let errorMessage: String?
+    /// 参数校验失败时才有值,指向具体字段
+    let errorDetail: String?
     /// true = 已精确关联(此时 `matches` 只有一项,客户端应直接采用,§2)
     let isMatched: Bool?
     let matches: [DandanplayMatch]?
@@ -59,6 +77,8 @@ struct DandanplaySearchEpisodesResponse: Decodable, Sendable, DandanplayStatusRe
     let errorCode: Int?
     let success: Bool?
     let errorMessage: String?
+    /// 参数校验失败时才有值,指向具体字段
+    let errorDetail: String?
     /// 结果太多被截断:应提示用户填更详细的关键词
     let hasMore: Bool?
     let animes: [DandanplaySearchAnime]?
@@ -83,6 +103,8 @@ struct DandanplayBangumiResponse: Decodable, Sendable, DandanplayStatusResponse 
     let errorCode: Int?
     let success: Bool?
     let errorMessage: String?
+    /// 参数校验失败时才有值,指向具体字段
+    let errorDetail: String?
     let bangumi: DandanplayBangumi?
 }
 

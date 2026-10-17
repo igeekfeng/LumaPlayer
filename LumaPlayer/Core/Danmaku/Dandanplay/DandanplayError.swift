@@ -14,8 +14,9 @@ enum DandanplayError: Error, Equatable {
     case forbidden(reason: String?)
     /// 其余非 2xx。
     case server(statusCode: Int)
-    /// HTTP 200 但响应体 `success == false`(`errorCode` / `errorMessage` 原样带上)。
-    case api(code: Int?, message: String?)
+    /// HTTP 200 但响应体 `success == false`(`errorCode` / `errorMessage` / `errorDetail` 原样带上)。
+    /// `detail` 是规格 `ResponseBase.errorDetail`,参数校验失败时指向具体字段。
+    case api(code: Int?, message: String?, detail: String?)
     /// 传输失败。⛔ 文本一律已过 `SecretRedactor`。
     case transport(String)
     /// 解码失败。只带解码器描述,不带响应体。
@@ -38,9 +39,10 @@ enum DandanplayError: Error, Equatable {
             return "弹弹play 拒绝了请求(HTTP 403)\(hint)。"
         case .server(let statusCode):
             return "弹弹play 返回了错误(HTTP \(statusCode))。"
-        case .api(let code, let message):
-            let detail = [code.map { "错误码 \($0)" }, message].compactMap { $0 }.joined(separator: ":")
-            return "弹弹play 返回失败\(detail.isEmpty ? "" : "(\(detail))")。"
+        case .api(let code, let message, let detail):
+            let reason = [message, detail].compactMap { $0 }.joined(separator: " · ")
+            let parts = [code.map { "错误码 \($0)" }, reason.isEmpty ? nil : reason].compactMap { $0 }
+            return "弹弹play 返回失败\(parts.isEmpty ? "" : "(\(parts.joined(separator: ":")))")。"
         case .transport(let detail):
             return "连接弹弹play 失败:\(detail)"
         case .decoding(let detail):

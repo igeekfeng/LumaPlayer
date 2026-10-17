@@ -201,9 +201,17 @@
   (要先按 `API_CONTRACT.md` 0.2 核实 `ProviderIds`)。
 - **Q46 签名与 302 跳转未在真实服务验证。** 签名按官方公式实现、有独立算出的期望值做单测;
   `comment` 端点 302 到加速服务后 URLSession 是否带着自定义头跟随、加速服务是否需要它们,都不知道。
-  结案:真实凭据下拉一次弹幕,403 时看 `X-Error-Message`。
+  现在:签名**已经过一次真实服务的间接验证** —— 用户填好凭据后 `/match` 返回 HTTP 200 + `errorCode 2`
+  (业务层参数错误,不是 403),说明 `X-AppId` / `X-Timestamp` / `X-Signature` 都被接受。
+  仍未验证的是 302 跳转。结案:真实凭据下拉一次弹幕,403 时看 `X-Error-Message`。
 - **Q47 作品剧集列表的 `episodeNumber` 形状只看过规格。** 规格说「不一定是纯数字」;多季被并进一个作品时集号会不会重复未知。
   现在:只认能解析成整数且唯一的一项,否则落回 `/match`。结案:拿一部多季番看 `/bangumi/{id}` 的实际值。
+- **Q48 `/match` 要求 `fileHash` 是 32 位串,规格没写。** 缺字段 / 空串 / 不足 32 位 → `errorCode 2`
+  「一个或多个参数不符合规则」+ `matches: null`(播放页显示「弹弹play 返回失败」)。
+  现在:恒填 32 个 `0`(`DandanplayMatchRequest.placeholderFileHash`),服务端查不到 Hash 记录即按文件名模糊匹配。
+  上述「必须有 32 位」的结论来自第三方客户端按线上接口核对(`open-ani/animeko#3506`),
+  **未用本项目自己的凭据逐条复验**(只验证了补上占位串后请求不再报 errorCode 2 / 是否真出候选未记录)。
+  结案:真实凭据下播一集,确认 `/match` 返回 `matches` 非空或空的正常候选列表(而不是 `errorCode 2`)。
 
 ## D. 工程与播放内核
 

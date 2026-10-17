@@ -43,7 +43,8 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 
 带 `ResponseBase` 的响应(match / search / bangumi)HTTP 200 时还要看 `success`:
 `errorCode`(int,0 = 无错)、`success`(bool)、`errorMessage`(string?)、`errorDetail`(string?)。
-`success == false` → `.api(code:message:)`。
+`success == false` → `.api(code:message:detail:)`。`errorDetail` 只在参数校验失败时有值,用来说明
+**是哪个字段**不合规则 —— 排障时优先看它,本项目的错误文案会把它一起显示。
 
 ## 2. 文件识别 `POST /api/v2/match`
 
@@ -52,10 +53,18 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 | 字段 | 类型 | 说明 | 本项目 |
 |---|---|---|---|
 | `fileName` | string? | 视频文件名,**不含文件夹名与扩展名** | 百度:真实文件名去扩展名;Emby:合成(见 `DanmakuMediaQuery`) |
-| `fileHash` | string? | 文件前 16 MB 的 MD5(32 位,不区分大小写) | **不传**(拿字节要多拉 16 MB) |
+| `fileHash` | string? | 文件前 16 MB 的 MD5(32 位,不区分大小写) | **32 位占位串**(见下表后的警告) |
 | `fileSize` | int64 | 文件总长度(字节) | 百度有就传;Emby 不传 |
 | `videoDuration` | int32 | [可选] 时长(秒),默认 0 | 播放器已知时传 |
 | `matchMode` | enum | `hashAndFileName` / `fileNameOnly` / `hashOnly` | 恒 `fileNameOnly` |
+
+⚠️ **`fileHash` 实际上是必填,规格没写。** 2026-10 的线上行为:即使 `matchMode` 是 `fileNameOnly`,
+`fileHash` 缺失、空串或不足 32 位都会让接口返回 `errorCode 2`「一个或多个参数不符合规则」+ `matches: null`,
+播放页表现成「弹弹play 返回失败(错误码 2 …)」。带任意 32 位串则正常返回候选。
+来源:第三方客户端按线上接口核对后的记录(`open-ani/animeko#3506`);本项目**未用自有凭据复验**
+(`KNOWN_ISSUES.md` Q48)。
+本项目填全 `0`(`DandanplayMatchRequest.placeholderFileHash`):服务端按 Hash 查不到记录就回落文件名模糊匹配,
+正是要走的路径,还省掉为算 Hash 多拉 16 MB。全 `0` 也是官方旧文档示例里的「无 Hash」写法。
 
 响应 `MatchResponseV2` = `ResponseBase` +:
 
