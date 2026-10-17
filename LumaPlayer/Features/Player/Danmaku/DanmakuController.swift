@@ -123,6 +123,9 @@ final class DanmakuController {
 
     @ObservationIgnored private var layoutMemo: (parameters: DanmakuLayout.Parameters, placed: [PlacedDanmaku], maxLifetime: Double)?
 
+    /// 排版结果每重算一次 +1。渲染层按「下标 → 图层」缓存预渲染位图,代号变了下标就不再对应,须整批丢弃。
+    @ObservationIgnored private(set) var layoutGeneration = 0
+
     /// 按画面参数排版;参数不变时直接返回上一次的结果(渲染层每帧都会问)。
     func placement(for parameters: DanmakuLayout.Parameters) -> (placed: [PlacedDanmaku], maxLifetime: Double) {
         if let memo = layoutMemo, memo.parameters == parameters {
@@ -132,6 +135,7 @@ final class DanmakuController {
         let placed = DanmakuLayout.layout(loaded.comments, widthPerPoint: widthPerPoint, parameters: parameters)
         let lifetime = DanmakuLayout.maxLifetime(of: placed)
         layoutMemo = (parameters, placed, lifetime)
+        layoutGeneration += 1
         return (placed, lifetime)
     }
 
@@ -168,7 +172,7 @@ final class DanmakuController {
     /// 测量用的字号:在 100pt 下测再除以 100,比直接测 1pt 精确。
     private nonisolated static let measureFontSize: CGFloat = 100
 
-    /// 每条文字在 1pt 字号下的宽度。字体与渲染层一致(系统字体粗体,见 `DanmakuOverlayView`)。
+    /// 每条文字在 1pt 字号下的宽度。字体与渲染层一致(系统字体粗体,见 `DanmakuRenderer`)。
     nonisolated static func measure(_ texts: [String]) -> [CGFloat] {
         let font = CTFontCreateUIFontForLanguage(.emphasizedSystem, measureFontSize, nil)
             ?? CTFontCreateWithName("Helvetica-Bold" as CFString, measureFontSize, nil)

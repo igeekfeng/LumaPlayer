@@ -31,7 +31,7 @@
         ▼
    DanmakuController.placement(for:) ─→ DanmakuLayout(纯函数排版,参数不变即复用)
         ▼
-   DanmakuOverlayView(TimelineView + Canvas,视频之上、控件之下、不吃点击)
+   DanmakuOverlayView(CALayer + displayLink,视频之上、控件之下、不吃点击)
         ↑ 时间:DanmakuClock 在 5 Hz 的 positionSeconds 之间按倍速外推
 ```
 
@@ -75,12 +75,16 @@
 ## 4. 渲染
 
 - **为什么不交给 mpv**:mpv 只能把弹幕当 ASS 字幕轨画,改字号 / 透明度 / 区域 / 偏移都要重新生成并重载,
-  还会占掉用户正在用的字幕轨。SwiftUI `Canvas` 自画则所有外观即时生效。
+  还会占掉用户正在用的字幕轨。自己画一层则所有外观即时生效。
+- **渲染**:每条弹幕出场时预渲染一次位图(`DanmakuSprite`:文字 + 描边),放进一个 `CALayer`;
+  之后每帧只改图层位置,由 Core Animation 在 GPU 上合成。最早的 `TimelineView` + `Canvas` 每帧在主线程
+  重画整窗口,120 Hz 屏上 30–40 条在场只剩约 40 帧且步长不均,看着累(`DanmakuFrameDiagnostics` 实测)。
 - **层级**:`PlayerWindowView` 里 `MPVView` 之上、`interactionLayer` 之下,`allowsHitTesting(false)`。
   错误页出现时弹幕层仍在(在错误覆盖层下面,被盖住)。
 - **时间**:`positionSeconds` 只有 5 Hz。`DanmakuClock` 以最近一次位置为锚点按倍速外推;
-  新位置误差 < 0.5 秒时每次收敛 20%(不回跳),更大视为 seek 直接对齐;暂停 / 缓冲时停住,
-  `TimelineView(.animation(paused:))` 同时停止重画。
+  新位置误差 < 0.5 秒时锚点取当前外推值(位置不跳),误差在 1 秒内靠微调速度(≤ ±10%)匀速吸收,
+  更大视为 seek 直接对齐;暂停 / 缓冲时停住,displayLink 同时暂停。
+  逐帧位置按 displayLink 的 `targetTimestamp`(这一帧上屏的时刻)算,并对齐到屏幕像素。
 - **偏移**:画面时间 − (`/match` 的 `shift` + 用户手调),正数 = 弹幕延后。手调只在本集有效(0.5 秒步进)。
 - **排版**(`DanmakuLayout`,纯函数):
   - 滚动弹幕**同速**(`画面宽 / 滚动时长`),所以不会后追前;一行能放下新弹幕的条件只有「上一条尾巴已离开右缘 + 1.5 字宽」。
@@ -90,7 +94,8 @@
   - 文字宽度在加载时于后台用 CoreText 测一次(100pt 下测、存「每 pt 宽度」),字号 / 窗口变化只需等比缩放重排,不再测量。
   - 排版结果按 `Parameters`(画面尺寸取整、字号取整、外观开关)记忆,拖窗口时才重排。
 - **取可见**:按 `start` 二分 + 回看最长在场时长,每帧只碰在场附近的几十条。
-- **外观**:系统粗体,双层黑色阴影代替描边;整层不透明度;字号以 1080 高为基准随窗口缩放(最小 12pt)。
+- **外观**:系统粗体 + 实心描边(深色字白边、其余黑边;模糊阴影在移动中会糊);整层不透明度;
+  字号以 1080 高为基准随窗口缩放(最小 12pt)。
 
 ## 5. 交互入口
 

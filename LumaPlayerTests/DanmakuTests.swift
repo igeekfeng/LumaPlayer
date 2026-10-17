@@ -1,8 +1,9 @@
+import CoreGraphics
 import XCTest
 @testable import LumaPlayer
 
 /// 弹幕链路:弹弹play 端点 / 签名 / 传输(`DandanplayClient`)、弹幕解析、媒体身份、
-/// 匹配编排(`DanmakuService`)、排版(`DanmakuLayout`)、时钟外推(`DanmakuClock`)。
+/// 匹配编排(`DanmakuService`)、排版(`DanmakuLayout`)、时钟外推(`DanmakuClock`)、预渲染(`DanmakuSprite`)、逐帧诊断。
 ///
 /// ⛔ **零真实网络**:全走 `MockEmbyURLProtocol`。真实弹弹play 调用要等用户在设置里
 /// 填了自己的 AppId / AppSecret 才能跑,在此之前按 CLAUDE.md 硬规则 2 标「未在真实服务验证」。
@@ -391,22 +392,205 @@ final class DanmakuTests: XCTestCase {
     // MARK: - 时钟
 
     @MainActor
-    func testClockExtrapolatesAndSnapsOnSeek() {
+    func testClockAbsorbsSmallErrorBySlewingNotJumping() {
         let clock = DanmakuClock()
-        let t0 = Date(timeIntervalSince1970: 0)
+        let t0 = 1000.0
         clock.update(position: 10, isPaused: false, speed: 2, now: t0)
-        XCTAssertEqual(clock.time(at: t0.addingTimeInterval(0.1)), 10.2, accuracy: 0.0001)
+        XCTAssertEqual(clock.time(at: t0 + 0.1), 10.2, accuracy: 1e-9)
 
-        // 小误差:慢慢收敛,不回跳
-        clock.update(position: 10.3, isPaused: false, speed: 2, now: t0.addingTimeInterval(0.2))
-        XCTAssertEqual(clock.time(at: t0.addingTimeInterval(0.2)), 10.4 - 0.1 * DanmakuClock.convergence, accuracy: 0.0001)
+        // 位置报 10.3、外推是 10.4:误差 -0.1。当下位置不跳
+        clock.update(position: 10.3, isPaused: false, speed: 2, now: t0 + 0.2)
+        XCTAssertEqual(clock.time(at: t0 + 0.2), 10.4, accuracy: 1e-9)
+        // 1 秒内匀速吸收:过一半吸收一半
+        XCTAssertEqual(clock.time(at: t0 + 0.7), 10.4 + 1.0 - 0.05, accuracy: 1e-9)
+        // 吸收完回到倍速,不过冲
+        XCTAssertEqual(clock.time(at: t0 + 1.2), 10.4 + 2.0 - 0.1, accuracy: 1e-9)
+        XCTAssertEqual(clock.time(at: t0 + 2.2), 10.4 + 4.0 - 0.1, accuracy: 1e-9)
+    }
 
+    @MainActor
+    func testClockStaysContinuousWhenUpdatesArriveMidSlew() {
+        let clock = DanmakuClock()
+        let t0 = 1000.0
+        clock.update(position: 10, isPaused: false, speed: 1, now: t0)
+        clock.update(position: 10.25, isPaused: false, speed: 1, now: t0 + 0.2)
+        let before = clock.time(at: t0 + 0.45)
+        clock.update(position: 10.4, isPaused: false, speed: 1, now: t0 + 0.45)
+        XCTAssertEqual(clock.time(at: t0 + 0.45), before, accuracy: 1e-9, "接力吸收时位置不跳")
+    }
+
+    @MainActor
+    func testClockStretchesSlewForLargerErrorToCapSpeedChange() {
+        let clock = DanmakuClock()
+        let t0 = 1000.0
+        clock.update(position: 10, isPaused: false, speed: 1, now: t0)
+        // 误差 0.3 秒:按 1 秒吸收要变速 30%,拉长到 3 秒、变速封顶 10%
+        clock.update(position: 10.5, isPaused: false, speed: 1, now: t0 + 0.2)
+        XCTAssertEqual(clock.time(at: t0 + 1.7), 10.2 + 1.5 + 0.15, accuracy: 1e-9)
+        XCTAssertEqual(clock.time(at: t0 + 3.2), 10.2 + 3.0 + 0.3, accuracy: 1e-9)
+    }
+
+    @MainActor
+    func testClockSnapsOnSeekAndStopsWhenPaused() {
+        let clock = DanmakuClock()
+        let t0 = 1000.0
+        clock.update(position: 10, isPaused: false, speed: 2, now: t0)
         // 大误差(seek):直接对齐
-        clock.update(position: 100, isPaused: false, speed: 2, now: t0.addingTimeInterval(0.4))
-        XCTAssertEqual(clock.time(at: t0.addingTimeInterval(0.4)), 100, accuracy: 0.0001)
+        clock.update(position: 100, isPaused: false, speed: 2, now: t0 + 0.4)
+        XCTAssertEqual(clock.time(at: t0 + 0.4), 100, accuracy: 1e-9)
+        XCTAssertEqual(clock.time(at: t0 + 0.5), 100.2, accuracy: 1e-9)
 
         // 暂停:时间停住
-        clock.update(position: 100, isPaused: true, speed: 2, now: t0.addingTimeInterval(0.5))
-        XCTAssertEqual(clock.time(at: t0.addingTimeInterval(5)), 100, accuracy: 0.0001)
+        clock.update(position: 100, isPaused: true, speed: 2, now: t0 + 0.5)
+        XCTAssertEqual(clock.time(at: t0 + 5), 100, accuracy: 1e-9)
+        // 恢复:直接对齐到报来的位置
+        clock.update(position: 100.1, isPaused: false, speed: 2, now: t0 + 6)
+        XCTAssertEqual(clock.time(at: t0 + 6), 100.1, accuracy: 1e-9)
+    }
+
+    // MARK: - 预渲染
+
+    func testSpriteAlignsToDevicePixels() {
+        XCTAssertEqual(DanmakuSprite.aligned(10.3, scale: 2), 10.5)
+        XCTAssertEqual(DanmakuSprite.aligned(10.2, scale: 2), 10)
+        XCTAssertEqual(DanmakuSprite.aligned(10.4, scale: 1), 10)
+        XCTAssertEqual(DanmakuSprite.aligned(10.4, scale: 0), 10.4)
+    }
+
+    func testSpriteOutlineColorFollowsTextBrightness() {
+        XCTAssertTrue(DanmakuSprite.usesLightOutline(0x000000))
+        XCTAssertTrue(DanmakuSprite.usesLightOutline(0x101040))
+        XCTAssertFalse(DanmakuSprite.usesLightOutline(0xFFFFFF))
+        XCTAssertFalse(DanmakuSprite.usesLightOutline(0xFF0000))
+    }
+
+    func testSpriteRendersFillAndOutlineAtPixelSize() throws {
+        let scale: CGFloat = 2
+        let rendered = try XCTUnwrap(DanmakuSprite.render(
+            text: "弹幕 Test", color: 0xFFFFFF, fontSize: 24, lineHeight: 24 * 1.3, scale: scale))
+        // 位图像素与 pt 尺寸严格是 scale 倍:上屏不做重采样
+        XCTAssertEqual(CGFloat(rendered.image.width), rendered.size.width * scale)
+        XCTAssertEqual(CGFloat(rendered.image.height), rendered.size.height * scale)
+        XCTAssertGreaterThanOrEqual(rendered.size.height, 24 * 1.3 + rendered.margin * 2)
+
+        // 读回像素:白字黑边,两种颜色都应出现
+        let width = rendered.image.width
+        let height = rendered.image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(rendered.image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        XCTAssertTrue(drawn)
+        var fill = 0
+        var outline = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index + 3] > 220 {
+            if pixels[index] > 220 { fill += 1 } else if pixels[index] < 40 { outline += 1 }
+        }
+        XCTAssertGreaterThan(fill, 0, "应有白色字形")
+        XCTAssertGreaterThan(outline, 0, "应有黑色描边")
+    }
+
+    // MARK: - 逐帧诊断
+
+    /// 120 Hz 屏上第 `refresh` 次刷新的一帧(速度 200pt/s):回调在上屏前 8ms 到达;
+    /// `timeOffset` 模拟时钟校正带来的额外时间跳动,`late` 模拟回调晚到
+    private func frame(
+        _ refresh: Int, timeOffset: Double = 0, rate: Double = 1, late: Double = 0, visible: Bool = true
+    ) -> DanmakuFrameStats.Frame {
+        let target = 5000 + Double(refresh) / 120
+        return DanmakuFrameStats.Frame(
+            hostTime: target - 0.008 + late, targetTime: target, refreshInterval: 1.0 / 120,
+            danmakuTime: 10 + Double(refresh) / 120 * rate + timeOffset,
+            velocity: 200, rate: rate, workDuration: 0.001, visibleCount: 3, windowVisible: visible)
+    }
+
+    func testFrameStatsUniformMotionHasNoDropsOrJumps() throws {
+        var stats = DanmakuFrameStats()
+        for i in 0..<120 { stats.record(frame(i, rate: 2)) }
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.frameCount, 120)
+        XCTAssertEqual(summary.refreshInterval, 1.0 / 120, accuracy: 1e-9)
+        XCTAssertEqual(summary.intervalMedian, 1.0 / 120, accuracy: 1e-9)
+        XCTAssertEqual(summary.droppedFrames, 0)
+        XCTAssertEqual(summary.redraws, 0)
+        XCTAssertEqual(summary.callbackJitterMax, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.marginMin, 0.007, accuracy: 1e-9)
+        XCTAssertEqual(summary.jumpCount, 0)
+        XCTAssertEqual(summary.snapCount, 0)
+        XCTAssertEqual(summary.speedDeviationMax, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.windowVisibleFrames, 120)
+    }
+
+    /// 时钟微调速度(每帧多走 2% 的时间)不算跳动,只体现为速度偏差
+    func testFrameStatsReportsSlewAsSpeedDeviationNotJumps() throws {
+        var stats = DanmakuFrameStats()
+        for i in 0..<120 {
+            stats.record(frame(i, timeOffset: Double(i) / 120 * 0.02, visible: i < 100))
+        }
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.jumpCount, 0)
+        XCTAssertEqual(summary.speedDeviationMax, 0.02, accuracy: 1e-6)
+        XCTAssertEqual(summary.windowVisibleFrames, 100)
+        XCTAssertTrue(summary.description.contains("可见 100/120"))
+    }
+
+    /// 回归:整体只跟上每 4 次刷新里的 1 次(120 Hz 屏上 30 帧)。
+    /// 按中位数判定会把 33ms 当正常、一帧也数不出来;按刷新间隔判定每次都跳过 3 次刷新。
+    func testFrameStatsCountsDropsAgainstRefreshIntervalNotMedian() throws {
+        var stats = DanmakuFrameStats()
+        for i in stride(from: 0, to: 80, by: 4) { stats.record(frame(i)) }
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.intervalMedian, 4.0 / 120, accuracy: 1e-9)
+        XCTAssertEqual(summary.droppedFrames, 19 * 3)
+        XCTAssertEqual(summary.redraws, 0)
+    }
+
+    func testFrameStatsCountsRedrawAndLateCallback() throws {
+        var stats = DanmakuFrameStats()
+        for i in 0..<10 { stats.record(frame(i)) }
+        // 同一次刷新回调了两次
+        stats.record(frame(9))
+        // 回调晚到 10ms:做完时这一帧已经上屏
+        stats.record(frame(10, late: 0.010))
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.redraws, 1)
+        XCTAssertEqual(summary.droppedFrames, 0)
+        XCTAssertEqual(summary.marginMin, -0.003, accuracy: 1e-9)
+        XCTAssertEqual(summary.callbackJitterMax, 0.010, accuracy: 1e-9)
+    }
+
+    func testFrameStatsSeparatesClockJumpFromSeek() throws {
+        var stats = DanmakuFrameStats()
+        for i in 0..<10 { stats.record(frame(i)) }
+        // 时钟校正:时间多走了 0.01 秒 → 横向跳 2pt
+        for i in 10..<20 { stats.record(frame(i, timeOffset: 0.01)) }
+        // seek:时间一下跳了 30 秒
+        for i in 20..<30 { stats.record(frame(i, timeOffset: 30)) }
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.jumpCount, 1)
+        XCTAssertEqual(summary.jumpMax, 2, accuracy: 1e-6)
+        XCTAssertEqual(summary.snapCount, 1)
+    }
+
+    func testFrameStatsSkipsResumeGapAndResetsWindow() throws {
+        var stats = DanmakuFrameStats()
+        stats.record(frame(0))
+        // 暂停 2 秒后恢复:这段间隔不计入
+        stats.record(frame(240, timeOffset: -2))
+        XCTAssertNil(stats.summary(window: 1))
+
+        stats.record(frame(241, timeOffset: -2))
+        XCTAssertEqual(try XCTUnwrap(stats.summary(window: 1)).droppedFrames, 0)
+
+        stats.resetWindow()
+        XCTAssertNil(stats.summary(window: 1))
+        // 清空后仍以上一帧为起点
+        stats.record(frame(242, timeOffset: -2))
+        XCTAssertEqual(try XCTUnwrap(stats.summary(window: 1)).frameCount, 1)
     }
 }
