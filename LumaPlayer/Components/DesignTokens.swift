@@ -30,6 +30,9 @@ import Foundation
 /// hero 上**只有播放按钮**(透明玻璃;电影 / 分集直接播,剧集点了再定位分集:看过接着看、
 /// 没看过第一集),⛔ 不给「详情」按钮 —— 进详情靠点整块画面。
 /// 详情页:hero 图透到窗口最上沿,顶栏不放来源菜单(切换会清掉导航栈)。
+/// 剧集页的分集标题行有「批量标记」菜单(整季已看 / 未看 + 勾选分集…,API_CONTRACT.md 5.8):
+/// 它是**普通菜单**不是玻璃,与同一行的「跳转选集」一致;逐条串行写,进度显示在这一行
+/// 左侧「共 N 集」旁边,结果用 alert 明示(成功也说一声,失败带条数与原因)。
 /// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
 /// **加载态**:首屏无内容时用灰色骨架(`Skeleton*`)照真实布局占位;刷新时保留旧内容,
@@ -362,6 +365,19 @@ enum Metrics {
     /// 轮播分页圆点的直径(`HomeHeroCarousel`)。比系统 `PageControl` 的小一号,
     /// 它压在图上、只是位置提示,不该抢文字区的注意力
     static let heroDotSize: CGFloat = 7
+
+    // MARK: 批量标记分集(`SeasonPlayedPickerSheet`,API_CONTRACT.md 5.8)
+
+    /// 面板宽度。与 `DanmakuPickerSheet` / `PlayerMarkersEditor` 同一量级:
+    /// 一行放得下「集号. 集名」+ 已看标记,又不至于宽得像另一个窗口。
+    static let playedPickerWidth: CGFloat = 520
+    /// 分集清单的高度上限:集多时滚动。
+    static let playedPickerListMaxHeight: CGFloat = 420
+    /// 清单里一行的高度(复选框 + 一行文字)。
+    ///
+    /// 高度是**按行数算出来的**(`SeasonPlayedPickerSheet.listHeight`),不是把 `List`
+    /// 丢进弹性容器:那样集少时下方空一大片、集多时又按容器高度硬裁。
+    static let playedPickerRowHeight: CGFloat = 24
 
     // MARK: 分集货架滚动条
 

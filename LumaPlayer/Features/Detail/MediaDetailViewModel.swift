@@ -51,6 +51,9 @@ final class MediaDetailViewModel {
     private var refreshTask: Task<Void, Never>?
     private var episodesRefreshTask: Task<Void, Never>?
     private var similarTask: Task<Void, Never>?
+    /// 批量标记的代次号:换条目(`load`)时 +1,旧批次的结果不再回写。
+    /// 与 `generation` 分开 —— 那个管的是详情 / 季 / 分集的加载任务。
+    private var batchToken = 0
 
     /// 相似推荐的条数(与 Emby Web 同为一行 12 个)
     static let similarLimit = 12
@@ -68,6 +71,10 @@ final class MediaDetailViewModel {
         episodesRefreshTask?.cancel()
         similarTask?.cancel()
         generation += 1
+        // 换条目:上一页的批量进度与提示不再属于这里(见 runBatch)
+        batchToken += 1
+        batchProgress = nil
+        batchMessage = nil
         let myGeneration = generation
 
         // 同一台服务器上的同一项、且已经有内容:原地刷新,不回退到 loading,
@@ -140,12 +147,111 @@ final class MediaDetailViewModel {
 
     // MARK: - 已看 / 收藏(API_CONTRACT.md 5.5 / 5.6)
 
-    /// 切换已看。作用于剧集(Series)时服务端会把整部剧的分集一起标上,
+    /// 切换已看。作用于剧集(Series)时服务端会把整部剧的分集一起标上
+    /// (服务端级联,客户端不依赖它做状态:写入后一律重读详情 / 分集),
     /// 所以成功后要重拉分集与详情,而不只是改这一项。
     func togglePlayed(_ item: EmbyItem, server: ServerProfile) {
         let target = !(item.userData?.played ?? false)
         writeUserData(item, server: server, failureVerb: target ? "标记为已看" : "标记为未看") { connection in
             try await connection.setPlayed(itemID: item.id, played: target)
+        }
+    }
+
+    // MARK: - 批量标记(API_CONTRACT.md 5.8)
+
+    /// 正在进行的批量标记。nil = 没有在跑。
+    ///
+    /// Emby 没有批量端点,服务端只能逐条写,所以「标记一季」在网速慢时要几秒 ——
+    /// 界面必须能显示进度,否则用户以为点了没反应。
+    struct BatchPlayedProgress: Sendable, Equatable {
+        /// 本次要写的条数(已经处于目标状态的集不计入)
+        let total: Int
+        /// 已经成功写回的条数
+        var completed: Int = 0
+        /// 目标是已看(true)还是未看(false)
+        let played: Bool
+    }
+
+    private(set) var batchProgress: BatchPlayedProgress?
+
+    /// 一次批量标记的结果提示(成功也要说一声:几十集的写入不该静默结束)。
+    /// 有失败时它是错误文案,必须让用户看到。
+    var batchMessage: String?
+
+    /// 这些集里还有哪些需要写(已经处于目标状态的不再发请求)。
+    ///
+    /// `UserData` 缺失按「未看」算,与 `EmbyItem.isPlayed` 同一口径。
+    nonisolated static func pendingIDs(in episodes: [EmbyItem], played: Bool) -> [String] {
+        episodes.filter { $0.isPlayed != played }.map(\.id)
+    }
+
+    /// 单季一键:把这一季里还没到目标状态的集逐条标记(API_CONTRACT.md 5.8)。
+    func markSeasonPlayed(_ episodes: [EmbyItem], played: Bool, server: ServerProfile) {
+        runBatch(itemIDs: Self.pendingIDs(in: episodes, played: played), played: played, server: server)
+    }
+
+    /// 勾选面板:只标选中的那些。
+    func markEpisodesPlayed(_ episodes: [EmbyItem], played: Bool, server: ServerProfile) {
+        runBatch(itemIDs: Self.pendingIDs(in: episodes, played: played), played: played, server: server)
+    }
+
+    /// 批量写入的唯一出口:串行、失败不中断,结束后以服务端为准重读一次。
+    ///
+    /// 批量在后台跑时用户可能切到别的条目(`load` 会 `batchToken += 1`):
+    /// 那时旧批次**已经发出去的请求照样发完**(写操作不该半途丢下),但不再回写
+    /// 进度 / 提示,也不再碰新页面的 `updatingItemIDs`。清理一律放在 `defer` 里,
+    /// ⛔ 不能靠 `guard` 提前 return —— 那会把 `batchProgress` 永久卡住,
+    /// 新页面的批量入口就再也点不动了。
+    private func runBatch(itemIDs: [String], played: Bool, server: ServerProfile) {
+        guard !itemIDs.isEmpty, batchProgress == nil else { return }
+        batchToken += 1
+        let myToken = batchToken
+        batchProgress = BatchPlayedProgress(total: itemIDs.count, played: played)
+        let connection = container.connection(for: server)
+        let myGeneration = generation
+        updatingItemIDs.formUnion(itemIDs)
+        Task {
+            defer {
+                if myToken == batchToken {
+                    updatingItemIDs.subtract(itemIDs)
+                    batchProgress = nil
+                }
+            }
+            let verb = played ? "标记为已看" : "标记为未看"
+            let result: PlayedBatchResult
+            do {
+                result = try await connection.setPlayed(itemIDs: itemIDs, played: played) { done, _ in
+                    await MainActor.run {
+                        guard myToken == self.batchToken, var progress = self.batchProgress else { return }
+                        progress.completed = done
+                        self.batchProgress = progress
+                    }
+                }
+            } catch let error as EmbyAPIError {
+                guard myToken == batchToken else { return }
+                if error == .cancelled { return }
+                if error == .unauthorized { container.state.serverNeedingLogin = server }
+                batchMessage = "\(verb)失败:\(error.userMessage)"
+                return
+            } catch {
+                guard myToken == batchToken else { return }
+                batchMessage = "\(verb)失败,请稍后重试。"
+                return
+            }
+            guard myToken == batchToken, myGeneration == generation else { return }
+            for (itemID, userData) in result.written {
+                apply(userData, to: itemID)
+            }
+            let succeeded = result.written.count
+            if result.isComplete {
+                batchMessage = "已把 \(succeeded) 集\(verb)。"
+            } else {
+                let reason = result.firstError.map { "(\($0.userMessage))" } ?? ""
+                batchMessage = "\(verb):\(succeeded) 集成功,\(result.failedItemIDs.count) 集失败\(reason)。"
+            }
+            if result.firstError == .unauthorized { container.state.serverNeedingLogin = server }
+            // 已看状态会改变续播定位与剧 / 季上的汇总,以服务端为准重读
+            refreshAfterPlayback(server: server)
         }
     }
 

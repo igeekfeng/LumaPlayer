@@ -367,6 +367,56 @@ actor ServerConnection {
         return userData
     }
 
+    /// 批量标记已看 / 未看(API_CONTRACT.md 5.8)。
+    ///
+    /// Emby **没有批量端点**(官方 OpenAPI 4.1.1.0 只有 `POST|DELETE /Users/{UserId}/PlayedItems/{Id}`),
+    /// 所以这里就是**逐条**发 5.5 的请求:串行、不并发(CLAUDE.md「真实服务器使用纪律」:
+    /// 不对同一台服务器并发轰炸),全部发完才让缓存作废一次。
+    ///
+    /// 失败**不中断**:网络抖一下就丢掉后面几十集比「有几集没标上」更糟。
+    /// 返回实际失败的条目 Id 与第一个错误 —— 调用方必须把它们摆到用户面前
+    /// (CLAUDE.md 硬规则 4:不静默吞错),并据此重读列表,让界面与服务端一致。
+    ///
+    /// - Parameter onProgress: 每成功一条回调一次(已成功条数, 总数)。在 actor 上调用,
+    ///   调用方自行切回主线程。
+    func setPlayed(
+        itemIDs: [String],
+        played: Bool,
+        onProgress: @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> PlayedBatchResult {
+        guard !itemIDs.isEmpty else { return PlayedBatchResult() }
+        // 先确保已登录:一条都没发就 401 的话,没必要把每条都失败一遍
+        let userID = try await currentUserID()
+        var result = PlayedBatchResult()
+        for (index, itemID) in itemIDs.enumerated() {
+            do {
+                let userData: EmbyUserData = try await authenticated(
+                    .setPlayed(userID: userID, itemID: itemID, played: played)
+                )
+                result.written[itemID] = userData
+                await onProgress(index + 1, itemIDs.count)
+            } catch let error as EmbyAPIError {
+                // 取消是正常流程(离开页面),不当成失败继续往下发
+                if error == .cancelled { throw error }
+                result.failedItemIDs.append(itemID)
+                if result.firstError == nil { result.firstError = error }
+                if error == .unauthorized {
+                    // 401 已经由 withUnauthorizedHandling 处理过(重登或清 token):
+                    // 后面的请求只会再 401 一遍,没有继续的意义。但**没发出去的也要算失败**
+                    // —— 否则调用方拿到的失败数比实际少,会以为剩下的标上了(硬规则 4)
+                    result.failedItemIDs.append(contentsOf: itemIDs[(index + 1)...])
+                    break
+                }
+            } catch {
+                result.failedItemIDs.append(itemID)
+                if result.firstError == nil { result.firstError = .transport(.unknown) }
+            }
+        }
+        // 一次写操作改了多条 UserData:整台作废(与单条 setPlayed 同一条规则)
+        await responseCache?.invalidate(serverID: profile.id)
+        return result
+    }
+
     /// 收藏 / 取消收藏(API_CONTRACT.md 5.6)。返回写入后的 `UserData`。
     func setFavorite(itemID: String, favorite: Bool) async throws -> EmbyUserData {
         let userID = try await currentUserID()

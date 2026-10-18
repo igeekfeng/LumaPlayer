@@ -22,6 +22,8 @@ struct MediaDetailView: View {
     /// 共用一个 ViewModel 会让上层页面显示下层那一项的内容。
     @State private var viewModel: MediaDetailViewModel
     @State private var isOverviewExpanded = false
+    /// 勾选分集批量标记的面板
+    @State private var isBatchPickerPresented = false
     @Environment(\.openWindow) private var openWindow
 
     init(
@@ -80,6 +82,34 @@ struct MediaDetailView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(viewModel.userDataError ?? "")
+        }
+        // 批量标记的结果:成功也要说一声(几十集的写入不该静默结束),
+        // 有失败时文案里带失败条数与原因(API_CONTRACT.md 5.8)
+        .alert(
+            "批量标记",
+            isPresented: Binding(
+                get: { viewModel.batchMessage != nil },
+                set: { if !$0 { viewModel.batchMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(viewModel.batchMessage ?? "")
+        }
+        .sheet(isPresented: $isBatchPickerPresented) {
+            if case .loaded(let episodes) = viewModel.episodesState {
+                SeasonPlayedPickerSheet(
+                    episodes: episodes,
+                    seasonName: viewModel.selectedSeason?.name ?? "本季",
+                    onApply: { ids, played in
+                        isBatchPickerPresented = false
+                        viewModel.markEpisodesPlayed(
+                            episodes.filter { ids.contains($0.id) }, played: played, server: server
+                        )
+                    },
+                    onClose: { isBatchPickerPresented = false }
+                )
+            }
         }
     }
 
@@ -354,9 +384,14 @@ struct MediaDetailView: View {
                     serverID: server.id,
                     store: container.posters,
                     updatingIDs: viewModel.updatingItemIDs,
+                    batchProgress: viewModel.batchProgress,
                     onSelect: { viewModel.selectEpisode($0) },
                     onPlay: { play($0, fromBeginning: $1) },
-                    onTogglePlayed: { viewModel.togglePlayed($0, server: server) }
+                    onTogglePlayed: { viewModel.togglePlayed($0, server: server) },
+                    onMarkSeasonPlayed: { played in
+                        viewModel.markSeasonPlayed(episodes, played: played, server: server)
+                    },
+                    onOpenBatchPicker: { isBatchPickerPresented = true }
                 )
             }
         }

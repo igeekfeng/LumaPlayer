@@ -18,10 +18,16 @@ struct EpisodeListView: View {
     let store: PosterImageStore
     /// 正在写 UserData 的集(右键菜单里的已看切换据此禁用)
     let updatingIDs: Set<String>
+    /// 正在跑的批量标记(nil = 没有)。有值时标题行显示进度
+    let batchProgress: MediaDetailViewModel.BatchPlayedProgress?
     let onSelect: (EmbyItem) -> Void
     /// 第二个参数:是否从头播放
     let onPlay: (EmbyItem, Bool) -> Void
     let onTogglePlayed: (EmbyItem) -> Void
+    /// 单季一键:整季标记为已看(true)/ 未看(false)
+    let onMarkSeasonPlayed: (Bool) -> Void
+    /// 打开「勾选分集批量标记」面板
+    let onOpenBatchPicker: () -> Void
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
@@ -35,7 +41,15 @@ struct EpisodeListView: View {
                 Text("共 \(episodes.count) 集")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let batchProgress {
+                    // 逐条串行发请求(API_CONTEXT 5.8),几十集时要有进度,否则像点了没反应
+                    Text("正在标记 \(batchProgress.completed)/\(batchProgress.total) 集…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer(minLength: 0)
+                batchMenu
                 if geometry.isScrollable {
                     // 几百上千集时一屏一屏翻太慢:直接从菜单选集,横排滚过去
                     EpisodeJumpMenu(episodes: episodes, onJump: jump(to:))
@@ -101,6 +115,37 @@ struct EpisodeListView: View {
         withAnimation(reduceMotion ? nil : .easeInOut(duration: Metrics.animationStandard)) {
             position.scrollTo(id: episode.id, anchor: .leading)
         }
+    }
+
+    /// 单季一键 + 勾选面板的入口。
+    ///
+    /// Emby 没有批量端点(API_CONTRACT.md 5.8),这里只负责收集意图,逐条写由
+    /// `MediaDetailViewModel.runBatch` 串行做;已经在目标状态的集不计入,菜单项据此禁用。
+    private var batchMenu: some View {
+        let pendingPlayed = episodes.filter { !$0.isPlayed }.count
+        let pendingUnplayed = episodes.count - pendingPlayed
+        let isBusy = batchProgress != nil
+        return Menu {
+            Button("整季标记为已看", systemImage: "checkmark.circle") {
+                onMarkSeasonPlayed(true)
+            }
+            .disabled(pendingPlayed == 0)
+            Button("整季标记为未看", systemImage: "circle") {
+                onMarkSeasonPlayed(false)
+            }
+            .disabled(pendingUnplayed == 0)
+            Divider()
+            Button("选择分集…", systemImage: "checklist") {
+                onOpenBatchPicker()
+            }
+        } label: {
+            Label("批量标记", systemImage: "checkmark.circle.badge.plus")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(isBusy)
+        .help(isBusy ? "正在标记,请稍候" : "整季或选中的分集一次性标记已看 / 未看")
+        .accessibilityLabel("批量标记")
     }
 
     @ViewBuilder
