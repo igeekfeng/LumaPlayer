@@ -123,6 +123,7 @@ final class DanmakuLayerView: NSView {
             removeAllSprites()
         }
         self.settings = settings
+        if self.isPaused != isPaused { diagnostics?.breakContinuity() }
         self.isPaused = isPaused
         self.speed = speed.isFinite && speed > 0 ? speed : 1
         container.opacity = Float(settings.opacity)
@@ -148,6 +149,7 @@ final class DanmakuLayerView: NSView {
         }
         applyBackingScale(window.backingScaleFactor)
         if displayLink == nil {
+            diagnostics?.breakContinuity()
             let link = displayLink(target: self, selector: #selector(step(_:)))
             // common 模式:拖窗口 / 菜单展开时也照常刷新
             link.add(to: .main, forMode: .common)
@@ -174,6 +176,7 @@ final class DanmakuLayerView: NSView {
 
     /// displayLink 强引用 target,视图离开窗口 / 被 SwiftUI 拆掉时必须 invalidate
     func stopDisplayLink() {
+        diagnostics?.breakContinuity()
         displayLink?.invalidate()
         displayLink = nil
     }

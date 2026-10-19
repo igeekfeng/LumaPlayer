@@ -241,6 +241,13 @@ final class PlayerViewModel {
     private var isPositionSettled = false
     private var upNextTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
+    private var monitorTimerTask: Task<Void, Never>?
+    private var monitorRequests: AsyncStream<Void>.Continuation?
+    /// 开关期间的旧轮不能给重新打开的面板/缓冲状态写回。
+    private var statisticsEpoch = 0
+    private var bufferingEpoch = 0
+    /// 默认使用 mpv 真异步 API;测试注入可控的挂起读取,不需要播放/网络/GL。
+    private let readMonitoredProperties: @MainActor (MPVPlayer, [String]) async throws -> [String: String]
 
     /// 起播位置(秒)。来源有两个:打开时的恢复位置,以及转码 seek 的目标。
     private var startSeconds: Double
@@ -308,9 +315,13 @@ final class PlayerViewModel {
         lastFramePlayer: MPVPlayer? = nil,
         preparer: (any PlaybackSessionPreparing)? = nil,
         reporter: (any PlaybackReporting)? = nil,
-        displaySleep: (any DisplaySleepInhibiting)? = nil
+        displaySleep: (any DisplaySleepInhibiting)? = nil,
+        readMonitoredProperties: @escaping @MainActor (MPVPlayer, [String]) async throws -> [String: String] = {
+            try await $0.stringPropertiesAsync($1)
+        }
     ) {
         self.container = container
+        self.readMonitoredProperties = readMonitoredProperties
         self.request = request
         self.carryOver = carryOver
         self.frozenPlayer = lastFramePlayer
@@ -518,6 +529,10 @@ final class PlayerViewModel {
         generation &+= 1
         startTask?.cancel()
         startTask = nil
+        monitorRequests?.finish()
+        monitorRequests = nil
+        monitorTimerTask?.cancel()
+        monitorTimerTask = nil
         monitorTask?.cancel()
         monitorTask = nil
         // 待发的倍速上报属于已经结束的会话:Stopped 之前的最终 Progress 会带上倍速
@@ -1089,34 +1104,70 @@ final class PlayerViewModel {
 
     func toggleStatistics() {
         showsStatistics.toggle()
-        if showsStatistics { refreshMonitoredProperties() } else { statistics = nil }
-    }
-
-    /// 低频轮询 mpv(`Metrics.playerMonitorInterval`):已缓存位置常驻读,
-    /// 缓冲进度 / 网速只在缓冲中读,统计信息只在 overlay 打开时读。
-    private func startMonitoring() {
-        monitorTask?.cancel()
-        monitorTask = Task { [weak self] in
-            while true {
-                do { try await Task.sleep(for: .seconds(Metrics.playerMonitorInterval)) } catch { return }
-                guard let self else { return }
-                self.refreshMonitoredProperties()
-            }
+        statisticsEpoch &+= 1
+        if showsStatistics {
+            // 唤醒唯一 worker;在途轮不取消,最多合并一个待刷轮,不因反复开关堆积核心读取。
+            monitorRequests?.yield(())
+        } else {
+            statistics = nil
         }
     }
 
-    private func refreshMonitoredProperties() {
+    /// 低频 timer 只发刷新信号,唯一 worker 串行 await;长读取不占 MainActor/state mutex。
+    /// bufferingNewest(1) 合并慢核心期间的 tick 与开面板请求,不会无限并发排队。
+    /// internal 以便无网络测试安装空闲 mpv;生产只在 prepareAndLoad 中调用。
+    func startMonitoring(player: MPVPlayer) {
+        monitorRequests?.finish()
+        monitorTimerTask?.cancel()
+        monitorTask?.cancel()
+        self.player = player
+        let requests = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        monitorRequests = requests.continuation
+        monitorTask = Task { [weak self] in
+            defer { requests.continuation.finish() }
+            for await _ in requests.stream {
+                guard !Task.isCancelled else { return }
+                // 强引用只维持单轮;在等下一次 tick 时不永久持有 ViewModel。
+                guard let self else { return }
+                await self.refreshMonitoredProperties()
+            }
+        }
+        monitorTimerTask = Task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(Metrics.playerMonitorInterval)) } catch { return }
+                if case .terminated = requests.continuation.yield(()) { return }
+            }
+        }
+        if showsStatistics { requests.continuation.yield(()) }
+    }
+
+    private func refreshMonitoredProperties() async {
         guard let player else { return }
+        let generation = generation
+        let statisticsEpoch = statisticsEpoch
+        let bufferingEpoch = bufferingEpoch
+        let readsStatistics = showsStatistics
+        let readsBuffering = isBuffering
         var names = ["demuxer-cache-time"]
-        if isBuffering { names += ["cache-buffering-state", "cache-speed"] }
-        if showsStatistics { names += PlayerStatistics.propertyNames }
-        let values = player.stringProperties(names)
+        if readsBuffering { names += ["cache-buffering-state", "cache-speed"] }
+        if readsStatistics { names += PlayerStatistics.propertyNames }
+        let values: [String: String]
+        do {
+            values = try await readMonitoredProperties(player, names)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, self.generation == generation, self.player === player else { return }
+            Self.logger.error("播放监控属性读取失败:\(String(describing: error), privacy: .public)")
+            return // 诊断失败不能盖住正常视频;不伪造空字典或覆盖旧读数。
+        }
+        guard !Task.isCancelled, self.generation == generation, self.player === player else { return }
         bufferedUntilSeconds = values["demuxer-cache-time"].flatMap(Double.init)
-        if isBuffering {
+        if readsBuffering, isBuffering, self.bufferingEpoch == bufferingEpoch {
             bufferingPercent = values["cache-buffering-state"].flatMap(Int.init)
             cacheSpeedBytesPerSecond = values["cache-speed"].flatMap(Double.init)
         }
-        if showsStatistics {
+        if readsStatistics, showsStatistics, self.statisticsEpoch == statisticsEpoch {
             statistics = PlayerStatistics(
                 properties: values, session: session,
                 renderBackend: player.statisticsSnapshot().renderBackend)
@@ -1273,7 +1324,7 @@ final class PlayerViewModel {
             player.attach(eventBridge: bridge)
             // 先挂出去让视图把 GL layer 建起来,再等上下文就绪
             self.player = player
-            startMonitoring()
+            startMonitoring(player: player)
 
             let deadline = Date().addingTimeInterval(Self.glAttachTimeout)
             while !player.statisticsSnapshot().glAttached, Date() < deadline {
@@ -1487,6 +1538,7 @@ final class PlayerViewModel {
             subtitleDelay = value
 
         case .buffering(let value):
+            if value != isBuffering { bufferingEpoch &+= 1 }
             isBuffering = value
             if !value {
                 bufferingPercent = nil

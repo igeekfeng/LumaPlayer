@@ -41,13 +41,15 @@ PlayerViewModel (@MainActor) → PlaybackSessionCoordinator → MPVPlayer (Core/
 FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。
 
 `CAOpenGLLayer` 的异步模式由**主线程 runloop 上的定时器**驱动,draw 与 `mpv_render_context_render` 都在主线程执行
-(2026-10-17 采样实测)。所以 render 不能阻塞:`video-timing-offset=0`(§3),否则 render 画完会等到这一帧的上屏时刻,
-主线程被压到视频帧率(`PITFALLS.md`「渲染阻塞主线程」)。
+(2026-10-17 采样实测)。所以保留 `video-timing-offset=0`(§3)避免提前交帧,并在每次 render 显式传
+`BLOCK_FOR_TARGET_TIME=0`,不在主线程等待 VO 的 present 通知。只设置 offset 不等于关闭等待分支;
+默认等待曾使主线程被压到视频帧率(`PITFALLS.md`「渲染阻塞主线程」)。这不保证 GL 渲染 / GPU 提交本身无阻塞,
+音画同步、60 fps 与 gpu-next 的真实表现仍需 Q49 验证。
 
 ## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer` 里的表)
 
 `config=no`、`load-scripts=no`、`terminal=no`(libmpv 默认即如此,防御性显式设置)、`msg-level`、`vo=libmpv`、
-`hwdec=auto`、`cache=yes`、`demuxer-max-bytes=128MiB`(未按码率标定,M2)、`video-timing-offset=0`(render 不阻塞,§2)。
+`hwdec=auto`、`cache=yes`、`demuxer-max-bytes=128MiB`(未按码率标定,M2)、`video-timing-offset=0`(不提前交帧,配合 §2 关闭 render 的 target-time 等待)。
 任何 `mpv_set_option_string` 失败都当致命。⛔ 不设 `tls-verify=no` 及任何跳过证书校验的选项。
 
 ### 3.1 hwdec
@@ -89,13 +91,18 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 
 `time-pos`、`duration`、`pause`、`volume`、`mute`、`speed`、`paused-for-cache`、`track-list`、`aid` / `sid`、
 `hwdec-current`、`sub-delay` 等(列表在 `MPVPlayer`)。统计与缓冲进度这类高频变化值**不 observe**,
-由调用方低频轮询 `stringProperties(_:)`;读不到的属性结果里就没有这个键,不填占位。
+由调用方低频轮询 `stringPropertiesAsync(_:)`:用 `mpv_get_property_async` 入队,事件线程处理
+`GET_PROPERTY_REPLY`、复制字符串后恢复等待方,不在 MainActor 同步读核心,也不把长同步读取挪到持有 state 锁的后台任务。
+每轮属性串行读取、重复名字去重;属性暂不可用时省略键,其它错误抛出并由监控日志记录,不伪装为空结果。
+取消 / 拆卸 / 核心退出必须结束在途等待;旧实例和过期面板 / 缓冲状态的回复不写回 UI。
+同步 `stringProperties(_:)` 仅保留给同步调用与测试,播放页监控不再使用。
 
 ### 6.2 事件类型
 
 `PROPERTY_CHANGE`、`START_FILE`、`FILE_LOADED`、`END_FILE`(`reason == ERROR(4)` → `loadFailed`)、
-`SEEK`、`PLAYBACK_RESTART`、`LOG_MESSAGE`、`SHUTDOWN`(核心退出 → `endFile(.error)`)。
-队列满会静默丢事件:等帧 / 等结束的循环(测试、探针)要持续排空。
+`SEEK`、`PLAYBACK_RESTART`、`LOG_MESSAGE`、`GET_PROPERTY_REPLY`(异步读取回复)、`SHUTDOWN`(核心退出 → `endFile(.error)`)。
+队列满会丢事件:等帧 / 等结束的循环(测试、探针)要持续排空;收到 `QUEUE_OVERFLOW` 时记录错误并结束所有
+在途属性等待,避免丢失 `GET_PROPERTY_REPLY` 后监控永久挂起。
 
 ### 6.3 线程模型(强制)
 

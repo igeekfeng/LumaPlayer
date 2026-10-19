@@ -60,7 +60,9 @@ module map 与 `OTHER_LDFLAGS` 都指向那里。`brew upgrade` 换了 ffmpeg / 
 **渲染阻塞主线程:播放时界面和弹幕被压到视频帧率。** `CAOpenGLLayer` 异步模式的 draw 跑在主线程(runloop 定时器,
 不是独立渲染线程);`mpv_render_context_render` 默认 `BLOCK_FOR_TARGET_TIME = 1`,画完阻塞到这一帧的上屏时刻
 (最长 `video-timing-offset`,默认 0.05 s)。实测 24 fps 片源播放时主线程 78% 的样本卡在 render 里的 `pthread_cond_wait`,
-弹幕 displayLink 只剩约 24 Hz、每次晚 30–40 ms;不播视频时 120 Hz。解:启动选项 `video-timing-offset=0`(render.h 推荐的替代做法)。
+弹幕 displayLink 只剩约 24 Hz、每次晚 30–40 ms;不播视频时 120 Hz。现在:保留启动选项 `video-timing-offset=0`
+避免提前交帧,每次 render 再显式传 `BLOCK_FOR_TARGET_TIME=0`,不等 VO 的 present 通知(offset=0 本身并未关闭等待分支)。
+后者是 2026-10-19 针对偶发跳步的防御性修补,未复现原故障,真实音画同步仍待 Q49 核验;不代表 GL / GPU 提交也不会阻塞。
 ⚠️ 窗口被遮挡时这个定时器不跑,采样看不到这条路径 —— 取证要先确认窗口可见。
 
 **画面偏移。** `MPVLayerView` 走 `makeBackingLayer`,渲染尺寸取 GL viewport,别让 `layout()` 把 layer 拽到父 layer 原点。

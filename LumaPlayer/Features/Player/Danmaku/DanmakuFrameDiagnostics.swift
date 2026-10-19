@@ -25,6 +25,8 @@ import os
 ///   系统会给 displayLink 降频(实测约 24 Hz、每次晚 30–40 ms),这些窗口的帧率不代表观看时的表现。
 /// - **间隔**:相邻两次更新的 `targetTimestamp` 之差,即画面上弹幕实际隔多久动一次。
 /// - **掉帧**:间隔里跳过的刷新数之和(`round(间隔 / 刷新间隔) − 1`),0 = 每次刷新都跟上了。
+/// - **长停顿**:连续运行中间隔 ≥ 250ms 的次数,仍计入间隔与掉帧;只有明确暂停 / 恢复 / 拆卸
+///   displayLink 或窗口可见性切换才断开比较,避免把真正的严重卡顿误判为暂停。
 /// - **重画**:间隔不到半个刷新间隔(同一次刷新更新了两次)。
 /// - **回调抖动**:实际回调间隔与 `targetTimestamp` 步长之差的最大值。
 /// - **余量**:回调做完时距这一帧上屏还剩多久的最小值;负数 = 做完时这一帧已经上屏了。
@@ -44,6 +46,11 @@ final class DanmakuFrameDiagnostics {
 
     private var stats = DanmakuFrameStats()
     private var windowStart: Double?
+
+    /// 生命周期变化不能跨段比较;不要用「间隔 ≥ 250ms」猜暂停而漏记长停顿。
+    func breakContinuity() {
+        stats.breakContinuity()
+    }
 
     func record(_ frame: DanmakuFrameStats.Frame) {
         stats.record(frame)
@@ -92,6 +99,7 @@ struct DanmakuFrameStats: Sendable {
         var intervalP95: Double
         var intervalMax: Double
         var droppedFrames: Int
+        var longStallCount: Int
         var redraws: Int
         var callbackJitterMax: Double
         var marginMin: Double
@@ -114,7 +122,7 @@ struct DanmakuFrameStats: Sendable {
             let hz = refreshInterval > 0 ? String(format: "%.0f", 1 / refreshInterval) : "?"
             return "弹幕帧 \(String(format: "%.1f", window))s 刷新 \(hz)Hz 可见 \(windowVisibleFrames)/\(frameCount)"
                 + " | 帧 \(frameCount) 间隔 p50 \(ms(intervalMedian)) p95 \(ms(intervalP95)) max \(ms(intervalMax))ms"
-                + " 掉帧 \(droppedFrames) 重画 \(redraws)"
+                + " 掉帧 \(droppedFrames) 长停顿 \(longStallCount) 重画 \(redraws)"
                 + " | 回调抖动 max \(ms(callbackJitterMax))ms 余量 min \(ms(marginMin))ms"
                 + " | 速度 \(pt(velocity))pt/s 时钟跳 \(jumpCount) 次 max \(pt(jumpMax)) 合计 \(pt(jumpTotal))pt seek \(snapCount)"
                 + " 速度偏差 max \(String(format: "%.1f", speedDeviationMax * 100))%"
@@ -123,8 +131,8 @@ struct DanmakuFrameStats: Sendable {
         }
     }
 
-    /// 间隔超过它视为暂停 / 切走后恢复,不计入(displayLink 暂停期间不回调)
-    static let resumeGap = 0.25
+    /// 连续运行时达到它记为长停顿;不能仅凭间隔大就当成暂停,否则最严重的掉帧会被漏掉。
+    static let longStallThreshold = 0.25
     /// 单帧位移残差到这么大才算一次跳动(pt)。时钟微调速度时每帧残差 ≤ 速度偏差 × 每帧位移
     /// (120 Hz、216 pt/s、偏差 10% 时约 0.18 pt),阈值高于它;旧的直接挪位置每次约 0.5–1 pt,能被数到
     static let jumpEpsilon = 0.25
@@ -133,6 +141,7 @@ struct DanmakuFrameStats: Sendable {
     private var intervals: [Double] = []
     private var refreshIntervals: [Double] = []
     private var droppedFrames = 0
+    private var longStallCount = 0
     private var redraws = 0
     private var callbackJitters: [Double] = []
     private var margins: [Double] = []
@@ -153,9 +162,13 @@ struct DanmakuFrameStats: Sendable {
         velocity = frame.velocity
         defer { last = frame }
         guard let last else { return }
+        // 切回被遮挡的窗口不把离开期间计成观看时的掉帧;真正暂停 / 拆掉 displayLink
+        // 由调用方显式 breakContinuity。两帧都可见时,再长的间隔也必须保留。
+        guard frame.windowVisible == last.windowVisible else { return }
         let interval = frame.targetTime - last.targetTime
-        guard interval < Self.resumeGap else { return }
+        guard interval >= 0 else { return }
         intervals.append(interval)
+        if interval >= Self.longStallThreshold { longStallCount += 1 }
 
         if frame.refreshInterval > 0 {
             if interval < frame.refreshInterval * 0.5 {
@@ -191,6 +204,7 @@ struct DanmakuFrameStats: Sendable {
             intervalP95: Self.percentile(sortedIntervals, 0.95),
             intervalMax: sortedIntervals.last ?? 0,
             droppedFrames: droppedFrames,
+            longStallCount: longStallCount,
             redraws: redraws,
             callbackJitterMax: callbackJitters.max() ?? 0,
             marginMin: margins.min() ?? 0,
@@ -208,11 +222,17 @@ struct DanmakuFrameStats: Sendable {
             visibleMax: visibleCounts.max() ?? 0)
     }
 
+    /// 明确的暂停 / 恢复 / displayLink 重建:丢弃间隔起点,保留本统计窗口已有样本。
+    mutating func breakContinuity() {
+        last = nil
+    }
+
     /// 清空本窗口的样本,保留最后一帧作为下一窗口第一个间隔的起点。
     mutating func resetWindow() {
         intervals.removeAll(keepingCapacity: true)
         refreshIntervals.removeAll(keepingCapacity: true)
         droppedFrames = 0
+        longStallCount = 0
         redraws = 0
         callbackJitters.removeAll(keepingCapacity: true)
         margins.removeAll(keepingCapacity: true)

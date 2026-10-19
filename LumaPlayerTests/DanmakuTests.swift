@@ -577,10 +577,40 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(summary.snapCount, 1)
     }
 
-    func testFrameStatsSkipsResumeGapAndResetsWindow() throws {
+    func testFrameStatsCountsLongVisibleStallInsteadOfAssumingPause() throws {
         var stats = DanmakuFrameStats()
         stats.record(frame(0))
-        // 暂停 2 秒后恢复:这段间隔不计入
+        // 两帧之间缺了 0.5s,时钟正常外推:应该记录掉帧,而不是误算为恢复 / 时钟跳。
+        stats.record(frame(60))
+        let summary = try XCTUnwrap(stats.summary(window: 1))
+        XCTAssertEqual(summary.intervalMax, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(summary.droppedFrames, 59)
+        XCTAssertEqual(summary.longStallCount, 1)
+        XCTAssertEqual(summary.jumpCount, 0)
+        XCTAssertEqual(summary.snapCount, 0)
+        XCTAssertTrue(summary.description.contains("长停顿 1"))
+        stats.resetWindow()
+        stats.record(frame(61))
+        XCTAssertEqual(try XCTUnwrap(stats.summary(window: 1)).longStallCount, 0)
+    }
+
+    func testFrameStatsDoesNotCountOcclusionTransitionAsVisibleStall() throws {
+        var stats = DanmakuFrameStats()
+        stats.record(frame(0, visible: true))
+        stats.record(frame(240, visible: false))
+        stats.record(frame(480, visible: true))
+        XCTAssertNil(stats.summary(window: 4))
+        stats.record(frame(481, visible: true))
+        let summary = try XCTUnwrap(stats.summary(window: 4))
+        XCTAssertEqual(summary.droppedFrames, 0)
+        XCTAssertEqual(summary.longStallCount, 0)
+    }
+
+    func testFrameStatsSkipsExplicitPauseAndResetsWindow() throws {
+        var stats = DanmakuFrameStats()
+        stats.record(frame(0))
+        // 暂停 2 秒后恢复:由生命周期明确断开,不猜测间隔
+        stats.breakContinuity()
         stats.record(frame(240, timeOffset: -2))
         XCTAssertNil(stats.summary(window: 1))
 

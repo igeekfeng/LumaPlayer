@@ -53,6 +53,68 @@ struct MPVPlayerStatistics: Sendable, Equatable {
     var renderBackend: String?
 }
 
+/// 单个异步属性请求的完成闸。取消可能先于 continuation 注册,结果必须留到注册时交付。
+/// 所有可变状态由 Mutex 保护;finish/install 都在锁外 resume,且恰好完成一次。
+final class MPVPropertyRequest: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<String?, any Error>?
+        var result: Result<String?, any Error>?
+    }
+    let name: String
+    private let state = Synchronization.Mutex(State())
+
+    init(name: String) { self.name = name }
+
+    var isFinished: Bool { state.withLock { $0.result != nil } }
+
+    func install(_ continuation: CheckedContinuation<String?, any Error>) {
+        let result: Result<String?, any Error>? = state.withLock { state in
+            if let result = state.result { return result }
+            state.continuation = continuation
+            return nil as Result<String?, any Error>?
+        }
+        if let result { continuation.resume(with: result) }
+    }
+
+    func finish(_ result: Result<String?, any Error>) {
+        let continuation = state.withLock { state in
+            guard state.result == nil else { return nil as CheckedContinuation<String?, any Error>? }
+            state.result = result
+            let continuation = state.continuation
+            state.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+/// 请求/回复簿,只在 MPVPlayer 的 state mutex 内访问。非零 id 在同一实例内不复用。
+struct MPVPropertyRequests {
+    private var nextID: UInt64 = 0
+    private var pending: [UInt64: MPVPropertyRequest] = [:]
+
+    mutating func insert(_ request: MPVPropertyRequest) throws -> UInt64 {
+        guard nextID < UInt64.max else {
+            throw MPVError.commandFailed(code: MPV_ERROR_GENERIC.rawValue, message: "属性请求 id 已耗尽")
+        }
+        nextID += 1
+        pending[nextID] = request
+        return nextID
+    }
+
+    mutating func take(_ id: UInt64) -> MPVPropertyRequest? { pending.removeValue(forKey: id) }
+
+    mutating func remove(_ request: MPVPropertyRequest) {
+        if let id = pending.first(where: { $0.value === request })?.key { pending.removeValue(forKey: id) }
+    }
+
+    mutating func takeAll() -> [MPVPropertyRequest] {
+        let requests = Array(pending.values)
+        pending.removeAll()
+        return requests
+    }
+}
+
 /// libmpv 的薄 Swift 封装(业务代码不得直接调 C API,MPV_INTEGRATION.md §1)。
 ///
 /// ## 线程安全论证(`@unchecked Sendable`)
@@ -112,6 +174,9 @@ final class MPVPlayer: @unchecked Sendable {
         /// 只用于播放失败时留档:`Unrecognized file format` 之类的错误码本身看不出
         /// 服务端回的是媒体、HTML 还是 JSON 错误页,demuxer / ffmpeg 的日志才有线索。
         var recentLogs: [String] = []
+        var propertyRequests = MPVPropertyRequests()
+        /// 事件循环已经退出时拒绝新读取,否则不会再有 GET_PROPERTY_REPLY。
+        var eventLoopEnded = false
     }
 
     /// 环形缓冲保留的日志条数 / 单条字符上限
@@ -339,17 +404,19 @@ final class MPVPlayer: @unchecked Sendable {
     /// 有序销毁(§6.3 顺序:wakeup 停事件循环 → render_context_free →
     /// core 销毁,顺序不可换)。可重入:重复调用直接返回,不崩溃(有测试)。
     func shutdown() {
-        let handle = mutex.withLock { () -> LockedPointer<OpaquePointer>? in
-            guard state.phase != .tearingDown, state.phase != .destroyed,
+        let teardown = mutex.withLock { () -> (LockedPointer<OpaquePointer>?, [MPVPropertyRequest]) in
+            guard !state.isStopping, state.phase != .destroyed,
                   let h = state.handle else {
-                return nil
+                return (nil, [])
             }
             state.phase = .tearingDown
             state.isStopping = true
             state.bridge?.submit(.phaseChanged(.tearingDown))
-            return h
+            return (h, state.propertyRequests.takeAll())
         }
-        guard let handle else { return }
+        // 在等待事件线程之前、且锁外完成:取消/销毁不依赖核心把属性回复送回来。
+        teardown.1.forEach { $0.finish(.failure(MPVError.instanceDestroyed)) }
+        guard let handle = teardown.0 else { return }
 
         // 1. 唤醒阻塞在 mpv_wait_event 里的事件线程
         mpv_wakeup(handle.raw)
@@ -512,12 +579,11 @@ final class MPVPlayer: @unchecked Sendable {
 
     /// 一次读出若干属性的字符串形式(`mpv_get_property_string`)。
     ///
-    /// 给统计信息与缓冲进度用:这些值(`cache-speed`、丢帧数…)变化极频繁,
-    /// 走 observe 会让事件线程每帧往 MainActor 投递一次,所以改为调用方按需低频轮询。
+    /// 仅为既有同步测试/探针保留。此方法持 state mutex 等待核心,不得用于 MainActor 播放监控;
+    /// 生产统计/缓冲轮询改用 stringPropertiesAsync,避免阻塞界面与 render 取状态锁。
     /// 当前不可用的属性(没有视频轨时的 `video-params/w`、未缓冲时的
     /// `cache-buffering-state`)mpv 返回 NULL,结果里就没有这个键 —— 不填占位值。
-    /// 实例已销毁 / 初始化失败时返回空字典:这是「此刻什么都读不到」,
-    /// 不是需要上抛的错误(调用方下一轮自然会停下)。
+    /// 为兼容旧测试,实例已销毁 / 初始化失败时仍返回空字典;异步 API 则明确抛错。
     func stringProperties(_ names: [String]) -> [String: String] {
         do {
             return try withLiveHandle { handle, _ in
@@ -532,6 +598,86 @@ final class MPVPlayer: @unchecked Sendable {
         } catch {
             return [:]
         }
+    }
+
+    /// 监控专用读取:只在 state mutex 内快速 enqueue `mpv_get_property_async`,
+    /// 等核心的工作不持 mutex、不占 MainActor。轮内逐个等待,不同时排满事件队列。
+    /// unavailable 是合法的缺项;其它错误明确抛出。同步 stringProperties 仅保留兼容旧测试。
+    func stringPropertiesAsync(_ names: [String]) async throws -> [String: String] {
+        try Task.checkCancellation()
+        // 空轮也遵守生命周期契约,不让 destroyed 看起来读取成功。
+        try withLiveHandle { _, state in
+            guard !state.isStopping, !state.eventLoopEnded else { throw MPVError.instanceDestroyed }
+        }
+        var values: [String: String] = [:]
+        var seen: Set<String> = []
+        for name in names where seen.insert(name).inserted {
+            try Task.checkCancellation()
+            if let value = try await stringPropertyAsync(name) { values[name] = value }
+        }
+        try Task.checkCancellation()
+        return values
+    }
+
+    private func stringPropertyAsync(_ name: String) async throws -> String? {
+        let request = MPVPropertyRequest(name: name)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                request.install(continuation)
+                do {
+                    try withLiveHandle { handle, state in
+                        guard !state.isStopping, !state.eventLoopEnded else { throw MPVError.instanceDestroyed }
+                        // 取消可先于注册;完成闸已记住取消时不要再 enqueue。
+                        guard !request.isFinished else { return }
+                        let id = try state.propertyRequests.insert(request)
+                        let status = mpv_get_property_async(handle, id, name, MPV_FORMAT_STRING)
+                        if status < 0 {
+                            _ = state.propertyRequests.take(id)
+                            throw mpvFailure(status, "请求读取 \(name)")
+                        }
+                    }
+                } catch {
+                    request.finish(.failure(error))
+                }
+            }
+        } onCancel: {
+            // 属性 API 不支持 abort_async_command。先完成 Swift 等待,再从匹配簿移除。
+            // 如注册已持有 mutex,移除会等其快速 enqueue 返回;若尚未注册,isFinished 会挡下它。
+            request.finish(.failure(CancellationError()))
+            self.mutex.withLock { self.state.propertyRequests.remove(request) }
+        }
+    }
+
+    private func processPropertyReply(_ event: mpv_event) {
+        guard let request = mutex.withLock({ state.propertyRequests.take(event.reply_userdata) }) else { return }
+        let result: Result<String?, any Error>
+        if event.error == MPV_ERROR_PROPERTY_UNAVAILABLE.rawValue {
+            result = .success(nil)
+        } else if event.error < 0 {
+            result = .failure(mpvFailure(event.error, "读取 \(request.name)"))
+        } else if let raw = event.data {
+            let property = raw.assumingMemoryBound(to: mpv_event_property.self).pointee
+            if let name = property.name, String(cString: name) == request.name,
+               property.format == MPV_FORMAT_STRING, let data = property.data,
+               let value = data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee {
+                // 事件内存归 mpv,只活到下一次 wait_event;锁外复制并且不得 mpv_free。
+                result = .success(String(cString: value))
+            } else {
+                result = .failure(mpvFailure(MPV_ERROR_PROPERTY_FORMAT.rawValue, "属性回复格式/名称不匹配"))
+            }
+        } else {
+            result = .failure(mpvFailure(MPV_ERROR_PROPERTY_ERROR.rawValue, "属性回复缺少数据"))
+        }
+        request.finish(result)
+    }
+
+    private func failPropertyRequests(_ error: any Error, eventLoopEnded: Bool = false) {
+        let requests = mutex.withLock {
+            if eventLoopEnded { state.eventLoopEnded = true }
+            return state.propertyRequests.takeAll()
+        }
+        requests.forEach { $0.finish(.failure(error)) }
     }
 
     /// 按目标后端建渲染上下文;gpu-next 建不起来就回退 legacy —— 宁可 DV 发紫发绿也不能黑屏。
@@ -758,18 +904,27 @@ final class MPVPlayer: @unchecked Sendable {
                 fbo: Int32(boundFramebuffer), w: Int32(width), h: Int32(height),
                 internal_format: 0)
             var flipY: Int32 = 1
+            // draw 与弹幕 displayLink 共用主线程:即使 timing-offset 为 0,也不能在这里
+            // 等 VO 的 present 通知。保留 video-timing-offset=0 避免提前交帧造成音画偏差,
+            // 并显式关闭 render 的等待分支(render.h MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME)。
+            var blockForTargetTime: Int32 = 0
             let err: Int32 = withUnsafeMutableBytes(of: &fbo) { fboPtr in
                 withUnsafeMutableBytes(of: &flipY) { flipPtr in
-                    var params: [mpv_render_param] = [
-                        mpv_render_param(
-                            type: MPV_RENDER_PARAM_OPENGL_FBO,
-                            data: fboPtr.baseAddress),
-                        mpv_render_param(
-                            type: MPV_RENDER_PARAM_FLIP_Y,
-                            data: flipPtr.baseAddress),
-                        mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
-                    ]
-                    return mpv_render_context_render(renderContext, &params)
+                    withUnsafeMutableBytes(of: &blockForTargetTime) { blockPtr in
+                        var params: [mpv_render_param] = [
+                            mpv_render_param(
+                                type: MPV_RENDER_PARAM_OPENGL_FBO,
+                                data: fboPtr.baseAddress),
+                            mpv_render_param(
+                                type: MPV_RENDER_PARAM_FLIP_Y,
+                                data: flipPtr.baseAddress),
+                            mpv_render_param(
+                                type: MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME,
+                                data: blockPtr.baseAddress),
+                            mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
+                        ]
+                        return mpv_render_context_render(renderContext, &params)
+                    }
                 }
             }
             if err < 0 {
@@ -874,7 +1029,10 @@ final class MPVPlayer: @unchecked Sendable {
     ) {
         // 无论从哪条路径退出都要放行 shutdown 的等待——包括拥有者已被
         // 释放、owner() 返回 nil 的那条路径,所以信号量是值捕获的。
-        defer { done.signal() }
+        defer {
+            owner()?.failPropertyRequests(MPVError.instanceDestroyed, eventLoopEnded: true)
+            done.signal()
+        }
         while true {
             guard let event = mpv_wait_event(handle.raw, -1) else { break }
             // 强引用的作用域严格限制在本轮迭代内
@@ -894,6 +1052,7 @@ final class MPVPlayer: @unchecked Sendable {
             // 上层知道:否则 phase 永远停在 playing、不发任何事件,
             // UI 显示「正在播放」而画面永久冻结。
             logLine("[MPV] 核心已退出(MPV_EVENT_SHUTDOWN),事件循环收摊")
+            failPropertyRequests(MPVError.instanceDestroyed, eventLoopEnded: true)
             setPhase(.failed)
             submitEvent(.endFile(.error("mpv 核心已退出(MPV_EVENT_SHUTDOWN)")))
             // 核心已死,继续 wait_event 只会永久阻塞,没有意义
@@ -945,6 +1104,14 @@ final class MPVPlayer: @unchecked Sendable {
 
         case MPV_EVENT_PLAYBACK_RESTART:
             submitEvent(.seeking(false))
+
+        case MPV_EVENT_GET_PROPERTY_REPLY:
+            processPropertyReply(event)
+
+        case MPV_EVENT_QUEUE_OVERFLOW:
+            // 丢掉的 GET_REPLY 不会重发,必须放行所有等待者而不能挂住监控 worker。
+            logLine("[MPV] 事件队列溢出,终止本轮属性读取")
+            failPropertyRequests(mpvFailure(MPV_ERROR_EVENT_QUEUE_FULL.rawValue, "属性回复队列溢出"))
 
         case MPV_EVENT_PROPERTY_CHANGE:
             guard let data = event.data else { return .continue }

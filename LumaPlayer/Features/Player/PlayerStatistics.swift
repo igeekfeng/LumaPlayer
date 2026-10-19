@@ -2,7 +2,7 @@ import Foundation
 
 /// 播放统计信息 overlay 的内容(按 I 键开关)。
 ///
-/// 数据来自 mpv 属性的字符串读数(`MPVPlayer.stringProperties`)、
+/// 数据来自 mpv 属性的异步字符串读数(`MPVPlayer.stringPropertiesAsync`)、
 /// 我们自己记的渲染后端(`MPVPlayerStatistics.renderBackend`,mpv 没有对应属性),
 /// 再加上 Emby 侧的播放方式与容器。本类型只做格式化,是纯函数,便于测试。
 /// 某个属性读不到(mpv 返回 NULL)时对应的行直接不显示,不填「未知」凑数。

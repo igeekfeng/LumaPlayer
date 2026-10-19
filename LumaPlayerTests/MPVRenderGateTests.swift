@@ -51,6 +51,12 @@ final class MPVRenderGateTests: XCTestCase {
         try player.load(url: url, headers: [:])
         await fulfillment(of: [firstFrame], timeout: 5)
 
+        // 视频在同一主线程 draw 时,监控读取通过异步回复完成,不需要主线程同步等核心。
+        // 这里只验读取与出帧能共存,不把墙钟耗时当作真实播放顺滑 / 音画同步证据。
+        let properties = try await player.stringPropertiesAsync(["video-codec", "container-fps"])
+        XCTAssertNotNil(properties["video-codec"])
+        XCTAssertNotNil(properties["container-fps"])
+
         // 24 fps 片源播 0.4 s:按片源帧率约 10 次;按屏幕刷新率(60 / 120 Hz)是 24 / 48 次
         let playingStart = player.statisticsSnapshot().drawCalls
         try await Task.sleep(for: .milliseconds(400))
