@@ -165,9 +165,26 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 `CommunityRating`、`CriticRating`、`PremiereDate`、`ChildCount`、`Taglines`、`ImageTags`、`PrimaryImageTag`、
 `BackdropImageTags`、`Parent*ItemId` / `Parent*ImageTag(s)`、`People`(`Id` `Name` `Role` `Type` `PrimaryImageTag`)、
 `Studios`(⚠️ 只解 `Name`:4.1.1.0 里 `Id` 是 int64,跨版本未核实)、`MediaStreams`(另解 `DisplayTitle` `Width` `Height` `Channels` `Title`)、
-`UserData`(`PlaybackPositionTicks` `Played` `PlayedPercentage` `PlayCount` `IsFavorite` `LastPlayedDate` `UnplayedItemCount`)。
+`UserData`(`PlaybackPositionTicks` `Played` `PlayedPercentage` `PlayCount` `IsFavorite` `LastPlayedDate` `UnplayedItemCount`)、
+`ProviderIds`(见下)。
 
 ⚠️ 4.1.1.0 的 `BaseItemDto` 没有 `PrimaryImageTag`:两个都解,`ImageTags["Primary"]` 优先,都没有就不发请求(Q13)。
+
+#### 3.4.1 `ProviderIds` ✅
+
+官方 OpenAPI 4.1.1.0:`BaseItemDto.ProviderIds` 是 `object<string,string>`
+(2026-10-19 从 `swagger.emby.media/openapi.json` 直接读出)。
+
+- 键名由各刮削器决定,常见 `Tmdb` / `Tvdb` / `Imdb` / `MyAnimeList` / `AniList`;
+  **键名大小写不统一**(社区实测 `Tmdb` 与 `tmdb` 都出现过)→ 取值一律按小写比较;
+- 值一律是**字符串**,要自己转数字;转不成正整数就当没有(⛔ 不把脏数据当 id 用);
+- ⚠️ **列表接口默认不返回它**,要显式 `Fields=ProviderIds`(3.2 的白名单里有)。
+  媒体库、分集列表、首页推荐都已显式带上(`LibraryViewModel.makeQuery` / `ServerConnection.episodes` /
+  `ServerConnection.recommendations`),否则从这些页面直接点播时弹幕匹配拿不到 TMDB ID;
+- 用途:弹幕匹配的 TMDB 降级层(`DANMAKU.md` §3 第 5 步)。
+
+⚠️ **未在真实服务器验证**:本地 `Tools/emby-dev/` 未启动(Docker 不可用),`Tmdb` 键的**实际存在率**
+与大小写形态都没亲眼看过 —— 只有官方 schema 与社区记录。登记在 `KNOWN_ISSUES.md` Q51。
 
 ## 4. 播放
 

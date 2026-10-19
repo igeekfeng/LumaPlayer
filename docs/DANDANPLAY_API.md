@@ -53,18 +53,22 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 | 字段 | 类型 | 说明 | 本项目 |
 |---|---|---|---|
 | `fileName` | string? | 视频文件名,**不含文件夹名与扩展名** | 百度:真实文件名去扩展名;Emby:合成(见 `DanmakuMediaQuery`) |
-| `fileHash` | string? | 文件前 16 MB 的 MD5(32 位,不区分大小写) | **32 位占位串**(见下表后的警告) |
-| `fileSize` | int64 | 文件总长度(字节) | 百度有就传;Emby 不传 |
+| `fileHash` | string? | 文件前 16 MiB 的 MD5(32 位,不区分大小写) | Emby 直连流:真实值(`DanmakuFingerprint`);否则 32 位占位串 |
+| `fileSize` | int64 | 文件总长度(字节) | 百度有就传;Emby 传 `MediaSource.Size`(有就传) |
 | `videoDuration` | int32 | [可选] 时长(秒),默认 0 | 播放器已知时传 |
-| `matchMode` | enum | `hashAndFileName` / `fileNameOnly` / `hashOnly` | 恒 `fileNameOnly` |
+| `matchMode` | enum | `hashAndFileName` / `fileNameOnly` / `hashOnly` | 有真实 Hash 时 `hashAndFileName`,否则 `fileNameOnly` |
 
 ⚠️ **`fileHash` 实际上是必填,规格没写。** 2026-10 的线上行为:即使 `matchMode` 是 `fileNameOnly`,
 `fileHash` 缺失、空串或不足 32 位都会让接口返回 `errorCode 2`「一个或多个参数不符合规则」+ `matches: null`,
 播放页表现成「弹弹play 返回失败(错误码 2 …)」。带任意 32 位串则正常返回候选。
 来源:第三方客户端按线上接口核对后的记录(`open-ani/animeko#3506`);本项目**未用自有凭据复验**
 (`KNOWN_ISSUES.md` Q48)。
-本项目填全 `0`(`DandanplayMatchRequest.placeholderFileHash`):服务端按 Hash 查不到记录就回落文件名模糊匹配,
-正是要走的路径,还省掉为算 Hash 多拉 16 MB。全 `0` 也是官方旧文档示例里的「无 Hash」写法。
+算不出真实指纹时填全 `0`(`DandanplayMatchRequest.placeholderFileHash`):服务端按 Hash 查不到记录
+就回落文件名模糊匹配,正是要走的路径。全 `0` 也是官方旧文档示例里的「无 Hash」写法。
+
+**真实指纹**只在 Emby 直连流上算(`DANMAKU.md` §3.1):转码流的前 16 MiB 是编码器输出,
+与源文件不是同一份字节,算出来没有意义。`hashAndFileName` 的命中即「同一份文件」,
+是目前最硬的判据。
 
 响应 `MatchResponseV2` = `ResponseBase` +:
 
@@ -80,17 +84,22 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 
 | 参数 | 类型 | 说明 | 本项目 |
 |---|---|---|---|
-| `anime` | string? | 作品标题,中 / 日(含罗马音)/ 英,**至少 2 个字符** | ✅ |
-| `episode` | string? | 集号:正整数或 `C1` / `S1` / `O1`,只保留该集 | 用户填了才传 |
-| `tmdbId` | int32? | 只返回该 TMDB id 的关联作品 | 不用(见 `DANMAKU.md` §6) |
-| `tmdbIdType` | int32 | 0 / 不传 = 电视剧 id,1 = 电影 id | 不用 |
+| `anime` | string? | 作品标题,中 / 日(含罗马音)/ 英,**至少 2 个字符** | ✅ 手动搜索与标题降级层 |
+| `episode` | string? | 集号:正整数或 `C1` / `S1` / `O1`,只保留该集 | 用户填了 / 匹配时有集号才传 |
+| `tmdbId` | int32? | 只返回该 TMDB id 的关联作品 | ✅ TMDB 降级层(`DANMAKU.md` §3 第 5 步) |
+| `tmdbIdType` | int32 | 0 / 不传 = 电视剧 id,1 = 电影 id | ✅ 按目标类型给;查不到再试另一套 |
 | `v2` | bool | 新版搜索引擎 | 不用 |
 
 `anime` 与 `tmdbId` 至少提供一个。⚠️ `anime` 里「空格 + 数字」(`EVA 10`)在未给 `episode` 时会被当成集号。
 
 响应 `SearchEpisodesResponse` = `ResponseBase` +:`hasMore`(bool,结果过多被截断,应提示用户写得更具体)、
-`animes`(`SearchEpisodesAnime[]?`):`animeId`、`animeTitle`?、`type`、`typeDescription`?、
+`animes`(`SearchEpisodesAnime[]?`):`animeId`、`animeTitle`?、`type`(`AnimeType`)、`typeDescription`?、
 `episodes`(`SearchEpisodeDetails[]?`:`episodeId`、`episodeTitle`?)。
+
+`type` 用来区分剧场版与剧集 —— 两者是**不同作品**,不是同一部剧的不同集。`AnimeType` 的
+12 个取值(`tvseries` / `tvspecial` / `ova` / `movie` / `musicvideo` / `web` / `other` /
+`jpmovie` / `jpdrama` / `unknown` / `tmdbtv` / `tmdbmovie` 中属于电影的:后三个含 `movie` 的)
+见规格 `components.schemas.AnimeType`(2026-10-19 核对)。
 
 ## 4. 作品详情 `GET /api/v2/bangumi/{bangumiId}`
 

@@ -429,7 +429,42 @@ final class PlayerViewModel {
             guard let duration = self?.durationSeconds, duration > 0 else { return nil }
             return duration
         }
+        danmaku.matchHintsProvider = { [weak self] in
+            guard let self else { return .none }
+            return DanmakuMatchHints(tmdbID: self.item?.tmdbID, isMovie: self.item?.kind == .movie)
+        }
+        danmaku.fingerprintProvider = { [weak self] in
+            await self?.mediaFingerprint() ?? nil
+        }
         danmaku.startIfNeeded()
+    }
+
+    /// 媒体指纹(前 16 MiB 的 MD5),给弹幕 `/match` 的 `fileHash`。
+    ///
+    /// 只在**直连流**上算:
+    /// - 转码流的前 16 MiB 是编码器输出,与源文件不是同一份字节,MD5 没有意义;
+    /// - 指纹要等播放会话就绪才知道地址与认证头 —— 这里最多等 10 秒,
+    ///   超时就当没有(`DanmakuFingerprint` 的调用方会把 nil 当「退回文件名匹配」)。
+    ///
+    /// ⚠️ 代价说清楚:这会额外发一次 `Range` 请求拉 16 MiB。对 Emby 直连流来说
+    /// 这 16 MiB 正是播放器接下来要读的字节(服务端 / 内核缓存都可能已有),
+    /// 但对**限速或按流量计费**的服务器仍是实实在在的负担。算不算由用户决定:
+    /// 设置 › 弹幕 的「用文件指纹提高匹配准确度」(默认开)。
+    private func mediaFingerprint() async -> String? {
+        guard container.danmakuSettings.settings.usesFileFingerprint else { return nil }
+        guard case .emby = request.source else { return nil }
+        // 会话可能还在准备(与弹幕并行),等一小会儿而不是直接放弃
+        let deadline = Date().addingTimeInterval(10)
+        while session == nil, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return nil }
+        }
+        guard let session, session.plan.method == .directStream else { return nil }
+        return await DanmakuFingerprint.md5(
+            of: session.plan.url,
+            headers: session.plan.headers,
+            expectedFileSize: session.mediaSource.size,
+            session: container.session)
     }
 
     /// 起播位置:Emby 读服务端 `UserData`,百度读本地续播库 —— 由组合根按来源给

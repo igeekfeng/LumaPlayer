@@ -7,9 +7,9 @@ import Foundation
 /// 见 API_CONTRACT.md 4.3。
 ///
 /// 可选性按 `API_CONTRACT.md` 8.1:**只有 `Id` 必填**,其余一律可选。
-/// 这里只解真正要用的字段 —— 不用的字段(`Path` / `Size` / `Bitrate` /
-/// `RunTimeTicks` / `LocationType` / `VideoType` …)一律不解,避免留下一堆
-/// 没人读的属性假装“已支持”。
+/// 这里只解真正要用的字段 —— 不用的字段(`Path` / `Bitrate` / `RunTimeTicks` /
+/// `LocationType` / `VideoType` …)一律不解,避免留下一堆没人读的属性假装“已支持”。
+/// `Size` 例外:弹幕指纹要用它校验 Range 响应(`DanmakuFingerprint`)。
 struct EmbyMediaSource: Decodable, Sendable, Equatable {
     /// 必填(API_CONTRACT.md 8.1)
     let id: String
@@ -22,6 +22,11 @@ struct EmbyMediaSource: Decodable, Sendable, Equatable {
     let supportsTranscoding: Bool?
     /// 相对路径的转码流地址;需拼到站点根上(4.4 第 5 步)
     let transcodingUrl: String?
+    /// 源文件大小(字节,`MediaSourceInfo.Size`,官方 OpenAPI 4.1.1.0 ✅ `int64` 可空)。
+    ///
+    /// 弹幕匹配用:弹弹play 的 `fileSize` 是 hash 之外的辅助判据,给得对能减少误配;
+    /// 同时 `DanmakuFingerprint` 用它校验 `Content-Range` 的总长。缺失即 nil。
+    var size: Int64? = nil
     /// 音视频与字幕轨
     let mediaStreams: [EmbyMediaStream]?
     /// 章节与片头片尾标记(4.3.1)。取源上的而不是外层 Item 上的:
@@ -41,6 +46,7 @@ struct EmbyMediaSource: Decodable, Sendable, Equatable {
         case supportsTranscoding = "SupportsTranscoding"
         case directStreamUrl = "DirectStreamUrl"
         case transcodingUrl = "TranscodingUrl"
+        case size = "Size"
         case mediaStreams = "MediaStreams"
         case chapters = "Chapters"
     }

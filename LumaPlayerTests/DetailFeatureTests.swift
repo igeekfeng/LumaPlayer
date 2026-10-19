@@ -109,7 +109,11 @@ final class DetailFeatureTests: XCTestCase {
         _ = try await connection.episodes(seriesID: "SERIES-1", seasonID: "SEASON-1")
 
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Episodes"))
-        XCTAssertEqual(queryValue(request.url, "Fields"), "Overview", "分集行要显示简介,列表接口默认不给")
+        // Overview:分集行要显示简介,列表接口默认不给。
+        // ProviderIds:弹幕匹配要靠它的 Tmdb 走 TMDB 降级层(`DANMAKU.md` §3)。
+        XCTAssertEqual(
+            queryValue(request.url, "Fields"), "Overview,ProviderIds",
+            "分集行要显示简介,列表接口默认不给;弹幕匹配还要 ProviderIds")
     }
 
     // MARK: - 解码

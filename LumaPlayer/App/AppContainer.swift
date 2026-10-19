@@ -46,8 +46,11 @@ final class AppContainer {
     /// 弹幕编排(弹弹play)。**全 App 一份**:它带作品剧集列表的进程内记忆,
     /// 绑定库 / 弹幕缓存也只该有一个写入方。凭据在用时向 `credentials` 取 —— 设置页刚填就生效。
     let danmaku: DanmakuService
-    /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话
-    private let session: URLSession
+    /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话。
+    ///
+    /// 非 private:弹幕指纹(`PlayerViewModel.mediaFingerprint`)要对直连流补一次
+    /// `Range` 请求,必须走**同一个**会话 —— 测试里换掉它,那条请求才不会真的发出去。
+    let session: URLSession
 
     init(
         registry: ServerRegistry,

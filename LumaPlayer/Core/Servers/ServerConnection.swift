@@ -243,7 +243,8 @@ actor ServerConnection {
         query.includeItemTypes = ["Movie", "Series"]
         query.sortBy = ["Random"]
         query.filters = ["IsUnplayed"]
-        query.fields = ["Overview", "Genres"]
+        // ProviderIds:从首页直接点播时弹幕匹配要它的 Tmdb(`DANMAKU.md` §3)
+        query.fields = ["Overview", "Genres", "ProviderIds"]
         query.limit = limit
         return try await items(query).items
     }
@@ -343,8 +344,9 @@ actor ServerConnection {
         var query = EmbyEpisodesQuery()
         query.userID = userID
         query.seasonID = seasonID
-        // 列表接口默认不给 Overview(3.2);分集行要显示简介,显式要一次
-        query.fields = ["Overview"]
+        // 列表接口默认不给 Overview(3.2);分集行要显示简介,显式要一次。
+        // ProviderIds 同理:弹幕匹配要靠它的 Tmdb 走 TMDB 降级层(`DANMAKU.md` §3)。
+        query.fields = ["Overview", "ProviderIds"]
         let response: EmbyItemsResponse<EmbyItem> = try await authenticated(.episodes(seriesID: seriesID, query: query))
         return response.items
     }

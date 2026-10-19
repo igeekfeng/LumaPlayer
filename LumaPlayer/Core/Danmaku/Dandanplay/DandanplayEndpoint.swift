@@ -18,8 +18,12 @@ enum DandanplayEndpoint: Sendable, Equatable {
 
     /// `POST /api/v2/match`:按文件名(及可选的 Hash / 大小 / 时长)找可能的节目(§2)
     case match(DandanplayMatchRequest)
-    /// `GET /api/v2/search/episodes?anime=&episode=`:关键词搜剧集(§3)
-    case searchEpisodes(anime: String, episode: String?)
+    /// `GET /api/v2/search/episodes?anime=&episode=&tmdbId=&tmdbIdType=`:搜剧集(§3)
+    ///
+    /// `anime` 与 `tmdbId` **至少给一个**(官方约束)。`tmdbIdType` 只在给了
+    /// `tmdbId` 时才有意义:0 = 电视剧 ID,1 = 电影 ID。
+    case searchEpisodes(
+        anime: String?, episode: String?, tmdbID: Int? = nil, tmdbIDType: Int? = nil)
     /// `GET /api/v2/bangumi/{animeId}`:作品详情,只读其中的剧集列表(§4)
     case bangumi(animeID: Int64)
     /// `GET /api/v2/comment/{episodeId}?withRelated=&chConvert=`:一个弹幕库的全部弹幕(§5)
@@ -68,10 +72,17 @@ enum DandanplayEndpoint: Sendable, Equatable {
         switch self {
         case .match, .bangumi:
             return []
-        case .searchEpisodes(let anime, let episode):
-            var items: [(name: String, value: String)] = [("anime", anime)]
+        case .searchEpisodes(let anime, let episode, let tmdbID, let tmdbIDType):
+            var items: [(name: String, value: String)] = []
+            // 空串不算「给了」:官方要求 anime 至少 2 个字符,给空串等于一次注定失败的请求
+            if let anime, !anime.isEmpty { items.append(("anime", anime)) }
             // 不知道集数时**不传**(⛔ 不填 0 / 空串:服务端会按「指定集数」过滤)
-            if let episode { items.append(("episode", episode)) }
+            if let episode, !episode.isEmpty { items.append(("episode", episode)) }
+            if let tmdbID {
+                items.append(("tmdbId", String(tmdbID)))
+                // tmdbIdType 只在给了 tmdbId 时才带(不给时服务端按 0 处理)
+                if let tmdbIDType { items.append(("tmdbIdType", String(tmdbIDType))) }
+            }
             return items
         case .comments(_, let withRelated, let conversion):
             return [

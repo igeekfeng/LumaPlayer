@@ -34,6 +34,11 @@ final class DanmakuController {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// 视频时长(秒)来源,给 `/match` 的 `videoDuration`。由 `PlayerViewModel` 接上
     @ObservationIgnored var durationProvider: () -> Double? = { nil }
+    /// 媒体指纹来源(`DanmakuMatchContext.fileHash`)。由 `PlayerViewModel` 接上 ——
+    /// 它才知道播放计划与认证头;`nil` = 算不出来,退回文件名匹配。
+    @ObservationIgnored var fingerprintProvider: () async -> String? = { nil }
+    /// TMDB ID / 电影标记来源。由 `PlayerViewModel` 接上(读 `ProviderIds`)。
+    @ObservationIgnored var matchHintsProvider: () -> DanmakuMatchHints = { .none }
 
     /// 已加载的弹幕与每条在 1pt 字号下的宽度(一一对应)
     private(set) var loaded: LoadedDanmaku?
@@ -61,14 +66,27 @@ final class DanmakuController {
     }
 
     /// 重新走一遍自动匹配(凭据刚填好 / 网络恢复后)。
+    ///
+    /// 指纹(`fingerprintProvider`)在**这里**取:它是唯一需要等播放源就绪的一步
+    /// (`DanmakuFingerprint` 要拿直连流地址与认证头)。取不到就当没有,退回文件名匹配 ——
+    /// 指纹只是提高命中率,⛔ 不是匹配的前提。
     func reload() {
         loadTask?.cancel()
         status = .loading
         let query = query
         let duration = durationProvider()
+        let hints = matchHintsProvider()
+        let fingerprintProvider = self.fingerprintProvider
         loadTask = Task { [weak self, service] in
             do {
-                let resolution = try await service.resolve(query, durationSeconds: duration)
+                let fingerprint = await fingerprintProvider()
+                guard !Task.isCancelled else { return }
+                let context = DanmakuMatchContext(
+                    tmdbID: hints.tmdbID ?? query.tmdbID,
+                    isMovie: hints.isMovie ?? query.isMovie,
+                    fileHash: fingerprint)
+                let resolution = try await service.resolve(
+                    query, durationSeconds: duration, matchContext: context)
                 guard !Task.isCancelled else { return }
                 switch resolution {
                 case .loaded(let danmaku): await self?.apply(danmaku)

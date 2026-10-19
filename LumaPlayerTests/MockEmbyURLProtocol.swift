@@ -17,6 +17,8 @@ final class MockEmbyURLProtocol: URLProtocol {
         }
 
         let outcome: Outcome
+        /// 额外的响应头(如 `Content-Range` / `Content-Type`)。默认只给 JSON。
+        var headers: [String: String] = [:]
 
         /// 200 + JSON 字符串
         static func json(_ body: String, statusCode: Int = 200) -> Stub {
@@ -26,6 +28,11 @@ final class MockEmbyURLProtocol: URLProtocol {
         /// 只关心状态码(如 401 —— Emby 的鉴权失败响应通常没有 body)
         static func status(_ code: Int) -> Stub {
             Stub(outcome: .response(statusCode: code, body: nil))
+        }
+
+        /// 带响应头的原始字节(媒体 Range 响应用:`206` + `Content-Range`)
+        static func bytes(_ data: Data, statusCode: Int, headers: [String: String] = [:]) -> Stub {
+            Stub(outcome: .response(statusCode: statusCode, body: data), headers: headers)
         }
 
         static func failure(_ code: URLError.Code) -> Stub {
@@ -143,7 +150,7 @@ final class MockEmbyURLProtocol: URLProtocol {
         }
         switch stub.outcome {
         case .response(let statusCode, let body):
-            respond(statusCode: statusCode, body: body)
+            respond(statusCode: statusCode, body: body, headers: stub.headers)
         case .failure(let code):
             fail(with: URLError(code))
         }
@@ -153,13 +160,13 @@ final class MockEmbyURLProtocol: URLProtocol {
 
     // MARK: - 内部
 
-    private func respond(statusCode: Int, body: Data?) {
+    private func respond(statusCode: Int, body: Data?, headers: [String: String] = [:]) {
         guard let url = request.url,
               let response = HTTPURLResponse(
                 url: url,
                 statusCode: statusCode,
                 httpVersion: "HTTP/1.1",
-                headerFields: ["Content-Type": "application/json"]
+                headerFields: headers.merging(["Content-Type": "application/json"]) { current, _ in current }
               ) else {
             fail(with: URLError(.badServerResponse))
             return

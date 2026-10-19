@@ -7,6 +7,10 @@ struct DanmakuCandidate: Sendable, Equatable, Identifiable, Hashable {
     let animeTitle: String?
     let episodeTitle: String?
     let typeDescription: String?
+    /// 作品类型(`AnimeType` 枚举字符串,`docs/DANDANPLAY_API.md` §2)。
+    /// 用来区分剧场版与剧集 —— 两者是**不同作品**,不是同一部剧的不同集。
+    /// `/search/episodes` 的结果同样带它(§3 的 `SearchEpisodesAnime.type`)。
+    let type: String?
     /// 弹弹play 给的偏移(秒,只有 `/match` 结果带)
     let shift: Double?
 
@@ -69,12 +73,24 @@ actor DanmakuService {
 
     // MARK: - 自动匹配
 
-    /// 为一条视频找弹幕。顺序:
+    /// 为一条视频找弹幕。顺序(每一层都只在上一层没结果时才发请求):
+    ///
     /// 1. 这一集手选 / 精确匹配过 → 直接用;
     /// 2. 这一部剧绑定过作品且知道集号 → 在作品剧集列表里按集号对上;
-    /// 3. `/match`(只按文件名):`isMatched` 视为精确关联直接采用(官方语义),
-    ///    否则把候选交给用户挑(⛔ 不自作主张取第一个模糊结果)。
-    func resolve(_ query: DanmakuMediaQuery, durationSeconds: Double?) async throws -> DanmakuResolution {
+    /// 3. `/match`:有真实指纹就带 `hashAndFileName`,否则 `fileNameOnly` +
+    ///    32 位占位串。`isMatched` 视为精确关联直接采用(官方语义);
+    /// 4. 有 TMDB ID → `/search/episodes?tmdbId=`,按集号挑唯一命中;
+    /// 5. 仍然只有模糊候选时,用 `DanmakuCandidateMatcher` 判「是否唯一确定」,
+    ///    唯一才自动采用;
+    /// 6. 都不成立 → 把候选交给用户挑(⛔ 不自作主张取第一个模糊结果)。
+    ///
+    /// `matchContext` 是这一集的**匹配线索**(TMDB ID / 季 / 电影标记 / 指纹),
+    /// 与 `query` 分开:后者是身份与文案,前者只服务匹配。
+    func resolve(
+        _ query: DanmakuMediaQuery,
+        durationSeconds: Double?,
+        matchContext: DanmakuMatchContext = .empty
+    ) async throws -> DanmakuResolution {
         let credentials = try await requireCredentials()
 
         if let binding = await bindings.episode(for: query.itemKey) {
@@ -92,19 +108,78 @@ actor DanmakuService {
             return .loaded(try await load(binding, credentials: credentials))
         }
 
-        let request = DandanplayMatchRequest(
-            fileName: query.matchFileName,
-            // ⚠️ 必须带 32 位 Hash 串,否则服务端直接回 errorCode 2(见 `placeholderFileHash`)
-            fileHash: DandanplayMatchRequest.placeholderFileHash,
-            fileSize: query.fileSize,
-            videoDuration: durationSeconds.flatMap { $0.isFinite && $0 > 0 ? Int32(exactly: $0.rounded()) : nil },
-            matchMode: DandanplayMatchRequest.fileNameOnly)
-        let response = try await client.match(request, credentials: credentials)
+        // 第 3 层:`/match`。有指纹走 hashAndFileName(命中即同一份文件),
+        // 没有就退回文件名 —— 指纹拿不到不该让整条链路失败。
+        let response = try await client.match(
+            DandanplayMatchRequest(
+                fileName: query.matchFileName,
+                fileHash: matchContext.fileHash ?? DandanplayMatchRequest.placeholderFileHash,
+                fileSize: query.fileSize,
+                videoDuration: durationSeconds.flatMap {
+                    $0.isFinite && $0 > 0 ? Int32(exactly: $0.rounded()) : nil
+                },
+                matchMode: matchContext.fileHash == nil
+                    ? DandanplayMatchRequest.fileNameOnly
+                    : DandanplayMatchRequest.hashAndFileName),
+            credentials: credentials)
         let candidates = (response.matches ?? []).map(DanmakuCandidate.init(match:))
         if response.isMatched == true, let exact = candidates.first {
             return .loaded(try await select(exact, for: query))
         }
+
+        // 第 4 层:TMDB ID。`/match` 走文件名,译名不同就整条落空;
+        // TMDB ID 是语言无关的作品身份,`DANMAKU.md` §6 把它列为优先补的降级层。
+        if let tmdbID = matchContext.tmdbID,
+           let matched = try await searchByTMDB(
+               tmdbID: tmdbID, isMovie: matchContext.isMovie, target: matchContext.target(for: query),
+               credentials: credentials)
+        {
+            return .loaded(try await select(matched, for: query))
+        }
+
+        // 第 5 层:模糊候选里有没有**唯一确定**的那一集。
+        if let unique = DanmakuCandidateMatcher.uniqueMatch(
+            in: candidates, target: matchContext.target(for: query))
+        {
+            return .loaded(try await select(unique, for: query))
+        }
+
         return .needsSelection(candidates: candidates)
+    }
+
+    /// `GET /search/episodes?tmdbId=` 按 TMDB ID 搜作品,再按集号挑唯一命中(§3)。
+    ///
+    /// 电视剧与电影是两套 ID 空间(`tmdbIdType` 0 / 1),先按目标类型查;
+    /// 查不到再试另一套 —— 库里的类型标注与实际条目未必一致。
+    /// 都查不到返回 nil,交给后面的层。
+    private func searchByTMDB(
+        tmdbID: Int,
+        isMovie: Bool,
+        target: DanmakuCandidateMatcher.Target,
+        credentials: DandanplayCredentials
+    ) async throws -> DanmakuCandidate? {
+        for type in [isMovie ? 1 : 0, isMovie ? 0 : 1] {
+            let response = try await client.searchEpisodes(
+                anime: nil, episode: target.episodeNumber.map(String.init),
+                tmdbID: tmdbID, tmdbIDType: type, credentials: credentials)
+            let candidates = Self.candidates(from: response.animes ?? [])
+            if let unique = DanmakuCandidateMatcher.uniqueMatch(in: candidates, target: target) {
+                return unique
+            }
+        }
+        return nil
+    }
+
+    /// 把 `/search/episodes` 的作品列表摊平成候选。
+    static func candidates(from animes: [DandanplaySearchAnime]) -> [DanmakuCandidate] {
+        animes.flatMap { anime in
+            (anime.episodes ?? []).map { episode in
+                DanmakuCandidate(
+                    episodeID: episode.episodeId, animeID: anime.animeId,
+                    animeTitle: anime.animeTitle, episodeTitle: episode.episodeTitle,
+                    typeDescription: anime.typeDescription, type: anime.type, shift: nil)
+            }
+        }
     }
 
     // MARK: - 手动
@@ -122,7 +197,8 @@ actor DanmakuService {
                 episodes: (anime.episodes ?? []).map {
                     DanmakuCandidate(
                         episodeID: $0.episodeId, animeID: anime.animeId, animeTitle: anime.animeTitle,
-                        episodeTitle: $0.episodeTitle, typeDescription: anime.typeDescription, shift: nil)
+                        episodeTitle: $0.episodeTitle, typeDescription: anime.typeDescription,
+                        type: anime.type, shift: nil)
                 })
         }
         return (groups, response.hasMore ?? false)
@@ -197,6 +273,7 @@ extension DanmakuCandidate {
     init(match: DandanplayMatch) {
         self.init(
             episodeID: match.episodeId, animeID: match.animeId, animeTitle: match.animeTitle,
-            episodeTitle: match.episodeTitle, typeDescription: match.typeDescription, shift: match.shift)
+            episodeTitle: match.episodeTitle, typeDescription: match.typeDescription,
+            type: match.type, shift: match.shift)
     }
 }

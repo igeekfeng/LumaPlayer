@@ -19,8 +19,12 @@ struct DanmakuSettingsView: View {
 
             Section {
                 Toggle("播放时自动加载弹幕", isOn: $store.settings.isEnabled)
+                Toggle("用文件指纹提高匹配准确度", isOn: $store.settings.usesFileFingerprint)
             } footer: {
-                Text("关掉后播放页默认不显示弹幕,可随时在播放页「弹幕」菜单或按 D 打开。")
+                Text("关掉自动加载后,播放页默认不显示弹幕,可随时在播放页「弹幕」菜单或按 D 打开。\n"
+                    + "文件指纹 = 起播时对直连流多读 16 MB 算 MD5。它是「同一份文件」的硬证据,"
+                    + "准确度明显高于只按文件名猜;代价是多一次 16 MB 读取。"
+                    + "限速或按流量计费的服务器可以关掉,关掉后只按文件名匹配。")
             }
 
             Section("外观") {

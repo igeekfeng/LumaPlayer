@@ -232,8 +232,8 @@ final class DanmakuTests: XCTestCase {
     }
 
     private let query = DanmakuMediaQuery(
-        itemKey: "item-5", seriesKey: "series-x", episodeNumber: 5,
-        matchFileName: "某番 05", fileSize: nil, searchKeyword: "某番")
+        itemKey: "item-5", seriesKey: "series-x", episodeNumber: 5, seasonNumber: 1,
+        title: "某番", matchFileName: "某番 05", fileSize: nil)
 
     private func stubComments(_ episodeID: Int64) {
         MockEmbyURLProtocol.stub(

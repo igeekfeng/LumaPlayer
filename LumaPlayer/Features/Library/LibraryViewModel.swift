@@ -228,6 +228,9 @@ final class LibraryViewModel {
         query.sortOrder = [ascending ? "Ascending" : "Descending"]
             + Array(repeating: "Ascending", count: sort.sortBy.count - 1)
         query.filters = filter.filters
+        // ProviderIds:媒体库里直接点播时,弹幕匹配要靠它的 Tmdb 走 TMDB 降级层
+        // (`DANMAKU.md` §3)。列表接口默认不返回它(API_CONTRACT.md 3.2),必须显式要。
+        query.fields = ["ProviderIds"]
         query.startIndex = startIndex
         query.limit = limit
         return query

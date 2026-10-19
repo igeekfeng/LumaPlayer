@@ -62,11 +62,25 @@ struct DandanplayClient: Sendable {
         try await fetch(.match(request), credentials: credentials)
     }
 
-    /// 关键词搜剧集(§3)。`episode` 是集号字符串(正整数或 `C1` / `S1` / `O1`),不知道就传 nil。
-    func searchEpisodes(anime: String, episode: String?, credentials: DandanplayCredentials)
-        async throws -> DandanplaySearchEpisodesResponse
-    {
-        try await fetch(.searchEpisodes(anime: anime, episode: episode), credentials: credentials)
+    /// 搜剧集(§3)。按作品名与 / 或 TMDB ID。
+    ///
+    /// - `anime`:作品名(至少 2 个字符),不知道就传 nil
+    /// - `episode`:集号字符串(正整数或 `C1` / `S1` / `O1`),不知道就传 nil
+    /// - `tmdbID` + `tmdbIDType`:语言无关的作品身份;`tmdbIDType` 0 = 电视剧,1 = 电影
+    func searchEpisodes(
+        anime: String?,
+        episode: String?,
+        tmdbID: Int? = nil,
+        tmdbIDType: Int? = nil,
+        credentials: DandanplayCredentials
+    ) async throws -> DandanplaySearchEpisodesResponse {
+        // `anime` 与 `tmdbId` 至少给一个(§3):都不给是调用方的错,⛔ 不发注定失败的请求
+        guard anime?.isEmpty == false || tmdbID != nil else {
+            throw DandanplayError.transport("search/episodes 需要 anime 或 tmdbId")
+        }
+        return try await fetch(
+            .searchEpisodes(anime: anime, episode: episode, tmdbID: tmdbID, tmdbIDType: tmdbIDType),
+            credentials: credentials)
     }
 
     /// 作品详情里的剧集列表(§4)。

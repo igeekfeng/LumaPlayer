@@ -20,6 +20,13 @@ struct DanmakuDisplaySettings: Codable, Sendable, Equatable {
     var showsScroll = true
     var showsTop = true
     var showsBottom = true
+    /// 用文件指纹(前 16 MiB 的 MD5)提高 `/match` 的准确度。
+    ///
+    /// 代价是起播时对**直连流**补一次 `Range` 请求拉 16 MiB(`DanmakuFingerprint`)。
+    /// 默认开:对 Emby 直连流来说这 16 MiB 正是播放器接下来要读的字节,而指纹是
+    /// 「同一份文件」唯一的硬证据(`DANMAKU.md` §3)。限速 / 按流量计费的服务器
+    /// 可以在这里关掉,关掉后退回文件名匹配。
+    var usesFileFingerprint = true
 
     static let `default` = DanmakuDisplaySettings()
 

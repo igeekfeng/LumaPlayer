@@ -64,6 +64,16 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
     let criticRating: Double?
     /// 详情页「媒体信息」用;⚠️ 播放用的轨道仍以 PlaybackInfo 的 MediaSource 为准(4.3)
     let mediaStreams: [EmbyMediaStream]?
+    /// 外部元数据 id(`BaseItemDto.ProviderIds`,官方 OpenAPI 4.1.1.0 ✅:
+    /// `object<string,string>`)。键名由各个刮削器决定,常见 `Tmdb` / `Tvdb` / `Imdb` /
+    /// `MyAnimeList` / `AniList`;值是字符串。
+    ///
+    /// ⚠️ 列表接口默认**不返回**它,要 `Fields=ProviderIds`(`API_CONTRACT.md` 3.2)。
+    /// 键名大小写不统一(社区实测 `Tmdb` 与 `tmdb` 都出现过),取值统一按小写比较。
+    ///
+    /// `var` + 默认值:合成 `Decodable` 对带默认值的 `var` 照样按键解码,
+    /// 而逐成员构造器可以省略它(测试里手搓 `EmbyItem` 不必逐个补 nil)。
+    var providerIds: [String: String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id = "Id"
@@ -98,6 +108,7 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
         case childCount = "ChildCount"
         case criticRating = "CriticRating"
         case mediaStreams = "MediaStreams"
+        case providerIds = "ProviderIds"
     }
 }
 
@@ -249,6 +260,21 @@ extension EmbyItem {
 
     var isPlayed: Bool { userData?.played ?? false }
     var isFavorite: Bool { userData?.isFavorite ?? false }
+
+    /// TMDB ID(`ProviderIds.Tmdb`)。
+    ///
+    /// 用途:弹幕匹配的降级层(`/search/episodes?tmdbId=`)与 TMDB 元数据补全 ——
+    /// 它是**语言无关**的作品身份,文件名 / 译名对不上时仍然有效。
+    ///
+    /// 键名按小写比较:官方 schema 只规定「字符串到字符串」,不规定键名大小写。
+    /// 值不是正整数时返回 nil(⛔ 不把脏数据当 id 发出去)。
+    var tmdbID: Int? {
+        guard let raw = providerIds?.first(where: { $0.key.lowercased() == "tmdb" })?.value
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            let value = Int(raw), value > 0
+        else { return nil }
+        return value
+    }
 
     /// 播放进度 0–1;缺时长或没看过时返回 nil(UI 据此决定画不画进度条)。
     ///

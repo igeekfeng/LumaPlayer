@@ -13,8 +13,10 @@ import Foundation
 struct DandanplayMatchRequest: Encodable, Sendable, Equatable {
     /// 视频文件名,**不含文件夹名与扩展名**
     let fileName: String
-    /// 文件前 16 MB 的 MD5(32 位十六进制)。本项目不算真实 Hash,恒填
-    /// `placeholderFileHash`(理由见那个常量)
+    /// 文件前 16 MiB 的 MD5(32 位十六进制)。
+    ///
+    /// 算得出真实指纹就用真值 + `hashAndFileName`(`DanmakuFingerprint`);
+    /// 算不出就填 `placeholderFileHash` + `fileNameOnly`。
     let fileHash: String?
     /// 文件总长度(字节);未知时不传
     let fileSize: Int64?
@@ -23,7 +25,9 @@ struct DandanplayMatchRequest: Encodable, Sendable, Equatable {
     /// 匹配模式:`hashAndFileName` / `fileNameOnly` / `hashOnly`
     let matchMode: String
 
-    /// 没有 Hash 时只能按文件名匹配
+    /// 同时用文件名与 Hash:Hash 命中即同一份文件,是最硬的判据(§2)
+    static let hashAndFileName = "hashAndFileName"
+    /// 没有真实 Hash 时只能按文件名匹配
     static let fileNameOnly = "fileNameOnly"
 
     /// 占位 Hash:32 个 `0`。
@@ -35,7 +39,9 @@ struct DandanplayMatchRequest: Encodable, Sendable, Equatable {
     ///
     /// 为什么可以给假值:服务端先按 Hash 查记录,查不到才回落到文件名模糊匹配 —— 本项目要的正是
     /// 文件名这条路。全 `0` 是官方旧文档示例里的「无 Hash」写法,不会命中任何真实文件。
-    /// 算真 Hash 要多拉 16 MB(见 `DanmakuMediaQuery` 的注释),不划算。
+    ///
+    /// 真实指纹见 `DanmakuFingerprint`(只在 Emby 直连流上算,且受
+    /// 设置 › 弹幕 的「用文件指纹提高匹配准确度」控制)。
     static let placeholderFileHash = String(repeating: "0", count: 32)
 }
 
@@ -67,6 +73,8 @@ struct DandanplayMatch: Decodable, Sendable, Equatable {
     let animeId: Int64
     let animeTitle: String?
     let episodeTitle: String?
+    /// 作品类型(`AnimeType` 枚举字符串)。剧场版与剧集是不同作品。
+    let type: String?
     let typeDescription: String?
     /// 弹幕偏移(秒):弹幕应延迟多少秒出现,负数为提前
     let shift: Double?
@@ -88,6 +96,8 @@ struct DandanplaySearchEpisodesResponse: Decodable, Sendable, DandanplayStatusRe
 struct DandanplaySearchAnime: Decodable, Sendable, Equatable {
     let animeId: Int64
     let animeTitle: String?
+    /// 作品类型(`AnimeType` 枚举字符串)。用来区分剧场版与剧集 —— 两者是不同作品。
+    let type: String?
     let typeDescription: String?
     let episodes: [DandanplaySearchEpisode]?
 }

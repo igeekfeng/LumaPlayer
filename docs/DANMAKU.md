@@ -50,27 +50,58 @@
 
 ## 3. 匹配流程(`DanmakuService.resolve`)
 
+每一层都只在上一层没结果时才发请求:
+
 1. **凭据**:没填 → `DandanplayError.credentialsMissing`,⛔ 不发任何请求。
 2. **集绑定**(`itemKey`):这一集手选过 / 精确匹配过 → 直接加载。
 3. **剧绑定**(`seriesKey` + 集号):这一部剧绑定过作品 → `GET /bangumi/{animeId}`(进程内记忆),
    按 `episodeNumber` 找**唯一**相等的一集 → 写集绑定并加载。对不上就落到第 4 步。
-4. **`POST /match`**(`fileNameOnly`):`isMatched` → 采用并写集 + 剧绑定;
-   否则 `needsSelection(candidates)`,菜单提示「请选择」,⛔ 不自动取第一个模糊结果。
-5. 用户在 `DanmakuPickerSheet` 里从候选或关键词搜索结果中选一个 → `select` → 写集 + 剧绑定 → 加载。
+4. **`POST /match`**:有真实指纹就带 `hashAndFileName`(见 3.1),否则 `fileNameOnly` + 32 位占位串。
+   `isMatched` → 采用并写集 + 剧绑定。
+5. **TMDB 降级层**:有 `ProviderIds.Tmdb` → `GET /search/episodes?tmdbId=&tmdbIdType=&episode=`,
+   按集号挑唯一命中。先按目标类型查(剧集 `tmdbIdType=0` / 电影 `1`),查不到再试另一套。
+6. **唯一候选采用**(`DanmakuCandidateMatcher`):第 4 步的模糊候选里,若**恰好一集**通过
+   全部硬门槛(集号 / 季 / 类型)与标题软校验,自动采用。
+7. 都不成立 → `needsSelection(candidates)`,菜单提示「请选择」,⛔ 不自动取第一个模糊结果。
+8. 用户在 `DanmakuPickerSheet` 里从候选或关键词搜索结果中选一个 → `select` → 写集 + 剧绑定 → 加载。
+
+**为什么第 6 步不是打分**:另一款同类播放器用加权打分(集数 +2000 / 季度 +1500 / 标题 +1500,阈值 1200)。
+加权要调阈值,阈值偏低就会把「第二季第 5 话」判给「第一季第 5 话」。唯一性判据没有阈值可调,
+剩 0 个或 ≥2 个都交回用户 —— 既提高了自动化率,又没有把「不猜」改成「猜一个」。
+
+**集号 token**(`DanmakuEpisodeToken`):`episodeTitle` 是模糊候选里唯一带集数语义的字段,
+形状很杂(`第5话 …` / `05` / `EP06` / `第十二话` / `S2 …` / `C1 …`)。只认这几种形态,
+认不出返回 nil —— ⛔ 不做「标题里出现过这个数字就算」的宽松兜底(`S5 聖地巡礼` 里的 5 不是第 5 话)。
 
 **加载**:先查 `DanmakuCommentCache`(4 小时内有效),否则 `GET /comment/{id}?withRelated=true&chConvert=1`,
 解析(丢弃无法解析的并计数)→ 排序 → 写缓存。
 
 **身份键**(`DanmakuMediaQuery`):
 
-| 来源 | `itemKey` | `seriesKey` | `/match` 文件名 |
-|---|---|---|---|
-| Emby | `emby|{serverId}|{itemId}` | 有 `SeriesId` 与 `IndexNumber` 时 `emby|{serverId}|series:{SeriesId}` | 剧集:`剧名 S{季}E{集}`(合成,Q45);电影:`Name` |
-| 百度 | `baidu|fsid:{fs_id}` | 文件名解析出集号时 `baidu|dir:{父目录}` | 真实文件名去扩展名 |
+| 来源 | `itemKey` | `seriesKey` | `/match` 文件名 | TMDB ID |
+|---|---|---|---|---|
+| Emby | `emby\|{serverId}\|{itemId}` | 有 `SeriesId` 与 `IndexNumber` 时 `emby\|{serverId}\|series:{SeriesId}` | 剧集:`剧名 S{季}E{集}`(合成,Q45);电影:`Name` | `ProviderIds.Tmdb` |
+| 百度 | `baidu\|fsid:{fs_id}` | 文件名解析出集号时 `baidu\|dir:{父目录}` | 真实文件名去扩展名 | 文件名里的 `{tmdbid-…}` |
 
 按服务器隔离沿用「每台服务器完全隔离」。删服务器时**不**清绑定(只是几条本地映射,不含凭据)。
 
 「解除这一部的匹配」(选择面板底部):删集绑定 + 剧绑定,回到等用户挑的状态。
+
+### 3.1 媒体指纹(`DanmakuFingerprint`)
+
+`/match` 的 `fileHash` 是「同一份文件」唯一的硬证据。`DanmakuFingerprint` 算文件前 16 MiB 的 MD5,
+但**只服务 Emby 直连流**:
+
+- 转码流的前 16 MiB 是编码器输出,与源文件不是同一份字节,算出来没有意义 → 不试;
+- 走 `Range: bytes=0-16777215`,并严格校验 `Content-Range`(206 + `start == 0` + 总长自洽);
+- 服务端忽略 Range 回 200 时,**只有**整文件 ≤ 16 MiB 才接受 —— ⛔ 绝不为算指纹把整部电影下下来;
+- 任何一步不满足就返回 nil,退回文件名匹配。指纹是锦上添花,⛔ 不抛错、不挡播放。
+
+代价与开关:起播时多一次 16 MiB 读取。对 Emby 直连流来说这正是播放器接下来要读的字节
+(服务端 / 内核 HTTP 缓存都可能已有),所以**默认开**;设置 › 弹幕 的「用文件指纹提高匹配准确度」
+可以关掉(限速 / 按流量计费的服务器),关掉后退回文件名匹配。
+
+百度来源**不算指纹**:`dlink` 下载要额外消耗网盘流量,而它的真实文件名已经足够(见 §6)。
 
 ## 4. 渲染
 
@@ -104,18 +135,18 @@
 | 控制栏「弹幕」菜单 | 字幕菜单右侧:显示开关、状态(条数 / 匹配情况 / 错误)、重试、选择弹幕…、偏移 ±0.5 秒、设置入口 |
 | 快捷键 D | 显示 / 隐藏(`PlayerCommands` 表 + `PlayerWindowView.onKeyPress`) |
 | 选择弹幕面板 | 播放窗口 sheet;打开期间钉住控制栏 |
-| 设置 › 弹幕 | AppId / AppSecret;自动加载、不透明度、字号、滚动时长、显示区域、三种类型开关 |
+| 设置 › 弹幕 | AppId / AppSecret;自动加载、文件指纹、不透明度、字号、滚动时长、显示区域、三种类型开关 |
 
 「显示弹幕」是本集的会话开关,初值取设置里的「播放时自动加载弹幕」;关着时不发任何请求,打开时才加载。
 转码 seek / 重试会重走 `PlayerViewModel.start()`,但弹幕只在第一次加载(`startIfNeeded` 判重)。
 
 ## 6. 取舍与后续
 
-- **不算文件 Hash**:`/match` 的精确匹配要文件前 16 MB 的 MD5,两路来源都只能经网络流拿字节。
-  为匹配多拉 16 MB 对别人的 Emby / 百度配额都是负担。但服务端**硬性要求** `fileHash` 是 32 位串
-  (少了直接 `errorCode 2`,见 `DANDANPLAY_API.md` §2),所以填 32 个 `0` 占位:查不到 Hash 记录就按文件名匹配,
-  正是要走的路径。若以后要提高命中率,优先考虑 Emby 的 `ProviderIds.Tmdb` + `/search/episodes?tmdbId=` 这条路
-  (需先按 `API_CONTRACT.md` 0.2 核实并回填 `ProviderIds` 的用法)。
+- **文件 Hash:Emby 算,百度不算**。`/match` 的 `fileHash` 要文件前 16 MB 的 MD5。Emby 直连流本来就要从头读,
+  这 16 MiB 正是播放器接下来要读的字节 → 算(见 §3.1,可在设置里关)。百度 `dlink` 要额外消耗网盘流量 →
+  不算,填 32 个 `0` 占位。服务端**硬性要求** `fileHash` 是 32 位串(少了直接 `errorCode 2`,
+  见 `DANDANPLAY_API.md` §2),占位串查不到 Hash 记录就按文件名匹配,正是要走的路径。
 - **Emby 拿不到文件名**:`MediaSource.Path` 按契约不用,只能合成名字(Q45)。手选一次后同剧其它集走剧绑定,不再依赖它。
+  TMDB 降级层(§3 第 5 步)是这条短板的第二重保险。
 - **弹幕数量**:不做「最多显示 N 条」的截断,密度由行数自然控制。
 - **屏蔽词 / 合并重复**:未做。
