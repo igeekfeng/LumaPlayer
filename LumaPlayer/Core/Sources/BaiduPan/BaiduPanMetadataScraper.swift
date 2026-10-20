@@ -506,10 +506,31 @@ actor BaiduPanMetadataScraper {
         item.kind == .folder && !item.title.isEmpty
     }
 
+    /// 一张 TMDB **剧级海报**的 `ImageDescriptor`(没有 `poster_path` 时为 `nil`)。
+    ///
+    /// ⚠️ 目录卡片(`apply`)与详情页的剧级信息(`BaiduPanSourceViewModel`)必须走
+    /// **同一把** `cacheKey` 拼法:同一个 `poster_path` + 同一个档位 → 同一条缓存。
+    /// 于是「从目录卡片进来」与「从继续观看进来」看到的剧集海报是同一张
+    /// —— 用户报的「两个入口封面 / 背景图不一样」正是各自拼各自的图造成的。
+    static func posterDescriptor(for match: TMDBMatch, sourceID: UUID) -> ImageDescriptor? {
+        guard let url = match.posterURL, let path = match.posterPath else { return nil }
+        return .remote(
+            ownerID: sourceID,
+            url: url,
+            // TMDB 图床是公开 CDN,不带认证头(`docs/TMDB_API.md` §4)
+            headers: [:],
+            cacheKey: ImageDescriptor.tmdbPosterKey(
+                sourceID: sourceID,
+                posterPath: path,
+                size: TMDBImage.posterSize
+            )
+        )
+    }
+
     /// 把剧级命中项折回条目(电影 / 视频 / 目录卡片用)。
     ///
     /// 封面按 `ImageDescriptor.remote` 走既有图片通路;`cacheKey` 用 `poster_path`
-    /// 当版本段(`ImageDescriptor.tmdbPosterKey`)。
+    /// 当版本段(`ImageDescriptor.tmdbPosterKey`,拼法见 `posterDescriptor`)。
     ///
     /// - Parameter fillTMDBID: 要不要把命中的 id 写回条目。**只有目录卡片要**
     ///   (`enrichFolders`)—— 详情页拿它去取剧级信息与演职员(`seriesProfile`)。
@@ -520,22 +541,8 @@ actor BaiduPanMetadataScraper {
         to item: SourceItem,
         fillTMDBID: Bool = false
     ) -> SourceItem {
-        var poster: ImageDescriptor?
-        if let url = match.posterURL, let path = match.posterPath {
-            poster = .remote(
-                ownerID: item.ref.sourceID,
-                url: url,
-                // TMDB 图床是公开 CDN,不带认证头(`docs/TMDB_API.md` §4)
-                headers: [:],
-                cacheKey: ImageDescriptor.tmdbPosterKey(
-                    sourceID: item.ref.sourceID,
-                    posterPath: path,
-                    size: TMDBImage.posterSize
-                )
-            )
-        }
-        return item.withScrapedMetadata(
-            poster: poster,
+        item.withScrapedMetadata(
+            poster: posterDescriptor(for: match, sourceID: item.ref.sourceID),
             overview: match.overview,
             year: match.year,
             tmdbID: fillTMDBID ? match.tmdbID : nil
