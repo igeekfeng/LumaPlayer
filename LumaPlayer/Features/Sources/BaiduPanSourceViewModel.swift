@@ -125,6 +125,15 @@ final class BaiduPanSourceViewModel {
     /// 用户点进来时那张**目录卡片**(剧级元数据的来源)。只有 `enter(_:)` 会设置它。
     private var enteredSeriesItem: SourceItem?
 
+    /// 「继续观看」卡片快照里的封面 —— **暂代**剧级海报,拿到剧级信息后就换掉。
+    ///
+    /// ⚠️ 它不是剧级海报:续播快照记的是**那一集**的封面,配了 TMDB 时那是 16:9 的
+    /// 分集剧照(`applyEpisode`)。详情页的海报与 hero 背景都取自剧级封面,拿一张剧照顶上
+    /// 就与「从目录卡片进来」看到的剧集海报不一样 —— 用户报的「两个入口封面和背景图
+    /// 不一样」正是这个。所以它只当**过渡**:`seriesProfile` 一到就换成 TMDB 剧集海报
+    /// (见 `applySeriesPosterFromProfile`)。nil = 没有待替换的快照。
+    private var resumeSnapshotPoster: ImageDescriptor?
+
     /// 上一轮判定形态的是哪个目录。
     ///
     /// 用途只有一个:区分「同一部剧的刷新」与「进了另一部剧」—— 前者要保住用户正看着的季,
@@ -277,6 +286,7 @@ final class BaiduPanSourceViewModel {
         directoryCache.removeAll()
         filesByID.removeAll()
         enteredSeriesItem = nil
+        resumeSnapshotPoster = nil
         shapeDirectory = nil
         // 结构性重载:上一次「继续观看」点进来的选季意图已经不作数了
         preferredSeasonNumber = nil
@@ -546,6 +556,8 @@ final class BaiduPanSourceViewModel {
         // 记下这张目录卡片:若点进去的是一部剧,它就是这一部剧的剧级元数据来源
         // (标题 / TMDB 海报 / 简介 / 年份,见 `enteredSeriesItem`)。
         enteredSeriesItem = item
+        // 点的是目录卡片:这就是剧级元数据本身,不欠着任何快照封面要换
+        resumeSnapshotPoster = nil
         // 手点目录进来自带上下文,上一次「继续观看」留下的选季意图到此为止
         preferredSeasonNumber = nil
         currentDirectory = file.path
@@ -562,6 +574,7 @@ final class BaiduPanSourceViewModel {
         currentDirectory = BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top
         // 退回上一层:上一层是什么形态要重新判,刚才那一部剧的剧级元数据也不再适用
         enteredSeriesItem = nil
+        resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
         await loadFiles()
     }
@@ -581,6 +594,7 @@ final class BaiduPanSourceViewModel {
         self.preferredSeasonNumber = nil
         guard let structure = shape.seriesStructure else {
             enteredSeriesItem = nil
+            resumeSnapshotPoster = nil
             seriesItem = nil
             shapeDirectory = nil
             clearEpisodeState()
@@ -597,6 +611,10 @@ final class BaiduPanSourceViewModel {
         // 直接落在剧目录(片库根就是一部剧)时没有那张卡片,退回只有目录名的兜底条目。
         seriesItem = enteredSeriesItem
             ?? Self.fallbackSeriesItem(directory: directory, sourceID: source.id)
+        // 同一部剧刷新时剧级信息已经在手上,不必等那一趟重来:立刻把快照封面换回剧集海报。
+        // ⚠️ 只在同一部剧时补:换了一部剧时 `seriesProfile` 还是上一部剧的
+        // (下面 `startSeriesProfileLoad` 才清掉),拿它换就会贴错海报。
+        if isSameSeries { applySeriesPosterFromProfile() }
         let previousSeasonID = isSameSeries ? selectedSeason?.id : nil
         // 选中哪一季的优先级:「继续观看」指定的那一季 > 同一部剧刷新时保住的那一季 > 第一季。
         // ⚠️ 指定的排最前:用户从续播卡片点进来时看的多半不是第 1 季,而详情页的播放主按钮
@@ -644,7 +662,30 @@ final class BaiduPanSourceViewModel {
             guard let self, myGeneration == self.seriesProfileGeneration else { return }
             self.seriesProfile = profile
             self.isLoadingSeriesProfile = false
+            self.applySeriesPosterFromProfile()
         }
+    }
+
+    /// 剧级信息到手后,把「续播快照顶上的那张封面」换成 TMDB 的剧集海报。
+    ///
+    /// 两个入口看到的必须是同一张图:从目录卡片进来时 `seriesItem.poster` 本来就是
+    /// 剧集海报(TMDB `poster_path`,与这里同一个 `cacheKey`),所以**只换快照顶上那张**
+    /// (`resumeSnapshotPoster` 记着它),⛔ 不覆盖卡片自己的封面。
+    ///
+    /// 拿不到 TMDB 剧集海报(没配 token / 没命中)时保留快照:一张剧照也好过占位图,
+    /// 而这正是快照当初的用途(见 `openDetail(for:)`)。
+    private func applySeriesPosterFromProfile() {
+        guard let snapshot = resumeSnapshotPoster,
+              let profile = seriesProfile,
+              let poster = BaiduPanMetadataScraper.posterDescriptor(
+                  for: profile.match, sourceID: source.id),
+              let item = seriesItem else { return }
+        let updated = item.withPoster(poster)
+        seriesItem = updated
+        // 同一部剧刷新时 `seriesItem` 会从 `enteredSeriesItem` 重新取一份 ——
+        // 不一起换掉,刷新后又退回那张剧照
+        if enteredSeriesItem?.poster == snapshot { enteredSeriesItem = updated }
+        resumeSnapshotPoster = nil
     }
 
     /// 丢掉正在跑的剧级扩展信息请求(它的结果已经作废)。轮次 +1 也就是让它回来时自行退出。
@@ -978,6 +1019,9 @@ final class BaiduPanSourceViewModel {
         // 剧级元数据:这次不是从父目录那张卡片点进来的,但**续播卡自己带着封面快照**
         // (播放那一刻记下的)。不用它兜底,详情页的海报与 hero 背景就都是空的
         // —— 用户报的「从继续观看进详情,封面和背景图加载不出来」正是这个。
+        // ⚠️ 快照里那张是**那一集**的图(配了 TMDB 就是 16:9 剧照),只当过渡:
+        // `seriesProfile` 一到就换成剧集海报(见 `applySeriesPosterFromProfile`)
+        resumeSnapshotPoster = card.poster
         enteredSeriesItem = Self.fallbackSeriesItem(
             directory: directory,
             sourceID: source.id,

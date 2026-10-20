@@ -479,6 +479,35 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             MockEmbyURLProtocol.recordedRequests().count, afterFirst, "第二次不该再发请求")
     }
 
+    /// ★ 详情页的剧级海报必须是**目录卡片那张同一张**。
+    ///
+    /// 「剧集列表」入口的封面来自目录卡片(`enrich`),「继续观看」入口的封面要等
+    /// 详情页那一趟剧级信息(`seriesProfile`)。两者拼出的 `ImageDescriptor` 必须相等
+    /// —— 不相等就是用户报的「两个入口封面和背景图不一样」。
+    func testSeriesProfilePosterMatchesDirectoryCard() async throws {
+        await save(token: "T")
+        MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
+        MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        let scraper = Self.makeScraper(credentials)
+
+        // 剧集列表入口:目录卡片
+        let cards = await scraper.enrich([
+            item(title: "Game of Thrones", year: nil, kind: .folder, origin: .none)
+        ])
+        let cardPoster = try XCTUnwrap(cards.first?.poster, "目录卡片没拿到剧集海报")
+
+        // 继续观看入口:详情页那一趟剧级信息
+        let loaded = await scraper.seriesProfile(tmdbID: 1399, title: "Game of Thrones", year: nil)
+        let profile = try XCTUnwrap(loaded)
+        let detailPoster = try XCTUnwrap(
+            BaiduPanMetadataScraper.posterDescriptor(for: profile.match, sourceID: sourceID),
+            "剧级信息里没有海报")
+
+        XCTAssertEqual(detailPoster, cardPoster, "两条入口必须是同一张剧集海报(同一条缓存)")
+        XCTAssertTrue(detailPoster.isDiskCacheable)
+    }
+
     /// id 与标题都没有 → nil,⛔ 一个请求都不发
     /// (拿空标题去搜只会端回一堆无关的剧,那正是硬规则 4 要避免的)。
     func testSeriesProfileWithoutAnyIdentitySendsNothing() async {
