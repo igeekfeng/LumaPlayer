@@ -93,7 +93,7 @@ final class PosterDiskCacheTests: XCTestCase {
         let serverID = UUID()
         let oldest = makeSpec(serverID: serverID, itemID: "oldest", tag: "TAG-1")
         let newest = makeSpec(serverID: serverID, itemID: "newest", tag: "TAG-1")
-        let big = Data(repeating: 0x61, count: PosterDiskCache.byteLimit / 2 + 1024)
+        let big = Data(repeating: 0x61, count: PosterDiskCache.defaultByteLimit / 2 + 1024)
 
         await cache.store(big, for: oldest)
         // 拉开两个文件的 mtime,「按最旧淘汰」的顺序才确定
@@ -104,6 +104,81 @@ final class PosterDiskCacheTests: XCTestCase {
         let hitNewest = await cache.data(for: newest)
         XCTAssertNil(hitOldest, "超限后最旧的文件必须被淘汰")
         XCTAssertNotNil(hitNewest, "最新的文件必须保留")
+    }
+
+    // MARK: - 设置 → 缓存:占用 / 上限 / 清空
+
+    /// 「已用空间」显示的是磁盘上真实的大小与张数
+    func testUsageCountsBytesAndFiles() async {
+        let payload = Data(repeating: 0x62, count: 4096)
+        await cache.store(payload, for: makeSpec(itemID: "ITEM-1", tag: "TAG-1"))
+        await cache.store(payload, for: makeSpec(itemID: "ITEM-2", tag: "TAG-1"))
+
+        let usage = await cache.usage()
+
+        XCTAssertEqual(usage.fileCount, 2)
+        XCTAssertEqual(usage.bytes, payload.count * 2)
+    }
+
+    /// 空目录(或目录还不存在)时的占用必须是 0,⛔ 不是「估算中」卡住
+    func testUsageIsZeroBeforeAnyStore() async {
+        let usage = await cache.usage()
+
+        XCTAssertEqual(usage, .zero)
+    }
+
+    /// 「清空图片缓存」:文件全没了,占用归零,而且之后还能正常写
+    func testRemoveAllClearsDiskAndStaysUsable() async {
+        let spec = makeSpec(itemID: "ITEM-1", tag: "TAG-1")
+        await cache.store(Data("poster-bytes".utf8), for: spec)
+
+        await cache.removeAll()
+
+        let hit = await cache.data(for: spec)
+        let usage = await cache.usage()
+        XCTAssertNil(hit, "清空后不得还能读到旧文件")
+        XCTAssertEqual(usage, .zero, "清空后占用必须归零")
+
+        await cache.store(Data("again".utf8), for: spec)
+        let rewritten = await cache.data(for: spec)
+        XCTAssertEqual(rewritten, Data("again".utf8), "清空后目录要能自行重建")
+    }
+
+    /// 调小上限**立即**按新上限淘汰,不等下一次写盘
+    /// (用户把 2 GB 改成 128 MB 后,盘上那 2 GB 不能还躺着)
+    func testLoweringLimitEvictsImmediately() async throws {
+        let small = 64 * 1024
+        let limited = PosterDiskCache(directory: directory, byteLimit: 1024 * 1024)
+        let old = makeSpec(itemID: "old", tag: "TAG-1")
+        let new = makeSpec(itemID: "new", tag: "TAG-1")
+        let payload = Data(repeating: 0x63, count: 40 * 1024)
+
+        await limited.store(payload, for: old)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await limited.store(payload, for: new)
+        let before = await limited.usage()
+        XCTAssertEqual(before.bytes, payload.count * 2)
+
+        await limited.setByteLimit(small)
+
+        let hitOld = await limited.data(for: old)
+        let hitNew = await limited.data(for: new)
+        let after = await limited.usage()
+        XCTAssertNil(hitOld, "调小上限后最旧的必须先走")
+        XCTAssertNotNil(hitNew, "最新的应当留下")
+        XCTAssertLessThanOrEqual(after.bytes, small, "调小上限后占用必须落到新上限之内")
+    }
+
+    /// 上限放宽时什么都不删
+    func testRaisingLimitKeepsFiles() async {
+        let payload = Data(repeating: 0x64, count: 4096)
+        let spec = makeSpec(itemID: "ITEM-1", tag: "TAG-1")
+        await cache.store(payload, for: spec)
+
+        await cache.setByteLimit(PosterDiskCache.defaultByteLimit * 4)
+
+        let hit = await cache.data(for: spec)
+        XCTAssertEqual(hit, payload)
     }
 
     // MARK: - 辅助

@@ -201,6 +201,65 @@ final class PosterImageTests: XCTestCase {
         XCTAssertEqual(calls, 2, "磁盘被 purge 后必须重新走网络")
     }
 
+    // MARK: - 设置 → 缓存
+
+    /// 设置页看的数字就是磁盘层的真实占用
+    @MainActor
+    func testDiskUsageReflectsStoredImages() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let payload = try makeImageData()
+        let store = PosterImageStore(loader: CountingImageLoader(payload: payload), disk: disk)
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+
+        _ = try await store.image(for: spec)
+
+        let usage = await store.diskUsage()
+        XCTAssertEqual(usage?.fileCount, 1)
+        XCTAssertEqual(usage?.bytes, payload.count)
+    }
+
+    /// 没有磁盘层时占用是 `nil`(设置页据此不显示数字),不是 0
+    @MainActor
+    func testDiskUsageIsNilWithoutDiskLayer() async throws {
+        let store = PosterImageStore(loader: CountingImageLoader(payload: try makeImageData()))
+        let usage = await store.diskUsage()
+        XCTAssertNil(usage)
+    }
+
+    /// 「清空图片缓存」要清**两层**:内存清了、磁盘也清了,下一次访问重新走网络
+    @MainActor
+    func testClearAllDropsMemoryAndDisk() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let loader = CountingImageLoader(payload: try makeImageData())
+        let store = PosterImageStore(loader: loader, disk: disk)
+        let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
+        _ = try await store.image(for: spec)
+
+        await store.clearAll()
+
+        XCTAssertFalse(store.isCached(spec), "内存层必须清空")
+        let onDisk = await disk.data(for: spec)
+        XCTAssertNil(onDisk, "磁盘层必须清空")
+        let usage = await store.diskUsage()
+        XCTAssertEqual(usage?.fileCount, 0)
+
+        _ = try await store.image(for: spec)
+        let calls = await loader.callCount
+        XCTAssertEqual(calls, 2, "清空后再取同一张图必须重新走网络")
+    }
+
+    /// 设置页改上限走的就是磁盘层的 `setByteLimit`
+    @MainActor
+    func testSetDiskByteLimitThroughStore() async throws {
+        let disk = PosterDiskCache(directory: diskDirectory)
+        let store = PosterImageStore(loader: CountingImageLoader(payload: try makeImageData()), disk: disk)
+
+        await store.setDiskByteLimit(512 * 1024 * 1024)
+
+        let limit = await disk.byteLimit
+        XCTAssertEqual(limit, 512 * 1024 * 1024)
+    }
+
     // MARK: - 辅助
 
     /// 造一张能解回 `NSImage` 的图(TIFF,AppKit 原生支持)。

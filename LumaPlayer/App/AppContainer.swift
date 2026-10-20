@@ -40,6 +40,12 @@ final class AppContainer {
     /// 首页外观偏好(`HomeAppearancePreferences`,UserDefaults):要不要显示顶部 hero 推荐。
     /// 设置窗口改、首页读,必须是同一个实例,改完回到首页立即生效。
     let homeAppearance: HomeAppearancePreferences
+    /// 图片缓存偏好(`ImageCachePreferences`,UserDefaults):海报磁盘缓存的上限档位。
+    /// 组合根建 `posterDiskCache` 时读它,设置页改它。
+    let imageCachePreferences: ImageCachePreferences
+    /// 海报磁盘缓存。**单独持有**是因为设置页要看占用 / 清空 / 改上限:
+    /// 那些动作不该依赖 `posters` 懒加载出来的整条加载链。
+    let posterDiskCache: PosterDiskCache
     /// 弹幕外观偏好(`DanmakuSettingsStore`,UserDefaults)。理由同 `subtitleStyles`:
     /// 设置窗口与播放窗口必须共用同一个实例。
     let danmakuSettings: DanmakuSettingsStore
@@ -68,6 +74,9 @@ final class AppContainer {
         self.subtitleStyles = SubtitleStyleStore(defaults: preferences)
         self.preferences = PlaybackPreferences(defaults: preferences)
         self.homeAppearance = HomeAppearancePreferences(defaults: preferences)
+        let imageCachePreferences = ImageCachePreferences(defaults: preferences)
+        self.imageCachePreferences = imageCachePreferences
+        self.posterDiskCache = PosterDiskCache(byteLimit: imageCachePreferences.byteLimitBytes)
         self.watchProgress = watchProgress
             ?? WatchProgressStore(fileURL: WatchProgressStore.defaultFileURL)
         self.hiddenItems = hiddenItems
@@ -313,7 +322,7 @@ final class AppContainer {
     /// `MockEmbyURLProtocol` 才能把图片请求也拦住。
     private(set) lazy var posters = PosterImageStore(
         loader: PosterImageLoader(container: self, session: session),
-        disk: PosterDiskCache()
+        disk: posterDiskCache
     )
 
     /// 手动刷新(菜单「Reload」,⌘R)时作废这台服务器的接口缓存:

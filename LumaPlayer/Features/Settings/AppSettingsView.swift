@@ -12,21 +12,24 @@ enum SettingsTab: String {
     case servers
     /// 被隐藏的条目(只在本机隐藏的那些,可恢复)
     case hidden
+    /// 图片缓存(占用 / 上限 / 清空)
+    case cache
 
     static let storageKey = "settings.selectedTab"
 }
 
-/// 设置窗口(⌘,)。六个标签页:
+/// 设置窗口(⌘,)。七个标签页:
 ///
 /// - **通用**:网络(自定义 User-Agent)+ 首页顶部推荐开关 + 元数据刮削(TMDB token);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
 /// - **字幕**:字幕外观(`SubtitleSettingsView`);
 /// - **弹幕**:弹弹play 的 AppId / AppSecret 与弹幕外观(`DanmakuSettingsView`);
 /// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`);
-/// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复。
+/// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复;
+/// - **缓存**:图片缓存的占用 / 上限 / 清空(`ImageCacheSettingsView`)。
 ///
 /// 来源管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
-/// (DesignTokens.swift「界面规则」)。
+/// (DesignTokens.swift「界面规则」)。缓存同理 —— 一年也点不了两次。
 struct AppSettingsView: View {
     let container: AppContainer
 
@@ -55,6 +58,12 @@ struct AppSettingsView: View {
             HiddenItemsSettingsView(store: container.hiddenItems)
                 .tabItem { Label("已隐藏", systemImage: "eye.slash") }
                 .tag(SettingsTab.hidden)
+            ImageCacheSettingsView(
+                preferences: container.imageCachePreferences,
+                store: container.posters
+            )
+                .tabItem { Label("缓存", systemImage: "externaldrive") }
+                .tag(SettingsTab.cache)
         }
         .frame(width: Metrics.settingsWindowWidth, height: Metrics.settingsWindowHeight)
     }
@@ -451,6 +460,95 @@ private struct SubtitleSettingsView: View {
 
     private static func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
+    }
+}
+
+/// 缓存:图片(海报 / 背景图 / 剧照 / 网盘封面)的磁盘占用、上限与清空。
+///
+/// ## 为什么只放图片缓存
+///
+/// 这里只摆**随时可以丢掉的派生数据**。接口响应缓存(`EmbyResponseCache`)不进这页:
+/// 它按服务器隔离、跟随登录态整片作废,清掉之后用户感知不到任何「腾出了空间」,
+/// 却要白等一轮接口往返(见 `Core/Cache/EmbyResponseCache.swift`)。
+///
+/// ## 数字从哪来
+///
+/// 占用**现扫磁盘**(`PosterImageStore.diskUsage()`),不读缓存层自己的字节簿记 ——
+/// 簿记只覆盖 App 自己的写入,手删目录 / 系统清理之后就偏了,而这一页正是要「准」的地方。
+/// 上限一经改动立即生效并立刻淘汰,不需要重启或等下一次写盘。
+private struct ImageCacheSettingsView: View {
+    @Bindable var preferences: ImageCachePreferences
+    let store: PosterImageStore
+
+    @State private var usage: PosterDiskCache.Usage?
+    @State private var isBusy = false
+    @State private var confirmsClear = false
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("已用空间") {
+                    Text(usageText)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Picker("上限", selection: $preferences.byteLimitMB) {
+                    ForEach(ImageCachePreferences.byteLimitOptionsMB, id: \.self) { megabytes in
+                        Text(Self.sizeText(megabytes * 1024 * 1024)).tag(megabytes)
+                    }
+                }
+                HStack {
+                    Text("调小上限会立刻淘汰最久未用的图片。")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("清空图片缓存") { confirmsClear = true }
+                        .disabled(isBusy || (usage?.fileCount ?? 0) == 0)
+                }
+            } header: {
+                Text("图片缓存")
+            } footer: {
+                Text("海报、背景图、分集剧照与网盘封面的本地副本,存在 App 的缓存目录里,超出上限按最久未用淘汰。清空只删本机副本:服务器上的图、观看记录与进度都不受影响,之后浏览时按需重新下载。")
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task { await refreshUsage() }
+        .onChange(of: preferences.byteLimitMB) { _, newValue in
+            Task {
+                await store.setDiskByteLimit(newValue * 1024 * 1024)
+                await refreshUsage()
+            }
+        }
+        .alert("清空图片缓存?", isPresented: $confirmsClear) {
+            Button("清空", role: .destructive) { Task { await clear() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会删掉本机 \(usageText) 的图片副本。服务器上的图不受影响,之后浏览时重新下载;正在显示的图也不会突然消失。")
+        }
+    }
+
+    private var usageText: String {
+        guard let usage else { return "统计中…" }
+        // 一条都没有时不能落进 ByteCountFormatter:它对 0 字节给的是「Zero KB」
+        guard usage.fileCount > 0 else { return Self.sizeText(0) }
+        return "\(Self.sizeText(usage.bytes))(\(usage.fileCount.formatted()) 张)"
+    }
+
+    private func refreshUsage() async {
+        usage = await store.diskUsage()
+    }
+
+    private func clear() async {
+        isBusy = true
+        await store.clearAll()
+        await refreshUsage()
+        isBusy = false
+    }
+
+    /// 二进制单位(1024)。与档位数字同一套进制:256 MB 就显示「256 MB」,
+    /// ⛔ 不用十进制单位把它显示成「268.4 MB」。
+    private static func sizeText(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
     }
 }
 

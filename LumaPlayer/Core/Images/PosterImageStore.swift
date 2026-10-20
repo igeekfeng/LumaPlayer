@@ -12,6 +12,9 @@ import Foundation
 ///
 /// 内存淘汰是 **LRU**(超限只淘汰最久未用的那一条):内存里留着哪张图
 /// 与「最近在看哪个库」强相关,全表清空会让另一台服务器的海报无辜陪葬。
+///
+/// 磁盘层的上限可调、占用可查、可整片清空(设置 → 缓存),入口是这里的
+/// `diskUsage()` / `setDiskByteLimit(_:)` / `clearAll()` —— 设置页只跟这一个对象打交道。
 @MainActor
 final class PosterImageStore {
     /// 内存条目上限。不是设计 token,与布局无关。
@@ -82,6 +85,27 @@ final class PosterImageStore {
     /// 删除某个来源在磁盘上的全部图片(删来源时)。
     func purgeDisk(ownerID: UUID) async {
         await disk?.purge(ownerID: ownerID)
+    }
+
+    // MARK: - 设置 → 缓存(占用 / 上限 / 清空)
+
+    /// 磁盘层当前占用;`nil` = 这一层不存在(纯内存的测试替身),设置页据此不显示数字。
+    func diskUsage() async -> PosterDiskCache.Usage? {
+        await disk?.usage()
+    }
+
+    /// 改磁盘上限。调低时立即淘汰(`PosterDiskCache.setByteLimit`)。
+    func setDiskByteLimit(_ bytes: Int) async {
+        await disk?.setByteLimit(bytes)
+    }
+
+    /// 清空**两层**缓存(设置页的「清空图片缓存」)。
+    ///
+    /// 屏幕上正在显示的图不受影响:每个 `PosterImage` 自己持着已解出的 `NSImage`,
+    /// 清缓存不会让画面空掉;下次重新出现时按需走网络。
+    func clearAll() async {
+        clearCache()
+        await disk?.removeAll()
     }
 
     /// 该 key 是否已在内存中(测试断言缓存命中用)。
