@@ -18,22 +18,69 @@ import os
 /// 隐藏是**可恢复**的(设置页「已隐藏」),所以它比真删安全:这也是删除确认
 /// 面板里那个勾选框默认不勾的原因。
 ///
+/// ⚠️ 隐藏**目录**时,它下面所有分集的「继续观看」卡片也要一起消失
+/// (`BaiduPanSourceViewModel.loadResumeCards` 用 `hiddenPaths` 过滤);
+/// 只按 `fs_id` 过滤挡不住它们 —— 卡片记的是集文件的 id,不是目录的。
+///
 /// ⚠️ 落点与凭据文件同级(`Library/Application Support/LumaPlayer/`)。
 actor HiddenItemsStore {
 
     /// 一条隐藏记录。
     ///
-    /// ⚠️ 只留**恢复与展示**要的东西:身份(`ref`)决定过滤谁,`title` 给设置页
-    /// 显示。⛔ 不存 `path` / 是否目录 —— 那些是删除接口才要的定位信息,
-    /// 而且 `SourceItem` 身上本来就没有 `path`,存下来只会多一条容易不同步的路。
+    /// ⚠️ 只留**恢复、展示与路径过滤**要的东西:身份(`ref`)决定过滤谁,`title` 给设置页
+    /// 显示,`path` 让「隐藏了一个目录」能连带遮住目录里各集的续播卡片。
+    /// ⛔ 不存别的(大小 / 修改时间那一类):删接口要的定位信息只有 `path` 一项,
+    /// 多存一份就会多一条容易不同步的路。
     struct Item: Codable, Sendable, Equatable, Identifiable {
         let ref: SourceItemRef
         /// 隐藏那一刻的条目标题(设置页显示用;真名叫什么都可能变)
         let title: String
         let hiddenAt: Date
+        /// 隐藏那一刻它在网盘上的路径(文件或目录)。
+        ///
+        /// ⚠️ **后加的**,老记录没有(解码成 nil),行为退回「只按 `ref` 过滤」。
+        /// 它只服务一件事:隐藏一个**目录**时,把目录里各集的续播卡片一并滤掉 ——
+        /// 那些记录记的是集文件的 `fs_id`,按 `ref` 过滤挡不住。
+        var path: String? = nil
+        /// 隐藏的是不是目录。与之配套,老记录一律按「单条文件」处理(只认路径完全相等)。
+        var isDirectory: Bool = false
 
         /// 与存储键同形,也给设置页的 `List` 当 id
         var id: String { "\(ref.sourceID.uuidString)|\(ref.itemID)" }
+
+        init(
+            ref: SourceItemRef,
+            title: String,
+            hiddenAt: Date,
+            path: String? = nil,
+            isDirectory: Bool = false
+        ) {
+            self.ref = ref
+            self.title = title
+            self.hiddenAt = hiddenAt
+            self.path = path
+            self.isDirectory = isDirectory
+        }
+
+        /// 解码时把后加的两格当**可选**读。
+        ///
+        /// ⚠️ 不能靠合成的解码器 + 属性默认值:`Bool` 是非可选字段,合成实现会走
+        /// `decode` 而不是 `decodeIfPresent`,老文件缺这个键就整份解码失败 ——
+        /// 那等于「升级一次,隐藏列表全丢」(`CLAUDE.md` 硬规则 4 的迁移纪律)。
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            ref = try container.decode(SourceItemRef.self, forKey: .ref)
+            title = try container.decode(String.self, forKey: .title)
+            hiddenAt = try container.decode(Date.self, forKey: .hiddenAt)
+            path = try container.decodeIfPresent(String.self, forKey: .path)
+            isDirectory = try container.decodeIfPresent(Bool.self, forKey: .isDirectory) ?? false
+        }
+    }
+
+    /// 一条「隐藏了哪个路径」的规则(续播卡片的过滤用)。
+    struct HiddenPath: Sendable, Equatable {
+        let path: String
+        let isDirectory: Bool
     }
 
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "hidden-items")
@@ -66,6 +113,20 @@ actor HiddenItemsStore {
     /// ⛔ 不能在计算属性里 await。
     func hiddenRefs(sourceID: UUID) -> Set<SourceItemRef> {
         Set(entries().values.filter { $0.ref.sourceID == sourceID }.map(\.ref))
+    }
+
+    /// 某个来源下**隐藏了哪些路径**(续播卡片的过滤用)。
+    ///
+    /// ⚠️ 与 `hiddenRefs` 分开:那个按条目的 `fs_id` 过滤列表,挡不住续播卡片 ——
+    /// 卡片记的是**集文件**的 id,而用户隐藏的可能是它所在的**目录**。
+    /// 没有 `path` 的老记录不出现在这里(它们本来也没有目录语义可判)。
+    func hiddenPaths(sourceID: UUID) -> [HiddenPath] {
+        entries().values
+            .filter { $0.ref.sourceID == sourceID }
+            .compactMap { item in
+                guard let path = item.path, !path.isEmpty else { return nil }
+                return HiddenPath(path: path, isDirectory: item.isDirectory)
+            }
     }
 
     /// 全部隐藏记录(设置页用),最近隐藏的在前。

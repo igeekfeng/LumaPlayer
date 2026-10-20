@@ -218,6 +218,22 @@ enum BaiduPanPath {
         (path as NSString).deletingLastPathComponent
     }
 
+    /// `locator` 是不是 `path` 本身,或(删 / 隐藏的是目录时)落在它下面。
+    ///
+    /// - **文件**:只认完全相等。同一目录下的兄弟文件不能被「前缀相同」误伤。
+    /// - **目录**:用 `isInside`(路径自己也算在内),与删除接口的**递归**语义一致
+    ///   (`docs/BAIDU_PAN_API.md` §2.4)。它对 `A` 与 `AB` 这类前缀相似的兄弟目录
+    ///   不会误判,所以删 `A` 不会连 `AB` 里的记录一起清。
+    ///
+    /// 用途是同一件事的两个面:删掉一条网盘条目时圈出**它名下**的观看记录
+    /// (`BaiduPanWatchHistory`),以及「隐藏了一个目录」时把它的续播卡一并滤掉
+    /// (`BaiduPanSourceViewModel.loadResumeCards`)。
+    static func covers(path: String, locator: String, isDirectory: Bool) -> Bool {
+        guard !path.isEmpty, !locator.isEmpty else { return false }
+        guard isDirectory else { return locator == path }
+        return isInside(locator, applicationRoot: path)
+    }
+
     /// 从文件全路径推出**它所属那部剧的目录**。
     ///
     /// 与 `directory(ofFilePath:)` 的差别:那个是**文件所在**的目录,这个是**剧**的目录 ——

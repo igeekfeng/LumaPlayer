@@ -67,6 +67,23 @@ actor WatchProgressStore {
         let display: Display
     }
 
+    /// 一条**存档**记录(`storedRecords` 的返回):不管还续不续播。
+    ///
+    /// ## 为什么不能拿 `ResumeRecord` 代替
+    ///
+    /// `ResumeRecord` 是**续播语义**:位置 > 0、没看完、带展示快照的才给。
+    /// 删除一个网盘条目时要清的是**它名下的全部记录** —— 已看完的那几集、
+    /// 位置还是 0 的那几条也都在里面。只按续播语义找会漏掉它们,留下指向
+    /// 已不存在文件的死记录(它们不占卡片,但会一直躺在库里)。
+    ///
+    /// ⚠️ 只留删除要用的两格:`fileID` 是要删的键,`display` 给出定位信息
+    /// (`locator` / 标题)。进度数值这里用不上,⛔ 不为了「看起来完整」多存一份。
+    struct StoredRecord: Sendable, Equatable {
+        /// 来源内 id(百度:`fs_id` 字符串)
+        let fileID: String
+        let display: Display
+    }
+
     /// 视为「已看完」的比例:超过它就不再续播,从头开始。
     /// 与 Emby 那边的语义对齐(服务端自己按比例判已看),
     /// 这里的阈值只影响本地续播,不影响任何上报。
@@ -76,6 +93,18 @@ actor WatchProgressStore {
 
     private let fileURL: URL
     private var loaded: [String: Entry]?
+    /// 本次运行内已经删掉的 id。写入路径据此拒绝「把记录写回来」。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 删的若正是**正在播**的那一条,播放器的进度上报器每 10 秒还会写一次进度
+    /// (`LocalResumeReporting`)—— 刚清掉的记录会被重新写回去,「继续观看」里
+    /// 又冒出一张点开就播不了的卡。删除不可恢复,所以这个 id 在本进程内
+    /// 就不该再有记录。
+    ///
+    /// ⚠️ 不落盘:重启之后没有播放会话在写它;而 `fs_id` 是网盘分配的唯一 id,
+    /// 不会分给另一条文件。落盘反而会在「同一个 id 后来又真有了内容」时永久挡住它。
+    private var forgottenIDs: Set<String> = []
     /// 读盘失败的原因(诊断用)。**不静默吞**:读到损坏的文件时把原因留下来,
     /// 由调用方决定要不要提示;⛔ 不假装「没有记录」然后继续。
     private(set) var lastLoadFailureDescription: String?
@@ -149,12 +178,27 @@ actor WatchProgressStore {
 
     // MARK: - 写
 
+    /// 某个来源下**全部**带展示快照的记录,不管还续不续播(删除条目时用)。
+    ///
+    /// 与 `resumeEntries` 的差别只在于**不过滤**:位置 0 的、已经看完的都留着。
+    /// `display` 仍然必需 —— 没有展示快照的老记录没有 `locator`,判断不了
+    /// 「这条属于哪个文件 / 哪部剧」,连删除的范围都界不出来(⛔ 不猜)。
+    func storedRecords(sourceID: UUID) -> [StoredRecord] {
+        entries().compactMap { key, entry -> StoredRecord? in
+            guard let display = entry.display, display.sourceID == sourceID else { return nil }
+            return StoredRecord(fileID: key, display: display)
+        }
+    }
+
     /// 记一条进度。位置为 0 或负值时**删掉**这条记录 ——
     /// 「从 0 开始看」不是一条进度,留着会让下次续播读到 0。
     ///
     /// ⚠️ 保留已有的 `display`:进度与展示信息是**两个写入方**
     /// (上报器写位置、播放页写展示),后写的不能把先写的抹掉。
     func record(fileID id: String, positionSeconds: Double, durationSeconds: Double?) throws {
+        // 这条已经被删掉了(网盘里的文件不在,见 `forgottenIDs`)——
+        // 正在播的那一次会话还在往下报,不能让它把记录写回来。
+        guard !forgottenIDs.contains(id) else { return }
         guard positionSeconds > 0 else {
             try remove(fileID: id)
             return
@@ -174,6 +218,7 @@ actor WatchProgressStore {
     /// ⚠️ 与 `record` 对称:保留已有的位置 —— 起播时先记展示(此刻位置还是 0),
     /// 上报器随后才把位置写进来。两者都改同一份文件,由 actor 串行化,⛔ 不竞态。
     func rememberDisplay(fileID id: String, display: Display) throws {
+        guard !forgottenIDs.contains(id) else { return }
         var current = entries()
         let existing = current[id]
         current[id] = Entry(
@@ -189,6 +234,49 @@ actor WatchProgressStore {
         var current = entries()
         guard current.removeValue(forKey: id) != nil else { return }
         try persist(current)
+    }
+
+    /// 一次性删掉多条记录,**只落一次盘**(不记「已忘」,之后写还会生效)。
+    ///
+    /// 用途是「移出继续观看」:那是**用户主动弃掉进度**,不是内容没了 ——
+    /// 他之后再点开这一集看,进度当然要重新记下来。
+    /// ⚠️ 删网盘条目请用 `forget(fileIDs:)`:那边要挡住正在播的会话把记录写回来。
+    ///
+    /// ⚠️ 写盘失败**抛错**,内存快照保持原样。调用方据此如实报错,
+    /// ⛔ 不假装已经清干净。
+    ///
+    /// - Returns: 真正删掉的条数(不在库里 / 已被删过的 id 不计)。
+    @discardableResult
+    func remove(fileIDs ids: [String]) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        var current = entries()
+        var removed = 0
+        for id in ids where current.removeValue(forKey: id) != nil {
+            removed += 1
+        }
+        guard removed > 0 else { return 0 }
+        try persist(current)
+        return removed
+    }
+
+    /// 一次性清掉多条记录,并在本次运行内**拒绝**再写它们。
+    ///
+    /// 用于「网盘里的条目被**真删**」:文件已经不在网盘,而删除不可恢复。
+    /// 与 `remove(fileIDs:)` 的唯一差别就是这里多记一道 `forgottenIDs` ——
+    /// 正在播的那一条每 10 秒还会报一次进度(`LocalResumeReporting`),
+    /// 不挡就会把刚清掉的记录写回去,「继续观看」里又冒出一张点开就播不了的卡。
+    ///
+    /// ⚠️ 「隐藏」**不要**用它:隐藏可恢复,恢复之后这一项还要能重新记进度,
+    /// 用 `remove(fileIDs:)`。
+    ///
+    /// ⚠️ 写盘失败**抛错**,且**不**记「已忘」(否则重试永远写不进去);
+    /// 调用方据此如实说「文件已处理,但记录没清掉」。
+    @discardableResult
+    func forget(fileIDs ids: [String]) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let removed = try remove(fileIDs: ids)
+        forgottenIDs.formUnion(ids)
+        return removed
     }
 
     /// 文件在网盘上被改名 / 挪位之后,更新**展示快照**里的定位信息。

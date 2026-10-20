@@ -414,6 +414,53 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
                 ofFilePath: "/apps/LumaPlayer/电影/300.mp4"))
     }
 
+    // MARK: - 「继续观看」按隐藏路径过滤
+
+    /// 隐藏的若是**目录**,目录里各集的续播卡片也要消失 —— 那些记录记的是
+    /// 集文件的 `fs_id`,只按 `ref` 过滤挡不住(用户报的正是「隐藏了剧,
+    /// 继续观看里还挂着它的卡,点开播不了」)。
+    func testResumeRecordsUnderHiddenDirectoryAreFiltered() throws {
+        let hidden = [HiddenItemsStore.HiddenPath(
+            path: "/apps/LumaPlayer/琅琊榜", isDirectory: true)]
+        let episode = makeRecord(
+            fileID: "1", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/01.mp4")
+        let sibling = makeRecord(
+            fileID: "2", title: "别的剧", locator: "/apps/LumaPlayer/别的剧/01.mp4")
+
+        XCTAssertTrue(BaiduPanSourceViewModel.isHidden(episode, by: hidden))
+        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(sibling, by: hidden))
+    }
+
+    /// 隐藏的是**单个文件**时只挡那一条:同剧别的集还能接着看。
+    func testResumeRecordHiddenByFilePathOnly() throws {
+        let hidden = [HiddenItemsStore.HiddenPath(
+            path: "/apps/LumaPlayer/琅琊榜/01.mp4", isDirectory: false)]
+        let deleted = makeRecord(
+            fileID: "1", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/01.mp4")
+        let next = makeRecord(
+            fileID: "2", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/02.mp4")
+
+        XCTAssertTrue(BaiduPanSourceViewModel.isHidden(deleted, by: hidden))
+        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(next, by: hidden))
+    }
+
+    /// 前缀相似的兄弟目录不能误伤(`琅琊榜` 与 `琅琊榜2`)。
+    func testHiddenDirectoryDoesNotCatchPrefixSibling() throws {
+        let hidden = [HiddenItemsStore.HiddenPath(
+            path: "/apps/LumaPlayer/琅琊榜", isDirectory: true)]
+        let sibling = makeRecord(
+            fileID: "2", title: "琅琊榜2", locator: "/apps/LumaPlayer/琅琊榜2/01.mp4")
+
+        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(sibling, by: hidden))
+    }
+
+    func testNoHiddenPathsKeepsEveryRecord() throws {
+        let record = makeRecord(
+            fileID: "1", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/01.mp4")
+
+        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(record, by: []))
+    }
+
     // MARK: - 夹具
 
     private func makeEpisodeItem(sourceID: UUID, index: Int) -> SourceItem {

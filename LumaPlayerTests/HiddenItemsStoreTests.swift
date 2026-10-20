@@ -68,6 +68,57 @@ final class HiddenItemsStoreTests: XCTestCase {
         XCTAssertEqual(titles, ["新的", "旧的"])
     }
 
+    // MARK: - 隐藏路径(续播卡片过滤)
+
+    /// 隐藏一个**目录**时要把它的路径记下来:目录里各集的续播卡片靠它过滤掉
+    /// (那些记录记的是集文件的 `fs_id`,按 `ref` 挡不住)。
+    func testHiddenPathsReportPathAndDirectoryFlag() async throws {
+        let store = makeStore()
+        try await store.hide(HiddenItemsStore.Item(
+            ref: SourceItemRef(sourceID: sourceID, itemID: "100"),
+            title: "琅琊榜",
+            hiddenAt: Date(),
+            path: "/apps/LumaPlayer/琅琊榜",
+            isDirectory: true))
+
+        let paths = await store.hiddenPaths(sourceID: sourceID)
+
+        XCTAssertEqual(paths, [HiddenItemsStore.HiddenPath(
+            path: "/apps/LumaPlayer/琅琊榜", isDirectory: true)])
+        // ⛔ 不串来源
+        let other = await store.hiddenPaths(sourceID: UUID())
+        XCTAssertTrue(other.isEmpty)
+    }
+
+    /// 没记路径的(老记录 / 没给 path)不进 `hiddenPaths` —— 没有路径就没有目录语义可判。
+    func testHiddenPathsSkipItemsWithoutPath() async throws {
+        let store = makeStore()
+        try await store.hide(makeItem())
+
+        let paths = await store.hiddenPaths(sourceID: sourceID)
+
+        XCTAssertTrue(paths.isEmpty)
+    }
+
+    /// ⚠️ 老文件没有 `path` / `isDirectory` 两个键,必须照常解码 ——
+    /// 升级不该把用户的隐藏列表判成损坏。
+    func testLegacyFileWithoutPathDecodes() async throws {
+        let ref = SourceItemRef(sourceID: sourceID, itemID: "42")
+        let id = sourceID.uuidString
+        let legacy = "{\"\(id)|42\":{\"ref\":{\"sourceID\":\"\(id)\",\"itemID\":\"42\"},"
+            + "\"title\":\"第 3 集\",\"hiddenAt\":\"2026-01-01T00:00:00Z\"}}"
+        try Data(legacy.utf8).write(to: fileURL)
+
+        let store = makeStore()
+        let refs = await store.hiddenRefs(sourceID: sourceID)
+        let failure = await store.lastLoadFailureDescription
+
+        XCTAssertEqual(refs, [ref])
+        XCTAssertNil(failure, "老文件不是损坏文件")
+        let paths = await store.hiddenPaths(sourceID: sourceID)
+        XCTAssertTrue(paths.isEmpty)
+    }
+
     // MARK: - 持久化
 
     /// 换一个实例(模拟重启)还在 —— 隐藏是**持久化**的,不是内存态。

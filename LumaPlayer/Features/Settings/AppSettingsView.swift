@@ -461,6 +461,10 @@ private struct SubtitleSettingsView: View {
 /// 连网盘一起删掉的条目⛔ 不进这个列表 —— 文件已经不在网盘,恢复不出任何东西
 /// (`BaiduPanSourceViewModel.delete` 的注释)。所以这个列表的每一条都是
 /// **网盘上还在、只是不想看见**的条目。
+///
+/// ⚠️ 恢复只把**条目**放回列表,**不还原观看记录**:隐藏时本地进度已经清掉了
+/// (这也是「继续观看」里那张卡消失的原因)。⛔ 按钮别写成「撤销」——
+/// 那会让人以为进度也能一起回来。
 private struct HiddenItemsSettingsView: View {
     let store: HiddenItemsStore
 
@@ -474,7 +478,8 @@ private struct HiddenItemsSettingsView: View {
                     Label("没有隐藏的条目", systemImage: "eye.slash")
                 } description: {
                     Text("在百度网盘片库里右键一张卡片选「删除…」、且不勾选"
-                        + "「同时删除网盘里的文件」时,条目会记在这里。")
+                        + "「同时删除网盘里的文件」时,条目会记在这里。"
+                        + "隐藏时本地观看记录会一并清掉,恢复后进度不会回来。")
                 }
             } else {
                 List(items) { item in
@@ -488,6 +493,7 @@ private struct HiddenItemsSettingsView: View {
                         }
                         Spacer()
                         Button("恢复") { Task { await restore(item) } }
+                            .help("把条目放回片库列表。隐藏时清掉的本机观看记录不会恢复。")
                     }
                 }
             }

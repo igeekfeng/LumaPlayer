@@ -982,13 +982,16 @@ final class BaiduPanSourceViewModel {
     /// ⚠️ 删的是**这一整部剧**:卡片是一部剧一张,只删当前那一集的话,
     /// 同剧下一集有进度就会立刻顶上来 —— 表现为「移出了又回来了」。
     /// (本地续播库没有「隐藏」这一态,删记录是它唯一的移除手段。)
+    ///
+    /// ⚠️ 走 `remove(fileIDs:)` 而不是 `forget(fileIDs:)`:这是用户主动弃掉进度,
+    /// 文件本身还在网盘 —— 他之后再点开这一集,进度当然要重新记下来。
     func removeResumeCard(_ card: BaiduResumeCard) async {
         let key = Self.seriesKey(title: card.title, locator: card.path)
         do {
-            for record in await container.watchProgress.resumeEntries(sourceID: source.id)
-            where Self.seriesKey(of: record) == key {
-                try await container.watchProgress.remove(fileID: record.fileID)
-            }
+            let ids = await container.watchProgress.resumeEntries(sourceID: source.id)
+                .filter { Self.seriesKey(of: $0) == key }
+                .map(\.fileID)
+            try await container.watchProgress.remove(fileIDs: ids)
             resumeCards = resumeCards.filter { $0.id != card.id }
         } catch {
             notice = "移出继续观看失败:\(error)"
@@ -1013,18 +1016,55 @@ final class BaiduPanSourceViewModel {
     ///   记一条只会让「已隐藏」列表越积越多。改成把本地这一份(缓存 / 卡片 /
     ///   续播记录)一起清掉。
     ///
+    /// ## 本地观看记录一起清(两条路都清)
+    ///
+    /// 用户的要求是「删剧集的时候同步删掉观看记录、继续观看里该剧集的内容」。
+    /// 所以两条路都会清掉**这一条名下**的记录(圈定靠 `BaiduPanWatchHistory`:
+    /// 删目录 = 递归包含,删文件 = 路径完全相等):
+    ///
+    /// - **隐藏**也清。隐藏之后这部剧的卡片不该还留在「继续观看」里 ——
+    ///   那就是用户说的「继续观看里面该剧集的内容」。恢复隐藏**不会**把记录
+    ///   还回来(进度是真删了,⛔ 不假装能还原),但条目本身会回到列表,
+    ///   重新看一集就又有了记录(所以这条路用 `remove`,不封 id)。
+    /// - **真删**清的是同一批,并且**封掉**这批 id(`forget`):文件已经不在了,
+    ///   正在播的那一场还在报进度,不挡就会把记录写回来。
+    ///   ⚠️ 只删一集时,同剧其它集的记录留着 —— 卡片会退到下一集,
+    ///   那正是「接着看」该有的样子。
+    ///
+    /// ⚠️ 圈定**只认路径**:拿标题 / 集号猜等于可能清错别人的进度(见
+    /// `BaiduPanWatchHistory` 的注释)。路径拿不到(`file(for:)` 返回 nil)时不猜 ——
+    /// 直接抛,连删除动作都不做(与「找不到就没法删」同一把尺子)。
+    ///
     /// 勾了但网盘删失败 → **直接抛**,既不隐藏也不摘除 —— 让用户看到「没删成」,
-    /// ⛔ 不悄悄降级成隐藏(那会让人以为已经删干净了)。
+    /// ⛔ 不悄悄降级成隐藏(那会让人以为已经删干净了)。本地记录此时不动:
+    /// 文件还在,进度就该还在。
     func delete(_ item: SourceItem, alsoDeleteRemotely: Bool) async throws {
         guard let file = file(for: item) else {
             throw BaiduPanError.configuration(
                 "找不到「\(item.title)」在网盘上的路径,没法删除。")
         }
+        // 删的是不是目录只认 `BaiduPanFile` 自己那一格,⛔ 不从 `item.kind` 反推
+        // (`kind` 是给 UI 的分类,「认不出的文件」也是 `.unknown`,与目录语义无关)。
+        let isDirectory = file.isDirectory
+        // 先算出「这一条名下有哪些观看记录」—— 隐藏与真删共用这一份,⛔ 不各算一遍。
+        // ⚠️ 再加上它**自己的** `fs_id`:没有展示快照的老记录没有 `locator`,
+        // 按路径圈不到,但它可能就记在这个文件自己的 id 底下。
+        let fileIDs = await affectedRecordIDs(
+            path: file.path, isDirectory: isDirectory, ownItemID: item.ref.itemID)
         guard alsoDeleteRemotely else {
             try await container.hiddenItems.hide(
-                HiddenItemsStore.Item(ref: item.ref, title: item.title, hiddenAt: Date()))
+                HiddenItemsStore.Item(
+                    ref: item.ref,
+                    title: item.title,
+                    hiddenAt: Date(),
+                    path: file.path,
+                    isDirectory: isDirectory))
             hiddenRefs.insert(item.ref)
-            resumeCards.removeAll { $0.fileID == item.ref.itemID }
+            // ⚠️ 走 `remove` 而不是 `forget`:隐藏**可恢复**,恢复之后这一项还能再播,
+            // 那时进度必须记得上。只有真删才用 `forget`(删除不可恢复,见下)。
+            await removeRecords(fileIDs)
+            for id in fileIDs { resumePositions.removeValue(forKey: id) }
+            await loadResumeCards()
             return
         }
 
@@ -1040,18 +1080,62 @@ final class BaiduPanSourceViewModel {
         hiddenRefs.insert(item.ref)
         items.removeAll { $0.ref == item.ref }
         if let fsID = UInt64(item.ref.itemID) { filesByID.removeValue(forKey: fsID) }
-        resumeCards.removeAll { $0.fileID == item.ref.itemID }
-        resumePositions.removeValue(forKey: item.ref.itemID)
         // 缓存要丢两层:被删的那一条自己(目录的话还有它的子层),
         // 以及**它所在的那一层** —— 后者还留着它的卡片,不丢就等于删了个寂寞。
         evictCachedDirectory(file.path)
         evictCachedDirectory(BaiduPanPath.directory(ofFilePath: file.path))
+        await forgetRecords(fileIDs)
+        // 角标按清理后的记录重算:删 / 隐藏目录时,它下面每一集的「已看到 …」
+        // 都该消失。被删的文件已经不在 `items` / `episodes` 里,重算自然丢掉它们;
+        // 季文件夹存法下分集可能不在这两份里,再按刚算出的 id 兜一层。
+        await loadResumePositions()
+        for id in fileIDs { resumePositions.removeValue(forKey: id) }
+        await loadResumeCards()
+    }
+
+    /// 删 / 隐藏这一条会带走哪些观看记录。
+    ///
+    /// 读的是 `storedRecords`(**不过滤已看完 / 位置 0**)—— 清的是「它名下全部」,
+    /// 只按续播语义找会漏掉已看完的那几集,留下指向不存在文件的死记录。
+    ///
+    /// ⚠️ 除了按路径圈,还要把**条目自己的 `fs_id`** 并进来:极老的记录可能没有
+    /// 展示快照(也就没有 `locator`),它在续播区里不显示,却仍然躺在库里 ——
+    /// 删掉的若是这一条,那条记录也得清。目录那条 id 底下不会有记录(目录不可播),
+    /// 并进来只是兜底,不会误伤。
+    private func affectedRecordIDs(
+        path: String, isDirectory: Bool, ownItemID: String
+    ) async -> [String] {
+        let records = await container.watchProgress.storedRecords(sourceID: source.id)
+        var ids = BaiduPanWatchHistory.fileIDs(
+            deletingPath: path, isDirectory: isDirectory, from: records)
+        if !ids.contains(ownItemID) { ids.append(ownItemID) }
+        return ids
+    }
+
+    /// 把这批记录从库里删掉(一次落盘),失败只如实提示、⛔ 不推翻已经发生的删除。
+    ///
+    /// `forget` 与 `remove` 的差别只有一个:前者还会在本进程内拒绝再写这批 id。
+    /// - **真删**用 `forget`:文件已经不在网盘,正在播的那一场每 10 秒还在报进度,
+    ///   不挡住就会把刚清掉的记录写回来;
+    /// - **隐藏**用 `remove`:隐藏可恢复,恢复之后这一项还能再播,进度要记得上。
+    private func forgetRecords(_ fileIDs: [String]) async {
+        guard !fileIDs.isEmpty else { return }
         do {
-            try await container.watchProgress.remove(fileID: item.ref.itemID)
+            try await container.watchProgress.forget(fileIDs: fileIDs)
         } catch {
-            // 文件已经删掉了,清不掉进度只是留一条死记录 —— 如实说一句,
-            // ⛔ 不把它算成删除失败(那会让人再删一次)。
-            notice = "网盘文件已删除,但本地续播记录没清掉:\(error)"
+            // 文件已经删掉了 / 隐藏已经生效,清不掉记录只是留几条死记录 ——
+            // 如实说一句,⛔ 不把它算成删除失败(那会让人再删一次)。
+            notice = "条目已处理,但本地观看记录没清掉:\(error)"
+        }
+    }
+
+    /// 隐藏那条路用的批量清:只删记录,不封 id(见 `forgetRecords`)。
+    private func removeRecords(_ fileIDs: [String]) async {
+        guard !fileIDs.isEmpty else { return }
+        do {
+            try await container.watchProgress.remove(fileIDs: fileIDs)
+        } catch {
+            notice = "条目已隐藏,但本地观看记录没清掉:\(error)"
         }
     }
 
@@ -1067,13 +1151,39 @@ final class BaiduPanSourceViewModel {
     ///
     /// 与 `loadResumePositions` 的分工:那个读的是**当前目录**每一条的进度(画在
     /// 卡片角上);这个读的是**全库**里有进度的条目(撑起顶部的续播区)。
+    ///
+    /// ## 两道过滤
+    ///
+    /// 1. **按 `fs_id`**:被隐藏的那一条自己不出现(原做法);
+    /// 2. **按路径**:隐藏的是一个**目录**时,目录里各集的卡片也一并消失 ——
+    ///    那些记录记的是集文件的 `fs_id`,第 1 道挡不住。不挡的后果是「隐藏了整部剧,
+    ///    「继续观看」里还挂着它的卡,点开就播不了」(用户报的就是这个)。
+    ///
+    /// ⚠️ 过滤放在这里而不是调用方:这个方法在 `loadFiles` 的片库根回落里
+    /// 会被再调一次,只在外层过滤会漏掉那一趟。
     private func loadResumeCards() async {
         let records = await container.watchProgress.resumeEntries(sourceID: source.id)
-        // ⚠️ 过滤放在这里而不是调用方:这个方法在 `loadFiles` 的片库根回落里
-        // 会被再调一次,只在外层过滤会漏掉那一趟。
-        let visibleRecords = records.filter { !hiddenRefs.contains(
-            SourceItemRef(sourceID: source.id, itemID: $0.fileID)) }
+        let hiddenPaths = await container.hiddenItems.hiddenPaths(sourceID: source.id)
+        let visibleRecords = records.filter { record in
+            guard !hiddenRefs.contains(
+                SourceItemRef(sourceID: source.id, itemID: record.fileID)) else { return false }
+            return !Self.isHidden(record, by: hiddenPaths)
+        }
         resumeCards = Self.oneCardPerSeries(visibleRecords).compactMap(BaiduResumeCard.init(record:))
+    }
+
+    /// 这条记录的文件是不是落在某个被隐藏的路径里(纯函数,单测覆盖)。
+    ///
+    /// ⚠️ 只认**路径**:拿标题 / 集号去碰等于可能把同名同集号的另一条藏掉。
+    /// 没有 `path` 的老隐藏记录不参与这一道(它们本来就只按 `fs_id` 生效)。
+    static func isHidden(
+        _ record: WatchProgressStore.ResumeRecord,
+        by hiddenPaths: [HiddenItemsStore.HiddenPath]
+    ) -> Bool {
+        hiddenPaths.contains {
+            BaiduPanPath.covers(
+                path: $0.path, locator: record.display.locator, isDirectory: $0.isDirectory)
+        }
     }
 
     /// 一部剧只留**一条**记录:同一目录 + 同一剧名的合成一张,取最近看的那一集。

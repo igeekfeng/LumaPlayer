@@ -77,6 +77,127 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(kept, 20)
     }
 
+    // MARK: - 批量清(删除网盘条目时用)
+
+    func testForgetRemovesEveryListedRecordInOneWrite() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "1", positionSeconds: 10, durationSeconds: 600)
+        try await store.record(fileID: "2", positionSeconds: 20, durationSeconds: 600)
+        try await store.record(fileID: "3", positionSeconds: 30, durationSeconds: 600)
+
+        let removed = try await store.forget(fileIDs: ["1", "2"])
+
+        XCTAssertEqual(removed, 2)
+        let left = await store.snapshot().keys.sorted()
+        XCTAssertEqual(left, ["3"], "只删列出来的那几条")
+    }
+
+    /// 不在库里的 id 不算删掉(调用方要据实报数),也不抛错。
+    func testForgetIgnoresUnknownIDs() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
+
+        let removed = try await store.forget(fileIDs: ["1", "ghost"])
+
+        XCTAssertEqual(removed, 1)
+        let empty = await store.snapshot().isEmpty
+        XCTAssertTrue(empty)
+    }
+
+    func testForgetWithEmptyListIsNoOp() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
+
+        let removed = try await store.forget(fileIDs: [])
+
+        XCTAssertEqual(removed, 0)
+        let position = await store.resumeSeconds(forFileID: "1")
+        XCTAssertEqual(position, 10)
+    }
+
+    /// ⚠️ 删掉的若是**正在播**的那一条,上报器每 10 秒还会写一次进度 ——
+    /// 不能让它把记录写回来(否则「继续观看」又冒出一张点开就播不了的卡)。
+    func testForgottenRecordIsNotResurrectedByLateProgressReports() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(fileID: "42", display: display(sourceID: sourceID))
+        try await store.record(fileID: "42", positionSeconds: 300, durationSeconds: 600)
+        try await store.forget(fileIDs: ["42"])
+
+        // 在途的两次写入:进度上报 + 起播那一刻补记的展示快照
+        try await store.record(fileID: "42", positionSeconds: 310, durationSeconds: 600)
+        try await store.rememberDisplay(fileID: "42", display: display(sourceID: sourceID))
+
+        let remaining = await store.snapshot()
+        XCTAssertNil(remaining["42"], "删掉的记录不该被在途的写入复活")
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertTrue(entries.isEmpty, "「继续观看」里也不该再有它")
+    }
+
+    /// 批量清之后,盘上也没有了(换个实例重开验证)。
+    func testForgetIsPersisted() async throws {
+        try await makeStore().record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
+        try await makeStore().forget(fileIDs: ["1"])
+
+        let reopened = makeStore()
+        let remaining = await reopened.snapshot()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    /// 「移出继续观看」走 `remove(fileIDs:)`:那是用户主动弃掉进度,文件还在网盘,
+    /// 之后再点开这一集必须还能记下来 —— ⛔ 不能落进「已忘」那道门。
+    func testRemovedRecordsCanBeWrittenAgain() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
+        try await store.remove(fileIDs: ["1"])
+
+        try await store.record(fileID: "1", positionSeconds: 40, durationSeconds: 600)
+
+        let position = await store.resumeSeconds(forFileID: "1")
+        XCTAssertEqual(position, 40)
+    }
+
+    // MARK: - 存档记录(删除时圈范围用)
+
+    /// `storedRecords` 不过滤:位置 0 的、已看完的都要在 —— 删条目时要清的是「全部」。
+    func testStoredRecordsIncludeUnfinishedFinishedAndZeroPosition() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(fileID: "1", display: display(sourceID: sourceID, title: "A"))
+        try await store.record(fileID: "1", positionSeconds: 100, durationSeconds: 600)
+        try await store.rememberDisplay(fileID: "2", display: display(sourceID: sourceID, title: "B"))
+        try await store.record(fileID: "2", positionSeconds: 590, durationSeconds: 600)
+        // 位置 0:起播那一刻写过展示快照,进度还没落
+        try await store.rememberDisplay(fileID: "3", display: display(sourceID: sourceID, title: "C"))
+
+        let stored = await store.storedRecords(sourceID: sourceID)
+
+        XCTAssertEqual(Set(stored.map(\.fileID)), ["1", "2", "3"])
+        XCTAssertEqual(stored.map(\.display.locator).count, 3)
+    }
+
+    /// 没有展示快照的记录不出现在 `storedRecords` 里:它没有 `locator`,界不出删除范围。
+    func testStoredRecordsSkipEntriesWithoutDisplay() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "1", positionSeconds: 100, durationSeconds: 600)
+
+        let stored = await store.storedRecords(sourceID: UUID())
+
+        XCTAssertTrue(stored.isEmpty)
+    }
+
+    /// 只给本来源的记录(多来源不串台)。
+    func testStoredRecordsFilterBySource() async throws {
+        let store = makeStore()
+        let mine = UUID()
+        try await store.rememberDisplay(fileID: "1", display: display(sourceID: mine, title: "A"))
+        try await store.rememberDisplay(fileID: "2", display: display(sourceID: UUID(), title: "B"))
+
+        let stored = await store.storedRecords(sourceID: mine)
+
+        XCTAssertEqual(stored.map(\.fileID), ["1"])
+    }
+
     // MARK: - 落盘
 
     func testSnapshotSurvivesANewStoreInstance() async throws {

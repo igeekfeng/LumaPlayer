@@ -339,6 +339,16 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 - 验收:`WatchProgressStoreTests`(快照合并 / 向后兼容 / `resumeEntries` 过滤与排序)、
   `BaiduPanSourceLifecycleTests`(组合根 `rememberResumeCard` 不丢进度、卡片重建)绿;
   全量 **614 项全绿**,0 warning。
+- ✅ **2026-10-20 删除条目连带清观看记录**:浏览页右键「删除…」两条路(只隐藏 / 连网盘一起删)
+  都会清掉这一条名下的本地进度(一次落盘),「继续观看」里不再有它。范围由
+  `BaiduPanWatchHistory` 按**路径**圈定(目录递归、文件严格相等),再并上条目自己的 `fs_id`
+  (没有展示快照的老记录按路径圈不到)。
+  - **隐藏**走 `WatchProgressStore.remove(fileIDs:)`:隐藏可恢复,恢复后重新看还能记进度;
+  - **真删**走 `forget(fileIDs:)`:顺手封掉这批 id,正在播的会话报进度也写不回来。
+  - `HiddenItemsStore.Item` 因此多了 `path` / `isDirectory`(老记录缺这两键,解码走
+    `decodeIfPresent` —— 见 `HiddenItemsStoreTests.testLegacyFileWithoutPathDecodes`),
+    隐藏一个**目录**时目录里各集的卡片一并被滤掉(`BaiduPanSourceViewModel.isHidden`)。
+  - ⚠️ 恢复隐藏**不还原进度**。
 - ⚠️ **未验证**:真机上的观感(百度无开发者账号,mock 覆盖)—— 见 §7 与 §10。
 
 ## 6. 关键决策
