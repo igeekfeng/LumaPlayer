@@ -113,4 +113,31 @@ final class BaiduPanWatchHistoryTests: XCTestCase {
 
     // ⚠️ 「已看完 / 位置为 0 的记录也要被圈中」这件事由 `storedRecords` 保证
     // (它本来就不过滤),用例在 `WatchProgressStoreTests.testStoredRecords…` 那一组。
+
+    // MARK: - 剧卡上的「已看 N 集」
+
+    /// 一条已看记录给它所在目录与**所有上层目录**各 +1 —— 剧目录卡片查的就是自己的
+    /// 路径,所以季文件夹存法(`剧/第1季/01.mp4`)也数得进去;只看了一半的不算。
+    ///
+    /// ⚠️ 这个数只统计**本地有记录**的集:网格上算不出「共几集 / 还有几集未看」
+    /// (那要列子目录,配额见 `docs/BAIDU_PAN_API.md` §7)。
+    @MainActor
+    func testWatchedEpisodeCountsRollUpThroughAncestors() {
+        let records = [
+            record("1", at: "/apps/LumaPlayer/琅琊榜/01.mp4"),
+            record("2", at: "/apps/LumaPlayer/琅琊榜/第1季/02.mp4"),
+            record("3", at: "/apps/LumaPlayer/别的剧/01.mp4"),
+        ]
+        let states: [String: WatchProgressStore.WatchState] = [
+            "1": .watched,
+            "2": .watched,
+            "3": .inProgress(seconds: 20),
+        ]
+
+        let counts = BaiduPanSourceViewModel.watchedEpisodeCounts(records: records, states: states)
+
+        XCTAssertEqual(counts["/apps/LumaPlayer/琅琊榜"], 2)
+        XCTAssertEqual(counts["/apps/LumaPlayer/琅琊榜/第1季"], 1)
+        XCTAssertNil(counts["/apps/LumaPlayer/别的剧"], "只看了一半的不算已看")
+    }
 }

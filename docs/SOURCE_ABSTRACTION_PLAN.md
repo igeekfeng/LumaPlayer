@@ -349,6 +349,31 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
     `decodeIfPresent` —— 见 `HiddenItemsStoreTests.testLegacyFileWithoutPathDecodes`),
     隐藏一个**目录**时目录里各集的卡片一并被滤掉(`BaiduPanSourceViewModel.isHidden`)。
   - ⚠️ 恢复隐藏**不还原进度**。
+- ✅ **2026-10-20 观看状态(已看 / 未看)**:百度**没有任何播放状态接口**(§2 只有授权 /
+  列表 / 元信息 / 播放流 / 删除 / 改名),所以这一态只能本地维护 —— 与进度同源,
+  `WatchProgressStore.Entry` 多了 `played: Bool?`(缺失时按 90% 现算,老文件照常解码)、
+  `setPlayed(_:played:)` 批量标记(一次落盘)、`watchState(forFileID:)` 是 UI 的唯一入口。
+  - 越过 `finishedThreshold`(0.90,与 Emby `MaxResumePct` 对齐)的上报**就地**落成已看、
+    位置归 0:同时退出续播与「继续观看」;
+  - 网格卡 / 分集卡右上角打 ✓(`WatchedBadge`),右键「标记为已看 / 未看」,详情页可整季批量
+    (分集已在手,零请求);
+  - 剧目录卡片只报「已看 N 集」(只数本地有记录的集)。Emby 剧卡那个「还有 3 集未看」的
+    气泡**做不到**:要「共几集」就得列子目录(2 请求 / 层,配额 §7 不允许放在网格上);
+  - ⚠️ 标已看时若那一集**正在播**,10 秒后那次进度上报会把它带回「进行中」——
+    如实(你确实还在看),不是状态丢失。
+- ✅ **2026-10-20 续播卡补「下一集」(Emby 的 NextUp 对位物)**:续播区原来只收
+  「看到一半的集」,于是**看完一集整部剧就从续播区消失**(第 1 集变已看 + 位置归 0,
+  下一集谁也没播过 → 库里没有任何 in-progress 记录)。新增 `Entry.upNext` 占位:
+  位置 0、不算看过、不续播,只是让卡片接得上。两个生产点,都零额外请求:
+  ① **播完一集** → 用这次播放的 `EpisodeQueue` 往后找第一个没看的集
+  (`AppContainer.advanceBaiduUpNext`,跳过已看 / 已有进度的);
+  ② **详情页标已看** → 用 `episodes` 找第一个没看的集(`BaiduPanSourceViewModel.advanceUpNext`)。
+  占位卡副标题报「下一集」、不画进度条;真播了一点就由 `record` 改回普通进度记录。
+  缺口见 `KNOWN_ISSUES.md`(季末不指向下一季、网格单条标记不补位)。
+- ✅ **2026-10-20 从「继续观看」进详情页的封面**:`openDetail(for:)` 原来把
+  `enteredSeriesItem` 清成 nil,剧级条目退回「只有目录名」的兜底,于是详情页的海报与
+  hero 背景都是空的(用户报的)。现在用**续播卡自己的展示快照**(标题 + 封面)兜底 ——
+  卡片上能显示的东西,详情页就能显示,不为此列一遍父目录(配额)。
 - ⚠️ **未验证**:真机上的观感(百度无开发者账号,mock 覆盖)—— 见 §7 与 §10。
 
 ## 6. 关键决策

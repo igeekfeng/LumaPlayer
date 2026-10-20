@@ -1596,6 +1596,11 @@ final class PlayerViewModel {
             // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)
             updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
+            // 百度来源:补一条「下一集」占位,否则看完一集整部剧就从续播区消失
+            // (Emby 由服务端算 NextUp,不需要这一步)。队列是起播时装配的,零请求。
+            if let queue = episodeQueue, let finished = queue.current {
+                Task { await container.advanceBaiduUpNext(after: finished, in: queue) }
+            }
             // 没有片尾标记、也没赶上结束前的提示(比如直接拖到了最后)时,
             // 播完卡片同样按设置倒计时播下一集
             if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }

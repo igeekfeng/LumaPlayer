@@ -447,17 +447,41 @@ final class AppContainer {
         do {
             try await watchProgress.rememberDisplay(
                 fileID: String(file.fsID),
-                display: WatchProgressStore.Display(
-                    sourceID: item.ref.sourceID,
-                    title: item.title,
-                    locator: file.path,
-                    fileName: file.name,
-                    cover: item.poster?.snapshot,
-                    // 集号:一部剧的续播卡片只出一张,靠它说清接着看的是第几集
-                    episodeNumber: item.episodeNumber
-                )
+                display: WatchProgressStore.Display(item: item, file: file)
             )
         } catch {}
+    }
+
+    /// 播完一集之后,把「继续观看」指向**下一集没看的**(Emby 的 NextUp 对位物)。
+    ///
+    /// ## 为什么需要这一步
+    ///
+    /// Emby 的续播卡是服务端算出来的(「第一集没看的」);百度没有服务端,而我们的
+    /// 续播卡原来只收「看到一半的集」。于是**看完一集整部剧就从续播区消失** ——
+    /// 库里只剩「已看 + 位置 0」,再没有任何 in-progress 记录(用户报的)。
+    /// 补一条位置 0 的占位(`WatchProgressStore.setUpNext`)卡片才接得上。
+    ///
+    /// ⚠️ 只认**播放队列里**的兄弟集(起播那一刻装配好的,零请求):队列里没有的
+    /// (别的季、没列过的目录)⛔ 不猜。
+    /// ⚠️ 跳过已看的集:队列里的下一集可能早就标过已看,那就该指向再下一集。
+    func advanceBaiduUpNext(after finished: PlaybackEpisode, in queue: EpisodeQueue) async {
+        guard finished.source.baiduFile != nil,
+              let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
+        for episode in queue.episodes[(start + 1)...] {
+            guard let file = episode.source.baiduFile, let item = episode.resumeItem else { continue }
+            guard await watchProgress.watchState(forFileID: episode.id) != .watched else { continue }
+            do {
+                try await watchProgress.setUpNext([
+                    WatchProgressStore.PlayedMark(
+                        fileID: episode.id,
+                        display: WatchProgressStore.Display(item: item, file: file))
+                ])
+            } catch {
+                // 写盘失败不该影响播放页收尾(与进度上报同一处置):下次播完再补
+                return
+            }
+            return
+        }
     }
 
     /// 结束属于 `sourceID` 的播放(切换 / 删除来源时)。

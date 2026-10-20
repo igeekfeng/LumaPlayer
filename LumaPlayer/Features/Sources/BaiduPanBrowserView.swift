@@ -196,11 +196,27 @@ struct BaiduPanBrowserView: View {
                                 BaiduPanCard(
                                     item: item,
                                     store: store,
-                                    resumeSeconds: viewModel.resumeSeconds(for: item)
+                                    resumeSeconds: viewModel.resumeSeconds(for: item),
+                                    isWatched: viewModel.isWatched(item),
+                                    watchedEpisodeCount: viewModel.watchedEpisodeCount(for: item)
                                 ) {
                                     open(item)
                                 }
                                 .contextMenu {
+                                    // 观看状态只对**能播的**文件给。目录要标「整部已看」
+                                    // 得先知道里面有哪些集 —— 那是列目录(2 请求 / 层,
+                                    // 配额见 `docs/BAIDU_PAN_API.md` §7),不在右键里悄悄做。
+                                    if item.kind.isPlayable {
+                                        if viewModel.isWatched(item) {
+                                            Button("标记为未看", systemImage: "arrow.counterclockwise") {
+                                                Task { await viewModel.markPlayed([item], played: false) }
+                                            }
+                                        } else {
+                                            Button("标记为已看", systemImage: "checkmark.circle") {
+                                                Task { await viewModel.markPlayed([item], played: true) }
+                                            }
+                                        }
+                                    }
                                     // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
                                     // 单集文件没有季 / 剧的上下文,改不出标准命名。
                                     if item.kind.isContainer, let file = viewModel.file(for: item) {
@@ -243,6 +259,9 @@ struct BaiduPanBrowserView: View {
                     Button("继续播放", systemImage: "play.fill") { play(card) }
                     Button("显示详情", systemImage: "info.circle") { openDetail(card) }
                     Divider()
+                    Button("标记为已看", systemImage: "checkmark.circle") {
+                        Task { await viewModel.markPlayed(card) }
+                    }
                     Button("移出继续观看", systemImage: "eye.slash") {
                         Task { await viewModel.removeResumeCard(card) }
                     }
@@ -363,8 +382,12 @@ struct BaiduPanBrowserView: View {
 private struct BaiduPanCard: View {
     let item: SourceItem
     let store: PosterImageStore
-    /// 本地续播位置(秒);nil = 没看过
+    /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
     let resumeSeconds: Double?
+    /// 已看完(本地续播库的显式标记,或自动判定过了 90%)
+    let isWatched: Bool
+    /// 目录卡:这一层之下本地已记录看过的集数(0 = 不显示)
+    let watchedEpisodeCount: Int
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -383,6 +406,9 @@ private struct BaiduPanCard: View {
                         )
                     }
                     .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                    .overlay(alignment: .topTrailing) {
+                        if isWatched { WatchedBadge() }
+                    }
                     .scaleEffect(isHovering ? Self.hoverScale : 1)
                     .shadow(
                         color: .black.opacity(isHovering ? 0.25 : 0),
@@ -437,11 +463,13 @@ private struct BaiduPanCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .hidden()
                     .accessibilityHidden(true)
-                subtitle
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -458,21 +486,26 @@ private struct BaiduPanCard: View {
         item.episodeTitle ?? item.title
     }
 
-    /// 副标题:有续播就报「已看到 mm:ss」(百度没有服务端进度,这条来自本地库);
-    /// 其次是集号(分集的主标题是集名,不报集号就分不清是哪一集);
-    /// 再次是年份(从文件名解析出来的);目录则标明它是文件夹。
-    /// ⛔ 都没有就不显示,不填占位符。
-    @ViewBuilder
-    private var subtitle: some View {
+    /// 副标题:进度类信息优先,其次是集号 / 年份 / 文件夹。
+    ///
+    /// 顺序:续播位置 > 「第 n 集 · 已看」> 「已看」> 集号 > 年份 >
+    /// 目录的「已看 N 集」/「文件夹」。⛔ 都没有就不显示,不填占位符。
+    ///
+    /// ⚠️ 「已看 N 集」只报**本地记录过的**集数,⛔ 不写成「3/12 集」——
+    /// 总集数要列子目录(配额,见 `watchedEpisodeCounts`),而我们没有那个数。
+    private var subtitle: String? {
         if let resumeSeconds, resumeSeconds > 0 {
-            Text("已看到 \(PlayerTime.text(resumeSeconds))")
-        } else if let episode = item.episodeNumber {
-            Text("第 \(episode) 集")
-        } else if let year = item.year {
-            Text(String(year))
-        } else if item.kind.isContainer {
-            Text("文件夹")
+            return "已看到 \(PlayerTime.text(resumeSeconds))"
         }
+        if let episode = item.episodeNumber {
+            return isWatched ? "第 \(episode) 集 · 已看" : "第 \(episode) 集"
+        }
+        if isWatched { return "已看" }
+        if let year = item.year { return String(year) }
+        if item.kind.isContainer {
+            return watchedEpisodeCount > 0 ? "已看 \(watchedEpisodeCount) 集" : "文件夹"
+        }
+        return nil
     }
 
     private var placeholderSymbol: String {
@@ -490,6 +523,10 @@ private struct BaiduPanCard: View {
         var parts = [displayTitle]
         if item.kind.isContainer { parts.append("文件夹") }
         if let episode = item.episodeNumber { parts.append("第 \(episode) 集") }
+        if isWatched { parts.append("已看") }
+        if item.kind.isContainer, watchedEpisodeCount > 0 {
+            parts.append("本地记录已看 \(watchedEpisodeCount) 集")
+        }
         if let year = item.year { parts.append(String(year)) }
         if let resumeSeconds, resumeSeconds > 0 {
             parts.append("已看到 \(PlayerTime.text(resumeSeconds))")
@@ -505,7 +542,7 @@ private struct BaiduPanCard: View {
 /// ⚠️ 点空白处不再直接播 —— 那是这一版之前的行为,与 Emby 不一致。
 ///
 /// 视觉与 `BaiduPanCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
-/// 副标题固定报「已看到 mm:ss」、有总时长时在图上画进度条。
+/// 副标题报「已看到 mm:ss」(「下一集」占位则报「下一集」)、有总时长时在图上画进度条。
 private struct BaiduResumeCardView: View {
     let card: BaiduResumeCard
     let store: PosterImageStore
@@ -603,7 +640,10 @@ private struct BaiduResumeCardView: View {
 
     /// 进度条比例。百度侧**可能没有总时长**(续播库里 `durationSeconds` 为 nil),
     /// 那就**不画**进度条 —— ⛔ 不猜一个比例。
+    ///
+    /// 「下一集」占位(上一集刚看完)也不画:它一秒都还没看,画一条空条只是噪音。
     private var progressFraction: Double? {
+        guard !card.isUpNext else { return nil }
         guard let duration = card.durationSeconds, duration > 0 else { return nil }
         return min(max(card.positionSeconds / duration, 0), 1)
     }

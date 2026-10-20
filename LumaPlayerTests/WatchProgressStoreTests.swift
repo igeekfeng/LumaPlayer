@@ -34,7 +34,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 123.5)
     }
 
-    /// 看完(≥95%)就不再续播,从头开始。
+    /// 看完(≥90%)就不再续播,从头开始。
     func testFinishedPlaybackResetsToBeginning() async throws {
         let store = makeStore()
         try await store.record(fileID: "42", positionSeconds: 590, durationSeconds: 600)
@@ -44,9 +44,10 @@ final class WatchProgressStoreTests: XCTestCase {
 
     func testBelowThresholdStillResumes() async throws {
         let store = makeStore()
-        try await store.record(fileID: "42", positionSeconds: 540, durationSeconds: 600)
+        // 480/600 = 80%,没到 90% 那一档
+        try await store.record(fileID: "42", positionSeconds: 480, durationSeconds: 600)
         let position = await store.resumeSeconds(forFileID: "42")
-        XCTAssertEqual(position, 540)
+        XCTAssertEqual(position, 480)
     }
 
     /// 时长未知时照样续播(只是判不了「已看完」)。
@@ -280,7 +281,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.fileID), ["3"])
     }
 
-    /// 看完(≥95%)的集不该再占一张「继续观看」卡 —— 与 `resumeSeconds` 同一把尺子。
+    /// 看完(≥90%)的集不该再占一张「继续观看」卡 —— 与 `resumeSeconds` 同一把尺子。
     func testResumeEntriesSkipsFinishedEntries() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -348,5 +349,207 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 123)
         let failure = await store.lastLoadFailureDescription
         XCTAssertNil(failure, "旧文件不是损坏文件")
+    }
+
+    // MARK: - 观看状态(已看 / 未看)
+
+    /// 越过 90% 的上报就地落成「已看」:位置归 0,状态置 true。
+    func testProgressCrossingThresholdBecomesWatched() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "42", positionSeconds: 590, durationSeconds: 600)
+
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .watched)
+        let entries = await store.snapshot()
+        XCTAssertEqual(entries["42"]?.played, true)
+        XCTAssertEqual(entries["42"]?.positionSeconds, 0)
+    }
+
+    /// 手动标已看:不再续播,也不再占「继续观看」的卡。
+    func testMarkPlayedClearsProgressAndResumeEntry() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(fileID: "42", display: display(sourceID: sourceID))
+        try await store.record(fileID: "42", positionSeconds: 300, durationSeconds: 600)
+
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: true)
+
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .watched)
+        let position = await store.resumeSeconds(forFileID: "42")
+        XCTAssertNil(position, "标了已看就不该再续播")
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertTrue(entries.isEmpty, "标了已看的不该再占一张续播卡")
+    }
+
+    /// 没播过的条目也能标已看:没有记录就新建一条。
+    ///
+    /// ⚠️ 标记时顺手带的展示快照要落下来 —— 否则删网盘文件时按路径圈不到这条记录。
+    func testMarkPlayedCreatesRecordAndKeepsDisplay() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+
+        let changed = try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(
+                fileID: "42", display: display(sourceID: sourceID, title: "第一集"))],
+            played: true)
+
+        XCTAssertEqual(changed, 1)
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .watched)
+        let stored = await store.storedRecords(sourceID: sourceID)
+        XCTAssertEqual(stored.map(\.fileID), ["42"])
+        XCTAssertEqual(stored.first?.display.title, "第一集")
+    }
+
+    /// 标未看要压过「比例上已经看完」这个自动判定。
+    func testMarkUnplayedOverridesThreshold() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "42", positionSeconds: 590, durationSeconds: 600)
+        let before = await store.watchState(forFileID: "42")
+        XCTAssertEqual(before, .watched)
+
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: false)
+
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .unwatched)
+        let position = await store.resumeSeconds(forFileID: "42")
+        XCTAssertNil(position, "未看不该带一个续播位置")
+    }
+
+    /// 已经是未看的、以及压根没有记录的,标未看不算改动。
+    func testMarkUnplayedOnUnknownOrUnwatchedIsNoOp() async throws {
+        let store = makeStore()
+        let unknown = try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "ghost", display: nil)], played: false)
+        XCTAssertEqual(unknown, 0)
+
+        try await store.record(fileID: "42", positionSeconds: 300, durationSeconds: 600)
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: false)
+        let again = try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: false)
+        XCTAssertEqual(again, 0, "已经是未看了,再标一次不算改动")
+    }
+
+    /// 标完已看又重新播起来:进度上报会把显式标记清掉,回到「进行中」。
+    ///
+    /// ⚠️ 这是刻意的(见 `record` 的注释):用户确实还在看,状态就该如实跟着走。
+    func testProgressAfterMarkPlayedTurnsBackToInProgress() async throws {
+        let store = makeStore()
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: true)
+
+        try await store.record(fileID: "42", positionSeconds: 30, durationSeconds: 600)
+
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .inProgress(seconds: 30))
+    }
+
+    /// 0 秒的起播上报会删记录,但**不能**抹掉显式标过的已看。
+    func testZeroPositionReportKeepsExplicitPlayed() async throws {
+        let store = makeStore()
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "42", display: nil)], played: true)
+
+        try await store.record(fileID: "42", positionSeconds: 0, durationSeconds: 600)
+
+        let state = await store.watchState(forFileID: "42")
+        XCTAssertEqual(state, .watched)
+    }
+
+    /// 批量读状态时**未看的不占一格**(调用方按「查不到 = 未看」处理)。
+    func testWatchStatesSkipsUnwatched() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "a", positionSeconds: 100, durationSeconds: 600)
+        try await store.record(fileID: "b", positionSeconds: 590, durationSeconds: 600)
+
+        let states = await store.watchStates(forFileIDs: ["a", "b", "ghost"])
+
+        XCTAssertEqual(states, ["a": .inProgress(seconds: 100), "b": .watched])
+    }
+
+    /// 老文件(没有 `played` 字段)按比例现算 —— 90% 以上算已看,其余算进行中。
+    func testLegacyEntryWithoutPlayedDerivesStateFromThreshold() async throws {
+        let legacy = #"""
+        {"done":{"positionSeconds":590,"durationSeconds":600,"updatedAt":"2026-01-01T00:00:00Z"},
+         "half":{"positionSeconds":300,"durationSeconds":600,"updatedAt":"2026-01-01T00:00:00Z"}}
+        """#
+        try Data(legacy.utf8).write(to: fileURL)
+
+        let store = makeStore()
+        let done = await store.watchState(forFileID: "done")
+        let half = await store.watchState(forFileID: "half")
+        XCTAssertEqual(done, .watched)
+        XCTAssertEqual(half, .inProgress(seconds: 300))
+    }
+
+    // MARK: - 「下一集」占位(Emby 的 NextUp 对位物)
+
+    /// 看完一集之后,下一集靠占位进续播区:位置 0、`isUpNext`,但**不算看过**。
+    func testUpNextPlaceholderShowsInResumeShelfWithoutCountingAsWatched() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+
+        try await store.setUpNext([
+            WatchProgressStore.PlayedMark(
+                fileID: "2", display: display(sourceID: sourceID, title: "琅琊榜"))
+        ])
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["2"])
+        XCTAssertEqual(entries.first?.positionSeconds, 0)
+        XCTAssertEqual(entries.first?.isUpNext, true)
+        let state = await store.watchState(forFileID: "2")
+        XCTAssertEqual(state, .unwatched, "占位不算看过:卡片上没有 ✓")
+        let resume = await store.resumeSeconds(forFileID: "2")
+        XCTAssertNil(resume, "占位不续播,从 0 开始")
+    }
+
+    /// 占位那一集真的播起来之后,占位就该让位给普通进度记录。
+    func testProgressReplacesUpNextPlaceholder() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.setUpNext([
+            WatchProgressStore.PlayedMark(
+                fileID: "2", display: display(sourceID: sourceID, title: "琅琊榜"))
+        ])
+
+        try await store.record(fileID: "2", positionSeconds: 30, durationSeconds: 600)
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.first?.isUpNext, false)
+        XCTAssertEqual(entries.first?.positionSeconds, 30)
+    }
+
+    /// 已经看过的集不能被占位盖掉(否则 ✓ 会凭空消失)。
+    func testUpNextSkipsWatchedEpisode() async throws {
+        let store = makeStore()
+        try await store.setPlayed(
+            [WatchProgressStore.PlayedMark(fileID: "2", display: nil)], played: true)
+
+        let changed = try await store.setUpNext([
+            WatchProgressStore.PlayedMark(fileID: "2", display: nil)
+        ])
+
+        XCTAssertEqual(changed, 0)
+        let state = await store.watchState(forFileID: "2")
+        XCTAssertEqual(state, .watched)
+    }
+
+    /// 还有进度的集也不能被占位抹成 0 秒(用户看起来像进度丢了)。
+    func testUpNextSkipsEpisodeWithProgress() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "2", positionSeconds: 300, durationSeconds: 600)
+
+        let changed = try await store.setUpNext([
+            WatchProgressStore.PlayedMark(fileID: "2", display: nil)
+        ])
+
+        XCTAssertEqual(changed, 0)
+        let position = await store.resumeSeconds(forFileID: "2")
+        XCTAssertEqual(position, 300)
     }
 }

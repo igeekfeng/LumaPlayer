@@ -360,7 +360,16 @@ struct BaiduPanSeriesDetailView: View {
                 episodes: viewModel.episodes,
                 store: store,
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
-                onPlay: { play($0) }
+                isWatched: { viewModel.isWatched($0) },
+                onPlay: { play($0) },
+                // 观看状态只有本地这一份(百度没有这类接口),所以⛔ 不发请求,
+                // 标完直接重读本地库 —— 与播完回来的处置同一个。
+                onMark: { episode, played in
+                    Task { await viewModel.markPlayed([episode], played: played) }
+                },
+                onMarkAll: { played in
+                    Task { await viewModel.markSeasonPlayed(played) }
+                }
             )
         }
     }
@@ -518,7 +527,12 @@ private struct BaiduPanEpisodeShelf: View {
     let episodes: [SourceItem]
     let store: PosterImageStore
     let resumeSeconds: (SourceItem) -> Double?
+    let isWatched: (SourceItem) -> Bool
     let onPlay: (SourceItem) -> Void
+    /// 单集标记:参数是「标成已看(true)/ 未看(false)」
+    let onMark: (SourceItem, Bool) -> Void
+    /// 整季标记(分集已经在手上,零请求)
+    let onMarkAll: (Bool) -> Void
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
@@ -526,10 +540,20 @@ private struct BaiduPanEpisodeShelf: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingM) {
-                Text("共 \(episodes.count) 集")
+                Text(countText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
+                Menu {
+                    Button("标记本季全部已看", systemImage: "checkmark.circle") { onMarkAll(true) }
+                    Button("标记本季全部未看", systemImage: "arrow.counterclockwise") { onMarkAll(false) }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("本季的观看状态")
                 if geometry.isScrollable {
                     ShelfPagingButtons(position: $position, geometry: geometry)
                 }
@@ -541,7 +565,9 @@ private struct BaiduPanEpisodeShelf: View {
                             episode: episode,
                             store: store,
                             resumeSeconds: resumeSeconds(episode),
-                            onPlay: { onPlay(episode) }
+                            isWatched: isWatched(episode),
+                            onPlay: { onPlay(episode) },
+                            onMark: { played in onMark(episode, played) }
                         )
                     }
                 }
@@ -560,15 +586,29 @@ private struct BaiduPanEpisodeShelf: View {
             }
         }
     }
+
+    /// 「共 12 集」/「共 12 集 · 已看 3 集」。
+    ///
+    /// ⚠️ 这里的「已看 3 集」是**准的**(分集就在手上,数一遍就行),
+    /// 与网格上目录卡片那个「已看 N 集」不可同日而语 —— 后者只数得到本地有记录的。
+    private var countText: String {
+        let watched = episodes.filter(isWatched).count
+        guard watched > 0 else { return "共 \(episodes.count) 集" }
+        return "共 \(episodes.count) 集 · 已看 \(watched) 集"
+    }
 }
 
 /// 一集一张卡:剧照(16:9)+ 集号与集名 + 简介 + 已看位置。
 private struct BaiduPanEpisodeCard: View {
     let episode: SourceItem
     let store: PosterImageStore
-    /// 本地续播位置(秒);nil = 没看过
+    /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
     let resumeSeconds: Double?
+    /// 已看完(本地续播库)
+    let isWatched: Bool
     let onPlay: () -> Void
+    /// 标记:true = 已看,false = 未看
+    let onMark: (Bool) -> Void
 
     @State private var isHovering = false
 
@@ -602,6 +642,13 @@ private struct BaiduPanEpisodeCard: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)
         .onHover { isHovering = $0 }
+        .contextMenu {
+            if isWatched {
+                Button("标记为未看", systemImage: "arrow.counterclockwise") { onMark(false) }
+            } else {
+                Button("标记为已看", systemImage: "checkmark.circle") { onMark(true) }
+            }
+        }
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)
         .accessibilityElement(children: .combine)
         .accessibilityLabel([title, progressText].compactMap { $0 }.joined(separator: ","))
@@ -632,6 +679,9 @@ private struct BaiduPanEpisodeCard: View {
         .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+        .overlay(alignment: .topTrailing) {
+            if isWatched { WatchedBadge() }
+        }
     }
 
     /// 「3. 集名」。没有集名(TMDB 未命中 / 未配置 token)时退回「第 3 集」——
@@ -645,8 +695,9 @@ private struct BaiduPanEpisodeCard: View {
         return "第 \(number) 集"
     }
 
-    /// 百度没有服务端进度,这一行来自本地续播库。没看过就不显示。
+    /// 百度没有服务端进度,这一行来自本地续播库。看完报「已看」,没看就不显示。
     private var progressText: String? {
+        if isWatched { return "已看" }
         guard let resumeSeconds, resumeSeconds > 0 else { return nil }
         return "已看到 \(PlayerTime.text(resumeSeconds))"
     }

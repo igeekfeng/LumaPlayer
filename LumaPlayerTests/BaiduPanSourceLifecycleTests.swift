@@ -216,17 +216,43 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(BaiduPanSourceViewModel.oneCardPerSeries(records).count, 2)
     }
 
+    /// 「看到一半」压过「下一集」占位:倒回去重看第 1 集时,卡片该指向第 1 集,
+    /// 而不是更晚写入的那条「下一集」占位。
+    func testOneCardPerSeriesPrefersProgressOverUpNextPlaceholder() throws {
+        let records = [
+            makeRecord(fileID: "2", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/02.mp4",
+                       episode: 2, upNext: true, at: Date(timeIntervalSinceNow: 0)),
+            makeRecord(fileID: "1", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/01.mp4",
+                       episode: 1, position: 600, at: Date(timeIntervalSinceNow: -30))
+        ]
+
+        let collapsed = BaiduPanSourceViewModel.oneCardPerSeries(records)
+
+        XCTAssertEqual(collapsed.map(\.fileID), ["1"], "看到一半的那一集才是该续播的")
+        let card = try XCTUnwrap(BaiduResumeCard(record: collapsed[0]))
+        XCTAssertEqual(card.subtitle, "第 1 集 · 已看到 10:00")
+    }
+
+    /// 「下一集」占位的副标题报「下一集」,不报「已看到 00:00」。
+    func testUpNextCardSubtitle() throws {
+        let record = makeRecord(fileID: "2", title: "琅琊榜", episode: 2, upNext: true)
+        let card = try XCTUnwrap(BaiduResumeCard(record: record))
+        XCTAssertEqual(card.subtitle, "第 2 集 · 下一集")
+        XCTAssertTrue(card.isUpNext)
+    }
+
     private func makeRecord(
         fileID: String,
         title: String,
         locator: String = "/apps/LumaPlayer/琅琊榜/01.mp4",
         episode: Int? = nil,
         position: Double = 600,
+        upNext: Bool = false,
         at updatedAt: Date = Date()
     ) -> WatchProgressStore.ResumeRecord {
         WatchProgressStore.ResumeRecord(
             fileID: fileID,
-            positionSeconds: position,
+            positionSeconds: upNext ? 0 : position,
             durationSeconds: 2400,
             updatedAt: updatedAt,
             display: WatchProgressStore.Display(
@@ -236,7 +262,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
                 fileName: (locator as NSString).lastPathComponent,
                 cover: nil,
                 episodeNumber: episode
-            )
+            ),
+            isUpNext: upNext
         )
     }
 

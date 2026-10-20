@@ -92,9 +92,19 @@ final class BaiduPanSourceViewModel {
     /// 用户主动要改配置时(多半是应用目录名填错了)预填给表单的现值。
     private(set) var configurationDraft: BaiduPanConfigurationDraft?
 
-    /// 本地续播进度(fs_id → 已看秒数),用于列表上画一行「已看到 12:34」。
-    /// 覆盖**当前目录**与**详情页这一季的分集**两份条目。
-    private(set) var resumePositions: [String: Double] = [:]
+    /// 本地观看状态(`fs_id` → 已看 / 已看到多少秒),用于卡片角标与续播区。
+    /// 覆盖**当前目录**、**详情页这一季的分集**,以及库里属于本来源的全部记录
+    /// (后者撑起剧目录卡片的「已看 N 集」)。⚠️ 全部来自本地续播库,**零请求**。
+    ///
+    /// 未看的不进这个字典(见 `WatchProgressStore.watchStates`)—— 查不到就是未看。
+    private(set) var watchStates: [String: WatchProgressStore.WatchState] = [:]
+
+    /// 目录路径 → 它下面**已看**的集数(含子目录)。剧目录卡片据此显示「已看 3 集」。
+    ///
+    /// ⚠️ 只统计**本地有记录**的集:要算「共几集 / 还有几集未看」得列子目录
+    /// (一次列目录 = 2 次请求,配额见 `docs/BAIDU_PAN_API.md` §7),网格上不能这么花。
+    /// 所以 Emby 剧卡上那个「还有 3 集未看」的气泡在百度侧**做不到**,这里只报已看的。
+    private(set) var watchedEpisodeCounts: [String: Int] = [:]
 
     // MARK: - 剧集详情(目录形态)
 
@@ -145,7 +155,17 @@ final class BaiduPanSourceViewModel {
     /// 详情页的播放主按钮作用于哪一集:**有本地续播进度的那一集**,都没有就是第一集。
     /// 没有分集时为 nil —— UI 据此不画播放按钮,⛔ 不给一个点了没反应的按钮。
     var focusedEpisode: SourceItem? {
-        episodes.first { (resumePositions[$0.ref.itemID] ?? 0) > 0 } ?? episodes.first
+        // 优先「看到一半」的那一集,其次「下一集」占位的那一集(上一集刚看完),
+        // 都没有才是第一集 —— 否则从续播卡点进详情页,播放主按钮会指回已经看过的第 1 集。
+        episodes.first { (resumeSeconds(for: $0) ?? 0) > 0 }
+            ?? episodes.first { upNextFileIDs.contains($0.ref.itemID) }
+            ?? episodes.first
+    }
+
+    /// 「下一集」占位那一批的 id(见 `BaiduResumeCard.isUpNext`)。
+    /// 续播区已经把占位捞出来了,这里不必再读一遍库。
+    private var upNextFileIDs: Set<String> {
+        Set(resumeCards.filter(\.isUpNext).map(\.fileID))
     }
 
     /// 详情页的**剧级扩展信息 + 演职员**(类型 / 评分 / 标语 / 状态 / 制片公司 / 演员表)。
@@ -397,14 +417,13 @@ final class BaiduPanSourceViewModel {
         await loadFiles(allowingLibraryRootFallback: true, forceRefresh: true)
     }
 
-    /// 播完一场后刷新**本地续播状态**(进度标签、继续观看区)。
+    /// 播完一场 / 标记过状态后刷新**本地观看状态**(角标、续播区、剧卡计数)。
     ///
-    /// ⛔ 不重新列目录:那是 2 次百度请求(`list` + `filemetas`),而播完一场变的
+    /// ⛔ 不重新列目录:那是 2 次百度请求(`list` + `filemetas`),而这些状态变的
     /// 只有本地续播库(`WatchProgressStore`)—— 目录内容一个字节都没动。
-    /// 进度标签与续播区都直接读本地库,所以只重读本地就够(配额纪律)。
     func refreshResumeState() async {
         await loadResumeCards()
-        await loadResumePositions()
+        await loadWatchStates()
     }
 
     /// `allowingLibraryRootFallback`:片库根读不出来时,允许清掉它并回落到应用目录。
@@ -565,6 +584,9 @@ final class BaiduPanSourceViewModel {
             seriesItem = nil
             shapeDirectory = nil
             clearEpisodeState()
+            // 普通目录:网格上每一张卡的 ✓ /「已看到 mm:ss」也要有 —— 剧集形态那条路
+            // 由 `selectSeason` 读,这里不读的话网格上永远没有观看状态。
+            await loadWatchStates()
             return
         }
         // ⚠️ 同一部剧的**刷新**(手动刷新(⌘R) / 播完回来)要保住用户正看着的那一季;
@@ -656,7 +678,21 @@ final class BaiduPanSourceViewModel {
             }
             await loadEpisodes(directory: file.path)
         }
-        await loadResumePositions()
+        await loadWatchStates()
+        applySeriesPosterFallback()
+    }
+
+    /// 剧级海报的最后一层兜底:剧级条目没有封面时,用**刚列出来的**分集封面顶上。
+    ///
+    /// 为什么可信:分集封面就是同目录的 `poster.jpg`(或 TMDB 分集剧照),而且是这一趟
+    /// 列目录刚换到的 `dlink`。片库根直接落在一部剧上、或者续播卡的快照里没有封面时,
+    /// 详情页的海报与 hero 背景就靠它 —— ⛔ 不为此再列一遍父目录(配额)。
+    ///
+    /// ⛔ 只在剧级条目**没有**封面时补:用户从父目录卡片进来时那张是 TMDB 海报,优先。
+    private func applySeriesPosterFallback() {
+        guard let item = seriesItem, item.poster == nil,
+              let poster = episodes.first(where: { $0.poster != nil })?.poster else { return }
+        seriesItem = item.withPoster(poster)
     }
 
     /// 列某一季的目录,取分集。
@@ -705,6 +741,7 @@ final class BaiduPanSourceViewModel {
             guard let self, generation == self.episodeGeneration else { return }
             self.episodes = enriched
             self.scrapeFailure = failure
+            self.applySeriesPosterFallback()
         }
     }
 
@@ -718,6 +755,7 @@ final class BaiduPanSourceViewModel {
         guard case .flatFiles = selectedSeason?.source else { return }
         episodes = BaiduPanSeriesLayout.sortedEpisodes(
             visible(items.filter { $0.kind == .episode }))
+        applySeriesPosterFallback()
     }
 
     /// 丢掉正在跑的分集刮削(它的结果已经作废)。轮次 +1 也就是让它在回来时自行退出。
@@ -736,15 +774,34 @@ final class BaiduPanSourceViewModel {
         episodeFailure = nil
     }
 
-    /// 剧级展示信息的兜底条目:只有目录名,没有海报 / 简介 / 年份。
+    /// 剧级展示信息的兜底条目:目录名 + 可能有的封面,没有简介 / 年份。
     ///
     /// ⛔ 不伪造任何字段 —— 详情页按「缺就隐藏」处理(`CLAUDE.md` 硬规则 4)。
     /// `ref` 用目录路径当 id:它只用于展示,不参与播放(播放走分集条目)。
-    private static func fallbackSeriesItem(directory: String, sourceID: UUID) -> SourceItem {
-        let name = (directory as NSString).lastPathComponent
+    ///
+    /// - Parameters:
+    ///   - title: 覆盖目录名。从「继续观看」进来时传卡片标题(合成器给的是**剧名**,
+    ///     比季目录名 / 文件目录名准)。
+    ///   - poster: 覆盖封面。同样来自续播卡的快照 —— 它是详情页海报与 hero 背景
+    ///     唯一的来源(⛔ 不为此去列一遍父目录找那张剧卡:配额)。
+    private static func fallbackSeriesItem(
+        directory: String,
+        sourceID: UUID,
+        title: String? = nil,
+        poster: ImageDescriptor? = nil
+    ) -> SourceItem {
+        let directoryName = (directory as NSString).lastPathComponent
+        let resolvedTitle: String
+        if let title, !title.isEmpty {
+            resolvedTitle = title
+        } else if !directoryName.isEmpty {
+            resolvedTitle = directoryName
+        } else {
+            resolvedTitle = "剧集"
+        }
         return SourceItem(
             ref: SourceItemRef(sourceID: sourceID, itemID: directory),
-            title: name.isEmpty ? "剧集" : name,
+            title: resolvedTitle,
             kind: .folder,
             overview: nil,
             year: nil,
@@ -753,7 +810,7 @@ final class BaiduPanSourceViewModel {
             seasonNumber: nil,
             episodeTitle: nil,
             durationSeconds: nil,
-            poster: nil,
+            poster: poster,
             metadataOrigin: .none
         )
     }
@@ -917,11 +974,17 @@ final class BaiduPanSourceViewModel {
         // 卡片那一集属于哪一季,点进去就默认选哪一季 —— 否则「继续播放」会变成
         // 「播放第 1 集」(理由见 `applyDirectoryShape`)
         preferredSeasonNumber = Self.seasonNumber(ofFilePath: card.path)
-        // 这次不是「从父目录那张卡片点进来的」,剧级元数据退回目录名兜底
-        // (已知取舍,见 `docs/KNOWN_ISSUES.md`「剧集详情页」一节)
-        enteredSeriesItem = nil
-        currentDirectory = Self.detailDirectory(
-            ofFilePath: card.path, topmost: topmostDirectory)
+        let directory = Self.detailDirectory(ofFilePath: card.path, topmost: topmostDirectory)
+        // 剧级元数据:这次不是从父目录那张卡片点进来的,但**续播卡自己带着封面快照**
+        // (播放那一刻记下的)。不用它兜底,详情页的海报与 hero 背景就都是空的
+        // —— 用户报的「从继续观看进详情,封面和背景图加载不出来」正是这个。
+        enteredSeriesItem = Self.fallbackSeriesItem(
+            directory: directory,
+            sourceID: source.id,
+            title: card.title,
+            poster: card.poster
+        )
+        currentDirectory = directory
         await loadFiles()
     }
 
@@ -998,8 +1061,101 @@ final class BaiduPanSourceViewModel {
         }
     }
 
+    /// 这一条的本地观看状态。没记录 = 未看。
+    func watchState(for item: SourceItem) -> WatchProgressStore.WatchState {
+        watchStates[item.ref.itemID] ?? .unwatched
+    }
+
+    /// 已经看完了(显式标记,或自动判定过了 90%)。
+    func isWatched(_ item: SourceItem) -> Bool {
+        watchState(for: item) == .watched
+    }
+
+    /// 接着看的位置(秒)。看完 / 未看都是 nil。
     func resumeSeconds(for item: SourceItem) -> Double? {
-        resumePositions[item.ref.itemID]
+        guard case .inProgress(let seconds) = watchState(for: item) else { return nil }
+        return seconds
+    }
+
+    /// 目录卡片上「已看 N 集」的 N(0 = 不显示)。
+    ///
+    /// ⚠️ 只数本地有记录的集 —— 「共几集」要列子目录(配额),见 `watchedEpisodeCounts`。
+    func watchedEpisodeCount(for item: SourceItem) -> Int {
+        guard item.kind.isContainer, let path = file(for: item)?.path else { return 0 }
+        return watchedEpisodeCounts[path] ?? 0
+    }
+
+    // MARK: - 动作:观看状态
+    //
+    // 百度**没有任何播放状态接口**(`docs/BAIDU_PAN_API.md` §2 只有授权 / 列表 /
+    // 元信息 / 播放流 / 删除 / 改名),所以「已看 / 未看」只能记在本地续播库里 ——
+    // 与进度同源:换台机器不同步,那正是这个来源的能力边界。
+
+    /// 把这些条目标成已看 / 未看。⛔ 一个请求都不发。
+    ///
+    /// ⚠️ 顺手写展示快照:标记时并没有播放,不写的话这条记录没有 `locator`,
+    /// 删网盘文件时按路径圈不到它(`BaiduPanWatchHistory`),会留成死记录。
+    func markPlayed(_ items: [SourceItem], played: Bool) async {
+        let marks = items.filter { $0.kind.isPlayable }.map { item in
+            WatchProgressStore.PlayedMark(
+                fileID: item.ref.itemID,
+                display: file(for: item).map { WatchProgressStore.Display(item: item, file: $0) }
+            )
+        }
+        await applyPlayed(marks, played: played)
+        // 标完已看要让续播卡接着指向**下一个没看的**集 —— 否则把最后一张卡标成
+        // 已看,整部剧就从「继续观看」里消失了(用户报的就是这个)。
+        if played { await advanceUpNext() }
+    }
+
+    /// 续播卡片上标已看:卡片是从记录折出来的,手上没有 `SourceItem`,
+    /// 所以不给展示快照 —— 那条记录本来就有(卡片就是靠它才画得出来)。
+    func markPlayed(_ card: BaiduResumeCard) async {
+        await applyPlayed(
+            [WatchProgressStore.PlayedMark(fileID: card.fileID, display: nil)], played: true)
+    }
+
+    /// 当前这一季的整季标记。分集已经在手上 —— 零额外请求(配额纪律)。
+    ///
+    /// ⚠️ 只作用于**已经列出来的**这一季:`episodes` 之外的东西不知道存在,
+    /// ⛔ 不为了「整部剧」回头列一遍别的季文件夹。
+    func markSeasonPlayed(_ played: Bool) async {
+        await markPlayed(episodes, played: played)
+    }
+
+    private func applyPlayed(_ marks: [WatchProgressStore.PlayedMark], played: Bool) async {
+        guard !marks.isEmpty else { return }
+        do {
+            _ = try await container.watchProgress.setPlayed(marks, played: played)
+            await refreshResumeState()
+        } catch {
+            notice = "标记\(played ? "已看" : "未看")失败:\(error)"
+        }
+    }
+
+    /// 标完已看后,把续播卡指向**下一个没看的**集(Emby 的 NextUp 对位物)。
+    ///
+    /// ⚠️ 只在**知道分集清单**时做 —— 也就是剧集详情页(`episodes` 就是这一季)。
+    /// 网格里标单个文件时不知道这部剧还有哪些集,⛔ 不为此去列目录(配额);
+    /// 那种情况下卡片退出续播区,等下次播完一集由 `AppContainer.advanceBaiduUpNext` 补位。
+    ///
+    /// ⚠️ 只认**这一季**:季末标完就什么都不写(别的季有哪些集我们不知道,
+    /// ⛔ 不猜「还有下一季」)。
+    private func advanceUpNext() async {
+        guard !episodes.isEmpty else { return }
+        guard let next = episodes.first(where: { $0.kind.isPlayable && !isWatched($0) }),
+              let file = file(for: next) else { return }
+        do {
+            let changed = try await container.watchProgress.setUpNext([
+                WatchProgressStore.PlayedMark(
+                    fileID: next.ref.itemID,
+                    display: WatchProgressStore.Display(item: next, file: file))
+            ])
+            guard changed > 0 else { return }
+            await refreshResumeState()
+        } catch {
+            notice = "续播卡没指向下一集:\(error)"
+        }
     }
 
     // MARK: - 动作:删除 / 隐藏
@@ -1063,7 +1219,7 @@ final class BaiduPanSourceViewModel {
             // ⚠️ 走 `remove` 而不是 `forget`:隐藏**可恢复**,恢复之后这一项还能再播,
             // 那时进度必须记得上。只有真删才用 `forget`(删除不可恢复,见下)。
             await removeRecords(fileIDs)
-            for id in fileIDs { resumePositions.removeValue(forKey: id) }
+            for id in fileIDs { watchStates.removeValue(forKey: id) }
             await loadResumeCards()
             return
         }
@@ -1088,8 +1244,8 @@ final class BaiduPanSourceViewModel {
         // 角标按清理后的记录重算:删 / 隐藏目录时,它下面每一集的「已看到 …」
         // 都该消失。被删的文件已经不在 `items` / `episodes` 里,重算自然丢掉它们;
         // 季文件夹存法下分集可能不在这两份里,再按刚算出的 id 兜一层。
-        await loadResumePositions()
-        for id in fileIDs { resumePositions.removeValue(forKey: id) }
+        await loadWatchStates()
+        for id in fileIDs { watchStates.removeValue(forKey: id) }
         await loadResumeCards()
     }
 
@@ -1149,8 +1305,9 @@ final class BaiduPanSourceViewModel {
 
     /// 读本地续播库里属于这个来源的记录,折成卡片。
     ///
-    /// 与 `loadResumePositions` 的分工:那个读的是**当前目录**每一条的进度(画在
-    /// 卡片角上);这个读的是**全库**里有进度的条目(撑起顶部的续播区)。
+    /// 与 `loadWatchStates` 的分工:那个读的是**当前目录**每一条的状态(画在
+    /// 卡片角上);这个读的是**全库**里有进度的条目 + 「下一集」占位
+    /// (撑起顶部的续播区)。
     ///
     /// ## 两道过滤
     ///
@@ -1196,12 +1353,22 @@ final class BaiduPanSourceViewModel {
     ///
     /// ⛔ 不改续播库:各集的进度还得留着(进目录时角标要按集显示),这里只是**卡片**聚合。
     ///
-    /// - Note: `resumeEntries` 已按 `updatedAt` 倒序,所以留下的是组内最近看的那一集。
+    /// ## 「看到一半」压过「下一集」占位
+    ///
+    /// 同一部剧可能既有看到一半的一集、又有另一集的 `upNext` 占位(比如倒回去重看)。
+    /// 该续播的是**那一集**,不是再往后一集 —— 所以先按进度记录去重,占位只补空位。
+    /// 两趟都按 `updatedAt` 倒序,组内留下的仍是最近看的那一条。
     static func oneCardPerSeries(
         _ records: [WatchProgressStore.ResumeRecord]
     ) -> [WatchProgressStore.ResumeRecord] {
         var seen: Set<String> = []
-        return records.filter { seen.insert(seriesKey(of: $0)).inserted }
+        let progressed = records
+            .filter { !$0.isUpNext }
+            .filter { seen.insert(seriesKey(of: $0)).inserted }
+        let upNext = records
+            .filter(\.isUpNext)
+            .filter { seen.insert(seriesKey(of: $0)).inserted }
+        return (progressed + upNext).sorted { $0.updatedAt > $1.updatedAt }
     }
 
     /// 一部剧的聚合键:剧名 + 所在目录。
@@ -1246,19 +1413,48 @@ final class BaiduPanSourceViewModel {
         let folderName: String
     }
 
-    private func loadResumePositions() async {
-        var result: [String: Double] = [:]
-        var seen: Set<String> = []
-        // 覆盖两份条目:当前目录那一层(网格卡片角标)与详情页这一季的分集。
-        // 平铺存法下两者是同一批条目,`seen` 去重免得同一条查两遍。
+    /// 读本地续播库,把「这一屏要画的条目」折成状态 + 剧卡计数。
+    ///
+    /// 与 `loadResumeCards` 的分工:那个折的是**跨目录的续播卡**(全库里有进度的);
+    /// 这个折的是**当前目录 / 当前季每一条的状态**(✓ 与「已看到 mm:ss」),外加
+    /// 剧目录卡片上的「已看 N 集」。
+    ///
+    /// ⚠️ 一次读盘拿两份:条目 id 与库里全部记录合起来查一次 `watchStates`,
+    /// 再按路径把已看的记录摊到各级目录上。全部本地,零请求。
+    private func loadWatchStates() async {
+        var ids = Set<String>()
         for item in items + episodes where item.kind.isPlayable {
-            let id = item.ref.itemID
-            guard seen.insert(id).inserted else { continue }
-            if let seconds = await container.watchProgress.resumeSeconds(forFileID: id) {
-                result[id] = seconds
+            ids.insert(item.ref.itemID)
+        }
+        let records = await container.watchProgress.storedRecords(sourceID: source.id)
+        ids.formUnion(records.map(\.fileID))
+        let states = await container.watchProgress.watchStates(forFileIDs: Array(ids))
+        watchStates = states
+        watchedEpisodeCounts = Self.watchedEpisodeCounts(records: records, states: states)
+    }
+
+    /// 每个目录下**已看**的集数(含子目录)。纯函数,单测覆盖。
+    ///
+    /// 一条已看记录给自己所在的目录与它所有上层目录各 +1 —— 剧目录卡片查的
+    /// 就是自己的路径,所以季文件夹存法(`剧/第1季/01.mp4`)也数得进去。
+    ///
+    /// ⚠️ 只认 `storedRecords`(带展示快照的记录):没有定位信息的记录归不到
+    /// 任何目录,⛔ 也不拿文件名猜一个。
+    static func watchedEpisodeCounts(
+        records: [WatchProgressStore.StoredRecord],
+        states: [String: WatchProgressStore.WatchState]
+    ) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for record in records where states[record.fileID] == .watched {
+            var directory = BaiduPanPath.directory(ofFilePath: record.display.locator)
+            while !directory.isEmpty, directory != "/" {
+                counts[directory, default: 0] += 1
+                let parent = (directory as NSString).deletingLastPathComponent
+                guard parent != directory else { break }
+                directory = parent
             }
         }
-        resumePositions = result
+        return counts
     }
 }
 
@@ -1278,14 +1474,17 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
     let path: String
     let fileName: String
     let poster: ImageDescriptor?
+    /// 这一张不是「看到一半」,而是「下一集该看」的占位(上一集刚看完)。
+    /// 副标题报「下一集」,⛔ 不报「已看到 00:00」,也不画进度条。
+    let isUpNext: Bool
 
     var id: String { fileID }
 
     /// 副标题:一部剧只出一张卡,得说清接着看的是第几集。
     var subtitle: String {
-        let progress = "已看到 \(PlayerTime.text(positionSeconds))"
-        guard let episodeNumber else { return progress }
-        return "第 \(episodeNumber) 集 · \(progress)"
+        let what = isUpNext ? "下一集" : "已看到 \(PlayerTime.text(positionSeconds))"
+        guard let episodeNumber else { return what }
+        return "第 \(episodeNumber) 集 · \(what)"
     }
 
     /// 折不出可播文件(键不是合法 `fs_id`)就返回 nil —— ⛔ 不端一张点不动的卡片。
@@ -1299,6 +1498,7 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
         self.path = record.display.locator
         self.fileName = record.display.fileName
         self.poster = record.display.cover.map(ImageDescriptor.init(snapshot:))
+        self.isUpNext = record.isUpNext
     }
 
     /// 重建一个够播放用的 `BaiduPanFile`(见 `BaiduPanSourceViewModel.play(_ card:)`)。
