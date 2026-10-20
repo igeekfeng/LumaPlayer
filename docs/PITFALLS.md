@@ -256,6 +256,13 @@ per-server epoch;Progress 每 10 秒一次,不能触发失效。图片内存缓�
 
 **共用工具栏的「刷新」靠各页 `.task(id:)` 吃 `refreshToken`(Q36)。** 详情页曾漏接,刷新成空操作。每个新页面都要确认。
 
+**换来源时「同类型来源之间切换」不重建页面,`@State` 的 ViewModel 还是上一个的。** 百度网盘有两个来源时,
+从 A 切到 B 停在 A 的目录上,接到 Emby 再切回 B 才正常(2026-10-20 用户报)。
+根因:`BaiduPanSourceViewModel` 在 `init` 里收下 `source`,`@State` 只在**视图身份**变化时初始化;
+百度 → 百度视图类型不变、`refreshToken` 也没变,`.task(id:)` 全都不重跑。
+修法是根页按来源 id 重建(`.id(source.id)`)。Emby 不受影响是因为它的 `HomeViewModel` 不绑服务器、按 `server.id` 分格存。
+⚠️ 以后给某个来源加「一个来源一份状态」的页面,都要在根页挂 `.id(source.id)`;
+
 **`.sheet(item:)` 的内容里 ⛔ 别用 `if let` 去取第二个 `@State`(第一次弹出的是空白面板)。** 百度「按 TMDB 命名重命名」曾这么写:一个状态装目录、
 另一个装流程 ViewModel,sheet 内容里 `if let viewModel`。后果是**第一次右键弹出一个空白面板** ——
 sheet 的内容闭包在状态提交落地之前就被求值,那次读到的还是上一次的值(nil),面板便建成了空的,而且不会再补内容。

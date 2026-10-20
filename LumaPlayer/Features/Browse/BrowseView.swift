@@ -134,6 +134,19 @@ struct BrowseView: View {
             // 刷新走 `refreshToken`,由它自己重读授权状态与目录;
             // 「上一层」由它经 `BrowseChromeController.pageBackAction` 登记到顶栏。
             BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
+                // ⚠️ 按来源 id 重建,别省。
+                //
+                // `BaiduPanSourceViewModel` 在 init 时就把 `source` 收进去(片库根 / 隐藏项 /
+                // 续播库 / 封面缓存分区全按 `source.id`),而它是 `@State` —— **只在视图身份
+                // 变化时**才重新初始化。百度 → 百度切换时视图类型没变、`refreshToken` 也没变,
+                // 两个 `.task(id:)` 都不重跑,于是停在**上一个来源**的目录上(用户报的
+                // 「百度源之间切换不刷新」)。接到 Emby 再切回来能刷新,是因为那次换了视图类型、
+                // 身份重建了 —— 与「有没有切过别的来源」无关,❌ 不是刷新逻辑的偶发问题。
+                //
+                // Emby 那边不需要这个:它的 `HomeViewModel` 不绑定服务器,按 `server.id` 分格存,
+                // 靠 `.task(id: "\\(server.id)-\\(refreshToken)")` 重新加载。百度这一页是
+                // 一个来源一份状态,换来源就该是一张新页。
+                .id(source.id)
         case .none:
             ContentUnavailableView(
                 "没有选中的来源",
