@@ -280,6 +280,7 @@ actor WatchProgressStore {
 
     /// 记一条进度。位置为 0 或负值时**删掉**这条记录 ——
     /// 「从 0 开始看」不是一条进度,留着会让下次续播读到 0。
+    /// (例外:显式已看的、以及 `upNext` 占位的不删,理由见方法内。)
     ///
     /// ## 越过 90% 就地落成「已看」
     ///
@@ -300,9 +301,12 @@ actor WatchProgressStore {
         var current = entries()
         let existing = current[id]
         guard positionSeconds > 0 else {
-            // 「从 0 开始看」不是一条进度,删掉它 —— 但**显式标过已看的不删**:
-            // 那是用户说的话,不该被一次 0 秒的起播抹掉。
-            guard existing?.played != true else { return }
+            // 「从 0 开始看」不是一条进度,删掉它 —— 但两种记录不删:
+            // 1. **显式标过已看**:那是用户说的话,不该被一次 0 秒的起播抹掉;
+            // 2. **「下一集」占位**(`upNext`):它本来就不是进度,一次 0 秒的起播
+            //    只说明「点开了还没看」。删了它续播卡就整张消失 —— 而这时候连
+            //    位置都还没有,那张卡再也回不来(用户报的「播完一集续播区空了」)。
+            guard existing?.played != true, existing?.upNext != true else { return }
             guard current.removeValue(forKey: id) != nil else { return }
             try persist(current)
             return
@@ -317,6 +321,49 @@ actor WatchProgressStore {
             // 真看过了:占位使命结束,这一条变成(或继续是)普通进度记录
             upNext: nil,
             display: existing?.display
+        )
+        try persist(current)
+    }
+
+    /// 自然播完一集(`end-file(.eof)`):落成「已看 + 位置 0」。
+    ///
+    /// ## 为什么不能只靠 `record` 的比例判定
+    ///
+    /// `record` 用 `位置 / 时长 ≥ 90%` 推「看完」,而时长只有 mpv 报过 `.duration`
+    /// 才有 —— 百度列表**不给时长**(`docs/BAIDU_PAN_API.md` §4),流上没读到时
+    /// `duration` 就是 nil,`reachesFinished` 恒为 false。于是播到结尾的那一集停在
+    /// 「看到 99%」:既不算已看,又占着这部唯一的一张续播卡(`oneCardPerSeries`
+    /// 里「看到一半」压过「下一集」占位)——「下一集」永远轮不到(用户报的)。
+    ///
+    /// 而**播到了文件末尾**这件事本身就是事实,不需要再用比例去猜。所以这条路
+    /// 直接定状态,不比例判定。
+    ///
+    /// ## 为什么把 `endedAt` 当时长兜底
+    ///
+    /// 关窗还会再报一次最终进度(`PlayerViewModel.stop()`),那一次的时长同样可能
+    /// 未知 —— 这一条如果没留下时长,`record` 又只能按比例判,就会把刚落的「已看」
+    /// 翻回「看到 99%」。文件在哪儿结束,这一集就有多长:拿终点兜底,后面那次
+    /// 上报的比例必然是 100%。
+    ///
+    /// ⚠️ 已知时长(或这一条原先记下的)优先,⛔ 不拿终点去覆盖真实时长。
+    func markFinished(
+        fileID id: String,
+        display: Display?,
+        endedAt positionSeconds: Double,
+        durationSeconds: Double?
+    ) throws {
+        guard !forgottenIDs.contains(id) else { return }
+        var current = entries()
+        let existing = current[id]
+        let duration = durationSeconds ?? existing?.durationSeconds
+            ?? (positionSeconds > 0 ? positionSeconds : nil)
+        current[id] = Entry(
+            positionSeconds: 0,
+            durationSeconds: duration,
+            updatedAt: Date(),
+            played: true,
+            upNext: nil,
+            display: existing?.display ?? display
         )
         try persist(current)
     }

@@ -552,4 +552,68 @@ final class WatchProgressStoreTests: XCTestCase {
         let position = await store.resumeSeconds(forFileID: "2")
         XCTAssertEqual(position, 300)
     }
+
+    /// 起播那一集(还没走过 10 秒)的一次 0 秒上报,不能把「下一集」占位删掉。
+    func testZeroSecondReportKeepsUpNextPlaceholder() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.setUpNext([
+            WatchProgressStore.PlayedMark(
+                fileID: "2", display: display(sourceID: sourceID, title: "琅琊榜"))
+        ])
+
+        try await store.record(fileID: "2", positionSeconds: 0, durationSeconds: nil)
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["2"], "占位不该被一次 0 秒起播抹掉")
+        XCTAssertEqual(entries.first?.isUpNext, true)
+    }
+
+    // MARK: - 自然播完(`markFinished`)
+
+    /// 用户报的那条:播完一集但**时长未知**时,续播卡必须让给下一集。
+    ///
+    /// 之前只靠「位置 / 时长 ≥ 90%」推「看完」,时长未知就判不出来 —— 那集停在
+    /// 「看到 99%」,继续占着这部唯一的一张卡,下一集的占位永远出不来。
+    func testMarkFinishedWithoutDurationFreesTheCardForNextEpisode() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        // 播到结尾了,但 mpv 从没报过时长
+        try await store.record(fileID: "1", positionSeconds: 2690, durationSeconds: nil)
+        let before = await store.watchState(forFileID: "1")
+        XCTAssertEqual(before, .inProgress(seconds: 2690), "时长未知时比例判不出看完")
+
+        try await store.markFinished(
+            fileID: "1",
+            display: display(sourceID: sourceID, title: "琅琊榜"),
+            endedAt: 2690,
+            durationSeconds: nil)
+        let after = await store.watchState(forFileID: "1")
+        XCTAssertEqual(after, .watched)
+
+        // 关窗时那一次收尾上报(位置≈终点、时长仍未知)不能把已看翻回进行中
+        try await store.record(fileID: "1", positionSeconds: 2690, durationSeconds: nil)
+        let settled = await store.watchState(forFileID: "1")
+        XCTAssertEqual(settled, .watched, "终点兜底成时长,后一次上报的比例是 100%")
+
+        try await store.setUpNext([
+            WatchProgressStore.PlayedMark(
+                fileID: "2", display: display(sourceID: sourceID, title: "琅琊榜"))
+        ])
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["2"])
+        XCTAssertEqual(entries.first?.isUpNext, true)
+    }
+
+    /// 已知时长时不能被「终点」覆盖:记录里的时长仍是那一次真实值。
+    func testMarkFinishedKeepsKnownDuration() async throws {
+        let store = makeStore()
+        try await store.markFinished(
+            fileID: "1", display: nil, endedAt: 600, durationSeconds: 3600)
+
+        let snapshot = await store.snapshot()
+        XCTAssertEqual(snapshot["1"]?.durationSeconds, 3600)
+        XCTAssertEqual(snapshot["1"]?.played, true)
+        XCTAssertEqual(snapshot["1"]?.positionSeconds, 0)
+    }
 }

@@ -452,32 +452,58 @@ final class AppContainer {
         } catch {}
     }
 
-    /// 播完一集之后,把「继续观看」指向**下一集没看的**(Emby 的 NextUp 对位物)。
+    /// 百度来源**播完一集**之后的本地收尾:① 这一集落成「已看」 ② 续播卡指向下一集没看的。
     ///
-    /// ## 为什么需要这一步
+    /// ## 为什么需要它
     ///
-    /// Emby 的续播卡是服务端算出来的(「第一集没看的」);百度没有服务端,而我们的
-    /// 续播卡原来只收「看到一半的集」。于是**看完一集整部剧就从续播区消失** ——
-    /// 库里只剩「已看 + 位置 0」,再没有任何 in-progress 记录(用户报的)。
-    /// 补一条位置 0 的占位(`WatchProgressStore.setUpNext`)卡片才接得上。
+    /// Emby 的续播卡是服务端算出来的(「第一集没看的」),百度没有服务端 ——
+    /// 两件事都得自己记,而且必须是**同一个动作**:只做 ② 不做 ① 的话,刚看完的
+    /// 那一集还留在「看到 99%」,按 `oneCardPerSeries`「看到一半压过下一集占位」
+    /// 的规则,占位根本出不来,整部剧还是停在上一集(用户报的)。
+    ///
+    /// ① 之所以不能交给进度上报的比例判定:百度列表不给时长,`duration` 拿不到时
+    /// 比例算不出来(见 `WatchProgressStore.markFinished`)。
     ///
     /// ⚠️ 只认**播放队列里**的兄弟集(起播那一刻装配好的,零请求):队列里没有的
     /// (别的季、没列过的目录)⛔ 不猜。
     /// ⚠️ 跳过已看的集:队列里的下一集可能早就标过已看,那就该指向再下一集。
-    func advanceBaiduUpNext(after finished: PlaybackEpisode, in queue: EpisodeQueue) async {
-        guard finished.source.baiduFile != nil,
-              let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
+    ///
+    /// - Parameters:
+    ///   - endedAt: 收尾那一刻的位置(秒)。播到文件末尾 = 这一集到此为止。
+    ///   - durationSeconds: 已知总时长;百度来源常常是 nil。
+    func finishBaiduEpisode(
+        _ finished: PlaybackEpisode,
+        in queue: EpisodeQueue,
+        endedAt positionSeconds: Double,
+        durationSeconds: Double?
+    ) async {
+        guard let file = finished.source.baiduFile else { return }
+        do {
+            try await watchProgress.markFinished(
+                fileID: finished.id,
+                display: finished.resumeItem.map {
+                    WatchProgressStore.Display(item: $0, file: file)
+                },
+                endedAt: positionSeconds,
+                durationSeconds: durationSeconds
+            )
+        } catch {
+            // 写盘失败不该影响播放页收尾(与进度上报同一处置):下次播完再补。
+            // 不往下写占位 —— 上一集没落成已看时,占位也出不来(见上)。
+            return
+        }
+        guard let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
         for episode in queue.episodes[(start + 1)...] {
-            guard let file = episode.source.baiduFile, let item = episode.resumeItem else { continue }
+            guard let nextFile = episode.source.baiduFile,
+                  let item = episode.resumeItem else { continue }
             guard await watchProgress.watchState(forFileID: episode.id) != .watched else { continue }
             do {
                 try await watchProgress.setUpNext([
                     WatchProgressStore.PlayedMark(
                         fileID: episode.id,
-                        display: WatchProgressStore.Display(item: item, file: file))
+                        display: WatchProgressStore.Display(item: item, file: nextFile))
                 ])
             } catch {
-                // 写盘失败不该影响播放页收尾(与进度上报同一处置):下次播完再补
                 return
             }
             return

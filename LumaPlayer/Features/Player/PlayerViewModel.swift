@@ -260,6 +260,11 @@ final class PlayerViewModel {
     private var startTask: Task<Void, Never>?
     /// 最近一次 `finishReporting` 的任务(finish + drain),供关窗后等待
     private var reportingFinishTask: Task<Void, Never>?
+    /// 百度来源「这一集播完了」之后要落进本地续播库的东西(已看 + 下一集占位)。
+    ///
+    /// 单独存一份是为了**关窗时能等它**:续播区(on `lastFinishedPlayback`)刷新得
+    /// 比它早,就会读到还没写进去的库 —— 表现为「刚播完,继续观看里没有下一集」。
+    private var baiduFinishTask: Task<Void, Never>?
     /// 合并后的倍速上报任务(拖滑块时只留最后一次)
     private var rateReportTask: Task<Void, Never>?
     /// 转码 seek 合并后的重新起流任务(连点时只留最后一次)
@@ -1483,11 +1488,33 @@ final class PlayerViewModel {
         }
     }
 
-    /// 等本轮收尾上报(最终 Progress + Stopped)真正发完。
+    /// 等本轮收尾上报(最终 Progress + Stopped)真正发完,并等本地续播库那笔写完。
     /// 播放页关闭后,详情页据此再向服务端读续播位置(docs/PITFALLS.md Q22)。
     /// 从未开始收尾时立即返回。
+    ///
+    /// ⚠️ 百度那笔要**等**:续播区在同一个广播之后刷新,不等就可能读到还没写进去的库。
     func waitUntilReportingFinished() async {
         await reportingFinishTask?.value
+        await baiduFinishTask?.value
+    }
+
+    /// 百度来源自然播完的收尾:已看 + 下一集占位(见 `AppContainer.finishBaiduEpisode`)。
+    ///
+    /// ⚠️ 先等最终进度落盘(`reportingFinishTask`)再写「已看」—— 反过来的话,
+    /// 随后那次「播到 99%」的进度写会把它翻回「进行中」。
+    private func finishBaiduEpisodeIfNeeded() {
+        guard let queue = episodeQueue, let finished = queue.current,
+              finished.source.baiduFile != nil else { return }
+        let final = reportState
+        let previous = reportingFinishTask
+        baiduFinishTask = Task { [container] in
+            await previous?.value
+            await container.finishBaiduEpisode(
+                finished,
+                in: queue,
+                endedAt: final.positionSeconds,
+                durationSeconds: final.durationSeconds)
+        }
     }
 
     // MARK: - 事件
@@ -1596,11 +1623,10 @@ final class PlayerViewModel {
             // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)
             updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
-            // 百度来源:补一条「下一集」占位,否则看完一集整部剧就从续播区消失
-            // (Emby 由服务端算 NextUp,不需要这一步)。队列是起播时装配的,零请求。
-            if let queue = episodeQueue, let finished = queue.current {
-                Task { await container.advanceBaiduUpNext(after: finished, in: queue) }
-            }
+            // 百度来源:这一集落成「已看」,再补一条「下一集」占位 —— 否则看完一集
+            // 整部剧就停在上一集 / 从续播区消失(Emby 由服务端算 NextUp,不需要这一步)。
+            // 队列是起播时装配的,零请求。
+            finishBaiduEpisodeIfNeeded()
             // 没有片尾标记、也没赶上结束前的提示(比如直接拖到了最后)时,
             // 播完卡片同样按设置倒计时播下一集
             if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
