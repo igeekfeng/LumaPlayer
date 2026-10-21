@@ -156,6 +156,9 @@ final class PlayerViewModel {
     /// 会在字幕菜单里堆出一排同名轨。换播放器(重试 / 转码重新起流)时在
     /// `prepareAndLoad` 里复位。
     private var didAddExternalSubtitles = false
+    /// 本次播放里最后挂上的字幕(手动挂或自动恢复)。转码 seek / 重试换了播放器时**静默**重挂它,
+    /// 不再读记录、不再提示 —— 否则转码模式下每拖一次进度就闪一句「已挂上」。
+    private var sessionSubtitle: (stored: SubtitleFileStore.Stored, assrtID: Int?)?
 
     /// 系统「正在播放」(控制中心)的倍速档位:那条命令只能给离散选项。
     /// 播放器内是连续调节(滑块 + 步进,`Metrics.speedRange`),不落在这几个值上。
@@ -734,6 +737,8 @@ final class PlayerViewModel {
     private func addExternalSubtitlesIfNeeded() {
         guard !didAddExternalSubtitles else { return }
         didAddExternalSubtitles = true
+        // 每个新播放器都恢复一次:转码 seek / 重试会换播放器,手动挂的字幕要跟过去
+        restoreRememberedSubtitle()
         guard let player, let session, !session.externalSubtitles.isEmpty else { return }
         var failed: [String] = []
         for subtitle in session.externalSubtitles {
@@ -771,7 +776,7 @@ final class PlayerViewModel {
             guard let self else { return }
             do {
                 let stored = try await self.container.subtitleFiles.importLocalFile(at: url)
-                try self.attach(stored)
+                try self.attach(stored, assrtID: nil)
             } catch {
                 self.reportSubtitleFailure(error, fileName: url.lastPathComponent)
             }
@@ -801,19 +806,90 @@ final class PlayerViewModel {
     @discardableResult
     func downloadSubtitle(_ result: SubtitleSearchResult) async throws -> String {
         let stored = try await container.subtitleService.download(result)
-        try attach(stored)
+        try attach(stored, assrtID: result.id)
         return stored.title
     }
 
-    /// 把已经落盘的字幕挂到当前播放器上(本地 / 在线两条通路共用)。
-    private func attach(_ stored: SubtitleFileStore.Stored) throws {
+    /// 把已经落盘的字幕挂到当前播放器上(本地 / 在线 / 自动恢复三条通路共用),并记成这一集的字幕。
+    ///
+    /// - Parameter assrtID: 在线字幕的 assrt id(缓存被清掉后凭它重新取回);本地导入传 nil。
+    /// - Parameter quiet: 换播放器后重挂本次已挂过的字幕:不提示、不重写记录。
+    private func attach(
+        _ stored: SubtitleFileStore.Stored, assrtID: Int?, announcement: String? = nil, quiet: Bool = false
+    ) throws {
         guard let player, phase == .playing || phase == .paused else {
             throw SubtitleAttachError.notPlaying
         }
         try player.addSubtitle(url: stored.url, title: stored.title, flags: .select)
         // 用户显式选了字幕:起播偏好让位,否则下一次 track-list 会把它顶掉
         hasUserChosenSubtitle = true
-        flash("字幕:\(stored.title)", systemImage: "captions.bubble")
+        sessionSubtitle = (stored, assrtID)
+        guard !quiet else { return }
+        flash(announcement ?? "字幕:\(stored.title)", systemImage: "captions.bubble")
+        remember(stored, assrtID: assrtID)
+    }
+
+    /// 记下「这一集用的是这条字幕」,并刷新文件的使用时间(缓存清理按它判断)。
+    /// 写不进去不影响这次播放,但要说出来:否则用户下次发现没自动挂上,无从查起。
+    private func remember(_ stored: SubtitleFileStore.Stored, assrtID: Int?) {
+        let key = danmaku.query.itemKey
+        let binding = SubtitleBindingStore.Binding(
+            relativePath: stored.relativePath, title: stored.title, assrtID: assrtID, lastUsed: Date())
+        let bindings = container.subtitleBindings
+        let files = container.subtitleFiles
+        Task { [weak self] in
+            do {
+                try await bindings.bind(binding, for: key)
+                try await files.markUsed(relativePath: stored.relativePath)
+            } catch {
+                Self.logger.error("记住字幕失败:\(String(describing: error), privacy: .public)")
+                self?.flash("没能记住这条字幕:\(error.localizedDescription)", systemImage: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    /// 自动挂上这一集上次用的字幕(`SubtitleBindingStore`)。
+    ///
+    /// 文件还在缓存里就直接挂;被清掉了的在线字幕按 assrt id 重新取(先查缓存、再请求);
+    /// 本地字幕没有来源可重取,如实提示并删掉这条记录。
+    /// ⚠️ 恢复时同样带 `select`:上次最后一个动作就是挂它。之后用户在菜单里改选别的轨,记录不变。
+    private func restoreRememberedSubtitle() {
+        if let current = sessionSubtitle {
+            // 本次播放已经挂过(换了播放器):文件就在手上,同步重挂
+            do {
+                try attach(current.stored, assrtID: current.assrtID, quiet: true)
+            } catch {
+                reportSubtitleFailure(error, fileName: current.stored.title)
+            }
+            return
+        }
+        let key = danmaku.query.itemKey
+        let generation = self.generation
+        let player = self.player
+        Task { [weak self] in
+            guard let self,
+                  let binding = await self.container.subtitleBindings.binding(for: key) else { return }
+            do {
+                let stored: SubtitleFileStore.Stored
+                if let cached = await self.container.subtitleFiles.existingFile(relativePath: binding.relativePath) {
+                    stored = cached
+                } else if let assrtID = binding.assrtID {
+                    stored = try await self.container.subtitleService.download(assrtID: assrtID)
+                } else {
+                    try await self.container.subtitleBindings.unbind(itemKey: key)
+                    self.flash("上次用的本地字幕「\(binding.title)」已被清理,需要重新选择", systemImage: "captions.bubble")
+                    return
+                }
+                // 等待期间播放器换了(转码 seek / 换集 / 关窗):新播放器会自己再恢复一次;
+                // 用户已经手动挂了别的:以用户为准
+                guard self.generation == generation, self.player === player,
+                      self.sessionSubtitle == nil else { return }
+                try self.attach(stored, assrtID: binding.assrtID, announcement: "字幕:已挂上上次用的「\(stored.title)」")
+            } catch {
+                guard self.generation == generation else { return }
+                self.reportSubtitleFailure(error, fileName: binding.title)
+            }
+        }
     }
 
     /// 字幕失败统一出口:一句 OSD + 一条日志。⛔ 不静默、不弹对话框打断播放。

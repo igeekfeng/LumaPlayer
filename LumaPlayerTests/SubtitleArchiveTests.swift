@@ -85,8 +85,8 @@ final class SubtitleArchiveTests: XCTestCase {
         let stored = try await service.download(Self.result)
         XCTAssertEqual(try String(data: Data(contentsOf: stored.url), encoding: .utf8), Self.srtText,
                        "取与 filelist 同名的那个")
-        XCTAssertEqual(stored.url.lastPathComponent, "assrt-712929-1.srt",
-                       "沿用单文件那条路的缓存名,下次直接命中")
+        XCTAssertEqual(stored.relativePath, "assrt-712929/a.srt",
+                       "与单文件那条路落进同一个组、保留原文件名,下次直接命中")
     }
 
     func testArchiveOnlyDetailExtractsByPriority() async throws {
@@ -101,7 +101,7 @@ final class SubtitleArchiveTests: XCTestCase {
             host: "file0.assrt.net", path: "/download/712929/pack.rar")
 
         let stored = try await service.download(Self.result)
-        XCTAssertEqual(stored.url.lastPathComponent, "assrt-712929-archive.srt", "srt 优先,缓存名用真实扩展名")
+        XCTAssertEqual(stored.relativePath, "assrt-712929/y.srt", "srt 优先,保留包里的原文件名")
     }
 
     // MARK: - 辅助

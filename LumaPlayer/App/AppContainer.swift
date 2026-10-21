@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// 组合根:装配 CredentialStore / ServerRegistry / AppState,
 /// 并承载跨视图的服务器管理动作(添加 / 切换 / 编辑 / 删除 / 会话恢复)。
@@ -49,6 +50,8 @@ final class AppContainer {
     /// 在线字幕(assrt)的编排(`SubtitleService`)。全 App 一份:
     /// 凭据、落盘目录、缓存都只该有一个写入方。
     let subtitleService: SubtitleService
+    /// 每一集上次挂的外挂字幕(`SubtitleBindingStore`)。播放页起播时据此自动挂上。
+    let subtitleBindings: SubtitleBindingStore
     /// 播放偏好(`PlaybackPreferences`,UserDefaults 持久化):起播默认值与播放期开关。
     /// 与字幕外观同样的理由必须是同一个实例 —— 设置里改了步长 / 默认倍速,
     /// 下一次起播就要用上。
@@ -85,6 +88,7 @@ final class AppContainer {
         danmaku: DanmakuService? = nil,
         subtitleFiles: SubtitleFileStore? = nil,
         subtitleService: SubtitleService? = nil,
+        subtitleBindings: SubtitleBindingStore? = nil,
         baiduDirectoryCache: BaiduPanDirectoryCache? = nil,
         baiduScrapeCache: BaiduPanScrapeCache? = nil,
         baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil
@@ -96,6 +100,8 @@ final class AppContainer {
         self.subtitleFiles = subtitleFiles ?? SubtitleFileStore(directory: SubtitleFileStore.defaultDirectory)
         self.subtitleService = subtitleService ?? SubtitleService(
             credentials: credentials, store: self.subtitleFiles)
+        self.subtitleBindings = subtitleBindings
+            ?? SubtitleBindingStore(fileURL: SubtitleBindingStore.defaultFileURL)
         self.preferences = PlaybackPreferences(defaults: preferences)
         self.homeAppearance = HomeAppearancePreferences(defaults: preferences)
         let imageCachePreferences = ImageCachePreferences(defaults: preferences)
@@ -698,6 +704,13 @@ final class AppContainer {
         // 本地缓存也一起走:接口响应与图片磁盘目录都不留在盘上
         await responseCache.invalidate(serverID: id)
         await posters.purgeDisk(ownerID: id)
+        // 每集字幕记录的键带服务器 id(`DanmakuMediaQuery.itemKey`),这台的记录一起删;
+        // 字幕文件本身不分服务器,没人引用后由 `cleanUpSubtitleCache` 按时间淘汰
+        do {
+            try await subtitleBindings.purge(keyPrefix: "emby|\(id.uuidString)|")
+        } catch {
+            Self.logger.error("删除服务器的字幕记录失败:\(error.localizedDescription, privacy: .public)")
+        }
         if state.currentSource?.id == id {
             state.currentSource = await registry.mostRecentlyUsedSource()
         }
@@ -709,6 +722,28 @@ final class AppContainer {
     /// 删除服务器(Emby 便利入口)。
     func removeServer(id: UUID) async throws {
         try await removeSource(id: id)
+    }
+
+    // MARK: - 字幕缓存
+
+    private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "subtitles")
+
+    /// 启动时清理一次字幕缓存:先删过期的每集记录,再删没人引用且过期 / 超量的文件
+    /// (规则见 `SubtitleFileStore` 的「清理」)。
+    ///
+    /// 失败只记日志、不打扰用户:清不掉的缓存下次启动再清,不影响任何功能。⛔ 但不静默 —— 日志里留原因。
+    func cleanUpSubtitleCache() async {
+        do {
+            let prunedBindings = try await subtitleBindings.prune()
+            let keeping = await subtitleBindings.referencedGroups()
+            let report = try await subtitleFiles.cleanUp(keeping: keeping)
+            if prunedBindings > 0 || report.removedGroups > 0 {
+                Self.logger.info(
+                    "字幕缓存清理:过期记录 \(prunedBindings) 条,删除 \(report.removedGroups) 组 \(report.removedBytes) 字节,剩余 \(report.remainingBytes) 字节")
+            }
+        } catch {
+            Self.logger.error("字幕缓存清理失败:\(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - 会话恢复
