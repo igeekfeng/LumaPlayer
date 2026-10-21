@@ -188,34 +188,6 @@ struct PlayerWindowView: View {
         .onChange(of: isSubtitleSearchPresented) { _, presented in
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
-        // 本地字幕:面板挂在窗口上而不是字幕菜单里 —— 菜单一点就收起来,
-        // 在菜单内部呈现的系统面板会跟着菜单一起消失。
-        .fileImporter(
-            isPresented: $isSubtitleImporterPresented,
-            allowedContentTypes: SubtitleFormats.contentTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                viewModel.attachLocalSubtitle(at: url)
-            case .failure(let error):
-                // 用户点「取消」不是失败(NSUserCancelledError),不提示
-                guard (error as NSError).code != NSUserCancelledError else { return }
-                viewModel.reportSubtitlePickerFailure(error)
-            }
-        }
-        .sheet(isPresented: $isDanmakuPickerPresented) {
-            DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
-        }
-        .sheet(isPresented: $isSubtitleSearchPresented) {
-            // 在线字幕:搜索 / 下载 / 挂载都在这个面板里完成,关掉即回到画面
-            SubtitlePickerSheet(viewModel: viewModel) { isSubtitleSearchPresented = false }
-        }
-        .sheet(isPresented: $isMarkersEditorPresented) {
-            // 手动片头片尾:表单在窗口上呈现(sheet 比 popover 稳,菜单点开就收起来了)
-            PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
-        }
         .onChange(of: viewModel.previousEpisode?.id) { nowPlaying.update(from: viewModel) }
         .onChange(of: viewModel.nextEpisode?.id) { nowPlaying.update(from: viewModel) }
         .task(id: viewModel.osd?.id) { await showOSD() }
@@ -275,6 +247,39 @@ struct PlayerWindowView: View {
             guard window.isFullScreen else { return .ignored }
             toggleFullScreen()
             return .handled
+        }
+        // 弹窗(sheet / 文件面板)⛔ 必须挂在上面这串 `onKeyPress` 的**外层**:SwiftUI 会把弹窗里的按键
+        // 沿「呈现它的视图」往上传,挂在里层时弹窗内容等于被这些处理器包着,而且它们比输入框先拿到键
+        // —— 在搜索框里打 M / I / 空格 / Z / F 会变成静音、统计、暂停……(最小复现实测;菜单栏那份
+        // 无修饰键快捷键不抢输入框,实测无关)。
+
+        // 本地字幕:面板挂在窗口上而不是字幕菜单里 —— 菜单一点就收起来,
+        // 在菜单内部呈现的系统面板会跟着菜单一起消失。
+        .fileImporter(
+            isPresented: $isSubtitleImporterPresented,
+            allowedContentTypes: SubtitleFormats.contentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                viewModel.attachLocalSubtitle(at: url)
+            case .failure(let error):
+                // 用户点「取消」不是失败(NSUserCancelledError),不提示
+                guard (error as NSError).code != NSUserCancelledError else { return }
+                viewModel.reportSubtitlePickerFailure(error)
+            }
+        }
+        .sheet(isPresented: $isDanmakuPickerPresented) {
+            DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
+        }
+        .sheet(isPresented: $isSubtitleSearchPresented) {
+            // 在线字幕:搜索 / 下载 / 挂载都在这个面板里完成,关掉即回到画面
+            SubtitlePickerSheet(viewModel: viewModel) { isSubtitleSearchPresented = false }
+        }
+        .sheet(isPresented: $isMarkersEditorPresented) {
+            // 手动片头片尾:表单在窗口上呈现(sheet 比 popover 稳,菜单点开就收起来了)
+            PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
         }
     }
 
