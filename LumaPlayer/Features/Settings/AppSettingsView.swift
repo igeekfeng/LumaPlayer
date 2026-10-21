@@ -22,7 +22,7 @@ enum SettingsTab: String {
 ///
 /// - **通用**:网络(自定义 User-Agent)+ 首页顶部推荐开关 + 元数据刮削(TMDB token);
 /// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
-/// - **字幕**:字幕外观(`SubtitleSettingsView`);
+/// - **字幕**:字幕外观(`SubtitleSettingsView`)+ 在线字幕站(assrt)的 API 密钥;
 /// - **弹幕**:弹弹play 的 AppId / AppSecret 与弹幕外观(`DanmakuSettingsView`);
 /// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`);
 /// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复;
@@ -46,7 +46,7 @@ struct AppSettingsView: View {
             PlaybackSettingsView(preferences: container.preferences)
                 .tabItem { Label("播放", systemImage: "play.circle") }
                 .tag(SettingsTab.playback)
-            SubtitleSettingsView(store: container.subtitleStyles)
+            SubtitleSettingsView(store: container.subtitleStyles, credentials: container.credentials)
                 .tabItem { Label("字幕", systemImage: "captions.bubble") }
                 .tag(SettingsTab.subtitles)
             DanmakuSettingsView(credentials: container.credentials, store: container.danmakuSettings)
@@ -342,6 +342,17 @@ struct SettingsValueSlider: View {
 /// 按窗口缩放)对不上,一个不准的预览比没有更误导。正在播放的画面就是准确的预览。
 private struct SubtitleSettingsView: View {
     @Bindable var store: SubtitleStyleStore
+    let credentials: CredentialStore
+
+    @State private var assrtToken = ""
+    @State private var savedAssrtToken = ""
+    @State private var tokenStatus: TokenStatus = .idle
+
+    private enum TokenStatus: Equatable {
+        case idle
+        case saved
+        case error(String)
+    }
 
     var body: some View {
         Form {
@@ -400,6 +411,25 @@ private struct SubtitleSettingsView: View {
             }
 
             Section {
+                SecureField(
+                    "API 密钥", text: $assrtToken,
+                    prompt: Text("assrt.net 用户面板里的 API 密钥"))
+                    .autocorrectionDisabled()
+                HStack {
+                    tokenStatusLabel
+                    Spacer()
+                    Button("清除") { Task { await saveAssrtToken("") } }
+                        .disabled(savedAssrtToken.isEmpty && trimmedAssrtToken.isEmpty)
+                    Button("保存") { Task { await saveAssrtToken(trimmedAssrtToken) } }
+                        .disabled(trimmedAssrtToken == savedAssrtToken)
+                }
+            } header: {
+                Text("在线字幕(assrt)")
+            } footer: {
+                Text("播放页「字幕 › 搜索在线字幕…」用它搜索并下载字幕。到 assrt.net 注册后,在用户面板复制 API 密钥;只写在本机凭据文件里。")
+            }
+
+            Section {
                 HStack {
                     Text("修改对正在播放的视频立即生效。")
                         .foregroundStyle(.secondary)
@@ -411,6 +441,52 @@ private struct SubtitleSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task { await loadAssrtToken() }
+    }
+
+    private var trimmedAssrtToken: String {
+        assrtToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @ViewBuilder
+    private var tokenStatusLabel: some View {
+        switch tokenStatus {
+        case .idle:
+            Text(savedAssrtToken.isEmpty ? "未配置,不能搜索在线字幕" : "已配置")
+                .foregroundStyle(.secondary)
+        case .saved:
+            Text("已保存").foregroundStyle(.secondary)
+        case .error(let message):
+            Text(message).foregroundStyle(.red)
+        }
+    }
+
+    private func loadAssrtToken() async {
+        do {
+            let token = try await credentials.assrtToken() ?? ""
+            assrtToken = token
+            savedAssrtToken = token
+            tokenStatus = .idle
+        } catch {
+            // ⛔ 不静默吞:读不出来如实说,不假装「未配置」
+            tokenStatus = .error("读凭据文件失败")
+        }
+    }
+
+    /// 空串 = 清除。与弹幕凭据同一套做法(保存 / 清除共用一条通路)。
+    private func saveAssrtToken(_ token: String) async {
+        do {
+            if token.isEmpty {
+                try await credentials.deleteAssrtToken()
+            } else {
+                try await credentials.saveAssrtToken(token)
+            }
+            assrtToken = token
+            savedAssrtToken = token
+            tokenStatus = .saved
+        } catch {
+            tokenStatus = .error("保存失败")
+        }
     }
 
     /// 预设色 + 系统取色器。预设是一排色块,选中的那个带描边与 `.isSelected`(VoiceOver 读得出)。

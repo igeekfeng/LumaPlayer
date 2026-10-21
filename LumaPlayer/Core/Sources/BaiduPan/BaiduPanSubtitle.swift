@@ -28,13 +28,13 @@ enum BaiduPanSubtitle {
 
     /// 认得的字幕扩展名。
     ///
-    /// `sub` 是 MicroDVD(老片常见),`vtt` 给 Web 来源;`smi` 不在内 ——
-    /// libmpv 对它支持不稳,列进来只会多一条加载失败的轨。
-    static let fileExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub"]
+    /// 口径的单一事实来源是 `SubtitleFormats`(手动加载那条通路也认同一批)——
+    /// 这里只是给「百度文件条目」这套调用点留的别名,⛔ 不要另写一份集合。
+    static var fileExtensions: Set<String> { SubtitleFormats.fileExtensions }
 
     /// 这条文件是不是字幕(只看扩展名,不看内容)。
     static func isSubtitle(_ file: BaiduPanFile) -> Bool {
-        !file.isDirectory && fileExtensions.contains(file.fileExtension)
+        !file.isDirectory && SubtitleFormats.fileExtensions.contains(file.fileExtension)
     }
 
     /// 从一批同目录文件里挑出属于这条视频的字幕,按名字自然序排好。

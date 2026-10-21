@@ -34,6 +34,10 @@ struct PlayerControlsView: View {
     @Binding var isMarkersEditorPresented: Bool
     /// 手动选择弹幕的面板是否打开:同上
     @Binding var isDanmakuPickerPresented: Bool
+    /// 选择本地字幕文件的系统面板是否打开:同上(面板开着期间也要钉住控制栏)
+    @Binding var isSubtitleImporterPresented: Bool
+    /// 在线搜索字幕的面板是否打开:同上
+    @Binding var isSubtitleSearchPresented: Bool
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
@@ -43,7 +47,10 @@ struct PlayerControlsView: View {
                 PlayerVolumeControl(viewModel: viewModel)
                 Spacer(minLength: Metrics.spacingL)
                 PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
-                PlayerSubtitleMenu(viewModel: viewModel)
+                PlayerSubtitleMenu(
+                    viewModel: viewModel,
+                    isImporterPresented: $isSubtitleImporterPresented,
+                    isSearchPresented: $isSubtitleSearchPresented)
                 PlayerDanmakuMenu(viewModel: viewModel, isPickerPresented: $isDanmakuPickerPresented)
                 PlayerAudioMenu(viewModel: viewModel)
                 PlayerOptionsMenu(
@@ -461,24 +468,44 @@ struct PlayerSpeedControl: View {
 /// 菜单里放不了可交互控件(见 `PlayerSpeedControl`),而且延迟要的是 0.1 秒级的微调,
 /// 连续调主要靠 Z / X(菜单栏「Playback › Subtitle Delay」,按住可连发),这里是给鼠标用户的入口。
 /// 外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
+///
+/// ⚠️ **菜单整体不再按「有没有字幕轨」禁用**:`打开本地字幕…` 恰恰是给
+/// 「容器里一条字幕都没有」的片源准备的 —— 禁用等于把唯一入口锁死。
+/// 没有轨时菜单里显示一句「没有字幕轨」,其它入口照常可用。
 struct PlayerSubtitleMenu: View {
     let viewModel: PlayerViewModel
+    /// 打开系统的文件选择面板(面板由 `PlayerWindowView` 呈现,菜单点开就收起来了,
+    /// 不能在这里挂 `fileImporter`)
+    @Binding var isImporterPresented: Bool
+    /// 打开在线搜索面板(同上,sheet 也挂在窗口上)
+    @Binding var isSearchPresented: Bool
 
     @Environment(\.openSettings) private var openSettings
     @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
 
     var body: some View {
         Menu {
-            Picker("字幕", selection: Binding<Int?>(
-                get: { viewModel.selectedSubtitleTrackID },
-                set: { viewModel.selectSubtitleTrack($0) }
-            )) {
-                Text("关闭").tag(Int?.none)
-                ForEach(viewModel.subtitleTracks) { track in
-                    PlayerTrackLabel(track: track).tag(Int?.some(track.id))
+            if viewModel.subtitleTracks.isEmpty {
+                Text("没有字幕轨")
+            } else {
+                Picker("字幕", selection: Binding<Int?>(
+                    get: { viewModel.selectedSubtitleTrackID },
+                    set: { viewModel.selectSubtitleTrack($0) }
+                )) {
+                    Text("关闭").tag(Int?.none)
+                    ForEach(viewModel.subtitleTracks) { track in
+                        PlayerTrackLabel(track: track).tag(Int?.some(track.id))
+                    }
                 }
+                .pickerStyle(.inline)
             }
-            .pickerStyle(.inline)
+
+            Divider()
+
+            Button("打开本地字幕…") { isImporterPresented = true }
+            Button("搜索在线字幕…") { isSearchPresented = true }
+
+            Divider()
 
             Section("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(viewModel.subtitleDelay))") {
                 PlayerSubtitleDelayButtons(viewModel: viewModel)
@@ -502,7 +529,6 @@ struct PlayerSubtitleMenu: View {
         .fixedSize()
         .help("字幕")
         .accessibilityLabel("字幕")
-        .disabled(viewModel.subtitleTracks.isEmpty)
     }
 
     /// 有选中轨道时用实心图标,和「关着」区分得开 —— 与音量按钮同一套做法。

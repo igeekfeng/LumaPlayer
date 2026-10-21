@@ -749,6 +749,81 @@ final class PlayerViewModel {
         flash("外挂字幕加载失败:\(failed.joined(separator: "、"))", systemImage: "captions.bubble")
     }
 
+    /// 文件选择面板本身失败(不是用户取消)。⛔ 不静默:面板打不开也是事实。
+    func reportSubtitlePickerFailure(_ error: Error) {
+        flash("选择字幕文件失败:\(error.localizedDescription)", systemImage: "exclamationmark.triangle")
+    }
+
+    /// 挂一条**用户从磁盘选的字幕**(控制栏「字幕 › 打开本地字幕…」)。
+    ///
+    /// 顺序:先复制进容器(`SubtitleFileStore`,顺手把 GBK / BIG5 转成 UTF-8),
+    /// 再 `sub-add` 并**选中** —— 用户点这一下就是要看它,与百度同目录字幕的
+    /// `auto`(不抢已选轨)刻意不同。
+    ///
+    /// ⚠️ `sub-add` 要求文件已加载:起播 / 缓冲首帧之前调用会被 mpv 拒掉,
+    /// 所以先按 `phase` 判一次,给一句能看懂的话,而不是把 mpv 的错误码抛给用户。
+    func attachLocalSubtitle(at url: URL) {
+        guard phase == .playing || phase == .paused else {
+            flash("画面出来后才能加载字幕", systemImage: "captions.bubble")
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let stored = try await self.container.subtitleFiles.importLocalFile(at: url)
+                try self.attach(stored)
+            } catch {
+                self.reportSubtitleFailure(error, fileName: url.lastPathComponent)
+            }
+        }
+    }
+
+    // MARK: - 在线字幕(assrt)
+
+    /// 在线字幕搜索框的初始关键词。
+    ///
+    /// 复用弹幕那套归一化后的身份(`DanmakuMediaQuery`)—— 它已经把 Emby / 百度的
+    /// 标题、季集、文件名统一过了,⛔ 不另造一套来源判断。
+    ///
+    /// ⚠️ 只给**作品名**,不拼季集号:assrt 没有集数参数,按「剧名 S01E03」搜
+    /// 反而会把「全集打包」这类条目筛掉;面板里用户可以自己改关键词。
+    var subtitleSearchKeyword: String { danmaku.query.title }
+
+    /// 搜在线字幕。失败如实抛给面板显示,⛔ 不在这里吞掉。
+    func searchSubtitles(keyword: String) async throws -> [SubtitleSearchResult] {
+        try await container.subtitleService.search(keyword: keyword)
+    }
+
+    /// 下载一条在线字幕并挂上,返回它的名字(给面板显示成功提示)。
+    ///
+    /// 下载与落盘在 `SubtitleService` 里完成(一次性地址、缓存、编码转换都在那边),
+    /// 这里只负责最后一跳:`sub-add`。
+    @discardableResult
+    func downloadSubtitle(_ result: SubtitleSearchResult) async throws -> String {
+        let stored = try await container.subtitleService.download(result)
+        try attach(stored)
+        return stored.title
+    }
+
+    /// 把已经落盘的字幕挂到当前播放器上(本地 / 在线两条通路共用)。
+    private func attach(_ stored: SubtitleFileStore.Stored) throws {
+        guard let player, phase == .playing || phase == .paused else {
+            throw SubtitleAttachError.notPlaying
+        }
+        try player.addSubtitle(url: stored.url, title: stored.title, flags: .select)
+        // 用户显式选了字幕:起播偏好让位,否则下一次 track-list 会把它顶掉
+        hasUserChosenSubtitle = true
+        flash("字幕:\(stored.title)", systemImage: "captions.bubble")
+    }
+
+    /// 字幕失败统一出口:一句 OSD + 一条日志。⛔ 不静默、不弹对话框打断播放。
+    private func reportSubtitleFailure(_ error: Error, fileName: String) {
+        let reason = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        flash("字幕加载失败:\(reason)", systemImage: "exclamationmark.triangle")
+        Self.logger.error(
+            "字幕加载失败 \(fileName, privacy: .public):\(String(describing: error), privacy: .public)")
+    }
+
     /// 按步长加 / 减(`[` `]` 与倍速浮层的 ±);已经贴着区间端点就不动。
     func stepSpeed(up: Bool, step: Double = Metrics.speedKeyStep) {
         let next = Self.steppedSpeed(from: speed, up: up, step: step)
@@ -1712,4 +1787,19 @@ final class PlayerViewModel {
     /// 判定「已到续播点附近」的容差(秒)。`seek absolute+exact` 落点误差很小,
     /// 3 秒足够覆盖首个 time-pos 的延迟,又不会把文件开头误判为已就位。
     private static let settledPositionTolerance: Double = 3
+}
+
+/// 字幕挂不上的原因(与网络、文件无关,纯粹是「播放器还没就绪」)。
+///
+/// 单独成类型而不是复用 `MPVError`:这条要原样显示给用户看,
+/// 而 `MPVError` 的文案是给排查用的(带 `mpv_command(...)` 之类)。
+enum SubtitleAttachError: LocalizedError, Equatable {
+    /// 文件还没加载完(`sub-add` 在 `no file loaded` 时必失败)
+    case notPlaying
+
+    var errorDescription: String? {
+        switch self {
+        case .notPlaying: return "画面出来后才能加载字幕"
+        }
+    }
 }

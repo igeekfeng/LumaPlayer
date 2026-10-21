@@ -263,4 +263,25 @@ actor CredentialStore {
     func deleteDandanplayCredentials() async throws {
         try await storage.removeValue(forAccount: Self.dandanplayCredentialsAccount)
     }
+
+    // MARK: - assrt(伪射手)在线字幕
+
+    /// 在线字幕站 assrt 的 API 密钥(32 位)。全 App 一份 —— 与服务器 / 来源无关。
+    ///
+    /// 用户在 assrt.net 的用户面板取得(`AssrtEndpoint` 注释里记了接口事实)。
+    /// 与其它凭据一样只落在本机凭据文件,⛔ 不进 UserDefaults、不进日志。
+    private static let assrtTokenAccount = "assrt-api-token"
+
+    func assrtToken() async throws -> String? {
+        guard let data = try await storage.value(forAccount: Self.assrtTokenAccount) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func saveAssrtToken(_ token: String) async throws {
+        try await storage.setValue(Data(token.utf8), forAccount: Self.assrtTokenAccount)
+    }
+
+    func deleteAssrtToken() async throws {
+        try await storage.removeValue(forAccount: Self.assrtTokenAccount)
+    }
 }

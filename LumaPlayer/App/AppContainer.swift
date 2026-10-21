@@ -42,6 +42,13 @@ final class AppContainer {
     /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
     /// 必须是同一个实例,播放中改设置才能即时生效。
     let subtitleStyles: SubtitleStyleStore
+    /// 手动加载的外挂字幕落盘(`SubtitleFileStore`)。
+    /// 用户从磁盘选中的字幕当场复制进容器,播放器只读容器内路径 ——
+    /// 沙箱下不必长期持 security-scoped 权限(理由见该类型注释)。
+    let subtitleFiles: SubtitleFileStore
+    /// 在线字幕(assrt)的编排(`SubtitleService`)。全 App 一份:
+    /// 凭据、落盘目录、缓存都只该有一个写入方。
+    let subtitleService: SubtitleService
     /// 播放偏好(`PlaybackPreferences`,UserDefaults 持久化):起播默认值与播放期开关。
     /// 与字幕外观同样的理由必须是同一个实例 —— 设置里改了步长 / 默认倍速,
     /// 下一次起播就要用上。
@@ -76,6 +83,8 @@ final class AppContainer {
         hiddenItems: HiddenItemsStore? = nil,
         manualMarkers: ManualMarkersStore? = nil,
         danmaku: DanmakuService? = nil,
+        subtitleFiles: SubtitleFileStore? = nil,
+        subtitleService: SubtitleService? = nil,
         baiduDirectoryCache: BaiduPanDirectoryCache? = nil,
         baiduScrapeCache: BaiduPanScrapeCache? = nil,
         baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil
@@ -84,6 +93,9 @@ final class AppContainer {
         self.credentials = credentials
         self.session = session
         self.subtitleStyles = SubtitleStyleStore(defaults: preferences)
+        self.subtitleFiles = subtitleFiles ?? SubtitleFileStore(directory: SubtitleFileStore.defaultDirectory)
+        self.subtitleService = subtitleService ?? SubtitleService(
+            credentials: credentials, store: self.subtitleFiles)
         self.preferences = PlaybackPreferences(defaults: preferences)
         self.homeAppearance = HomeAppearancePreferences(defaults: preferences)
         let imageCachePreferences = ImageCachePreferences(defaults: preferences)

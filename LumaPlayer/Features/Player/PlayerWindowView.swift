@@ -63,6 +63,10 @@ struct PlayerWindowView: View {
     @State private var isMarkersEditorPresented = false
     /// 手动选择弹幕的面板打开中:同理钉住控制栏
     @State private var isDanmakuPickerPresented = false
+    /// 选择本地字幕文件的系统面板打开中:同理钉住控制栏
+    @State private var isSubtitleImporterPresented = false
+    /// 在线搜索字幕的面板打开中:同理钉住控制栏
+    @State private var isSubtitleSearchPresented = false
     /// 正在显示的屏显提示(比 `viewModel.osd` 晚一拍清空)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -178,8 +182,35 @@ struct PlayerWindowView: View {
         .onChange(of: isDanmakuPickerPresented) { _, presented in
             if presented { revealControls(autoHide: false) } else { revealControls() }
         }
+        .onChange(of: isSubtitleImporterPresented) { _, presented in
+            if presented { revealControls(autoHide: false) } else { revealControls() }
+        }
+        .onChange(of: isSubtitleSearchPresented) { _, presented in
+            if presented { revealControls(autoHide: false) } else { revealControls() }
+        }
+        // 本地字幕:面板挂在窗口上而不是字幕菜单里 —— 菜单一点就收起来,
+        // 在菜单内部呈现的系统面板会跟着菜单一起消失。
+        .fileImporter(
+            isPresented: $isSubtitleImporterPresented,
+            allowedContentTypes: SubtitleFormats.contentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                viewModel.attachLocalSubtitle(at: url)
+            case .failure(let error):
+                // 用户点「取消」不是失败(NSUserCancelledError),不提示
+                guard (error as NSError).code != NSUserCancelledError else { return }
+                viewModel.reportSubtitlePickerFailure(error)
+            }
+        }
         .sheet(isPresented: $isDanmakuPickerPresented) {
             DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
+        }
+        .sheet(isPresented: $isSubtitleSearchPresented) {
+            // 在线字幕:搜索 / 下载 / 挂载都在这个面板里完成,关掉即回到画面
+            SubtitlePickerSheet(viewModel: viewModel) { isSubtitleSearchPresented = false }
         }
         .sheet(isPresented: $isMarkersEditorPresented) {
             // 手动片头片尾:表单在窗口上呈现(sheet 比 popover 稳,菜单点开就收起来了)
@@ -411,7 +442,9 @@ struct PlayerWindowView: View {
             isSpeedPopoverPresented: $isSpeedPopoverPresented,
             isEpisodePanelPresented: $isEpisodePanelPresented,
             isMarkersEditorPresented: $isMarkersEditorPresented,
-            isDanmakuPickerPresented: $isDanmakuPickerPresented
+            isDanmakuPickerPresented: $isDanmakuPickerPresented,
+            isSubtitleImporterPresented: $isSubtitleImporterPresented,
+            isSubtitleSearchPresented: $isSubtitleSearchPresented
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -487,6 +520,8 @@ struct PlayerWindowView: View {
             && !isEpisodePanelPresented
             && !isMarkersEditorPresented
             && !isDanmakuPickerPresented
+            && !isSubtitleImporterPresented
+            && !isSubtitleSearchPresented
             && viewModel.scrubPreviewSeconds == nil
     }
 

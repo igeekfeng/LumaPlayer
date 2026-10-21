@@ -546,22 +546,27 @@ final class MPVPlayer: @unchecked Sendable {
     ///
     /// ## 为什么需要它
     ///
-    /// 网盘里的片源常把字幕单独放成 `.srt` / `.ass`,它们不在视频容器里 ——
-    /// 内核自己发现不了,只能由客户端显式加轨。百度没有任何字幕接口,所以这是
-    /// 「同目录字幕」唯一能落地的通路(配对在 `BaiduPanSubtitle`,纯本地)。
+    /// 片源常把字幕单独放成 `.srt` / `.ass`,它们不在视频容器里 ——
+    /// 内核自己发现不了,只能由客户端显式加轨。两条通路都走这里:
+    /// 百度同目录字幕(配对在 `BaiduPanSubtitle`)与用户手动加载的本地文件
+    /// (`SubtitleFileStore` 复制进容器后的路径)。
     ///
-    /// ## 两个必须说清的约束
+    /// ## 三个必须说清的约束
     ///
     /// 1. **必须在文件加载之后调用**:`sub-add` 在 `no file loaded` 时直接失败。
-    ///    调用方是 `PlayerViewModel` 的 `.playing` 事件,不是 `load()` 之后立刻。
-    /// 2. flags 用 `auto`:没有选中任何字幕时自动选上这条,**已经有用户选过的轨
-    ///    就不抢**(与 Plex 的行为一致)。真正的选择仍走 `sid`。
+    ///    调用方是 `PlayerViewModel` 的 `.playing` 事件 / 起播后的用户操作,
+    ///    不是 `load()` 之后立刻。
+    /// 2. `flags` 决定加载后选不选中,见 `SubtitleAddFlag`:百度自动字幕用 `auto`
+    ///    (不抢用户已选的轨),手动 / 在线字幕用 `select`。
+    /// 3. **本地文件传路径,不传 `file://` URL**:`sub-add` 接受路径或 URL,
+    ///    但 `file:///…` 要经 lavf 的 file 协议再绕一层,多一个可能失败的地方。
     ///
-    /// ⚠️ 地址里的凭据(百度 `access_token`)必须已经带好 —— 这里只负责传地址;
+    /// ⚠️ 远程地址里的凭据(百度 `access_token`)必须已经带好 —— 这里只负责传地址;
     /// 请求头沿用 `load()` 时设的 `http-header-fields`(字幕与主文件同一个 UA)。
-    func addSubtitle(url: URL, title: String?) throws {
+    func addSubtitle(url: URL, title: String?, flags: SubtitleAddFlag = .auto) throws {
         try withLiveHandle { handle, _ in
-            var args = ["sub-add", url.absoluteString, "auto"]
+            let target = url.isFileURL ? url.path : url.absoluteString
+            var args = ["sub-add", target, flags.rawValue]
             if let title, !title.isEmpty { args.append(title) }
             try mpvCommand(args, on: handle)
         }

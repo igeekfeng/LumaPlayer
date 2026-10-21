@@ -156,7 +156,7 @@ X-Emby-Token: {accessToken}
 | 层 | 隔离 |
 |---|---|
 | `Models/` DTO | `struct` + `Sendable`;需要引用类型时 `final class` + 全 `let` |
-| `Core/Network/` `EmbyAPIClient`、`Core/Servers/` `ServerRegistry` / `ServerConnection`、`Core/Security/`、`PlaybackProgressReporter`、`Core/Cache/` | `actor` |
+| `Core/Network/` `EmbyAPIClient`、`Core/Servers/` `ServerRegistry` / `ServerConnection`、`Core/Security/`、`PlaybackProgressReporter`、`Core/Cache/`、`Core/Subtitles/` `SubtitleFileStore` | `actor` |
 | `PosterImageStore`(缓存 `NSImage`) | `@MainActor` |
 | `PlaybackDecisionEngine` | 纯函数 |
 | `Features/` ViewModel | `@MainActor` + `@Observable` |

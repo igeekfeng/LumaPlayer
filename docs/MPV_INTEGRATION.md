@@ -119,7 +119,10 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 - 选轨:设 `aid` / `sid` = id;关字幕 `sid = no`。设了不存在的轨会读回 `no` → 要读回验证。
 - `track-list` 事件里的 `mpv_node` 归 mpv,⛔ 不 `mpv_free_node_contents()`,同步解析完。
 - 与 Emby 流索引的对应:只按「同类型内嵌轨的出现顺序」,见 `StreamIndexMapper`(`PITFALLS.md` Q21)。
-- 外挂字幕(`sub-add` 带认证头)未实现(M4)。
+- 外挂字幕:`sub-add <path|url> [select|auto] [title]`(input.rst:658)。**本地文件传路径**,
+  ⛔ 不传 `file://` URL(白绕一层 lavf 的 file 协议)。手动加载用 `select`(用户点这一下就是要看它),
+  百度同目录字幕用 `auto`(不抢用户已选的轨)。落盘与编码见 `SubtitleFileStore`。
+- 远程带认证头的字幕(Emby 的 `IsExternal` 流)仍未接(M4)。
 
 ### 7.1 字幕延迟与外观
 
