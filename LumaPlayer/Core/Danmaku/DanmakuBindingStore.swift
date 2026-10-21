@@ -80,6 +80,18 @@ actor DanmakuBindingStore {
         try persist(current)
     }
 
+    /// 删掉键以 `keyPrefix` 开头的集绑定与剧绑定(删除服务器时用)。返回共删了几条。
+    @discardableResult
+    func purge(keyPrefix: String) throws -> Int {
+        var current = contents()
+        let before = current.episodes.count + current.series.count
+        current.episodes = current.episodes.filter { !$0.key.hasPrefix(keyPrefix) }
+        current.series = current.series.filter { !$0.key.hasPrefix(keyPrefix) }
+        let removed = before - current.episodes.count - current.series.count
+        if removed > 0 { try persist(current) }
+        return removed
+    }
+
     // MARK: - 内部
 
     private func contents() -> Contents {

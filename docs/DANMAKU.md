@@ -74,7 +74,7 @@
 认不出返回 nil —— ⛔ 不做「标题里出现过这个数字就算」的宽松兜底(`S5 聖地巡礼` 里的 5 不是第 5 话)。
 
 **加载**:先查 `DanmakuCommentCache`(4 小时内有效),否则 `GET /comment/{id}?withRelated=true&chConvert=1`,
-解析(丢弃无法解析的并计数)→ 排序 → 写缓存。
+解析(丢弃无法解析的并计数)→ 排序 → 写缓存。过期的缓存文件启动时删掉(`DanmakuCommentCache.cleanUp`)。
 
 **身份键**(`DanmakuMediaQuery`):
 
@@ -83,7 +83,7 @@
 | Emby | `emby\|{serverId}\|{itemId}` | 有 `SeriesId` 与 `IndexNumber` 时 `emby\|{serverId}\|series:{SeriesId}` | 剧集:`剧名 S{季}E{集}`(合成,Q45);电影:`Name` | `ProviderIds.Tmdb` |
 | 百度 | `baidu\|fsid:{fs_id}` | 文件名解析出集号时 `baidu\|dir:{父目录}` | 真实文件名去扩展名 | 文件名里的 `{tmdbid-…}` |
 
-按服务器隔离沿用「每台服务器完全隔离」。删服务器时**不**清绑定(只是几条本地映射,不含凭据)。
+按服务器隔离沿用「每台服务器完全隔离」。删 Emby 服务器时按 `emby|{serverId}|` 前缀删掉它的集 / 剧绑定(`AppContainer.removeSource`)。
 
 「解除这一部的匹配」(选择面板底部):删集绑定 + 剧绑定,回到等用户挑的状态。
 

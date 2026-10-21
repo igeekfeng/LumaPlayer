@@ -9,6 +9,12 @@ import os
 ///
 /// 放 `Caches/`(系统可清,丢了只是重新请求一次),⛔ 不放应用支持目录。
 /// 缓存的是**已解析**的 `DanmakuComment`,不是原始响应 —— 解析规则改了要换 `formatVersion`。
+///
+/// **清理**(`cleanUp`,启动时由 `AppContainer.cleanUpDanmakuCache` 调一次):过期的文件没有任何地方会再读
+/// (过期即重新请求,⛔ 不拿旧弹幕兜底),所以删掉过期、读不出、已损坏、`formatVersion` 不对的文件。
+/// 过期按文件里的 `fetchedAt` 判断,不看文件修改时间:与 `comments(forEpisode:)` 是**同一条判据**,
+/// 清理删掉的恰好是读取时会被当成「没有」的那些;修改时间会被拷贝 / 恢复改动,也不受注入的 `now` 控制。
+/// 代价是每个文件都要解码一遍,但留下的只有 4 小时内拉过的几集,数量很小。
 actor DanmakuCommentCache {
 
     static let freshness: TimeInterval = 4 * 60 * 60
@@ -60,6 +66,44 @@ actor DanmakuCommentCache {
             try data.write(to: fileURL(episodeID), options: .atomic)
         } catch {
             Self.logger.error("弹幕缓存写入失败 \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    // MARK: - 清理
+
+    struct CleanupReport: Sendable, Equatable {
+        var removedFiles = 0
+        var removedBytes = 0
+    }
+
+    /// 删掉过期 / 读不出 / 损坏 / 版本不对的缓存文件(规则见类型注释)。只看目录下一层的普通文件,不进子目录。
+    ///
+    /// 列目录、删文件失败时抛错(已删的不回滚,下次启动接着清)。
+    func cleanUp() throws -> CleanupReport {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: directory.path(percentEncoded: false)) else { return CleanupReport() }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        let current = now()
+        var report = CleanupReport()
+        for url in try manager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            guard values.isRegularFile == true, !isFresh(url, now: current) else { continue }
+            try manager.removeItem(at: url)
+            report.removedFiles += 1
+            report.removedBytes += values.fileSize ?? 0
+        }
+        return report
+    }
+
+    /// 与 `comments(forEpisode:)` 同一判据;读不出 / 解不开都算「不新鲜」(原因记日志后照删)。
+    private func isFresh(_ url: URL, now: Date) -> Bool {
+        do {
+            let entry = try JSONDecoder().decode(Entry.self, from: Data(contentsOf: url))
+            return entry.version == Self.formatVersion && now.timeIntervalSince(entry.fetchedAt) < Self.freshness
+        } catch {
+            Self.logger.info("弹幕缓存文件无法读取,清理时删除 \(String(describing: error), privacy: .public)")
+            return false
         }
     }
 

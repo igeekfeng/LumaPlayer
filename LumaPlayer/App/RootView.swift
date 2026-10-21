@@ -20,6 +20,7 @@ struct RootView: View {
             await container.restoreSession()
             // 维护放在恢复之后:不拖慢进首页,清理本身只碰本地文件
             await container.cleanUpSubtitleCache()
+            await container.cleanUpDanmakuCache()
         }
         .alert(
             "启动错误",

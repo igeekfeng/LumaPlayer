@@ -219,6 +219,19 @@ actor DanmakuService {
         try await bindings.unbind(itemKey: query.itemKey, seriesKey: query.seriesKey)
     }
 
+    // MARK: - 维护
+
+    /// 删掉键以 `keyPrefix` 开头的绑定(删除服务器时用,见 `DanmakuBindingStore.purge`)。
+    @discardableResult
+    func purgeBindings(keyPrefix: String) async throws -> Int {
+        try await bindings.purge(keyPrefix: keyPrefix)
+    }
+
+    /// 清理弹幕磁盘缓存(规则见 `DanmakuCommentCache` 的「清理」)。
+    func cleanUpCache() async throws -> DanmakuCommentCache.CleanupReport {
+        try await cache.cleanUp()
+    }
+
     // MARK: - 内部
 
     private func requireCredentials() async throws -> DandanplayCredentials {

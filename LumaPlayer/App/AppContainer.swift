@@ -711,6 +711,12 @@ final class AppContainer {
         } catch {
             Self.logger.error("删除服务器的字幕记录失败:\(error.localizedDescription, privacy: .public)")
         }
+        // 弹幕的集 / 剧绑定键同样带服务器 id;弹幕缓存按弹幕库 id 存、不分服务器,由 `cleanUpDanmakuCache` 按时间清
+        do {
+            try await danmaku.purgeBindings(keyPrefix: "emby|\(id.uuidString)|")
+        } catch {
+            Self.danmakuLogger.error("删除服务器的弹幕绑定失败:\(error.localizedDescription, privacy: .public)")
+        }
         if state.currentSource?.id == id {
             state.currentSource = await registry.mostRecentlyUsedSource()
         }
@@ -743,6 +749,25 @@ final class AppContainer {
             }
         } catch {
             Self.logger.error("字幕缓存清理失败:\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - 弹幕缓存
+
+    private static let danmakuLogger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "danmaku")
+
+    /// 启动时清理一次弹幕缓存:删掉过期 / 损坏的文件(规则见 `DanmakuCommentCache` 的「清理」)。
+    ///
+    /// 失败只记日志、不打扰用户,理由同 `cleanUpSubtitleCache`。
+    func cleanUpDanmakuCache() async {
+        do {
+            let report = try await danmaku.cleanUpCache()
+            if report.removedFiles > 0 {
+                Self.danmakuLogger.info(
+                    "弹幕缓存清理:删除 \(report.removedFiles) 个文件 \(report.removedBytes) 字节")
+            }
+        } catch {
+            Self.danmakuLogger.error("弹幕缓存清理失败:\(error.localizedDescription, privacy: .public)")
         }
     }
 
