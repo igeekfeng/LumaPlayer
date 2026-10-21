@@ -151,14 +151,30 @@ extension AssrtDetailDTO {
         let files = (filelist ?? []).compactMap { entry -> AssrtSubtitleFile? in
             guard let name = entry.fileName?.nilIfEmpty,
                   let raw = entry.url?.nilIfEmpty,
-                  let url = URL(string: raw) else { return nil }
+                  let url = Self.downloadURL(raw) else { return nil }
             return AssrtSubtitleFile(fileName: name, url: url)
         }
         return AssrtSubtitleDetail(
             id: id,
             files: files,
             archiveFileName: filename?.nilIfEmpty,
-            archiveURL: url.flatMap { URL(string: $0) })
+            archiveURL: url.flatMap(Self.downloadURL))
+    }
+
+    /// 下载地址:assrt 自家主机(`assrt.net` 及子域)的 `http` 一律升成 `https`。
+    ///
+    /// 详情返回的下载地址是明文 `http://file0.assrt.net/…`(文档示例如此,实测也是),
+    /// ATS 只放行局域网明文(`CLAUDE.md`「工程的非常规点」),直接请求必被拒。
+    /// 该主机有 `*.assrt.net` 的有效证书(2026-10-21 核对),所以升级而不是给 ATS 开例外。
+    /// 别的主机原样保留:明文的话让 ATS 报错,⛔ 不替不认识的主机猜 https。
+    static func downloadURL(_ raw: String) -> URL? {
+        guard var components = URLComponents(string: raw) else { return nil }
+        if components.scheme?.lowercased() == "http",
+           let host = components.host?.lowercased(),
+           host == "assrt.net" || host.hasSuffix(".assrt.net") {
+            components.scheme = "https"
+        }
+        return components.url
     }
 }
 

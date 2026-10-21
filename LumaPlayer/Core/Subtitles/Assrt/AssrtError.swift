@@ -23,6 +23,10 @@ enum AssrtError: LocalizedError, Equatable {
     case transport(String)
     /// 这条字幕里没有能挂的文本文件(只有压缩包 / 图形字幕)
     case noTextFile
+    /// 下载被重定向到 assrt 的错误页(`AssrtClient.download`):
+    /// `expired = true` 是 `/download/failed/`(签名不对 / 过期,实测 HTTP 492),
+    /// `false` 是 `/download/error/`(服务端出错,实测 HTTP 493「服务器抽风啦」)
+    case downloadRejected(expired: Bool)
 
     var errorDescription: String? {
         switch self {
@@ -42,6 +46,10 @@ enum AssrtError: LocalizedError, Equatable {
             return "网络错误:\(reason)"
         case .noTextFile:
             return "这条字幕只有压缩包或图形字幕(PGS / VobSub),挂不上;换一条试试"
+        case .downloadRejected(let expired):
+            return expired
+                ? "下载链接无效或已过期,再点一次试试"
+                : "assrt 服务器出错,下载没成功;稍后再试或换一条"
         }
     }
 

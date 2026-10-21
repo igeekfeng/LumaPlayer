@@ -148,6 +148,24 @@ final class AssrtSubtitleTests: XCTestCase {
         XCTAssertEqual(detail.archiveFileName, "pack.rar")
         XCTAssertNotNil(detail.archiveURL)
         XCTAssertTrue(detail.hasAnyDownload)
+        // 返回的是明文 http,ATS 会拒:assrt 自家主机必须升成 https
+        XCTAssertEqual(detail.files.map { $0.url.scheme }, ["https", "https"])
+        XCTAssertEqual(detail.archiveURL?.scheme, "https")
+        XCTAssertEqual(detail.archiveURL?.query, "_=1&-=abc&api=1", "升级不能动查询串(签名在里面)")
+    }
+
+    func testDownloadURLUpgradesOnlyAssrtHosts() {
+        XCTAssertEqual(
+            AssrtDetailDTO.downloadURL("http://file0.assrt.net/onthefly/1/-/1/a.srt")?.absoluteString,
+            "https://file0.assrt.net/onthefly/1/-/1/a.srt")
+        XCTAssertEqual(
+            AssrtDetailDTO.downloadURL("HTTP://assrt.net/a.srt")?.scheme, "https")
+        XCTAssertEqual(
+            AssrtDetailDTO.downloadURL("http://example.test/a.srt")?.scheme, "http",
+            "不认识的主机不替它猜 https")
+        XCTAssertEqual(
+            AssrtDetailDTO.downloadURL("http://assrt.net.example.test/a.srt")?.scheme, "http",
+            "只认以 assrt.net 结尾的主机,不认以它开头的")
     }
 
     func testDetailWithoutSubsIsNotFound() async {
@@ -291,13 +309,14 @@ final class AssrtSubtitleTests: XCTestCase {
     }],"action":"search","keyword":"big","result":"succeed"}}
     """#
 
+    /// 下载地址照官方文档示例写成转义的明文 `http:\/\/file0.assrt.net`(真实返回也是 http)
     private static let detailJSON = #"""
     {"status":0,"sub":{"result":"succeed","action":"detail","subs":[{
       "id":602333,"filename":"pack.rar","native_name":"洛东江大决战","subtype":"VobSub",
-      "url":"https://file0.assrt.net/download/602333/pack.rar?_=1&-=abc&api=1",
+      "url":"http:\/\/file0.assrt.net\/download\/602333\/pack.rar?_=1&-=abc&api=1",
       "filelist":[
-        {"f":"a.ass","s":"60KB","url":"https://file0.assrt.net/onthefly/602333/-/1/a.ass"},
-        {"f":"a.srt","s":"52KB","url":"https://file0.assrt.net/onthefly/602333/-/1/a.srt"}
+        {"f":"a.ass","s":"60KB","url":"http:\/\/file0.assrt.net\/onthefly\/602333\/-\/1\/a.ass"},
+        {"f":"a.srt","s":"52KB","url":"http:\/\/file0.assrt.net\/onthefly\/602333\/-\/1\/a.srt"}
       ]
     }]}}
     """#

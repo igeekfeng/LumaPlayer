@@ -74,14 +74,27 @@ actor SubtitleService {
 
     /// 取一条字幕并落进容器,返回可以直接 `sub-add` 的本地文件。
     ///
-    /// 顺序:详情 → 挑文本文件 → 命中缓存就不再下载 → 下载 → 转码落盘。
+    /// 顺序:详情 → 挑文本文件 → 命中缓存就不再下载 → 下载单文件 → 转码落盘。
+    /// 单文件下载失败(assrt 的服务端解压会坏,见 `SubtitleArchiveExtractor`)时,
+    /// 改下同一次详情里的**整包**、本地解压,优先取同名的那个文件;
+    /// `filelist` 为空、只有整包时直接走整包。
     /// ⚠️ 详情里的地址是**一次性**的,所以缓存的是**文件**而不是地址。
     func download(_ result: SubtitleSearchResult) async throws -> SubtitleFileStore.Stored {
         let token = try await requireToken()
         let detail = try await client.detail(id: result.id, token: token)
+
         guard let picked = Self.pick(detail.files) else {
-            // 只有压缩包 / 图形字幕:如实拒绝,⛔ 不偷偷下载一个挂不上的东西
-            throw AssrtError.noTextFile
+            // 列表里有文件却没有文本字幕(只有图形字幕):如实拒绝,⛔ 不偷偷下载一个挂不上的东西。
+            // 整包里装的也是同一批文件,不必再下。
+            guard detail.files.isEmpty, let archiveURL = detail.archiveURL else {
+                throw AssrtError.noTextFile
+            }
+            let base = "assrt-\(result.id)-archive"
+            for ext in SubtitleFormats.downloadableOrder {
+                if let cached = await store.existingFile(named: "\(base).\(ext)") { return cached }
+            }
+            return try await downloadFromArchive(
+                archiveURL, preferredFileName: nil, preferredCacheName: nil, fallbackCacheBase: base)
         }
 
         let extensionName = (picked.file.fileName as NSString).pathExtension.lowercased()
@@ -90,10 +103,52 @@ actor SubtitleService {
             return cached
         }
 
-        let data = try await client.download(picked.file.url)
+        let data: Data
+        do {
+            data = try await client.download(picked.file.url)
+        } catch {
+            guard !(error is CancellationError), let archiveURL = detail.archiveURL else { throw error }
+            Self.logger.error("单文件下载失败,改下整包:\(error.localizedDescription, privacy: .public)")
+            return try await downloadFromArchive(
+                archiveURL,
+                preferredFileName: picked.file.fileName,
+                preferredCacheName: cacheName,
+                fallbackCacheBase: "assrt-\(result.id)-archive")
+        }
         let stored = try await store.storeDownloaded(
             data: data, fileName: picked.file.fileName, cacheName: cacheName)
         Self.logger.info("在线字幕已落盘 \(picked.file.fileName, privacy: .public)")
+        return stored
+    }
+
+    /// 下整包、本地解压、挑一个落盘。
+    ///
+    /// 包里有与 `preferredFileName` 同名的文件就取它并沿用 `preferredCacheName`
+    /// (与单文件那条路命中同一份缓存);没有就按格式优先级挑,缓存名用
+    /// `fallbackCacheBase` + 实际扩展名 —— ⛔ 不把 `.srt` 的内容存成 `.ass` 的名字。
+    private func downloadFromArchive(
+        _ archiveURL: URL,
+        preferredFileName: String?,
+        preferredCacheName: String?,
+        fallbackCacheBase: String
+    ) async throws -> SubtitleFileStore.Stored {
+        let archive = try await client.download(archiveURL)
+        let entries = try await SubtitleArchiveExtractor.textSubtitles(in: archive)
+        let chosen: SubtitleArchiveExtractor.Entry
+        let cacheName: String
+        if let preferredFileName, let preferredCacheName,
+           let match = entries.first(where: { $0.fileName == preferredFileName }) {
+            chosen = match
+            cacheName = preferredCacheName
+        } else if let best = entries.min(by: { Self.rank($0.fileName) < Self.rank($1.fileName) }) {
+            chosen = best
+            cacheName = "\(fallbackCacheBase).\((best.fileName as NSString).pathExtension.lowercased())"
+        } else {
+            throw AssrtError.noTextFile
+        }
+        let stored = try await store.storeDownloaded(
+            data: chosen.data, fileName: chosen.fileName, cacheName: cacheName)
+        Self.logger.info("在线字幕已从整包解出并落盘 \(chosen.fileName, privacy: .public)")
         return stored
     }
 

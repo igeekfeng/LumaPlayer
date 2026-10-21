@@ -89,6 +89,9 @@ struct AssrtClient: Sendable {
         guard let http = response as? HTTPURLResponse else {
             throw AssrtError.transport("响应不是 HTTP")
         }
+        if let rejection = Self.downloadRejection(finalURL: http.url) {
+            throw rejection
+        }
         guard (200...299).contains(http.statusCode) else {
             throw AssrtError.server(message: "下载失败(HTTP \(http.statusCode))")
         }
@@ -96,6 +99,17 @@ struct AssrtClient: Sendable {
             throw AssrtError.server(message: "文件超过 \(SubtitleFileStore.maximumBytes / (1024 * 1024)) MB")
         }
         return data
+    }
+
+    /// 下载失败时 file0 不直接回错误码,而是 302 到主站的错误页(2026-10-21 实测):
+    /// `/download/failed/<base64 路径>`(HTTP 492)与 `/download/error/<base64 路径>`(HTTP 493)。
+    /// URLSession 会跟随跳转,所以看**最终地址**认出来,给出能看懂的原因而不是「HTTP 493」。
+    static func downloadRejection(finalURL: URL?) -> AssrtError? {
+        guard let url = finalURL, let host = url.host()?.lowercased(),
+              host == "assrt.net" || host.hasSuffix(".assrt.net") else { return nil }
+        if url.path.hasPrefix("/download/failed/") { return .downloadRejected(expired: true) }
+        if url.path.hasPrefix("/download/error/") { return .downloadRejected(expired: false) }
+        return nil
     }
 
     // MARK: - 传输与解码
