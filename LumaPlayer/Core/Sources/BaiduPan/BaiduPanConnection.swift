@@ -355,40 +355,65 @@ actor BaiduPanConnection {
 
     // MARK: - 封面
 
-    /// 一次批量换出多个封面文件的下载地址(失败的不在结果里)。
+    /// 一次批量换出的元信息:下载地址 + 时长(失败的不在结果里)。
     ///
     /// ## 为什么必须批量
     ///
     /// 配额见 §7(`docs/BAIDU_PAN_API.md`),
-    /// 逐个文件取封面会把配额瞬间烧光 —— 一个目录只发一次请求是这个功能
+    /// 逐个文件取会把配额瞬间烧光 —— 一个目录只发一次请求是这个功能
     /// 能不能用的前提。分片只为兜住接口对 `fsids` 长度的限制。
+    ///
+    /// ## 为什么封面与视频**同一批**取
+    ///
+    /// `filemetas` 本来就带 `needmedia=1`(`BaiduPanEndpoint.fileMeta`),
+    /// 一条视频的 `duration` 与一张封面的 `dlink` 是同一个响应的两份字段。
+    /// 分开取等于为了时长再发一遍请求 —— 而这批 id 通常远小于
+    /// `metaBatchLimit`,合并之后请求数不变。
+    /// ⚠️ 代价说清楚:一屏视频 + 封面超过 `metaBatchLimit` 时会多分一片,
+    /// 那是「拿到时长」换来的额外请求,不是白拿的。
     ///
     /// ## 为什么失败不抛
     ///
-    /// 封面是**锦上添花**:取不到就让那张卡降级成图标卡,⛔ 不能让一个封面
-    /// 把整页内容挡在错误页后面。这与 `Components/PosterImage.swift` 对图片
-    /// 加载失败的既有处置一致(留占位图,不弹窗、不重试风暴)。
-    /// 取不到的原因由「有没有图」这件事本身体现,不另记日志。
-    func coverURLs(for fsIDs: [UInt64]) async -> [UInt64: URL] {
-        guard !fsIDs.isEmpty else { return [:] }
-        var result: [UInt64: URL] = [:]
+    /// 封面与时长都是**锦上添花**:取不到就让那张卡降级成图标卡 / 不显示时长,
+    /// ⛔ 不能让一次附加请求把整页内容挡在错误页后面。这与
+    /// `Components/PosterImage.swift` 对图片加载失败的既有处置一致
+    /// (留占位图,不弹窗、不重试风暴)。取不到的原因由「有没有这个值」体现,
+    /// 不另记日志。
+    struct MetaInfo: Sendable, Equatable {
+        /// `fs_id` → 带 `access_token` 的下载地址(`dlink`)
+        var downloadURLs: [UInt64: URL] = [:]
+        /// `fs_id` → 时长(秒)。只有视频 / 音频条目才有
+        var durations: [UInt64: Double] = [:]
+    }
+
+    func metaInfo(for fsIDs: [UInt64]) async -> MetaInfo {
+        guard !fsIDs.isEmpty else { return MetaInfo() }
+        var result = MetaInfo()
         for chunk in fsIDs.chunked(into: Self.metaBatchLimit) {
-            let pairs: [(UInt64, URL)]
+            let entries: [(fsID: UInt64, url: URL?, duration: Double?)]
             do {
-                pairs = try await withToken { [client] token in
+                entries = try await withToken { [client] token in
                     let entries = try await client.metas(fsIDs: chunk, accessToken: token)
-                    return entries.compactMap { entry -> (UInt64, URL)? in
-                        guard let fsID = entry.fsID, let raw = entry.dlink, !raw.isEmpty,
-                              let url = Self.appendingAccessToken(to: raw, token: token) else {
-                            return nil
+                    // `dlink` 必须在**这一趟的 token** 下追加凭据:刷新过的话
+                    // 闭包外再取一次凭据是另一份值,拼出来的地址签名对不上。
+                    return entries.compactMap { entry in
+                        guard let fsID = entry.fsID else { return nil }
+                        let url = entry.dlink.flatMap { raw -> URL? in
+                            guard !raw.isEmpty else { return nil }
+                            return Self.appendingAccessToken(to: raw, token: token)
                         }
-                        return (fsID, url)
+                        return (fsID, url, entry.durationSeconds)
                     }
                 }
             } catch {
                 continue   // 这一片取不到就跳过(见上面的「失败不抛」)
             }
-            for (fsID, url) in pairs { result[fsID] = url }
+            for entry in entries {
+                if let url = entry.url { result.downloadURLs[entry.fsID] = url }
+                if let duration = entry.duration, duration > 0 {
+                    result.durations[entry.fsID] = duration
+                }
+            }
         }
         return result
     }

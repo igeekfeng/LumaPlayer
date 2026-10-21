@@ -151,6 +151,11 @@ final class PlayerViewModel {
     /// 画面上的短暂提示(「1.25×」「字幕:中文」…,DesignTokens.swift「界面规则」)。
     /// 每次都是新 id,视图据此重新计时消失。
     private(set) var osd: PlayerOSD?
+    /// 本次会话的外挂字幕是否已经挂过。
+    /// ⚠️ 只能挂一次:`.playing` 会因为暂停恢复 / 重新缓冲反复到达,重复 `sub-add`
+    /// 会在字幕菜单里堆出一排同名轨。换播放器(重试 / 转码重新起流)时在
+    /// `prepareAndLoad` 里复位。
+    private var didAddExternalSubtitles = false
 
     /// 系统「正在播放」(控制中心)的倍速档位:那条命令只能给离散选项。
     /// 播放器内是连续调节(滑块 + 步进,`Metrics.speedRange`),不落在这几个值上。
@@ -718,6 +723,32 @@ final class PlayerViewModel {
         }
     }
 
+    /// 挂上本次会话的外挂字幕(百度侧同目录的 `.srt` / `.ass` …)。
+    ///
+    /// - 只挂一次:`.playing` 会因暂停恢复 / 重新缓冲反复到达,重复 `sub-add`
+    ///   会在字幕菜单里堆出一排同名轨(见 `didAddExternalSubtitles`)。
+    /// - 失败**不打断播放**:字幕是附加轨,播不了字幕不该让整场播不了。
+    ///   但也不静默 —— 用一句 OSD 说清是哪几条没挂上(`CLAUDE.md` 硬规则 4)。
+    /// - `auto` 语义:用户还没选过字幕轨时自动选这条;选过就不抢
+    ///   (真正的选择仍走 `sid`,见 `selectSubtitleTrack`)。
+    private func addExternalSubtitlesIfNeeded() {
+        guard !didAddExternalSubtitles else { return }
+        didAddExternalSubtitles = true
+        guard let player, let session, !session.externalSubtitles.isEmpty else { return }
+        var failed: [String] = []
+        for subtitle in session.externalSubtitles {
+            do {
+                try player.addSubtitle(url: subtitle.url, title: subtitle.title)
+            } catch {
+                failed.append(subtitle.title ?? subtitle.url.lastPathComponent)
+                Self.logger.error(
+                    "外挂字幕加载失败 \(subtitle.title ?? "-", privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        guard !failed.isEmpty else { return }
+        flash("外挂字幕加载失败:\(failed.joined(separator: "、"))", systemImage: "captions.bubble")
+    }
+
     /// 按步长加 / 减(`[` `]` 与倍速浮层的 ±);已经贴着区间端点就不动。
     func stepSpeed(up: Bool, step: Double = Metrics.speedKeyStep) {
         let next = Self.steppedSpeed(from: speed, up: up, step: step)
@@ -943,7 +974,11 @@ final class PlayerViewModel {
         let carried = episode.source.baiduFile != nil ? episodeQueue?.selecting(episode) : nil
         // 沿用本页的 `pageID`:播放窗口据此只换会话、不重建播放页(见 `PlaybackRequest`)
         container.play(PlaybackRequest(
-            source: episode.source, episodeQueue: carried, continuingPage: request.pageID))
+            source: episode.source,
+            episodeQueue: carried,
+            // 这一集的外挂字幕随队列带过来 —— 换集时文件列表已经不在手上
+            subtitleFiles: episode.subtitleFiles,
+            continuingPage: request.pageID))
     }
 
     // MARK: - 跳过片头 / 下一集提示
@@ -1301,6 +1336,8 @@ final class PlayerViewModel {
 
             // 渲染后端策略起播时读一次(默认按片源:DV 用 gpu-next,其余 legacy,
             // 见 MPVRenderBackendPolicy)。切换在 MPVPlayer 内部、VO 建立前完成,这里不用管。
+            // 新播放器 = 新的一份字幕轨列表:重试 / 转码重新起流都要重新挂外挂字幕。
+            didAddExternalSubtitles = false
             let player = MPVPlayer(
                 backendPolicy: container.preferences.renderBackendPolicy)
             // 初始化失败只写进 `initializationFailure` 不抛错(MPVPlayer.init
@@ -1530,6 +1567,10 @@ final class PlayerViewModel {
             updateDisplaySleepAssertion()
             if newPhase == .playing {
                 markTimeline(.playing)
+                // 外挂字幕要等文件真的加载完才能加(`sub-add` 在 no file loaded 时失败),
+                // `.playing` 是第一个保证这一点的时点。放在 seek 之前:
+                // 字幕轨与起播位置无关,早挂上早出画面。
+                addExternalSubtitlesIfNeeded()
                 // DirectStream 的恢复位置:服务端吐的是整份文件,
                 // 偏移只能由客户端 seek(转码在起流时就带了 StartTimeTicks)
                 if !didApplyStartOffset {

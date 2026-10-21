@@ -542,6 +542,31 @@ final class MPVPlayer: @unchecked Sendable {
         try setStringProperty("sid", id.map(String.init) ?? "no")
     }
 
+    /// 挂一条**外挂字幕**(`sub-add` 命令)。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 网盘里的片源常把字幕单独放成 `.srt` / `.ass`,它们不在视频容器里 ——
+    /// 内核自己发现不了,只能由客户端显式加轨。百度没有任何字幕接口,所以这是
+    /// 「同目录字幕」唯一能落地的通路(配对在 `BaiduPanSubtitle`,纯本地)。
+    ///
+    /// ## 两个必须说清的约束
+    ///
+    /// 1. **必须在文件加载之后调用**:`sub-add` 在 `no file loaded` 时直接失败。
+    ///    调用方是 `PlayerViewModel` 的 `.playing` 事件,不是 `load()` 之后立刻。
+    /// 2. flags 用 `auto`:没有选中任何字幕时自动选上这条,**已经有用户选过的轨
+    ///    就不抢**(与 Plex 的行为一致)。真正的选择仍走 `sid`。
+    ///
+    /// ⚠️ 地址里的凭据(百度 `access_token`)必须已经带好 —— 这里只负责传地址;
+    /// 请求头沿用 `load()` 时设的 `http-header-fields`(字幕与主文件同一个 UA)。
+    func addSubtitle(url: URL, title: String?) throws {
+        try withLiveHandle { handle, _ in
+            var args = ["sub-add", url.absoluteString, "auto"]
+            if let title, !title.isEmpty { args.append(title) }
+            try mpvCommand(args, on: handle)
+        }
+    }
+
     // MARK: - 字幕延迟与外观(MPV_INTEGRATION.md 7.1)
 
     /// 字幕延迟(秒,`sub-delay`,RW):正值 = 字幕晚于画面出现,负值 = 提前。

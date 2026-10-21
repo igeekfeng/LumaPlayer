@@ -27,6 +27,15 @@ final class AppContainer {
     /// 与 `hiddenItems` 同一套做法(JSON 文件)—— Emby 没有写回章节标记的接口,
     /// 只能记在本地。键是「同一部剧」的范围键(见 `ManualMarkersScope`)。
     let manualMarkers: ManualMarkersStore
+    /// 百度目录的**落盘缓存**(`BaiduPanDirectoryCache`):冷启动先出内容、后台刷新。
+    /// 全 App 一份 —— 它按 `来源 id` 分区,多个百度来源互不干扰。
+    let baiduDirectoryCache: BaiduPanDirectoryCache
+    /// 百度条目的**刮削结果落盘缓存**(`BaiduPanScrapeCache`),给刮削器用。
+    /// 与目录缓存分开:失效条件不同(文件变了 vs 元数据没变),混在一起会互相误伤。
+    let baiduScrapeCache: BaiduPanScrapeCache
+    /// 百度「每个目录里有几集」的本地记录(`BaiduPanEpisodeCountStore`)。
+    /// 撑起剧目录卡片上的「已看 3 / 共 12 集」—— 总数只有进过详情页才知道。
+    let baiduEpisodeCounts: BaiduPanEpisodeCountStore
     /// 百度网盘来源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
     /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
     private var baiduConnectionInstance: BaiduPanConnection?
@@ -66,7 +75,10 @@ final class AppContainer {
         watchProgress: WatchProgressStore? = nil,
         hiddenItems: HiddenItemsStore? = nil,
         manualMarkers: ManualMarkersStore? = nil,
-        danmaku: DanmakuService? = nil
+        danmaku: DanmakuService? = nil,
+        baiduDirectoryCache: BaiduPanDirectoryCache? = nil,
+        baiduScrapeCache: BaiduPanScrapeCache? = nil,
+        baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
@@ -83,6 +95,12 @@ final class AppContainer {
             ?? HiddenItemsStore(fileURL: HiddenItemsStore.defaultFileURL)
         self.manualMarkers = manualMarkers
             ?? ManualMarkersStore(fileURL: ManualMarkersStore.defaultFileURL)
+        self.baiduDirectoryCache = baiduDirectoryCache
+            ?? BaiduPanDirectoryCache(fileURL: BaiduPanDirectoryCache.defaultFileURL)
+        self.baiduScrapeCache = baiduScrapeCache
+            ?? BaiduPanScrapeCache(fileURL: BaiduPanScrapeCache.defaultFileURL)
+        self.baiduEpisodeCounts = baiduEpisodeCounts
+            ?? BaiduPanEpisodeCountStore(fileURL: BaiduPanEpisodeCountStore.defaultFileURL)
         self.danmakuSettings = DanmakuSettingsStore(defaults: preferences)
         self.danmaku = danmaku ?? DanmakuService(
             credentials: credentials,
@@ -148,7 +166,10 @@ final class AppContainer {
 
     func metadataScraper() -> BaiduPanMetadataScraper {
         if let existing = metadataScraperInstance { return existing }
-        let fresh = BaiduPanMetadataScraper(credentials: credentials)
+        let fresh = BaiduPanMetadataScraper(
+            credentials: credentials,
+            cache: baiduScrapeCache
+        )
         metadataScraperInstance = fresh
         return fresh
     }
@@ -428,11 +449,15 @@ final class AppContainer {
     ///   没有(单条视频 / 「继续观看」卡片)就传 nil —— 播放页据此不显示换集入口。
     func play(
         _ file: BaiduPanFile,
+        subtitleFiles: [BaiduPanFile] = [],
         episodeQueue: EpisodeQueue? = nil,
         fromBeginning: Bool = false
     ) {
         state.nowPlaying = PlaybackRequest(
-            baiduFile: file, startFromBeginning: fromBeginning, episodeQueue: episodeQueue)
+            baiduFile: file,
+            subtitleFiles: subtitleFiles,
+            startFromBeginning: fromBeginning,
+            episodeQueue: episodeQueue)
     }
 
     /// 播一个**已经装配好的**请求(播放页换集用)。
@@ -548,7 +573,11 @@ final class AppContainer {
                 itemID: item.id
             )
         case .baiduPan(let file):
-            return BaiduPanSessionPreparer(connection: baiduConnection(), file: file)
+            return BaiduPanSessionPreparer(
+                connection: baiduConnection(),
+                file: file,
+                subtitleFiles: request.subtitleFiles
+            )
         }
     }
 
@@ -637,6 +666,10 @@ final class AppContainer {
         if let baidu = target?.baiduPanSource {
             // 这个来源自己的片库根先清掉(它是按来源存的)
             try? await credentials.deleteBaiduPanLibraryRoot(for: baidu.id)
+            // 落盘缓存也按来源分区:目录名就是用户在网盘里的片名,留着没有用处只有隐私风险
+            await baiduDirectoryCache.purge(sourceID: baidu.id)
+            await baiduScrapeCache.purge(sourceID: baidu.id)
+            await baiduEpisodeCounts.purge(sourceID: baidu.id)
             // 授权与密钥是**所有百度来源共用**的:只有删掉最后一个才清 ——
             // 否则会把还在用的其它来源一起弄成「需要重新授权」。
             let remaining = await baiduSources().filter { $0.id != baidu.id }

@@ -84,7 +84,12 @@ struct BaiduPanBrowserView: View {
         VStack(spacing: 0) {
             // 剧目录走详情页(`BaiduPanSeriesDetailView`),它自己有剧名,不再叠一行目录名
             if viewModel.directoryShape.seriesStructure == nil {
-                PageHeader(title: viewModel.currentDirectoryName)
+                PageHeader(title: viewModel.currentDirectoryName) {
+                    HStack(spacing: Metrics.spacingS) {
+                        sortMenu
+                        filterMenu
+                    }
+                }
             }
             if let notice = viewModel.notice {
                 OnboardingNotice(text: notice, style: .warning)
@@ -177,12 +182,22 @@ struct BaiduPanBrowserView: View {
         } else if viewModel.sortedItems.isEmpty, viewModel.resumeCards.isEmpty {
             // ⚠️ 判的是 `sortedItems` 不是 `items`:整目录都被隐藏时 `items` 非空,
             // 用它会既不画网格、也不给空状态,只剩一片白。
-            ContentUnavailableView {
-                Label(emptyTitle, systemImage: emptySymbol)
-            } description: {
-                Text(emptyHint)
-            } actions: {
-                Button("刷新") { Task { await viewModel.refreshFiles() } }
+            if isFilterHidingEverything {
+                ContentUnavailableView {
+                    Label("当前筛选下没有条目", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text("这个目录里有内容,只是都被「\(viewModel.watchFilter.title)」这一档筛掉了。")
+                } actions: {
+                    Button("显示全部") { viewModel.setWatchFilter(.all) }
+                }
+            } else {
+                ContentUnavailableView {
+                    Label(emptyTitle, systemImage: emptySymbol)
+                } description: {
+                    Text(emptyHint)
+                } actions: {
+                    Button("刷新") { Task { await viewModel.refreshFiles() } }
+                }
             }
         } else {
             ScrollView {
@@ -190,46 +205,15 @@ struct BaiduPanBrowserView: View {
                     if !viewModel.resumeCards.isEmpty {
                         resumeShelf
                     }
+                    // 片库根才给「最近添加」(Emby 首页那一行的对位物):
+                    // 子目录里再摆一行与下面的网格高度重叠,反而乱。
+                    if !viewModel.recentItems.isEmpty {
+                        recentShelf
+                    }
                     if !viewModel.sortedItems.isEmpty {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
                             ForEach(viewModel.sortedItems) { item in
-                                BaiduPanCard(
-                                    item: item,
-                                    store: store,
-                                    resumeSeconds: viewModel.resumeSeconds(for: item),
-                                    isWatched: viewModel.isWatched(item),
-                                    watchedEpisodeCount: viewModel.watchedEpisodeCount(for: item)
-                                ) {
-                                    open(item)
-                                }
-                                .contextMenu {
-                                    // 观看状态只对**能播的**文件给。目录要标「整部已看」
-                                    // 得先知道里面有哪些集 —— 那是列目录(2 请求 / 层,
-                                    // 配额见 `docs/BAIDU_PAN_API.md` §7),不在右键里悄悄做。
-                                    if item.kind.isPlayable {
-                                        if viewModel.isWatched(item) {
-                                            Button("标记为未看", systemImage: "arrow.counterclockwise") {
-                                                Task { await viewModel.markPlayed([item], played: false) }
-                                            }
-                                        } else {
-                                            Button("标记为已看", systemImage: "checkmark.circle") {
-                                                Task { await viewModel.markPlayed([item], played: true) }
-                                            }
-                                        }
-                                    }
-                                    // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
-                                    // 单集文件没有季 / 剧的上下文,改不出标准命名。
-                                    if item.kind.isContainer, let file = viewModel.file(for: item) {
-                                        Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
-                                            renameRequest = RenameRequest(
-                                                directory: file,
-                                                viewModel: viewModel.makeRenameViewModel())
-                                        }
-                                    }
-                                    Button("删除…", systemImage: "trash", role: .destructive) {
-                                        pendingDeletion = item
-                                    }
-                                }
+                                card(for: item)
                             }
                         }
                     }
@@ -237,6 +221,130 @@ struct BaiduPanBrowserView: View {
                 .padding(Metrics.spacingXL)
             }
         }
+    }
+
+    /// 一张卡片 + 右键菜单。
+    ///
+    /// 抽出来是因为它有两个用武之地:主网格与「最近添加」那一行。⛔ 不各写一份 ——
+    /// 两处的右键菜单必须完全一致(删除 / 改名 / 标记已看都在这里)。
+    private func card(for item: SourceItem) -> some View {
+        BaiduPanCard(
+            item: item,
+            store: store,
+            resumeSeconds: viewModel.resumeSeconds(for: item),
+            isWatched: viewModel.isFullyWatched(item),
+            watchedEpisodeCount: viewModel.watchedEpisodeCount(for: item),
+            episodeTotal: viewModel.episodeTotal(for: item)
+        ) {
+            open(item)
+        }
+        .contextMenu {
+            // 观看状态只对**能播的**文件给。目录要标「整部已看」
+            // 得先知道里面有哪些集 —— 那是列目录(2 请求 / 层,
+            // 配额见 `docs/BAIDU_PAN_API.md` §7),不在右键里悄悄做。
+            if item.kind.isPlayable {
+                if viewModel.isWatched(item) {
+                    Button("标记为未看", systemImage: "arrow.counterclockwise") {
+                        Task { await viewModel.markPlayed([item], played: false) }
+                    }
+                } else {
+                    Button("标记为已看", systemImage: "checkmark.circle") {
+                        Task { await viewModel.markPlayed([item], played: true) }
+                    }
+                }
+            }
+            // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
+            // 单集文件没有季 / 剧的上下文,改不出标准命名。
+            if item.kind.isContainer, let file = viewModel.file(for: item) {
+                Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
+                    renameRequest = RenameRequest(
+                        directory: file,
+                        viewModel: viewModel.makeRenameViewModel())
+                }
+            }
+            Button("删除…", systemImage: "trash", role: .destructive) {
+                pendingDeletion = item
+            }
+        }
+    }
+
+    /// 片库根上的「最近添加」:按网盘 `server_mtime` 倒序的前几条。
+    ///
+    /// ⚠️ 卡片宽度要**自己钉住**:`MediaShelf` 里是横向 `LazyHStack`,
+    /// 没有网格的列宽可借,不钉就会按图片比例乱撑。
+    private var recentShelf: some View {
+        MediaShelf(title: "最近添加") {
+            ForEach(viewModel.recentItems) { item in
+                card(for: item)
+                    .frame(width: Metrics.posterMinWidth)
+            }
+        }
+    }
+
+    // MARK: - 排序 / 筛选
+
+    /// 排序菜单(页头右侧)。
+    ///
+    /// ⚠️ 放在页头而不是主窗口工具栏:工具栏只有「返回上一层」一个控件
+    /// (用户明确要的简法)。排序与筛选都是**这一页**的事,放这里才对得上。
+    /// ⛔ 换档不重新请求目录 —— 排的是已经在手上的条目(配额见 `docs/BAIDU_PAN_API.md` §7)。
+    private var sortMenu: some View {
+        Menu {
+            Picker("排序", selection: Binding(
+                get: { viewModel.sortOrder },
+                set: { viewModel.setSortOrder($0) }
+            )) {
+                ForEach(BaiduPanSortOrder.allCases) { order in
+                    Text(order.title).tag(order)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Button(
+                viewModel.sortAscending ? "改为降序" : "改为升序",
+                systemImage: viewModel.sortAscending ? "arrow.down" : "arrow.up"
+            ) {
+                viewModel.toggleSortDirection()
+            }
+        } label: {
+            Label("排序", systemImage: "arrow.up.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("排序(只重排已取回的条目,不重新请求目录)")
+        .accessibilityLabel("排序:\(viewModel.sortOrder.title)")
+    }
+
+    /// 观看状态筛选(全部 / 未看 / 已看)。数据全来自本地续播库,零请求。
+    ///
+    /// 图标的选中态用 ✓ 而不是只换文字:菜单收起后按钮上只剩一个词,
+    /// 「已看」与「未看」两个词太像,带上图标一眼能分清。
+    private var filterMenu: some View {
+        Menu {
+            Picker("筛选", selection: Binding(
+                get: { viewModel.watchFilter },
+                set: { viewModel.setWatchFilter($0) }
+            )) {
+                ForEach(BaiduPanWatchFilter.allCases) { filter in
+                    Label(filter.title, systemImage: filter.symbol).tag(filter)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label(viewModel.watchFilter.title, systemImage: viewModel.watchFilter.symbol)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("按观看状态筛选(只筛已取回的条目,不重新请求目录)")
+        .accessibilityLabel("筛选:\(viewModel.watchFilter.title)")
+    }
+
+    /// 筛选把这一屏筛空了(目录本身有内容)。
+    ///
+    /// ⚠️ 必须与「这个目录是空的」分开说:前者是用户自己设的条件,
+    /// 端一句「这里还没有可播的文件」会让人以为片库坏了。
+    private var isFilterHidingEverything: Bool {
+        viewModel.watchFilter != .all && !viewModel.items.isEmpty
     }
 
     // MARK: - 继续观看
@@ -388,6 +496,9 @@ private struct BaiduPanCard: View {
     let isWatched: Bool
     /// 目录卡:这一层之下本地已记录看过的集数(0 = 不显示)
     let watchedEpisodeCount: Int
+    /// 目录卡:这一部剧**一共几集**。nil = 还没进过详情页,不知道总数
+    /// (见 `BaiduPanSourceViewModel.episodeTotal(for:)`)
+    let episodeTotal: Int?
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -486,23 +597,37 @@ private struct BaiduPanCard: View {
         item.episodeTitle ?? item.title
     }
 
-    /// 副标题:进度类信息优先,其次是集号 / 年份 / 文件夹。
+    /// 副标题:进度类信息优先,其次是集号 / 时长 / 年份 / 文件夹。
     ///
-    /// 顺序:续播位置 > 「第 n 集 · 已看」> 「已看」> 集号 > 年份 >
-    /// 目录的「已看 N 集」/「文件夹」。⛔ 都没有就不显示,不填占位符。
+    /// 顺序:续播位置 > 「第 n 集 · 已看」> 「已看」> 「第 n 集 · 时长」>
+    /// 时长 > 年份 > 目录的「已看 N 集」/「文件夹」。⛔ 都没有就不显示,不填占位符。
     ///
-    /// ⚠️ 「已看 N 集」只报**本地记录过的**集数,⛔ 不写成「3/12 集」——
-    /// 总集数要列子目录(配额,见 `watchedEpisodeCounts`),而我们没有那个数。
+    /// ⚠️ 时长来自 `filemetas` 那一趟(2026-10-21 起列表里就有);拿不到时
+    /// 整段不出现,⛔ 不写「未知时长」。
+    ///
+    /// ⚠️ 目录卡的集数分三种形态:知道总数就是「已看 3 / 共 12 集」,只知道已看
+    /// 就还是「已看 3 集」,两样都没有就是「文件夹」。总数来自**本地记录**
+    /// (进过一次详情页才知道),⛔ 不为网格上的一个数字去列子目录(配额)。
     private var subtitle: String? {
         if let resumeSeconds, resumeSeconds > 0 {
             return "已看到 \(PlayerTime.text(resumeSeconds))"
         }
         if let episode = item.episodeNumber {
-            return isWatched ? "第 \(episode) 集 · 已看" : "第 \(episode) 集"
+            let label = isWatched ? "第 \(episode) 集 · 已看" : "第 \(episode) 集"
+            guard !isWatched, let runtime = MediaFormat.duration(seconds: item.durationSeconds ?? 0)
+            else { return label }
+            return "\(label) · \(runtime)"
         }
         if isWatched { return "已看" }
+        if let runtime = MediaFormat.duration(seconds: item.durationSeconds ?? 0) {
+            return runtime
+        }
         if let year = item.year { return String(year) }
         if item.kind.isContainer {
+            if let episodeTotal, watchedEpisodeCount > 0 {
+                return "已看 \(watchedEpisodeCount) / 共 \(episodeTotal) 集"
+            }
+            if let episodeTotal { return "共 \(episodeTotal) 集" }
             return watchedEpisodeCount > 0 ? "已看 \(watchedEpisodeCount) 集" : "文件夹"
         }
         return nil
@@ -524,8 +649,15 @@ private struct BaiduPanCard: View {
         if item.kind.isContainer { parts.append("文件夹") }
         if let episode = item.episodeNumber { parts.append("第 \(episode) 集") }
         if isWatched { parts.append("已看") }
+        if !isWatched, let runtime = MediaFormat.duration(seconds: item.durationSeconds ?? 0) {
+            parts.append(runtime)
+        }
         if item.kind.isContainer, watchedEpisodeCount > 0 {
-            parts.append("本地记录已看 \(watchedEpisodeCount) 集")
+            parts.append(
+                episodeTotal.map { "本地记录已看 \(watchedEpisodeCount) 集,共 \($0) 集" }
+                    ?? "本地记录已看 \(watchedEpisodeCount) 集")
+        } else if item.kind.isContainer, let episodeTotal {
+            parts.append("共 \(episodeTotal) 集")
         }
         if let year = item.year { parts.append(String(year)) }
         if let resumeSeconds, resumeSeconds > 0 {

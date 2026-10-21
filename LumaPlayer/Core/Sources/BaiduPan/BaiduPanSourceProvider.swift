@@ -76,26 +76,46 @@ actor BaiduPanSourceProvider: SourceProvider {
         let items: [SourceItem]
         /// `fs_id` → 原始文件
         let filesByID: [UInt64: BaiduPanFile]
+        /// `fs_id` → 时长(秒)。只含这一次批量取到的(**列表接口本身不给时长**)。
+        /// 落盘缓存要连它一起存 —— 否则冷启动的卡片上又只剩标题没有时长。
+        let durations: [UInt64: Double]
     }
 
-    /// 列一个目录 → 合成条目 → **批量**换封面地址(全程只发两次请求:
+    /// 列一个目录 → 合成条目 → **批量**换封面地址与时长(全程只发两次请求:
     /// 一次 `list`、一次 `filemetas`)。
+    ///
+    /// ## 时长为什么在这一趟里拿
+    ///
+    /// `filemetas` 带 `needmedia=1`,视频条目的 `duration` 与封面的 `dlink`
+    /// 是**同一个响应**里的两份字段(`docs/BAIDU_PAN_API.md` §4)。
+    /// 封面那批 id 本来就要发一次,把视频 id 并进去几乎不增加请求数,
+    /// 却换来卡片上的时长 / 剩余 / 进度条 —— 这是「百度不给时长」这件事
+    /// 在客户端能补的部分。
     func content(directory: String) async throws -> DirectoryContent {
         let files = try await connection.files(inDirectory: directory)
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: files, sourceID: sourceID)
 
-        // 封面:收集所有配到的图片 `fs_id`,**一次批量**换地址 ——
-        // 逐个取会烧光配额,见 `coverURLs`。
+        // 封面与视频**同一批**:收集所有配到的图片 `fs_id` 与可播条目的 `fs_id`,
+        // 一次批量换地址 + 时长 —— 逐个取会烧光配额,见 `metaInfo`。
         let coverIDs = Set(synthesized.compactMap { $0.cover?.fsID })
-        let coverURLs = await connection.coverURLs(for: Array(coverIDs))
+        let playableIDs = Set(synthesized.compactMap { entry -> UInt64? in
+            guard entry.item.kind.isPlayable else { return nil }
+            return UInt64(entry.item.ref.itemID)
+        })
+        let meta = await connection.metaInfo(for: Array(coverIDs.union(playableIDs)))
 
         let items = synthesized.map { entry in
-            guard let cover = entry.cover, let url = coverURLs[cover.fsID] else {
-                // 没配到图 / 换了地址也拿不到 → 保持 nil,UI 降级成图标卡
-                return entry.item
+            var item = entry.item
+            // 时长:先补,再补封面 —— 两者互不影响,顺序只是让下面的 guard 简单
+            if let fsID = UInt64(item.ref.itemID), let duration = meta.durations[fsID] {
+                item = item.withDuration(duration)
             }
-            return entry.item.withPoster(
+            guard let cover = entry.cover, let url = meta.downloadURLs[cover.fsID] else {
+                // 没配到图 / 换了地址也拿不到 → 保持 nil,UI 降级成图标卡
+                return item
+            }
+            return item.withPoster(
                 .remote(
                     ownerID: sourceID,
                     url: url,
@@ -115,7 +135,8 @@ actor BaiduPanSourceProvider: SourceProvider {
         }
         return DirectoryContent(
             items: items,
-            filesByID: Dictionary(uniqueKeysWithValues: files.map { ($0.fsID, $0) })
+            filesByID: Dictionary(uniqueKeysWithValues: files.map { ($0.fsID, $0) }),
+            durations: meta.durations
         )
     }
 

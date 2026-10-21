@@ -227,3 +227,38 @@ extension BaiduPanSortOrder {
 
     private static let naturalSortLocale = Locale(identifier: "zh_Hans_CN")
 }
+
+/// 网格的**观看状态筛选**。
+///
+/// ## 为什么这个能做、而且不花请求
+///
+/// 百度的列表接口没有任何「已看 / 未看」字段(`docs/BAIDU_PAN_API.md` §2),
+/// 所以 Emby 那种按观看状态过滤看起来做不了。但客户端本来就有一份**本地续播库**
+/// (`WatchProgressStore`)—— 卡片上的 ✓ 与「已看到 mm:ss」就是它画的。
+/// 既然数据在手,筛选就是**纯过滤**,零请求、零额外状态。
+///
+/// ⚠️ 判据只在客户端成立:换台机器、重装 App 就没了(与「已看」本身同一局限)。
+enum BaiduPanWatchFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case unwatched
+    case watched
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .unwatched: return "未看"
+        case .watched: return "已看"
+        }
+    }
+
+    /// 菜单上的图标(与 `BaiduPanCard` 上那个 ✓ 同一套语义)
+    var symbol: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .unwatched: return "circle"
+        case .watched: return "checkmark.circle"
+        }
+    }
+}

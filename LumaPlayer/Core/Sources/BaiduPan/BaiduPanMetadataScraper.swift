@@ -54,6 +54,13 @@ actor BaiduPanMetadataScraper {
 
     private let credentials: CredentialStore
     private let client: TMDBClient
+    /// 条目级刮削结果的**落盘**缓存(`fs_id` → 补丁)。
+    ///
+    /// ⚠️ 与下面那四张内存缓存分工不同:内存缓存按「一次搜索 / 一季 / 一个 id」去重,
+    /// 活到进程结束;这一张按**条目**记最终补丁,跨重启有效 —— 否则每次冷启动
+    /// 第一屏都要重新问一遍 TMDB(封面慢一拍、断网就退图标卡)。
+    /// nil = 不落盘(单测 / 纯函数式调用)。
+    private let cache: BaiduPanScrapeCache?
 
     /// 一次搜索的键。同一个键问出来的结果不随会话变化,所以内存缓存足够;
     /// 进程重启后重新问一遍是可接受的代价(刮削是低频动作)。
@@ -126,9 +133,14 @@ actor BaiduPanMetadataScraper {
     /// ⛔ 不上模型层:它只用来给界面提一句,不改变任何条目(`LocalResumeReporting` 同一处置)。
     private(set) var lastFailureDescription: String?
 
-    init(credentials: CredentialStore, client: TMDBClient = TMDBClient()) {
+    init(
+        credentials: CredentialStore,
+        client: TMDBClient = TMDBClient(),
+        cache: BaiduPanScrapeCache? = nil
+    ) {
         self.credentials = credentials
         self.client = client
+        self.cache = cache
     }
 
     // MARK: - 入口
@@ -138,25 +150,94 @@ actor BaiduPanMetadataScraper {
     /// ⛔ 不抛错:调用方是「目录已经列出来之后」的第二趟,刮削失败不该让浏览变错。
     /// 失败原因留在 `lastFailureDescription`。
     func enrich(_ items: [SourceItem]) async -> [SourceItem] {
+        // 先吃掉落盘缓存:命中条目的封面 / 简介 / 年份 / 集名**立刻**回来,
+        // 不必等网络,也不必在断网时退回图标卡。命中的条目**不再发请求**。
+        let (cached, cachedIDs) = await applyCached(items)
+        let pending = cached.filter {
+            !cachedIDs.contains($0.ref.itemID) && Self.isCacheable($0)
+        }
+
         let token: String
         do {
             guard let stored = try await credentials.tmdbReadAccessToken(),
                   !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 // 没填 token = 用户没开刮削,不是失败(设置页的文案就是这么承诺的)
-                return items
+                return cached
             }
             token = stored
         } catch {
             // ⛔ 读凭据失败不假装「没配置」:如实记下来
             lastFailureDescription = "读取 TMDB 凭据失败"
-            return items
+            return cached
         }
+        guard !pending.isEmpty else { return cached }
         lastFailureDescription = nil
         // 分三步:**先剧集**(要钻季详情),再单条电影 / 视频,最后目录卡片。
         // 三步各只碰自己那几种 `kind`,互不重叠。
-        let episodes = await enrichEpisodes(items: items, token: token)
+        let episodes = await enrichEpisodes(items: pending, token: token)
         let singles = await enrichSingles(items: episodes, token: token)
-        return await enrichFolders(items: singles, token: token)
+        let enriched = await enrichFolders(items: singles, token: token)
+        await storeCache(enriched)
+        // 把补好的条目按身份并回原数组:缓存命中的那些原样保留,
+        // 顺序与入参完全一致(调用方按位置对应 `filesByID` / 目录结构)。
+        let byID = Dictionary(
+            enriched.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { first, _ in first })
+        return cached.map { byID[$0.ref.itemID] ?? $0 }
+    }
+
+    // MARK: - 落盘缓存
+
+    /// 这条条目值不值得进刮削缓存(文件与目录各有一套判据)。
+    private static func isCacheable(_ item: SourceItem) -> Bool {
+        isScrapable(item) || isScrapableFolder(item)
+    }
+
+    /// 把缓存命中的补丁贴回条目。
+    ///
+    /// - Returns: 贴好的条目 + 命中集合(调用方据此跳过网络)。
+    /// ⚠️ 只用 `withScrapedMetadata` 贴 —— 它**只补空位**,不会盖掉
+    /// 用户放在网盘目录里的封面(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+    private func applyCached(_ items: [SourceItem]) async -> ([SourceItem], Set<String>) {
+        guard let cache else { return (items, []) }
+        var result = items
+        var hits: Set<String> = []
+        for (offset, item) in items.enumerated() where Self.isCacheable(item) {
+            guard let entry = await cache.entry(
+                sourceID: item.ref.sourceID, fsID: item.ref.itemID) else { continue }
+            result[offset] = item.withScrapedMetadata(
+                poster: entry.poster.map(ImageDescriptor.init(snapshot:)),
+                overview: entry.overview,
+                year: entry.year,
+                episodeTitle: entry.episodeTitle,
+                tmdbID: entry.tmdbID
+            )
+            hits.insert(item.ref.itemID)
+        }
+        return (result, hits)
+    }
+
+    /// 把这一趟刮到的字段落盘。
+    private func storeCache(_ items: [SourceItem]) async {
+        guard let cache else { return }
+        var perSource: [UUID: [String: BaiduPanScrapeCache.Entry]] = [:]
+        for item in items where Self.isCacheable(item) {
+            let entry = BaiduPanScrapeCache.Entry(
+                // ⛔ 百度封面不进这里:那是 `dlink`,8 小时就过期,而这份缓存记 30 天。
+                // 存下来只会让冷启动端出一批打不开的图,还不如没有(界面会降级成图标卡,
+                // 紧接着的后台刷新再把新地址补上)。
+                poster: item.poster?.hasExpiringURL == false ? item.poster?.snapshot : nil,
+                overview: item.overview,
+                year: item.year,
+                episodeTitle: item.episodeTitle,
+                tmdbID: item.tmdbID,
+                savedAt: Date()
+            )
+            guard !entry.isEmpty else { continue }
+            perSource[item.ref.sourceID, default: [:]][item.ref.itemID] = entry
+        }
+        for (sourceID, entries) in perSource {
+            await cache.store(sourceID: sourceID, entries: entries)
+        }
     }
 
     // MARK: - 剧集(剧 + 季详情)

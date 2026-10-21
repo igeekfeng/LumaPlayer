@@ -26,4 +26,20 @@ struct PlaybackSession: Sendable, Equatable {
     let mediaSource: EmbyMediaSource
     /// 拖动进度的实现方式
     let seekStrategy: PlaybackSeekStrategy
+    /// 随本次播放一起挂上去的**外挂字幕**。
+    ///
+    /// 来源:百度侧同目录的 `.srt` / `.ass`(见 `BaiduPanSubtitle`)——
+    /// 它们不在视频容器里,播放内核自己发现不了。Emby 侧为空:字幕要么内嵌,
+    /// 要么由服务端作为独立流提供(那条通路本项目没接,见 `KNOWN_ISSUES.md`)。
+    ///
+    /// ⚠️ 加载失败**不影响播放**:字幕是附加轨,起播后再挂,挂不上只提示一句。
+    var externalSubtitles: [PlaybackSubtitle] = []
+}
+
+/// 一条随播放挂载的外挂字幕。
+struct PlaybackSubtitle: Sendable, Equatable {
+    /// 带凭据的字幕地址(百度 `dlink` + `access_token`)
+    let url: URL
+    /// 菜单里显示的名字(语言标签 / 文件名)。nil = 交给 mpv 用 URL 末段
+    let title: String?
 }

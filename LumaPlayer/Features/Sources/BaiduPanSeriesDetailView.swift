@@ -695,10 +695,14 @@ private struct BaiduPanEpisodeCard: View {
         return "第 \(number) 集"
     }
 
-    /// 百度没有服务端进度,这一行来自本地续播库。看完报「已看」,没看就不显示。
+    /// 百度没有服务端进度,这一行来自本地续播库。看完报「已看」,
+    /// 没看就报时长(2026-10-21 起 `filemetas` 那一趟会带回时长),
+    /// 两样都没有就不显示 —— ⛔ 不写「未知」。
     private var progressText: String? {
         if isWatched { return "已看" }
-        guard let resumeSeconds, resumeSeconds > 0 else { return nil }
-        return "已看到 \(PlayerTime.text(resumeSeconds))"
+        if let resumeSeconds, resumeSeconds > 0 {
+            return "已看到 \(PlayerTime.text(resumeSeconds))"
+        }
+        return MediaFormat.duration(seconds: episode.durationSeconds ?? 0)
     }
 }

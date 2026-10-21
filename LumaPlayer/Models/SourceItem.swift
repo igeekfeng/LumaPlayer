@@ -144,6 +144,33 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
         )
     }
 
+    /// 补上时长。
+    ///
+    /// 为什么单独一个方法:百度 `method=list` **不给时长**,要另外问一次
+    /// `filemetas`(`needmedia=1`)才有;而合成器是纯函数、不认识网络。
+    /// 所以合成器先出条目(`durationSeconds == nil`),由
+    /// `BaiduPanSourceProvider` 批量取回来再回填。
+    ///
+    /// ⚠️ 只补**原来没有值**的那一格:已经有值的(播放时由
+    /// `authoritativeDurationSeconds` 填过的)不被覆盖。
+    func withDuration(_ seconds: Double?) -> SourceItem {
+        guard let seconds, seconds > 0, durationSeconds == nil else { return self }
+        return SourceItem(
+            ref: ref,
+            title: title,
+            kind: kind,
+            overview: overview,
+            year: year,
+            tmdbID: tmdbID,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            episodeTitle: episodeTitle,
+            durationSeconds: seconds,
+            poster: poster,
+            metadataOrigin: metadataOrigin
+        )
+    }
+
     /// 补上**在线刮削**(TMDB)取回来的字段。
     ///
     /// ⚠️ 只补**原来没有值**的那几个:本地合成出来的东西优先。

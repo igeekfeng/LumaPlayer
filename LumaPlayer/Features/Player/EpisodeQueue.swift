@@ -29,6 +29,13 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
     /// ⚠️ 百度侧**没配 TMDB token 时逐集剧照是拿不到的**:合成器只给「目录卡片」
     /// 挑同目录封面,不逐集配(`docs/KNOWN_ISSUES.md`)。Emby 不受影响。
     let poster: ImageDescriptor?
+    /// 这一集的外挂字幕文件(百度侧同目录的 `.srt` / `.ass` …)。
+    ///
+    /// 与 `poster` 同一个理由装在队列里:换集时兄弟文件列表**已经不在手上**
+    /// (`episodeQueue(selecting:in:filesByID:)` 装配那一刻才有),不带过去就得
+    /// 为每一集重新列一次网盘(配额见 `docs/BAIDU_PAN_API.md` §7)。
+    /// Emby 侧恒为空。
+    let subtitleFiles: [BaiduPanFile]
 
     init(
         id: String,
@@ -36,7 +43,8 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
         title: String,
         source: PlaybackSource,
         resumeItem: SourceItem? = nil,
-        poster: ImageDescriptor? = nil
+        poster: ImageDescriptor? = nil,
+        subtitleFiles: [BaiduPanFile] = []
     ) {
         self.id = id
         self.label = label
@@ -44,6 +52,7 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
         self.source = source
         self.resumeItem = resumeItem
         self.poster = poster
+        self.subtitleFiles = subtitleFiles
     }
 }
 

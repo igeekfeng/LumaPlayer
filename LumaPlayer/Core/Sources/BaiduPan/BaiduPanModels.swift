@@ -9,7 +9,7 @@ import Foundation
 /// `isdir` / `category` / `md5` / `server_mtime` / `thumbs`)。
 ///
 /// ⚠️ 与 `EmbyItem` 的立场一致:能缺的字段一律可选,⛔ 不填假默认值。
-struct BaiduPanFile: Sendable, Equatable, Identifiable {
+struct BaiduPanFile: Sendable, Equatable, Identifiable, Codable {
 
     /// 云端唯一 ID。`fs_id` 是 `uint64`,但某些响应里会给字符串,
     /// 所以解码走「数字或字符串都认」(见 `BaiduPanFileMeta` 的解码实现)。

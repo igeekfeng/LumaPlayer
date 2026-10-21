@@ -96,6 +96,13 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         return Snapshot(ownerID: ownerID, url: url, headers: headers, cacheKey: cacheKey)
     }
 
+    /// 这张图的**地址会过期**(百度的 `dlink` 8 小时,见 `docs/BAIDU_PAN_API.md` §2.2)。
+    ///
+    /// 用途:跨天的缓存⛔ 不能存它 —— `BaiduPanScrapeCache` 记 30 天,存下来的地址
+    /// 第二天就打不开了。判据是 `cacheKey` 的命名空间前缀(`baidu|` / `tmdb|`),
+    /// 与两个 `…Key(…)` 工厂一一对应。
+    var hasExpiringURL: Bool { cacheKey.hasPrefix("baidu|") }
+
     /// 百度网盘里一张封面的缓存 key:来源 + `fs_id` + **文件修改时间**。
     ///
     /// ⚠️ 带 `modifiedAt`:它就是百度侧的「版本标识」。用户在网盘里换了封面图,

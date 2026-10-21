@@ -58,12 +58,21 @@ struct PlaybackRequest: Identifiable, Equatable {
     /// nil = 不是剧集 / 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
     var episodeQueue: EpisodeQueue?
 
+    /// 随本次播放挂载的**外挂字幕**文件(百度侧同目录的 `.srt` / `.ass` …)。
+    ///
+    /// 为什么装文件而不是地址:地址要换 `dlink`(带 token),那是
+    /// `BaiduPanSessionPreparer` 的活;而配对只需要文件名,浏览页 / 队列装配时
+    /// 文件列表已经在手上 —— 放在这里就**零额外请求**。
+    /// Emby 侧恒为空(字幕内嵌或由服务端提供)。
+    var subtitleFiles: [BaiduPanFile] = []
+
     /// - Parameter continuingPage: 播放页内换集时传当前请求的 `pageID`(沿用播放页);
     ///   nil = 新开一个播放页。
     init(
         source: PlaybackSource,
         startFromBeginning: Bool = false,
         episodeQueue: EpisodeQueue? = nil,
+        subtitleFiles: [BaiduPanFile] = [],
         continuingPage: UUID? = nil
     ) {
         let id = UUID()
@@ -72,6 +81,7 @@ struct PlaybackRequest: Identifiable, Equatable {
         self.source = source
         self.startFromBeginning = startFromBeginning
         self.episodeQueue = episodeQueue
+        self.subtitleFiles = subtitleFiles
     }
 
     /// 既有 Emby 调用点的形状(首页 / 媒体库 / 详情 / 搜索)。
@@ -81,13 +91,15 @@ struct PlaybackRequest: Identifiable, Equatable {
 
     init(
         baiduFile: BaiduPanFile,
+        subtitleFiles: [BaiduPanFile] = [],
         startFromBeginning: Bool = false,
         episodeQueue: EpisodeQueue? = nil
     ) {
         self.init(
             source: .baiduPan(file: baiduFile),
             startFromBeginning: startFromBeginning,
-            episodeQueue: episodeQueue)
+            episodeQueue: episodeQueue,
+            subtitleFiles: subtitleFiles)
     }
 
     var embyServer: ServerProfile? { source.embyServer }
