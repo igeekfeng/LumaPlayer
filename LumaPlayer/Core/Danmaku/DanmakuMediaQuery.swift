@@ -7,7 +7,7 @@ import Foundation
 ///
 /// ## 匹配线索从哪来
 ///
-/// - **百度**:有真实文件名 → 去扩展名直接给 `/match`(这正是接口设计的输入)。
+/// - **百度 / 本地文件夹**:有真实文件名 → 去扩展名直接给 `/match`(这正是接口设计的输入)。
 /// - **Emby**:`MediaSource.Path` 按 `API_CONTRACT.md` 4.3 **不用**,拿不到文件名 →
 ///   用剧名 + 季集**合成**一个场景命名风格的名字(`剧名 S01E03`)。
 ///   手动选一次之后按剧记住作品(`seriesKey`),后续集数不再依赖它。
@@ -95,22 +95,32 @@ struct DanmakuMediaQuery: Sendable, Equatable {
                     : item.name,
                 fileSize: nil)
         case .baiduPan(let file):
-            let base = BaiduPanMetadataSynthesizer.baseName(file.name)
-            let parsed = BaiduPanMetadataSynthesizer.parse(name: file.name)
-            let episode = parsed.episode
-            return DanmakuMediaQuery(
-                itemKey: "baidu|fsid:\(file.fsID)",
-                // 同一剧目录 = 同一部剧(与 `ManualMarkersScope` 同一启发式,只认强信号 `parsed.episode`)
-                seriesKey: episode == nil
-                    ? nil : "baidu|dir:\((file.path as NSString).deletingLastPathComponent)",
-                episodeNumber: episode,
-                seasonNumber: parsed.season,
-                title: parsed.title.isEmpty ? base : parsed.title,
-                isMovie: episode == nil && parsed.season == nil,
-                tmdbID: parsed.tmdbID,
-                matchFileName: base,
-                fileSize: file.sizeBytes.flatMap { Int64(exactly: $0) })
+            // ⚠️ 百度的键没有来源段:一份授权下 `fs_id` / 路径全局唯一(多个百度来源共用),
+            // 而且已有的绑定都记在这个形状下,⛔ 不改
+            return fileQuery(file, isolation: "baidu")
+        case .localFolder(let file, let source):
+            // 本地的 id / 路径只在**这个来源**里唯一:来源 id 进键,删来源时按前缀整片清
+            return fileQuery(file, isolation: "local|\(source.id.uuidString)")
         }
+    }
+
+    /// 文件树来源(百度 / 本地)的匹配线索:有真实文件名,直接给 `/match`。
+    private static func fileQuery(_ file: BaiduPanFile, isolation: String) -> DanmakuMediaQuery {
+        let base = BaiduPanMetadataSynthesizer.baseName(file.name)
+        let parsed = BaiduPanMetadataSynthesizer.parse(name: file.name)
+        let episode = parsed.episode
+        return DanmakuMediaQuery(
+            itemKey: "\(isolation)|fsid:\(file.fsID)",
+            // 同一剧目录 = 同一部剧(与 `ManualMarkersScope` 同一启发式,只认强信号 `parsed.episode`)
+            seriesKey: episode == nil
+                ? nil : "\(isolation)|dir:\((file.path as NSString).deletingLastPathComponent)",
+            episodeNumber: episode,
+            seasonNumber: parsed.season,
+            title: parsed.title.isEmpty ? base : parsed.title,
+            isMovie: episode == nil && parsed.season == nil,
+            tmdbID: parsed.tmdbID,
+            matchFileName: base,
+            fileSize: file.sizeBytes.flatMap { Int64(exactly: $0) })
     }
 
     /// `剧名 S01E03`;不知道季号时 `剧名 03`。

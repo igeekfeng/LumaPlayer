@@ -15,7 +15,7 @@ import Foundation
 ///
 /// ⚠️ 界面上它同时是**浏览页能退到的最外层**:片库根之上(应用目录那一层)
 /// 不再露出 —— 那里看到的就是自己刚设的那个目录名,没有意义
-/// (`BaiduPanSourceViewModel.canGoUp`)。
+/// (`FileSourceViewModel.canGoUp`)。
 struct BaiduPanLibraryRoot: Codable, Sendable, Equatable {
     /// 网盘上的完整路径(`/apps/{应用目录名}/...`)
     var path: String

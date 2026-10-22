@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 添加百度网盘来源的流程:填密钥 → 扫码 → 授权成功后落库。
 ///
-/// 复用了来源页那套 `BaiduPanSourceViewModel` 与 `BaiduPanAuthorizationView` ——
+/// 复用了来源页那套 `FileSourceViewModel` 与 `BaiduPanAuthorizationView` ——
 /// 「保存配置 → 立刻走扫码」本来就是同一条连续流程,不必在添加流程里再写一遍。
 /// 差别只在**收尾**:这里授权成功后要把来源写进注册表并切换过去。
 struct BaiduPanAddView: View {
@@ -10,7 +10,7 @@ struct BaiduPanAddView: View {
     let onBack: () -> Void
     let onDone: () -> Void
 
-    @State private var viewModel: BaiduPanSourceViewModel
+    @State private var viewModel: FileSourceViewModel
     @State private var isFinishing = false
     @State private var errorMessage: String?
 
@@ -20,7 +20,7 @@ struct BaiduPanAddView: View {
         self.onBack = onBack
         self.onDone = onDone
         self._viewModel = State(
-            initialValue: BaiduPanSourceViewModel(
+            initialValue: FileSourceViewModel(
                 container: container,
                 // 添加流程里来源还没落库,这里的 `id` 是临时的;
                 // 真正定下来是 `registerBaiduSource` 那一刻。

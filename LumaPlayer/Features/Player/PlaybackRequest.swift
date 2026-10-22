@@ -2,13 +2,16 @@ import Foundation
 
 /// 一次播放请求要播的**是哪一路来源**上的内容。
 ///
-/// ⚠️ 为什么是枚举而不是「给 `PlaybackRequest` 加两个可选字段」:
-/// Emby 与百度网盘**没有共同的语义** —— Emby 有服务器 / Item / 服务端进度,
-/// 百度只有一条文件与 `fs_id`。做成两个可选字段就会出现「既没服务器也没文件」
-/// 这种不可能的状态,而每个调用点都要先判一遍。
+/// ⚠️ 为什么是枚举而不是「给 `PlaybackRequest` 加几个可选字段」:
+/// Emby 与文件树来源(百度网盘 / 本地文件夹)**没有共同的语义** —— Emby 有服务器 /
+/// Item / 服务端进度,文件树来源只有一条文件与它的来源内 id。做成可选字段就会出现
+/// 「既没服务器也没文件」这种不可能的状态,而每个调用点都要先判一遍。
 enum PlaybackSource: Sendable, Equatable {
     case emby(server: ServerProfile, item: EmbyItem)
     case baiduPan(file: BaiduPanFile)
+    /// 本地文件夹里的一个文件。带上来源:打开文件要它的书签(`LocalFolderAccess`),
+    /// 范围键(倍速 / 片头片尾 / 弹幕绑定)要它的 id 做隔离。
+    case localFolder(file: BaiduPanFile, source: LocalFolderSource)
 
     /// Emby 来源才有(其它来源返回 nil)
     var embyServer: ServerProfile? {
@@ -26,11 +29,22 @@ enum PlaybackSource: Sendable, Equatable {
         return nil
     }
 
-    /// 上报 / 日志用的内容标识。Emby 是 Item Id,百度是 `fs_id`。
+    /// 文件树来源(百度网盘 / 本地文件夹)的那条文件;Emby 为 nil。
+    ///
+    /// 用于两边**同一套**的本地收尾:续播卡快照、播完落成已看 + 下一集占位
+    /// (`AppContainer.finishFileSourceEpisode`)、换集带队列。
+    var file: BaiduPanFile? {
+        switch self {
+        case .emby: return nil
+        case .baiduPan(let file), .localFolder(let file, _): return file
+        }
+    }
+
+    /// 上报 / 日志用的内容标识。Emby 是 Item Id,文件树来源是来源内 id(`fs_id`)。
     var contentID: String {
         switch self {
         case .emby(_, let item): return item.id
-        case .baiduPan(let file): return String(file.fsID)
+        case .baiduPan(let file), .localFolder(let file, _): return String(file.fsID)
         }
     }
 }

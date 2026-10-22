@@ -3,7 +3,7 @@ import SwiftUI
 /// 播放来源管理:增 / 改 / 删 / 切换 / 登录。
 /// 点击行切换当前来源;行尾按钮与右键菜单提供编辑、删除、登录。
 ///
-/// 「来源」是 Emby 与百度网盘**平等共存**的一层(`docs/SOURCE_ABSTRACTION_PLAN.md` §0):
+/// 「来源」是 Emby / 百度网盘 / 本地文件夹**平等共存**的一层(`docs/SOURCE_ABSTRACTION_PLAN.md` §0):
 /// 同一个列表装两种来源,可切换、可删除、可标记最近使用。
 ///
 /// 作为设置窗口「来源」标签页的内容(`AppSettingsView`):这里不再自带
@@ -15,7 +15,8 @@ struct ServerListView: View {
     /// 已能免输入进入的 Emby 服务器(百度来源的授权状态由它自己那一页判断)
     @State private var loggedInServerIDs: Set<UUID> = []
     @State private var showsAddSheet = false
-    /// 正在编辑的来源(Emby → `ServerSettingsView`;百度 → `BaiduPanSourceSettingsView`)
+    /// 正在编辑的来源(Emby → `ServerSettingsView`;百度 → `BaiduPanSourceSettingsView`;
+    /// 本地文件夹 → `LocalFolderSourceSettingsView`)
     @State private var editingSource: SourceProfile?
     @State private var sourcePendingDeletion: SourceProfile?
     @State private var serverToLogin: ServerProfile?
@@ -27,7 +28,7 @@ struct ServerListView: View {
                 ContentUnavailableView {
                     Label("没有播放来源", systemImage: "rectangle.stack.badge.plus")
                 } description: {
-                    Text("添加一个 Emby 服务器或百度网盘开始使用。")
+                    Text("添加一个 Emby 服务器、百度网盘或本地文件夹开始使用。")
                 } actions: {
                     Button("添加来源…") { showsAddSheet = true }
                 }
@@ -51,6 +52,8 @@ struct ServerListView: View {
                 ServerSettingsView(container: container, server: server)
             case .baiduPan(let baidu):
                 BaiduPanSourceSettingsView(container: container, source: baidu)
+            case .localFolder(let local):
+                LocalFolderSourceSettingsView(container: container, source: local)
             }
         }
         .sheet(item: $serverToLogin, onDismiss: {
@@ -163,6 +166,9 @@ struct ServerListView: View {
             return "将删除「\(server.displayName)」及其保存在本地的访问令牌,该操作不可撤销。"
         case .baiduPan:
             return "将删除「\(source.displayName)」及其保存在本地的授权与密钥,该操作不可撤销。"
+        case .localFolder:
+            return "将删除「\(source.displayName)」及它在本机的观看记录,该操作不可撤销。"
+                + "文件夹里的文件不会被删除。"
         }
     }
 }
@@ -229,6 +235,7 @@ private struct SourceRow: View {
         switch source {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
+        case .localFolder: return "folder.fill"
         }
     }
 
@@ -258,6 +265,9 @@ private struct SourceRow: View {
         case .baiduPan(let baidu):
             // 应用目录名是这一行唯一有信息量的字段:它决定了能访问网盘里的什么
             return "/apps/\(baidu.folderName)"
+        case .localFolder(let local):
+            // 上一次解析书签得到的路径(展示用;访问走书签)
+            return local.lastKnownPath
         }
     }
 
@@ -285,11 +295,12 @@ private struct SourceRow: View {
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
             }
-        } else {
+        } else if case .baiduPan = source {
             Text("已连接")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        // 本地文件夹不给状态:访问权要读一次书签才知道,列表上⛔ 不报一个没核实过的「正常」
     }
 
     private var moreMenu: some View {

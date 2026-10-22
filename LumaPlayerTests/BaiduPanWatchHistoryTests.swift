@@ -134,7 +134,7 @@ final class BaiduPanWatchHistoryTests: XCTestCase {
             "3": .inProgress(seconds: 20),
         ]
 
-        let counts = BaiduPanSourceViewModel.watchedEpisodeCounts(records: records, states: states)
+        let counts = FileSourceViewModel.watchedEpisodeCounts(records: records, states: states)
 
         XCTAssertEqual(counts["/apps/LumaPlayer/琅琊榜"], 2)
         XCTAssertEqual(counts["/apps/LumaPlayer/琅琊榜/第1季"], 1)

@@ -483,7 +483,9 @@ final class MPVPlayer: @unchecked Sendable {
                     message: "load 只能在 idle 阶段调用一次(一个实例只播一个 URL)")
             }
             try setHTTPHeaderFields(headers, on: handle)
-            try mpvCommand(["loadfile", url.absoluteString], on: handle)
+            // 本地文件(本地文件夹来源)传路径,不传 `file://` URL —— 与 `addSubtitle` 同一个理由:
+            // `file:///…` 要经 lavf 的 file 协议再绕一层,中文名还得先百分号解码一遍
+            try mpvCommand(["loadfile", url.isFileURL ? url.path : url.absoluteString], on: handle)
             s.hasLoaded = true
             s.phase = .loading
         }

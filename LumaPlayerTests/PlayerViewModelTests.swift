@@ -281,7 +281,7 @@ final class PlayerViewModelTests: XCTestCase {
     private var baiduContainer: AppContainer?
 
     /// 一部百度来源的剧集:`episodeCount` 集,当前播第 `playingIndex` 集,
-    /// 队列由浏览页装配后带进请求(与 `BaiduPanSourceViewModel.play(_ item:)` 同一条路)。
+    /// 队列由浏览页装配后带进请求(与 `FileSourceViewModel.play(_ item:)` 同一条路)。
     private func makeBaiduViewModel(episodeCount: Int, playingIndex: Int) throws -> PlayerViewModel {
         let registry = try ServerRegistry(
             defaults: UserDefaults(suiteName: "test.LumaPlayer.player.baidu.\(UUID().uuidString)")!,
@@ -308,8 +308,8 @@ final class PlayerViewModelTests: XCTestCase {
                 thumbnailURL: nil))
         })
         let playing = items[playingIndex]
-        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
-            selecting: playing, in: items, filesByID: files))
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: playing, in: items, filesByID: files, source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
         let playingFile = try XCTUnwrap(files[UInt64(playing.ref.itemID) ?? 0])
 
         let container = AppContainer(

@@ -16,7 +16,7 @@ import Foundation
 /// 成立(要额外消耗网盘流量);对 **Emby 直连流**不成立 —— 播放器本来就要从头读这个文件,
 /// 这 16 MiB 正是它接下来要读的字节,服务端与内核的 HTTP 缓存都可能已经有一份。
 ///
-/// 因此本类型**只服务 Emby 直连流**,并且:
+/// 因此网络这一路**只服务 Emby 直连流**(本机文件另有 `md5(ofFileAt:)`,不花流量),并且:
 ///
 /// - 只在 `DirectStream` 且 `Size` 已知时才试 —— 转码流的前 16 MiB 是编码器输出,
 ///   与源文件不是同一份字节,算出来的 MD5 没有意义;
@@ -73,6 +73,24 @@ enum DanmakuFingerprint {
         else { return nil }
         guard data.count == accepted else { return nil }
         return MD5.hash(data)
+    }
+
+    /// 本机文件的指纹(本地文件夹来源):直接读前 16 MiB,不足 16 MiB 就是整个文件。
+    ///
+    /// 与上面那条的成本判断正好相反:读本机文件不花流量、不碰任何服务器,
+    /// 而播放内核接下来要读的也正是这一段 —— 所以本地来源**总是值得算**
+    /// (仍受设置 › 弹幕 的开关管,见 `PlayerViewModel.mediaFingerprint`)。
+    /// 读不出来返回 nil(调用方退回文件名匹配),⛔ 不抛错打断播放。
+    static func md5(ofFileAt url: URL) async -> String? {
+        guard url.isFileURL else { return nil }
+        // 读 16 MiB 是阻塞 IO:放到后台,别占调用方(主线程上的播放页)
+        let task = Task.detached(priority: .utility) { () -> String? in
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: byteCount), !data.isEmpty else { return nil }
+            return MD5.hash(data)
+        }
+        return await task.value
     }
 
     /// 校验响应是否可以拿来算指纹,返回**应该收到的字节数**;不接受返回 nil。

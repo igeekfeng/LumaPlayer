@@ -466,7 +466,7 @@ final class PlaybackPolishTests: XCTestCase {
 
     /// 一部百度来源的剧:`directory` 下摆着 `episodeCount` 集,当前播第 `playing` 集。
     ///
-    /// 队列由浏览页装配后随请求带进播放页(与 `BaiduPanSourceViewModel.play(_ item:)`
+    /// 队列由浏览页装配后随请求带进播放页(与 `FileSourceViewModel.play(_ item:)`
     /// 同一条路)—— 播放页据此才知道「这是一部剧的一集」。
     private func makeBaiduViewModel(
         container: AppContainer, directory: String, episodeCount: Int = 3, playing: Int = 0
@@ -488,8 +488,8 @@ final class PlaybackPolishTests: XCTestCase {
                 modifiedAt: nil, thumbnailURL: nil))
         })
         let current = items[playing]
-        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
-            selecting: current, in: items, filesByID: files))
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: current, in: items, filesByID: files, source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
         let file = try XCTUnwrap(files[UInt64(current.ref.itemID) ?? 0])
         return PlayerViewModel(
             container: container,

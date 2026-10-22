@@ -150,7 +150,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
     }
 
     // ⚠️ 「目录排序」那一组测试已随排序菜单一起去掉:顺序现在**固定**为剧集顺序
-    // (`BaiduPanSourceViewModel.sortedItems` 直接调 `BaiduPanSortOrder.episode`),
+    // (`FileSourceViewModel.sortedItems` 直接调 `BaiduPanSortOrder.episode`),
     // 排序算法本身仍由 `BaiduPanSortOrderTests` 覆盖。
 
     // MARK: - 续播卡片(「继续观看」区)
@@ -173,7 +173,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNotNil(records.first?.display.cover, "封面要随卡片一起记下来")
 
         // 折成 UI 卡片:能从快照重建一个够播放用的文件
-        let card = try XCTUnwrap(records.compactMap(BaiduResumeCard.init(record:)).first)
+        let card = try XCTUnwrap(records.compactMap(FileSourceResumeCard.init(record:)).first)
         XCTAssertEqual(card.title, "示例电影")
         XCTAssertEqual(card.reconstructedFile?.fsID, 42)
         XCTAssertEqual(card.reconstructedFile?.path, "/apps/LumaPlayer/a.mp4")
@@ -189,7 +189,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             display: WatchProgressStore.Display(
                 sourceID: UUID(), title: "x", locator: "/x", fileName: "x.mp4", cover: nil)
         )
-        XCTAssertNil(BaiduResumeCard(record: record))
+        XCTAssertNil(FileSourceResumeCard(record: record))
     }
 
     /// 一部剧只出一张卡:看第 1 集一半又看第 2 集一半,退出后不该出现两张同名卡片。
@@ -200,9 +200,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             makeRecord(fileID: "3", title: "别的电影", episode: nil, at: Date(timeIntervalSinceNow: -30))
         ]
 
-        let collapsed = BaiduPanSourceViewModel.oneCardPerSeries(records)
+        let collapsed = FileSourceViewModel.oneCardPerSeries(records)
         XCTAssertEqual(collapsed.map(\.fileID), ["1", "3"], "同剧同目录只留一张,取最近看的那一集")
-        let card = try XCTUnwrap(BaiduResumeCard(record: collapsed[0]))
+        let card = try XCTUnwrap(FileSourceResumeCard(record: collapsed[0]))
         XCTAssertEqual(card.subtitle, "第 2 集 · 已看到 10:00")
     }
 
@@ -213,7 +213,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             makeRecord(fileID: "2", title: "同名", locator: "/apps/LumaPlayer/B/01.mp4")
         ]
 
-        XCTAssertEqual(BaiduPanSourceViewModel.oneCardPerSeries(records).count, 2)
+        XCTAssertEqual(FileSourceViewModel.oneCardPerSeries(records).count, 2)
     }
 
     /// 「看到一半」压过「下一集」占位:倒回去重看第 1 集时,卡片该指向第 1 集,
@@ -226,17 +226,17 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
                        episode: 1, position: 600, at: Date(timeIntervalSinceNow: -30))
         ]
 
-        let collapsed = BaiduPanSourceViewModel.oneCardPerSeries(records)
+        let collapsed = FileSourceViewModel.oneCardPerSeries(records)
 
         XCTAssertEqual(collapsed.map(\.fileID), ["1"], "看到一半的那一集才是该续播的")
-        let card = try XCTUnwrap(BaiduResumeCard(record: collapsed[0]))
+        let card = try XCTUnwrap(FileSourceResumeCard(record: collapsed[0]))
         XCTAssertEqual(card.subtitle, "第 1 集 · 已看到 10:00")
     }
 
     /// 「下一集」占位的副标题报「下一集」,不报「已看到 00:00」。
     func testUpNextCardSubtitle() throws {
         let record = makeRecord(fileID: "2", title: "琅琊榜", episode: 2, upNext: true)
-        let card = try XCTUnwrap(BaiduResumeCard(record: record))
+        let card = try XCTUnwrap(FileSourceResumeCard(record: record))
         XCTAssertEqual(card.subtitle, "第 2 集 · 下一集")
         XCTAssertTrue(card.isUpNext)
     }
@@ -276,8 +276,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let items = (1...3).map { makeEpisodeItem(sourceID: sourceID, index: $0) }
         let files = makeFiles(for: items)
 
-        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
-            selecting: items[1], in: items, filesByID: files))
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: items[1], in: items, filesByID: files, source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
 
         XCTAssertEqual(queue.episodes.map(\.id), ["10", "20", "30"])
         XCTAssertEqual(queue.current?.id, "20")
@@ -300,8 +300,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             durationSeconds: nil, poster: nil, metadataOrigin: .filename)
         let files = makeFiles(for: [movie])
 
-        XCTAssertNil(BaiduPanSourceViewModel.episodeQueue(
-            selecting: movie, in: [movie], filesByID: files))
+        XCTAssertNil(FileSourceViewModel.episodeQueue(
+            selecting: movie, in: [movie], filesByID: files, source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
     }
 
     /// 只有一集:没有可切的一集 —— 播放页因此不显示换集入口。
@@ -309,8 +309,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let sourceID = UUID()
         let only = makeEpisodeItem(sourceID: sourceID, index: 1)
 
-        XCTAssertNil(BaiduPanSourceViewModel.episodeQueue(
-            selecting: only, in: [only], filesByID: makeFiles(for: [only])))
+        XCTAssertNil(FileSourceViewModel.episodeQueue(
+            selecting: only, in: [only], filesByID: makeFiles(for: [only]), source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
     }
 
     /// 同目录的花絮 / 电影不混进队列 —— 队列只收 `.episode`。
@@ -324,8 +324,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             durationSeconds: nil, poster: nil, metadataOrigin: .filename)
         let items = episodes + [extra]
 
-        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
-            selecting: episodes[0], in: items, filesByID: makeFiles(for: items)))
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: episodes[0], in: items, filesByID: makeFiles(for: items), source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
 
         XCTAssertEqual(queue.episodes.map(\.id), ["10", "20"], "花絮不占一集的位置")
     }
@@ -348,8 +348,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let noCover = makeEpisodeItem(sourceID: sourceID, index: 2)
         let items = [withCover, noCover]
 
-        let queue = try XCTUnwrap(BaiduPanSourceViewModel.episodeQueue(
-            selecting: withCover, in: items, filesByID: makeFiles(for: items)))
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: withCover, in: items, filesByID: makeFiles(for: items), source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
 
         XCTAssertEqual(queue.current?.poster, cover, "有封面就带上")
         XCTAssertEqual(queue.current?.title, "第一集", "有集名就用集名")
@@ -405,16 +405,16 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let path = "/apps/LumaPlayer/Videos/琅琊榜/第1季/01.mp4"
 
         XCTAssertEqual(
-            BaiduPanSourceViewModel.detailDirectory(
+            FileSourceViewModel.detailDirectory(
                 ofFilePath: path, topmost: "/apps/LumaPlayer/Videos"),
             "/apps/LumaPlayer/Videos/琅琊榜", "剧目录在片库根之内 → 用它")
         XCTAssertEqual(
-            BaiduPanSourceViewModel.detailDirectory(
+            FileSourceViewModel.detailDirectory(
                 ofFilePath: path, topmost: "/apps/LumaPlayer/Videos/琅琊榜/第1季"),
             "/apps/LumaPlayer/Videos/琅琊榜/第1季",
             "剧目录在片库根之上 → 退回文件所在目录,⛔ 不越界")
         XCTAssertEqual(
-            BaiduPanSourceViewModel.detailDirectory(ofFilePath: path, topmost: nil),
+            FileSourceViewModel.detailDirectory(ofFilePath: path, topmost: nil),
             "/apps/LumaPlayer/Videos/琅琊榜", "还没读到最外层时不做限制")
     }
 
@@ -422,22 +422,22 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
     /// 「继续播放」变成「播放第 1 集」。
     func testSeasonNumberFromFilePath() {
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seasonNumber(
+            FileSourceViewModel.seasonNumber(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/第1季/01.mp4"), 1)
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seasonNumber(
+            FileSourceViewModel.seasonNumber(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/S0/01.mp4"), 0,
             "第 0 季(特别篇)是合法季号,⛔ 不当「没解析出来」")
         XCTAssertEqual(
-            BaiduPanSourceViewModel.seasonNumber(
+            FileSourceViewModel.seasonNumber(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/Show.S02E07.mkv"), 2,
             "季号也能来自文件名")
         XCTAssertNil(
-            BaiduPanSourceViewModel.seasonNumber(
+            FileSourceViewModel.seasonNumber(
                 ofFilePath: "/apps/LumaPlayer/琅琊榜/01.mp4"),
             "平铺存法认不出季号 → 详情页退回第一季(与判定层同一口径)")
         XCTAssertNil(
-            BaiduPanSourceViewModel.seasonNumber(
+            FileSourceViewModel.seasonNumber(
                 ofFilePath: "/apps/LumaPlayer/电影/300.mp4"))
     }
 
@@ -454,8 +454,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let sibling = makeRecord(
             fileID: "2", title: "别的剧", locator: "/apps/LumaPlayer/别的剧/01.mp4")
 
-        XCTAssertTrue(BaiduPanSourceViewModel.isHidden(episode, by: hidden))
-        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(sibling, by: hidden))
+        XCTAssertTrue(FileSourceViewModel.isHidden(episode, by: hidden))
+        XCTAssertFalse(FileSourceViewModel.isHidden(sibling, by: hidden))
     }
 
     /// 隐藏的是**单个文件**时只挡那一条:同剧别的集还能接着看。
@@ -467,8 +467,8 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let next = makeRecord(
             fileID: "2", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/02.mp4")
 
-        XCTAssertTrue(BaiduPanSourceViewModel.isHidden(deleted, by: hidden))
-        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(next, by: hidden))
+        XCTAssertTrue(FileSourceViewModel.isHidden(deleted, by: hidden))
+        XCTAssertFalse(FileSourceViewModel.isHidden(next, by: hidden))
     }
 
     /// 前缀相似的兄弟目录不能误伤(`琅琊榜` 与 `琅琊榜2`)。
@@ -478,14 +478,14 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let sibling = makeRecord(
             fileID: "2", title: "琅琊榜2", locator: "/apps/LumaPlayer/琅琊榜2/01.mp4")
 
-        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(sibling, by: hidden))
+        XCTAssertFalse(FileSourceViewModel.isHidden(sibling, by: hidden))
     }
 
     func testNoHiddenPathsKeepsEveryRecord() throws {
         let record = makeRecord(
             fileID: "1", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/01.mp4")
 
-        XCTAssertFalse(BaiduPanSourceViewModel.isHidden(record, by: []))
+        XCTAssertFalse(FileSourceViewModel.isHidden(record, by: []))
     }
 
     // MARK: - 夹具

@@ -47,6 +47,18 @@ extension PlaybackSpeedScope {
 
     /// 百度侧的隔离维度常量:只有一份授权,这一格没有第二个取值。
     static let baiduIsolation = "baidu-pan"
+
+    /// 本地文件夹:口径与百度相同(剧 = 剧目录,不是剧 = 这一条文件),
+    /// 隔离维度是**来源**—— 两个来源里同名的剧目录不是同一部。
+    static func localFolder(
+        sourceID: UUID, file: BaiduPanFile, isEpisodeSeries: Bool
+    ) -> PlaybackSpeedScope {
+        PlaybackSpeedScope(
+            isolation: "local|\(sourceID.uuidString)",
+            content: isEpisodeSeries
+                ? BaiduPanPath.seriesDirectory(ofFilePath: file.path)
+                : String(file.fsID))
+    }
 }
 
 /// 「同一部剧沿用同一个倍速」的内存记录。

@@ -25,12 +25,12 @@ import SwiftUI
 ///
 /// ⚠️ 演职员是**整部作品**的(TMDB `credits` 没有分季版本被本项目采用),
 /// 所以切季不会改变那一排,它也不随季刷新。
-struct BaiduPanSeriesDetailView: View {
-    @Bindable var viewModel: BaiduPanSourceViewModel
+struct FileSourceSeriesDetailView: View {
+    @Bindable var viewModel: FileSourceViewModel
     let structure: BaiduPanSeriesStructure
     let store: PosterImageStore
 
-    /// ⛔ 唤起播放窗口。与 `BaiduPanBrowserView` 同一条纪律:写请求与开窗必须成对,
+    /// ⛔ 唤起播放窗口。与 `FileSourceBrowserView` 同一条纪律:写请求与开窗必须成对,
     /// 少了 `openWindow` 就是点了播放毫无动静。
     @Environment(\.openWindow) private var openWindow
 
@@ -356,7 +356,7 @@ struct BaiduPanSeriesDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            BaiduPanEpisodeShelf(
+            FileSourceEpisodeShelf(
                 episodes: viewModel.episodes,
                 store: store,
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
@@ -438,7 +438,7 @@ struct BaiduPanSeriesDetailView: View {
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
                         ForEach(cast) { person in
-                            BaiduPanPersonCard(
+                            FileSourcePersonCard(
                                 person: person,
                                 descriptor: profileDescriptor(for: person),
                                 store: store
@@ -485,7 +485,7 @@ struct BaiduPanSeriesDetailView: View {
 /// ⚠️ 与 Emby 的 `DetailPeopleRow` 同形,两处差别都源于 TMDB:
 /// 头像走 `ImageDescriptor.remote`(不是 `ImageSpec`),以及头像接近 2:3 竖图
 /// —— 裁成圆之后是**居中裁切**(`PosterImage` 用 `.fill`)。
-private struct BaiduPanPersonCard: View {
+private struct FileSourcePersonCard: View {
     let person: TMDBPerson
     let descriptor: ImageDescriptor?
     let store: PosterImageStore
@@ -523,7 +523,7 @@ private struct BaiduPanPersonCard: View {
 ///
 /// ⚠️ 与 Emby 那边的差别都源于百度**不给时长**:卡片上没有时长 / 剩余,
 /// 进度条也画不出来(没有总时长就没有比例,⛔ 不猜一个),改成一行「已看到 mm:ss」文字。
-private struct BaiduPanEpisodeShelf: View {
+private struct FileSourceEpisodeShelf: View {
     let episodes: [SourceItem]
     let store: PosterImageStore
     let resumeSeconds: (SourceItem) -> Double?
@@ -561,7 +561,7 @@ private struct BaiduPanEpisodeShelf: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
                     ForEach(episodes) { episode in
-                        BaiduPanEpisodeCard(
+                        FileSourceEpisodeCard(
                             episode: episode,
                             store: store,
                             resumeSeconds: resumeSeconds(episode),
@@ -599,7 +599,7 @@ private struct BaiduPanEpisodeShelf: View {
 }
 
 /// 一集一张卡:剧照(16:9)+ 集号与集名 + 简介 + 已看位置。
-private struct BaiduPanEpisodeCard: View {
+private struct FileSourceEpisodeCard: View {
     let episode: SourceItem
     let store: PosterImageStore
     /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)

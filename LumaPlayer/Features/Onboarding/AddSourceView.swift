@@ -39,6 +39,12 @@ struct AddSourceView: View {
                     onBack: { selection = nil },
                     onDone: onFinish
                 )
+            case .some(.localFolder):
+                LocalFolderAddView(
+                    container: container,
+                    onBack: { selection = nil },
+                    onDone: onFinish
+                )
             }
         }
     }
@@ -50,7 +56,7 @@ struct AddSourceView: View {
             OnboardingFormHeader(
                 systemImage: "rectangle.stack.badge.plus",
                 title: "添加播放来源",
-                subtitle: "选择要从哪里播放。Emby 服务器与百度网盘可以同时存在,随时切换。"
+                subtitle: "选择要从哪里播放。Emby 服务器、百度网盘与本地文件夹可以同时存在,随时切换。"
             )
 
             VStack(spacing: Metrics.spacingM) {
@@ -101,7 +107,7 @@ struct AddSourceView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// 子流程完成(百度授权成功并落库):切来源已经在容器里做掉了,
+    /// 子流程完成(百度授权成功 / 本地文件夹选好,并已落库):切来源已经在容器里做掉了,
     /// 这里只负责把这一 sheet 关掉。
     private func onFinish() {
         dismiss()
@@ -112,6 +118,7 @@ struct AddSourceView: View {
 enum SourceKind: String, CaseIterable, Identifiable, Hashable {
     case emby
     case baiduPan
+    case localFolder
 
     var id: String { rawValue }
 
@@ -119,6 +126,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "Emby 服务器"
         case .baiduPan: return "百度网盘"
+        case .localFolder: return "本地文件夹"
         }
     }
 
@@ -126,6 +134,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "连接到自建的 Emby / Jellyfin 兼容服务器。"
         case .baiduPan: return "播放开放平台应用目录下的网盘文件。"
+        case .localFolder: return "播放本机、外接盘或已挂载网络卷上某个文件夹里的视频。"
         }
     }
 
@@ -133,6 +142,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
+        case .localFolder: return "folder.fill"
         }
     }
 }

@@ -8,7 +8,7 @@ import os
 ///
 /// 百度的调用配额极低(`docs/BAIDU_PAN_API.md` §7),而「打开来源 → 进目录 →
 /// 退回来 → 再进」这种走法每一层都是 `list` + `filemetas` 两次请求。
-/// 会话内的内存缓存(`BaiduPanSourceViewModel.directoryCache`)只活到页面重建为止
+/// 会话内的内存缓存(`FileSourceViewModel.directoryCache`)只活到页面重建为止
 /// —— 切一次来源(ViewModel 按 `source.id` 重建)或重启 App 就全空了,
 /// 于是每次冷启动都要转圈等网络。
 ///

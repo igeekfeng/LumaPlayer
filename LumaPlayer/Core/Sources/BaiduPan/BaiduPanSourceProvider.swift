@@ -9,7 +9,7 @@ import Foundation
 /// ⛔ 不必知道封面为什么要另外发一次请求、也不必知道刮削走的是哪个服务。
 ///
 /// ⛔ 播放不走它 —— 那条走 `BaiduPanSessionPreparer`(生命周期与浏览不同)。
-actor BaiduPanSourceProvider: SourceProvider {
+actor BaiduPanSourceProvider: FileSourceBrowsing {
 
     /// 封面取到多宽。
     ///
@@ -66,21 +66,6 @@ actor BaiduPanSourceProvider: SourceProvider {
         try await content(directory: library.libraryID).items
     }
 
-    /// 一次目录读取的**完整结果**。
-    ///
-    /// 为什么把原始文件一起交回去:合成后的 `SourceItem` 只保留展示所需字段,
-    /// 而播放与「进目录」要的 `path` / 真实文件名不在里面。
-    /// ⛔ 让调用方**再列一次目录**去拿它们是不可接受的 ——
-    /// 配额见 §7(`docs/BAIDU_PAN_API.md`)。
-    struct DirectoryContent: Sendable {
-        let items: [SourceItem]
-        /// `fs_id` → 原始文件
-        let filesByID: [UInt64: BaiduPanFile]
-        /// `fs_id` → 时长(秒)。只含这一次批量取到的(**列表接口本身不给时长**)。
-        /// 落盘缓存要连它一起存 —— 否则冷启动的卡片上又只剩标题没有时长。
-        let durations: [UInt64: Double]
-    }
-
     /// 列一个目录 → 合成条目 → **批量**换封面地址与时长(全程只发两次请求:
     /// 一次 `list`、一次 `filemetas`)。
     ///
@@ -91,7 +76,7 @@ actor BaiduPanSourceProvider: SourceProvider {
     /// 封面那批 id 本来就要发一次,把视频 id 并进去几乎不增加请求数,
     /// 却换来卡片上的时长 / 剩余 / 进度条 —— 这是「百度不给时长」这件事
     /// 在客户端能补的部分。
-    func content(directory: String) async throws -> DirectoryContent {
+    func content(directory: String) async throws -> FileSourceDirectoryContent {
         let files = try await connection.files(inDirectory: directory)
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: files, sourceID: sourceID)
@@ -133,7 +118,7 @@ actor BaiduPanSourceProvider: SourceProvider {
                 )
             )
         }
-        return DirectoryContent(
+        return FileSourceDirectoryContent(
             items: items,
             filesByID: Dictionary(uniqueKeysWithValues: files.map { ($0.fsID, $0) }),
             durations: meta.durations

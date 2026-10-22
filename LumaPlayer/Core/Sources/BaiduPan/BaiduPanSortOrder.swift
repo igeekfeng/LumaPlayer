@@ -253,7 +253,7 @@ enum BaiduPanWatchFilter: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 菜单上的图标(与 `BaiduPanCard` 上那个 ✓ 同一套语义)
+    /// 菜单上的图标(与 `FileSourceCard` 上那个 ✓ 同一套语义)
     var symbol: String {
         switch self {
         case .all: return "square.grid.2x2"

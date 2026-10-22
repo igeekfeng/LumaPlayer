@@ -40,6 +40,12 @@ final class AppContainer {
     /// 百度网盘来源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
     /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
     private var baiduConnectionInstance: BaiduPanConnection?
+    /// 本地文件夹来源的访问权(安全作用域书签)。全 App 一份:访问权按来源开一次、
+    /// 开着直到来源被删 / 换文件夹(理由见 `LocalFolderAccess`)。
+    let localFolderAccess: LocalFolderAccess
+    /// 本地视频时长的进程内记忆(`LocalMediaDurationCache`):本地目录每次进都重新读盘,
+    /// 时长不必每次都去读文件头。
+    let localMediaDurations = LocalMediaDurationCache()
     /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
     /// 必须是同一个实例,播放中改设置才能即时生效。
     let subtitleStyles: SubtitleStyleStore
@@ -91,7 +97,8 @@ final class AppContainer {
         subtitleBindings: SubtitleBindingStore? = nil,
         baiduDirectoryCache: BaiduPanDirectoryCache? = nil,
         baiduScrapeCache: BaiduPanScrapeCache? = nil,
-        baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil
+        baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil,
+        localFolderAccess: LocalFolderAccess? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
@@ -119,6 +126,7 @@ final class AppContainer {
             ?? BaiduPanScrapeCache(fileURL: BaiduPanScrapeCache.defaultFileURL)
         self.baiduEpisodeCounts = baiduEpisodeCounts
             ?? BaiduPanEpisodeCountStore(fileURL: BaiduPanEpisodeCountStore.defaultFileURL)
+        self.localFolderAccess = localFolderAccess ?? LocalFolderAccess()
         self.danmakuSettings = DanmakuSettingsStore(defaults: preferences)
         self.danmaku = danmaku ?? DanmakuService(
             credentials: credentials,
@@ -304,6 +312,107 @@ final class AppContainer {
         state.serverListRevision += 1
     }
 
+    // MARK: - 本地文件夹
+
+    /// 添加一个本地文件夹来源:做书签 → 落库 → 切过去。
+    ///
+    /// - Parameters:
+    ///   - folderURL: 打开面板 / `fileImporter` 给的文件夹 URL(本次运行带访问权)
+    ///   - displayName: 留空则用文件夹名
+    ///
+    /// 抛 `LocalFolderError`(做不出书签 / 文件夹不在)与 `ServerRegistryError`。
+    @discardableResult
+    func addLocalFolderSource(
+        folderURL: URL, displayName: String = ""
+    ) async throws -> LocalFolderSource {
+        let bookmark = try await localFolderAccess.makeBookmark(forFolderAt: folderURL)
+        let rootName = LocalFolderSource.rootName(forFolderAt: folderURL)
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = LocalFolderSource(
+            displayName: trimmed.isEmpty ? rootName : trimmed,
+            bookmark: bookmark,
+            lastKnownPath: folderURL.path,
+            rootName: rootName)
+        try await registry.add(.localFolder(source))
+        state.serverListRevision += 1
+        // ⛔ 与百度同一条:不写 `state.currentServer = nil`(那会把 currentSource 一并抹掉)
+        state.currentSource = .localFolder(source)
+        state.route = .browse
+        return source
+    }
+
+    /// 换一个文件夹(原文件夹被挪走 / 外接盘换了 / 访问权失效时,用户重新选一次)。
+    ///
+    /// ⚠️ **根名不变**(`rootName`):条目路径与 id 都挂在它下面,换了文件夹之后
+    /// 同名同路径的文件还认得出来,续播 / 隐藏 / 已看记录都还在。
+    @discardableResult
+    func relinkLocalFolder(
+        _ source: LocalFolderSource, to folderURL: URL
+    ) async throws -> LocalFolderSource {
+        let bookmark = try await localFolderAccess.makeBookmark(forFolderAt: folderURL)
+        var updated = await registry.allSources()
+            .first { $0.id == source.id }?.localFolderSource ?? source
+        updated.bookmark = bookmark
+        updated.lastKnownPath = folderURL.path
+        // 旧书签打开的访问权先关掉,下次读盘按新书签重开
+        await localFolderAccess.close(sourceID: source.id)
+        try await registry.update(.localFolder(updated))
+        state.serverListRevision += 1
+        if state.currentSource?.id == source.id {
+            state.currentSource = .localFolder(updated)
+        }
+        return updated
+    }
+
+    /// 改本地文件夹来源的显示名(留空则回到文件夹名)。
+    func renameLocalFolderSource(_ source: LocalFolderSource, displayName: String) async throws {
+        var updated = await registry.allSources()
+            .first { $0.id == source.id }?.localFolderSource ?? source
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.displayName = trimmed.isEmpty ? updated.rootName : trimmed
+        try await registry.update(.localFolder(updated))
+        state.serverListRevision += 1
+        if state.currentSource?.id == source.id {
+            state.currentSource = .localFolder(updated)
+        }
+    }
+
+    /// 本地文件夹来源的根目录 URL(访问权已打开)。浏览、封面、播放都经这里。
+    ///
+    /// 以注册表里的**现值**为准(调用方手上的可能是换文件夹之前的旧快照)。
+    /// 系统报书签陈旧时把新书签写回注册表 —— ⚠️ 不 +1 `serverListRevision`:
+    /// 这是一次静默维护,不该让浏览页把它当成「来源变了」去重读。
+    func localFolderRoot(for source: LocalFolderSource) async throws -> URL {
+        let current = await registry.allSources()
+            .first { $0.id == source.id }?.localFolderSource ?? source
+        let resolution = try await localFolderAccess.rootURL(for: current)
+        if resolution.refreshedBookmark != nil || resolution.url.path != current.lastKnownPath {
+            var updated = current
+            if let refreshed = resolution.refreshedBookmark { updated.bookmark = refreshed }
+            updated.lastKnownPath = resolution.url.path
+            do {
+                try await registry.update(.localFolder(updated))
+            } catch {
+                // 写不回去只影响「下次启动还会再报一次陈旧」,⛔ 不挡这一次访问
+                Self.localFolderLogger.error(
+                    "本地文件夹书签写回失败:\(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return resolution.url
+    }
+
+    /// 本地文件夹来源的内容能力(浏览页用)。
+    func localFolderProvider(for source: LocalFolderSource) -> LocalFolderSourceProvider {
+        LocalFolderSourceProvider(
+            source: source,
+            resolveRoot: { try await self.localFolderRoot(for: source) },
+            durations: localMediaDurations,
+            scraper: metadataScraper())
+    }
+
+    private static let localFolderLogger = Logger(
+        subsystem: NetworkDiagnostics.subsystem, category: "local-folder")
+
     /// 切换当前来源。切换时清除旧来源的临时内容与播放器状态(CLAUDE.md「架构主线」)。
     func switchCurrent(to source: SourceProfile) async throws {
         stopPlayback(unlessOn: source.id)
@@ -455,9 +564,9 @@ final class AppContainer {
         state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
     }
 
-    /// 播百度网盘里的一个文件。
+    /// 播文件树来源(百度网盘 / 本地文件夹)里的一个文件。
     ///
-    /// ⚠️ 百度来源与「当前 Emby 服务器」无关,所以切 Emby 服务器**不会**打断它
+    /// ⚠️ 这类来源与「当前 Emby 服务器」无关,所以切 Emby 服务器**不会**打断它
     /// (见 `stopPlayback(unlessOn:)`)。
     ///
     /// ⛔ 与 Emby 那条一样:**调用方(视图)必须自己 `openWindow`**。这里只写请求,
@@ -467,15 +576,16 @@ final class AppContainer {
     ///   没有(单条视频 / 「继续观看」卡片)就传 nil —— 播放页据此不显示换集入口。
     func play(
         _ file: BaiduPanFile,
+        in source: FileSource,
         subtitleFiles: [BaiduPanFile] = [],
         episodeQueue: EpisodeQueue? = nil,
         fromBeginning: Bool = false
     ) {
         state.nowPlaying = PlaybackRequest(
-            baiduFile: file,
-            subtitleFiles: subtitleFiles,
+            source: source.playbackSource(for: file),
             startFromBeginning: fromBeginning,
-            episodeQueue: episodeQueue)
+            episodeQueue: episodeQueue,
+            subtitleFiles: subtitleFiles)
     }
 
     /// 播一个**已经装配好的**请求(播放页换集用)。
@@ -486,7 +596,7 @@ final class AppContainer {
         state.nowPlaying = request
     }
 
-    /// 记下「这条百度内容在「继续观看」里长什么样」:标题 + 定位 + 封面快照。
+    /// 记下「这条文件树来源的内容在「继续观看」里长什么样」:标题 + 定位 + 封面快照。
     ///
     /// 由浏览页在**起播那一刻**调用 —— 此刻 `SourceItem` 刚合成过,标题与封面
     /// 都在手上。⛔ 不要在渲染续播区时回头再列一遍网盘:配额见 §7
@@ -504,7 +614,8 @@ final class AppContainer {
         } catch {}
     }
 
-    /// 百度来源**播完一集**之后的本地收尾:① 这一集落成「已看」 ② 续播卡指向下一集没看的。
+    /// 文件树来源(百度 / 本地文件夹)**播完一集**之后的本地收尾:
+    /// ① 这一集落成「已看」 ② 续播卡指向下一集没看的。
     ///
     /// ## 为什么需要它
     ///
@@ -523,13 +634,13 @@ final class AppContainer {
     /// - Parameters:
     ///   - endedAt: 收尾那一刻的位置(秒)。播到文件末尾 = 这一集到此为止。
     ///   - durationSeconds: 已知总时长;百度来源常常是 nil。
-    func finishBaiduEpisode(
+    func finishFileSourceEpisode(
         _ finished: PlaybackEpisode,
         in queue: EpisodeQueue,
         endedAt positionSeconds: Double,
         durationSeconds: Double?
     ) async {
-        guard let file = finished.source.baiduFile else { return }
+        guard let file = finished.source.file else { return }
         do {
             try await watchProgress.markFinished(
                 fileID: finished.id,
@@ -546,7 +657,7 @@ final class AppContainer {
         }
         guard let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
         for episode in queue.episodes[(start + 1)...] {
-            guard let nextFile = episode.source.baiduFile,
+            guard let nextFile = episode.source.file,
                   let item = episode.resumeItem else { continue }
             guard await watchProgress.watchState(forFileID: episode.id) != .watched else { continue }
             do {
@@ -596,10 +707,17 @@ final class AppContainer {
                 file: file,
                 subtitleFiles: request.subtitleFiles
             )
+        case .localFolder(let file, let source):
+            return LocalFileSessionPreparer(
+                file: file,
+                source: source,
+                subtitleFiles: request.subtitleFiles,
+                resolveRoot: { try await self.localFolderRoot(for: source) }
+            )
         }
     }
 
-    /// 按来源装配「进度出口」:Emby → 服务端上报;百度 → 本地续播库。
+    /// 按来源装配「进度出口」:Emby → 服务端上报;百度 / 本地文件夹 → 本地续播库。
     func makeReporter(for request: PlaybackRequest) -> any PlaybackReporting {
         switch request.source {
             // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
@@ -610,7 +728,7 @@ final class AppContainer {
             return PlaybackProgressReporter { endpoint in
                 try await connection.reportPlayback(endpoint)
             }
-        case .baiduPan:
+        case .baiduPan, .localFolder:
             return LocalResumeReporting(store: watchProgress)
         }
     }
@@ -624,7 +742,7 @@ final class AppContainer {
         case .emby(_, let item):
             return item.userData?.playbackPositionTicks
                 .flatMap { TickConverter.seconds(fromTicks: $0) } ?? 0
-        case .baiduPan(let file):
+        case .baiduPan(let file), .localFolder(let file, _):
             return await watchProgress.resumeSeconds(forFileID: String(file.fsID)) ?? 0
         }
     }
@@ -680,7 +798,14 @@ final class AppContainer {
         if state.nowPlaying?.source.embyServer?.id == id {
             state.nowPlaying = nil
         }
+        if case .localFolder(_, let playing) = state.nowPlaying?.source, playing.id == id {
+            // 访问权马上要关,正在播的文件下一次读就会失败 —— 先停
+            state.nowPlaying = nil
+        }
         let target = await registry.allSources().first { $0.id == id }
+        if target?.localFolderSource != nil {
+            await purgeLocalFolderData(sourceID: id)
+        }
         if let baidu = target?.baiduPanSource {
             // 这个来源自己的片库根先清掉(它是按来源存的)
             try? await credentials.deleteBaiduPanLibraryRoot(for: baidu.id)
@@ -723,6 +848,34 @@ final class AppContainer {
         if await registry.allSources().isEmpty {
             state.route = .onboarding
         }
+    }
+
+    /// 本地文件夹来源被删时,把只属于它的本地数据一起清掉。
+    ///
+    /// 与百度那边不同:本地条目的 id 由「来源 id + 路径」哈希而来(`LocalFolderListing.fileID`),
+    /// 来源一删这些记录就**永远对不上**任何东西 —— 留着只是垃圾,而且路径里有片名(隐私)。
+    /// 清不掉只记日志,⛔ 不挡删除(删来源这件事本身已经成立)。
+    private func purgeLocalFolderData(sourceID id: UUID) async {
+        await localFolderAccess.close(sourceID: id)
+        await baiduScrapeCache.purge(sourceID: id)
+        await baiduEpisodeCounts.purge(sourceID: id)
+        // 各清各的:一处写盘失败不该让后面几样留在盘上
+        func attempt(_ what: String, _ work: () async throws -> Void) async {
+            do {
+                try await work()
+            } catch {
+                Self.localFolderLogger.error(
+                    "删除本地文件夹来源时清\(what, privacy: .public)失败:\(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let prefix = "local|\(id.uuidString)|"
+        await attempt("观看记录") {
+            let records = await watchProgress.storedRecords(sourceID: id).map(\.fileID)
+            try await watchProgress.remove(fileIDs: records)
+        }
+        await attempt("隐藏记录") { try await hiddenItems.purge(sourceID: id) }
+        await attempt("字幕记录") { try await subtitleBindings.purge(keyPrefix: prefix) }
+        await attempt("弹幕绑定") { try await danmaku.purgeBindings(keyPrefix: prefix) }
     }
 
     /// 删除服务器(Emby 便利入口)。

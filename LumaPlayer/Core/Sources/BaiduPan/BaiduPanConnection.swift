@@ -237,7 +237,7 @@ actor BaiduPanConnection {
     /// 只靠它就能一键删掉整个 `/apps/{应用目录名}`。
     ///
     /// ⚠️ 「删掉的若是片库根,顺手清掉书签」这件事**不在这里**:片库根按**来源**存,
-    /// 这个 actor 不知道有哪些来源 —— 由调用方(`BaiduPanSourceViewModel.delete`)处置。
+    /// 这个 actor 不知道有哪些来源 —— 由调用方(`FileSourceViewModel.delete`)处置。
     ///
     /// 走 `withToken`:token 失效时它会刷新后重试一次。删除**不是幂等**操作,
     /// 但这里的重试只发生在「服务端说 token 失效」的码上 —— 那种情况下第一次

@@ -297,7 +297,7 @@ final class BrowseChromeController: NSObject {
     /// 页面自己的「返回」(导航栈之外的层级,目前只有百度目录的上一层)。
     /// nil = 页面没有自己的返回;导航栈不空时栈优先(见 `BrowseView.backAction`)。
     var pageBackAction: (@MainActor () -> Void)?
-    /// 根页顶部有 hero 的来源(Emby 首页 `HomeHeroSlot`、百度剧集详情 `BaiduPanBrowserView` 上报)。
+    /// 根页顶部有 hero 的来源(Emby 首页 `HomeHeroSlot`、百度剧集详情 `FileSourceBrowserView` 上报)。
     /// 有就把栏底换成 hero 的压暗;`BrowseView` 只在栈空时读。
     ///
     /// 按**来源 id** 登记而不是一个布尔:换来源时新根页「有 hero」与旧根页「没了」的上报

@@ -7,7 +7,7 @@ import Foundation
 /// - **Emby** 有可靠的剧身份 `SeriesId`,与 `PlaybackSpeedStore.scopeID` 同口径
 ///   (`SeriesId` 优先,电影等没有 `SeriesId` 的项退回自己的 `Id`,等价于「这一部」)。
 ///   服务器一起进键是沿用「每台服务器完全隔离」—— 不同服务器上的 Item Id 可能撞车。
-/// - **百度**没有 `SeriesId`(见 `docs/BAIDU_PAN_API.md`),只能用启发式:文件名明确是
+/// - **百度 / 本地文件夹**没有 `SeriesId`(见 `docs/BAIDU_PAN_API.md`),只能用启发式:文件名明确是
 ///   剧集的一集时按**父目录**归组(同一目录 = 同一部剧),否则退回这一条文件自己。
 ///   ⚠️ 这是本功能唯一的近似,判据刻意只取**强信号**:`parse(name:).episode != nil`
 ///   (`S01E02` / `第12集`)或纯集号(`01.mp4`)。
@@ -25,6 +25,13 @@ enum ManualMarkersScope {
                 return "baidu|\((file.path as NSString).deletingLastPathComponent)"
             }
             return "baidu|fsid:\(file.fsID)"
+        case .localFolder(let file, let source):
+            // 与百度同一启发式;来源 id 进键 —— 两个来源里同名的目录不是同一部剧
+            let isolation = "local|\(source.id.uuidString)"
+            if isEpisodeLike(file) {
+                return "\(isolation)|\((file.path as NSString).deletingLastPathComponent)"
+            }
+            return "\(isolation)|fsid:\(file.fsID)"
         }
     }
 

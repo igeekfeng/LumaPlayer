@@ -633,7 +633,7 @@ private struct ImageCacheSettingsView: View {
 /// ## 这里只有「只隐藏」的那些
 ///
 /// 连网盘一起删掉的条目⛔ 不进这个列表 —— 文件已经不在网盘,恢复不出任何东西
-/// (`BaiduPanSourceViewModel.delete` 的注释)。所以这个列表的每一条都是
+/// (`FileSourceViewModel.delete` 的注释)。所以这个列表的每一条都是
 /// **网盘上还在、只是不想看见**的条目。
 ///
 /// ⚠️ 恢复只把**条目**放回列表,**不还原观看记录**:隐藏时本地进度已经清掉了

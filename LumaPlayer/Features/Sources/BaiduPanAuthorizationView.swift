@@ -7,7 +7,7 @@ import CoreImage
 /// 分两屏是刻意的:**缺密钥**与**缺授权**是两件不同的事
 /// (前者要去开放平台建应用,后者扫码就行)。合成一个「未授权」会让人找不到北。
 struct BaiduPanAuthorizationView: View {
-    let viewModel: BaiduPanSourceViewModel
+    let viewModel: FileSourceViewModel
 
     @State private var appKey = ""
     @State private var secretKey = ""

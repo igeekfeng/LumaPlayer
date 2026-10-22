@@ -1,6 +1,7 @@
 # 播放来源抽象改造方案
 
-> 状态:**P1–P6 全部落地(全量 614 项测试全绿、0 warning)**。
+> 状态:**P1–P6 全部落地(全量 614 项测试全绿、0 warning)**;
+> 2026-10-22 加了第三个来源「本地文件夹」(§11)。
 > 本文件是这次改造的唯一计划来源。
 > 阶段落地会改动本文的「状态」段与 §9 的勾选,其余章节原则上不再改结构。
 >
@@ -279,7 +280,7 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 - ✅ **状态**:`AppState.currentSource: SourceProfile?` 成为权威字段;`currentServer`
   保留为派生访问器(读 Emby 档案、写回 `.emby(_)`)—— Emby 侧 39 个文件零改动。
 - ✅ **百度来源页**:`BaiduPanSourceView`(三屏:配密钥 → 扫码 → 浏览目录)/
-  `BaiduPanSourceViewModel` / `BaiduPanAuthorizationView` / `BaiduPanBrowserView`。
+  `FileSourceViewModel` / `BaiduPanAuthorizationView` / `FileSourceBrowserView`。
 - ✅ **播放层去 Emby 化**(§10.1 的会话准备协议一并落地):
   - 新增 `PlaybackSessionPreparing`(会话准备)与 `PlaybackReporting`(进度出口)两个协议;
     `PlayerViewModel` 只认协议,`PlaybackSessionCoordinator` 与 `BaiduPanSessionPreparer`
@@ -326,12 +327,12 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 - ✅ `WatchProgressStore` 增加**展示快照**(`Entry.display`):播放那一刻把标题 /
   定位 / 封面快照记下来,续播卡片才渲染得出来 —— ⛔ 不回头再列网盘(配额)。
   旧记录没有这个字段,照常解码(向后兼容)。
-- ✅ 百度来源页顶部加「继续观看」区(`BaiduPanBrowserView.resumeShelf`):
+- ✅ 百度来源页顶部加「继续观看」区(`FileSourceBrowserView.resumeShelf`):
   跨目录列出本地有进度的条目,卡片显示标题 + 封面 + 「已看到 mm:ss」,可续播 /
   可「移出继续观看」。**这是 Emby 首页那一行的对位物**(决策见 §6.7)。
 - ✅ **2026-10-14 交互对齐 Emby 那一行**:点卡片上的播放按钮直接续播,
   点卡片**其余位置**进详情页(此前点整张卡都是直接播)。落点在
-  `BaiduPanSourceViewModel.detailDirectory` —— 剧目录优先(季文件夹存法跳过季文件夹)、
+  `FileSourceViewModel.detailDirectory` —— 剧目录优先(季文件夹存法跳过季文件夹)、
   并默认选中卡片那一集所属的季;不是剧的条目落在文件所在目录(⛔ 百度没有单文件详情页)。
 - ⛔ `BrowseRoute` **未改**:本次形态下百度页是导航栈根页,续播卡片不 push 任何路由 ——
   「点卡片其余位置进详情页」是**本页内容换一屏**(与手点目录进去同一条路),
@@ -347,7 +348,7 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
   - **真删**走 `forget(fileIDs:)`:顺手封掉这批 id,正在播的会话报进度也写不回来。
   - `HiddenItemsStore.Item` 因此多了 `path` / `isDirectory`(老记录缺这两键,解码走
     `decodeIfPresent` —— 见 `HiddenItemsStoreTests.testLegacyFileWithoutPathDecodes`),
-    隐藏一个**目录**时目录里各集的卡片一并被滤掉(`BaiduPanSourceViewModel.isHidden`)。
+    隐藏一个**目录**时目录里各集的卡片一并被滤掉(`FileSourceViewModel.isHidden`)。
   - ⚠️ 恢复隐藏**不还原进度**。
 - ✅ **2026-10-20 观看状态(已看 / 未看)**:百度**没有任何播放状态接口**(§2 只有授权 /
   列表 / 元信息 / 播放流 / 删除 / 改名),所以这一态只能本地维护 —— 与进度同源,
@@ -367,7 +368,7 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
   位置 0、不算看过、不续播,只是让卡片接得上。两个生产点,都零额外请求:
   ① **播完一集** → 用这次播放的 `EpisodeQueue` 往后找第一个没看的集
   (`AppContainer.advanceBaiduUpNext`,跳过已看 / 已有进度的);
-  ② **详情页标已看** → 用 `episodes` 找第一个没看的集(`BaiduPanSourceViewModel.advanceUpNext`)。
+  ② **详情页标已看** → 用 `episodes` 找第一个没看的集(`FileSourceViewModel.advanceUpNext`)。
   占位卡副标题报「下一集」、不画进度条;真播了一点就由 `record` 改回普通进度记录。
   缺口见 `KNOWN_ISSUES.md`(季末不指向下一季、网格单条标记不补位)。
 - ✅ **2026-10-20 从「继续观看」进详情页的封面**:`openDetail(for:)` 原来把
@@ -423,13 +424,13 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
   这些子目录就是各季;②否则这一层的集文件(`kind == .episode`)按**第 1 季**处理 ——
   能这么做是因为合成器已经用「同目录 ≥2 个集号型文件名」的闸门把平铺的电影排除了。
   两条都不满足 → 普通目录,⛔ **不猜**:片库里的分类目录(子目录是片名)必须继续走网格。
-  判成剧时 `BaiduPanBrowserView` 换成 `BaiduPanSeriesDetailView`(海报 / 简介 / 季 / 分集),
+  判成剧时 `FileSourceBrowserView` 换成 `FileSourceSeriesDetailView`(海报 / 简介 / 季 / 分集),
   字段一律「TMDB 能给就显示,给不了就整块隐藏」。限制与未验证项见 `KNOWN_ISSUES.md`。
 - **2026-10-14 补充(详情页的剧级扩展信息 + 演职员)**:类型 / 评分 / 标语 / 状态 /
   制片公司 / 电视台 / 演员表 / 导演 / 编剧**不在列目录那一趟**——它们只有详情端点
   (`/3/{tv|movie}/{id}`)与演职员端点(`/3/{tv|movie}/{id}/credits`)才给
   (`docs/TMDB_API.md` §9 / §10)。所以单独一趟,由 `BaiduPanMetadataScraper.seriesProfile`
-  在**详情页**发,结果进 `BaiduPanSourceViewModel.seriesProfile`。
+  在**详情页**发,结果进 `FileSourceViewModel.seriesProfile`。
   身份来源:① 显式 / 父目录回填的 `tmdbID`;② 否则**剧名 + 年份**——键与判据与分集刮削
   **完全相同**(`searchMatch` 的 `QueryKey`),所以详情页问到的必定是**分集剧照所属的那部剧**,
   且通常命中缓存、零请求;两样都没有时⛔ 一个请求都不发。
@@ -562,3 +563,29 @@ P1–P6 全部落地。剩下的都不是「计划内的阶段」,而是**未验
    - `.nfo` sidecar 与 sidecar 封面下载到沙盒(`MetadataOrigin.sidecarNFO` /
      `ImageDescriptor.Origin.localFile` 两条契约已预留,生产者未接,见 §8);
    - `ServerProfile` 改名(见 §6.2)。
+
+## 11. 第三个来源:本地文件夹(2026-10-22)
+
+形态与百度**完全对齐**(用户拍板):列目录 → 本地合成 → TMDB 刮削 → 剧集详情 → 本地续播 / 已看 / 隐藏。
+做法是把百度的浏览层泛化成「文件树来源」,而不是给本地另写一套:
+
+- **身份**:`SourceProfile.localFolder(LocalFolderSource)`;浏览层只认 `FileSource`(百度 / 本地的子集枚举,
+  编译器挡住「把 Emby 传进浏览页」)。能力差别收在 `FileSource` 上(能不能删 / 改名、文案里的「网盘 / 文件夹」)。
+- **浏览层改名**(纯机械,⛔ 行为不变):`BaiduPanSourceViewModel` → `FileSourceViewModel`、
+  `BaiduPanBrowserView` → `FileSourceBrowserView`、`BaiduPanSeriesDetailView` → `FileSourceSeriesDetailView`、
+  `BaiduPanDeleteItemView` → `FileSourceDeleteItemView`、`BaiduResumeCard` → `FileSourceResumeCard`;
+  `BaiduPanSourceProvider.DirectoryContent` 提成 `FileSourceDirectoryContent`,两个 provider 都实现 `FileSourceBrowsing`。
+  被共用的纯函数(合成器 / 剧集布局 / 排序 / 字幕配对 / 刮削器)**没改名**,见 `KNOWN_ISSUES.md`「命名债」。
+- **访问权**:沙盒下靠安全作用域**只读**书签(entitlement `files.bookmarks.app-scope`),一个来源开一次、
+  开到来源被删 / 换文件夹为止(`LocalFolderAccess`;理由:libmpv 与封面加载都是异步读盘)。
+- **路径与 id**:条目路径是 `/{rootName}/…` 的虚拟路径(`rootName` 添加时取文件夹名,之后不变),
+  id 是「来源 id + 虚拟路径」的哈希 —— 换挂载点 / 换文件夹后记录还对得上;代价是 App 外改名会丢进度。
+- **差别只有三处**:不缓存目录(读盘不花配额,拷进新片子回来就看得到)、封面 `.localFile` 直接读盘、
+  时长自己读文件头(`LocalMediaDuration`)。
+- **播放**:`PlaybackSource.localFolder(file:source:)` → `LocalFileSessionPreparer`,地址是 `file://` 的
+  `.directStream`、`seekStrategy = .clientSeek`(⛔ 没有新增播放方式);进度走 `LocalResumeReporting`;
+  弹幕指纹直接读本机文件头(不花流量);倍速 / 片头片尾 / 弹幕 / 字幕绑定的键带来源 id 隔离,
+  删来源时连同续播 / 隐藏 / 绑定一起清(`AppContainer.purgeLocalFolderData`)。
+- **只读**:不删、不改名(`LocalFolderError.readOnly`);「删除…」只剩隐藏。
+- 未验证项见 `KNOWN_ISSUES.md`「本地文件夹来源」。
+

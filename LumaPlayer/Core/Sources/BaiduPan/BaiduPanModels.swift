@@ -227,7 +227,7 @@ enum BaiduPanPath {
     ///
     /// 用途是同一件事的两个面:删掉一条网盘条目时圈出**它名下**的观看记录
     /// (`BaiduPanWatchHistory`),以及「隐藏了一个目录」时把它的续播卡一并滤掉
-    /// (`BaiduPanSourceViewModel.loadResumeCards`)。
+    /// (`FileSourceViewModel.loadResumeCards`)。
     static func covers(path: String, locator: String, isDirectory: Bool) -> Bool {
         guard !path.isEmpty, !locator.isEmpty else { return false }
         guard isDirectory else { return locator == path }

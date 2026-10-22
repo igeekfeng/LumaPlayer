@@ -136,7 +136,7 @@ struct BrowseView: View {
             BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
                 // ⚠️ 按来源 id 重建,别省。
                 //
-                // `BaiduPanSourceViewModel` 在 init 时就把 `source` 收进去(片库根 / 隐藏项 /
+                // `FileSourceViewModel` 在 init 时就把 `source` 收进去(片库根 / 隐藏项 /
                 // 续播库 / 封面缓存分区全按 `source.id`),而它是 `@State` —— **只在视图身份
                 // 变化时**才重新初始化。百度 → 百度切换时视图类型没变、`refreshToken` 也没变,
                 // 两个 `.task(id:)` 都不重跑,于是停在**上一个来源**的目录上(用户报的
@@ -147,11 +147,16 @@ struct BrowseView: View {
                 // 靠 `.task(id: "\\(server.id)-\\(refreshToken)")` 重新加载。百度这一页是
                 // 一个来源一份状态,换来源就该是一张新页。
                 .id(source.id)
+        case .some(.localFolder(let source)):
+            // 与百度同一个浏览页(`FileSourceBrowserView`),只是没有授权那两屏。
+            // 按来源 id 重建的理由同上(ViewModel 在 init 时就收下了来源)
+            LocalFolderSourceView(container: container, source: source, refreshToken: refreshToken)
+                .id(source.id)
         case .none:
             ContentUnavailableView(
                 "没有选中的来源",
                 systemImage: "rectangle.stack.badge.plus",
-                description: Text("先在设置里添加一个 Emby 服务器或百度网盘。")
+                description: Text("先在设置里添加一个 Emby 服务器、百度网盘或本地文件夹。")
             )
         }
     }
@@ -320,6 +325,7 @@ struct BrowseView: View {
         switch container.state.currentSource {
         case .some(.emby): return "server.rack"
         case .some(.baiduPan): return "cloud.fill"
+        case .some(.localFolder): return "folder.fill"
         case .none: return "rectangle.stack.badge.plus"
         }
     }

@@ -91,7 +91,7 @@ grep -rnE '10{7}|10_000_000|1[eE]-?7|0\.0000001' LumaPlayer/ | grep -v 'TickConv
 APP_PATH="$(xcodebuild -scheme LumaPlayer -showBuildSettings \
   | awk -F' = ' '/ BUILT_PRODUCTS_DIR/{d=$2} / FULL_PRODUCT_NAME/{n=$2} END{print d"/"n}')"
 lipo -archs "$APP_PATH/Contents/MacOS/LumaPlayer"        # 期望 arm64
-codesign -d --entitlements - "$APP_PATH"                  # Release 4 项 / Debug 6 项
+codesign -d --entitlements - "$APP_PATH"                  # Release / Debug 均 6 项(5 条 + get-task-allow)
 codesign -d -r- "$APP_PATH"                               # ad-hoc:DR 是 cdhash,属预期
 ```
 
@@ -106,7 +106,8 @@ codesign -d -r- "$APP_PATH"                               # ad-hoc:DR 是 cdhash
 
 - ad-hoc 的 DR 是每次构建都变的 cdhash,钥匙串 ACL 认它 → ⛔ 新代码不往钥匙串存东西(加显式 DR 也没用,已实测)。
 - ⛔ 换回证书签名时不要打开 hardened runtime:`MPVPlayer()` 会让进程约 5 秒后无声死掉(Q18)。
-- entitlements 3 条:`app-sandbox`、`network.client`(没有它所有请求静默失败)、`cs.disable-library-validation`(加载自编 libmpv,Q1)。
+- entitlements 5 条:`app-sandbox`、`network.client`(没有它所有请求静默失败)、`cs.disable-library-validation`(加载自编 libmpv,Q1)、
+  `files.user-selected.read-only` + `files.bookmarks.app-scope`(打开本地字幕;本地文件夹来源的只读安全作用域书签,见 `LocalFolderAccess`)。
 - Info.plist 的 ATS 只开 `NSAllowsLocalNetworking`(公网仍强制 HTTPS),⛔ 不要 `NSAllowsArbitraryLoads`。
 
 ## 架构主线

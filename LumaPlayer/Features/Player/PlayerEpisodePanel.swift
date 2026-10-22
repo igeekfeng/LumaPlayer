@@ -10,7 +10,7 @@ import SwiftUI
 /// 是刻意留出左侧画面的(⛔ 不铺满)。
 ///
 /// 数据就是 `PlayerViewModel.episodes`(剧集队列),⛔ 这里不发任何请求 ——
-/// 百度的兄弟集是**起播那一刻**装进请求的(`BaiduPanSourceViewModel.episodeQueue`),
+/// 百度的兄弟集是**起播那一刻**装进请求的(`FileSourceViewModel.episodeQueue`),
 /// 回头再列一次网盘是白烧请求(配额见 `docs/BAIDU_PAN_API.md` §7)。
 /// 封面走 `PosterImage`(唯一允许发图请求的地方),缓存与海报墙共用。
 ///

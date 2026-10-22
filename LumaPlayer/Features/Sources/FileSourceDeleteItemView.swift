@@ -2,6 +2,8 @@ import SwiftUI
 
 /// 删除确认面板:**只在本机隐藏**,还是**连网盘里的文件一起删**。
 ///
+/// 本地文件夹来源只读(`FileSource.supportsDeletingFiles`):没有那个开关,只剩「隐藏」。
+///
 /// ## 为什么是自定义 sheet
 ///
 /// SwiftUI 的 `.alert` / `.confirmationDialog` 装不下 `Toggle` —— 而「要不要真删
@@ -20,9 +22,9 @@ import SwiftUI
 /// 它也就不再出现在「继续观看」里。⚠️ 恢复隐藏**不会**把进度还回来:
 /// 进度是真删了,条目本身会回到列表。副标题把这件事写出来,⛔ 不让人以为
 /// 恢复能复原一切。
-struct BaiduPanDeleteItemView: View {
+struct FileSourceDeleteItemView: View {
     let item: SourceItem
-    let viewModel: BaiduPanSourceViewModel
+    let viewModel: FileSourceViewModel
     /// 失败文案交给浏览页弹 alert(与 `ServerListView` 的破坏性操作同一范式)
     let onFailure: (String) -> Void
 
@@ -40,13 +42,15 @@ struct BaiduPanDeleteItemView: View {
                 subtitle: alsoDeleteRemotely ? remoteSubtitle : localSubtitle
             )
 
-            VStack(alignment: .leading, spacing: Metrics.spacingM) {
-                Toggle("同时删除网盘里的文件", isOn: $alsoDeleteRemotely)
-                    .disabled(isDeleting)
+            if viewModel.source.supportsDeletingFiles {
+                VStack(alignment: .leading, spacing: Metrics.spacingM) {
+                    Toggle("同时删除网盘里的文件", isOn: $alsoDeleteRemotely)
+                        .disabled(isDeleting)
+                }
+                .padding(.horizontal, Metrics.spacingXL)
+                .padding(.top, Metrics.spacingL)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, Metrics.spacingXL)
-            .padding(.top, Metrics.spacingL)
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: Metrics.spacingM)
 
@@ -71,9 +75,10 @@ struct BaiduPanDeleteItemView: View {
     /// ⚠️ 必须说清「观看记录也一起清」:这是一个**不可撤销**的副作用,
     /// 而「隐藏」这个字面上看着最轻的选项也会触发它。
     private var localSubtitle: String {
-        (item.kind.isContainer
-            ? "只会从这里的列表里消失,网盘上的文件还在。"
-            : "只会从这里的列表里消失,网盘上的这个文件还在。")
+        let storage = viewModel.source.storageNoun
+        return (item.kind.isContainer
+            ? "只会从这里的列表里消失,\(storage)里的文件还在。"
+            : "只会从这里的列表里消失,\(storage)里的这个文件还在。")
             + "这一项的本地观看记录会一起清掉,「继续观看」里的卡片也随之消失"
             + "(恢复隐藏不会把进度还回来)。可以在设置 →「已隐藏」里恢复这一项。"
     }
@@ -97,6 +102,9 @@ struct BaiduPanDeleteItemView: View {
             try await viewModel.delete(item, alsoDeleteRemotely: alsoDeleteRemotely)
             dismiss()
         } catch let error as BaiduPanError {
+            dismiss()
+            onFailure(error.userMessage)
+        } catch let error as LocalFolderError {
             dismiss()
             onFailure(error.userMessage)
         } catch {

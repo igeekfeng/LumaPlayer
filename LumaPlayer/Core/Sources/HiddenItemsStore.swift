@@ -19,7 +19,7 @@ import os
 /// 面板里那个勾选框默认不勾的原因。
 ///
 /// ⚠️ 隐藏**目录**时,它下面所有分集的「继续观看」卡片也要一起消失
-/// (`BaiduPanSourceViewModel.loadResumeCards` 用 `hiddenPaths` 过滤);
+/// (`FileSourceViewModel.loadResumeCards` 用 `hiddenPaths` 过滤);
 /// 只按 `fs_id` 过滤挡不住它们 —— 卡片记的是集文件的 id,不是目录的。
 ///
 /// ⚠️ 落点与凭据文件同级(`Library/Application Support/LumaPlayer/`)。
@@ -150,6 +150,18 @@ actor HiddenItemsStore {
     func restore(_ ref: SourceItemRef) throws {
         var current = entries()
         guard current.removeValue(forKey: Self.key(for: ref)) != nil else { return }
+        try persist(current)
+    }
+
+    /// 删掉某个来源名下的全部隐藏记录(删来源时)。
+    ///
+    /// ⚠️ 只给**本地文件夹**来源用:它的条目 id 只在这个来源里有意义,来源没了这些记录
+    /// 就永远恢复不出东西。百度来源共用一份授权,删一个来源不等于那些文件不在了,⛔ 不清。
+    func purge(sourceID: UUID) throws {
+        var current = entries()
+        let before = current.count
+        current = current.filter { $0.value.ref.sourceID != sourceID }
+        guard current.count != before else { return }
         try persist(current)
     }
 

@@ -12,14 +12,14 @@ struct BaiduPanSourceView: View {
     /// 「Reload」菜单(⌘R)的计数器:变化即重读授权状态与目录
     let refreshToken: Int
 
-    @State private var viewModel: BaiduPanSourceViewModel
+    @State private var viewModel: FileSourceViewModel
 
     init(container: AppContainer, source: BaiduPanSource, refreshToken: Int) {
         self.container = container
         self.source = source
         self.refreshToken = refreshToken
         self._viewModel = State(
-            initialValue: BaiduPanSourceViewModel(container: container, source: source))
+            initialValue: FileSourceViewModel(container: container, source: source))
     }
 
     var body: some View {
@@ -54,7 +54,7 @@ struct BaiduPanSourceView: View {
             case .unconfigured, .needsAuthorization:
                 BaiduPanAuthorizationView(viewModel: viewModel)
             case .authorized:
-                BaiduPanBrowserView(viewModel: viewModel, store: container.posters)
+                FileSourceBrowserView(viewModel: viewModel, store: container.posters)
             }
         } else if let failure = viewModel.loadFailure {
             failurePane(failure)

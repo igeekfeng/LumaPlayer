@@ -1,14 +1,23 @@
 import Foundation
 import Observation
 
-/// 百度网盘来源那一页的状态(ViewModel)。
+/// **文件树来源**(百度网盘 / 本地文件夹)那一页的状态(ViewModel)。
 ///
-/// 三屏共用一个 ViewModel:填密钥 → 扫码 → 浏览目录。
-/// 因为「保存密钥 → 立刻走扫码 → 授权完立刻列目录」是一条连续的流程,
-/// 拆成三个 View 各自取状态反而要来回传。
+/// 两个来源共用一套浏览:列目录 → 本地合成 → TMDB 刮削 → 剧集详情 → 本地续播 / 已看
+/// (`FileSource` 的类型注释)。差别收在少数几处,按 `source` 分派:
+///
+/// - **授权**:只有百度有。百度那三屏(填密钥 → 扫码 → 浏览目录)共用这一个 ViewModel ——
+///   「保存密钥 → 立刻走扫码 → 授权完立刻列目录」是一条连续的流程,
+///   拆成三个 View 各自取状态反而要来回传。本地文件夹的访问权来自书签,
+///   失效时在目录那一层报(`FileSourceDirectoryFailure.needsFolderReselection`)。
+/// - **缓存**:只有百度要(配额),见 `cachesDirectories`。
+/// - **写操作**:只有百度能删 / 改名(`FileSource.supportsDeletingFiles`)。
+///
+/// 名字里的 `BaiduPan…`(`BaiduPanSortOrder` / `BaiduPanSeriesLayout` / 合成器 …)是百度先落地
+/// 留下的,那些纯函数对两个来源一视同仁。
 @MainActor
 @Observable
-final class BaiduPanSourceViewModel {
+final class FileSourceViewModel {
 
     // MARK: - 授权
 
@@ -38,7 +47,7 @@ final class BaiduPanSourceViewModel {
     private(set) var libraryRoot: BaiduPanLibraryRoot?
     /// 当前目录
     private(set) var currentDirectory: String?
-    /// 当前目录的卡片(来源无关条目,带封面),**百度返回的原始顺序**。
+    /// 当前目录的卡片(来源无关条目,带封面),**来源返回的原始顺序**。
     /// ⚠️ 它**不含播放所需的信息**(`path` / 原始文件名),所以下面还有一份原始索引。
     /// ⚠️ 界面⛔ 不要直接读它 —— 用 `sortedItems`(那个才是排好的)。
     private(set) var items: [SourceItem] = []
@@ -61,7 +70,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// ⚠️ 缓存里的封面地址是百度 `dlink`(8 小时有效)。会话通常远短于 8 小时,
     /// 且封面图本身另有磁盘缓存兜底,所以不为过期另做处理。
-    private var directoryCache: [String: BaiduPanSourceProvider.DirectoryContent] = [:]
+    private var directoryCache: [String: FileSourceDirectoryContent] = [:]
 
     /// 命中**落盘缓存**之后,后台去拿真实目录的那一趟。
     ///
@@ -139,7 +148,7 @@ final class BaiduPanSourceViewModel {
     /// 观看状态筛选(全部 / 未看 / 已看)。数据全来自本地续播库,零请求。
     ///
     /// ⚠️ 换目录**不重置**:用户想找的东西不会因为进了下一层就变了;
-    /// 筛选把一屏筛空时,空状态里给一个「显示全部」的按钮(`BaiduPanBrowserView`)。
+    /// 筛选把一屏筛空时,空状态里给一个「显示全部」的按钮(`FileSourceBrowserView`)。
     private(set) var watchFilter: BaiduPanWatchFilter = .all
 
     /// 目录路径 → 这一层里的集数。本地记录(`BaiduPanEpisodeCountStore`),
@@ -147,7 +156,7 @@ final class BaiduPanSourceViewModel {
     private(set) var episodeCounts: [String: Int] = [:]
 
     private(set) var isLoadingFiles = false
-    private(set) var directoryFailure: BaiduPanDirectoryFailure?
+    private(set) var directoryFailure: FileSourceDirectoryFailure?
 
     /// 是否已经完成过一次完整的目录加载。「Reload」(⌘R)据此决定语义
     /// (首次 = 结构性重载,之后 = 只重读当前目录),见 `refreshFromToolbar()`。
@@ -235,7 +244,7 @@ final class BaiduPanSourceViewModel {
             ?? episodes.first
     }
 
-    /// 「下一集」占位那一批的 id(见 `BaiduResumeCard.isUpNext`)。
+    /// 「下一集」占位那一批的 id(见 `FileSourceResumeCard.isUpNext`)。
     /// 续播区已经把占位捞出来了,这里不必再读一遍库。
     private var upNextFileIDs: Set<String> {
         Set(resumeCards.filter(\.isUpNext).map(\.fileID))
@@ -271,17 +280,29 @@ final class BaiduPanSourceViewModel {
 
     /// 「继续观看」区的卡片:本地续播库里有进度、且带展示快照的条目,
     /// 按最近看排序。⛔ 不限于当前目录 —— 它就是要跨目录把你看过的东西捞出来。
-    private(set) var resumeCards: [BaiduResumeCard] = []
+    private(set) var resumeCards: [FileSourceResumeCard] = []
 
     /// 正在为「继续观看」起播做准备(补列它所在的目录)的那张卡片。
     /// 卡片据此转圈 —— 补列要发两次请求,不显示就等于「点了没反应」。
     private(set) var preparingPlaybackFileID: String?
 
     private let container: AppContainer
-    /// 这个页面属于哪个百度来源(决定 `sourceID`,也就决定了封面缓存 key)
-    private let source: BaiduPanSource
+    /// 这个页面属于哪个来源(决定 `sourceID`,也就决定了封面缓存 key)。
+    /// 可变只为一件事:设置里改了显示名 / 换了文件夹,页面不重建也要跟上(`sourceDidChange`)。
+    private(set) var source: FileSource
     /// 这个来源的 id(主窗口顶栏按它登记「根页有 hero」)
     var sourceID: UUID { source.id }
+
+    /// 目录要不要缓存(会话内存 + 落盘)。
+    ///
+    /// - **百度要**:一次列目录 = 2 次请求,配额见 `docs/BAIDU_PAN_API.md` §7;
+    /// - **本地不要**:读盘不花配额,而用户往文件夹里拷了新片子,回到这一层就该看到 ——
+    ///   每次进目录都重新读。时长另有进程内记忆(`LocalMediaDurationCache`),
+    ///   刮削有自己的缓存,重读一层只是一次 `contentsOfDirectory`。
+    private var cachesDirectories: Bool {
+        if case .baiduPan = source { return true }
+        return false
+    }
     /// 进到「已授权」那一屏时要不要顺带列目录。
     /// 添加流程传 `false`:`authorization()` 一变 `.authorized` 就会落库并切页,
     /// 此刻还照常列目录的话,那次请求(含封面)会被立刻丢掉 —— 白烧一次配额。
@@ -296,24 +317,41 @@ final class BaiduPanSourceViewModel {
     /// ⚠️ 与 `notice` 分开:它是**附加信息**的失败,不能盖掉目录本身的提示。
     private(set) var scrapeFailure: String?
 
-    init(container: AppContainer, source: BaiduPanSource, loadsDirectory: Bool = true) {
+    init(container: AppContainer, source: FileSource, loadsDirectory: Bool = true) {
         self.container = container
         self.source = source
         self.loadsDirectory = loadsDirectory
     }
 
+    convenience init(container: AppContainer, source: BaiduPanSource, loadsDirectory: Bool = true) {
+        self.init(container: container, source: .baiduPan(source), loadsDirectory: loadsDirectory)
+    }
+
+    /// 百度连接。⚠️ 只在百度分支里用 —— 本地文件夹来源一个请求都不发。
     private var connection: BaiduPanConnection { container.baiduConnection() }
 
-    /// 条目读取走 `BaiduPanSourceProvider` —— 那里把「列目录 → 合成条目 →
-    /// 批量换封面地址 → 刮削补封面」几步收在一起,这一页不必知道封面
-    /// 为什么要另外发请求、也不必知道刮削走的是哪个服务。
-    private func makeProvider() -> BaiduPanSourceProvider {
-        BaiduPanSourceProvider(
-            connection: connection,
-            sourceID: source.id,
-            folderName: folderName ?? source.folderName,
-            scraper: container.metadataScraper()
-        )
+    /// 条目读取走来源自己的 provider —— 那里把「列目录 → 合成条目 →
+    /// 换封面地址 / 读时长 → 刮削补封面」几步收在一起,这一页不必知道封面
+    /// 从哪来、也不必知道刮削走的是哪个服务。
+    private func makeProvider() -> any FileSourceBrowsing {
+        switch source {
+        case .baiduPan(let baidu):
+            return BaiduPanSourceProvider(
+                connection: connection,
+                sourceID: baidu.id,
+                folderName: folderName ?? baidu.folderName,
+                scraper: container.metadataScraper()
+            )
+        case .localFolder(let local):
+            return container.localFolderProvider(for: local)
+        }
+    }
+
+    /// 设置里改了这个来源(显示名 / 换了文件夹):页面不重建,把新值接过来。
+    /// ⛔ 不接别的来源 —— 换来源时主窗口按 id 重建整页(`BrowseView.rootPage`)。
+    func sourceDidChange(_ updated: FileSource) {
+        guard updated.id == source.id, updated != source else { return }
+        source = updated
     }
 
     // MARK: - 动作:进入
@@ -354,6 +392,15 @@ final class BaiduPanSourceViewModel {
         shapeDirectory = nil
         // 结构性重载:上一次「继续观看」点进来的选季意图已经不作数了
         preferredSeasonNumber = nil
+        guard case .baiduPan = source else {
+            // 本地文件夹没有授权这一步:访问权来自书签,失效时由 `loadFiles` 如实报
+            // (`FileSourceDirectoryFailure.needsFolderReselection`)
+            guard loadsDirectory else { return }
+            currentDirectory = nil
+            await loadFiles()
+            hasLoadedOnce = true
+            return
+        }
         do {
             authorization = try await connection.authorization()
             // 目录名只用于展示。⛔ 这里的 `try?` 不是吞错:凭据文件读不出来时
@@ -543,18 +590,28 @@ final class BaiduPanSourceViewModel {
 
         var directory = ""
         do {
-            let root = try await connection.applicationDirectory()
+            let root: String
+            switch source {
+            case .baiduPan(let baidu):
+                root = try await connection.applicationDirectory()
+                libraryRoot = try await connection.libraryRoot(for: baidu.id)
+            case .localFolder(let local):
+                // 本地文件夹的最外层就是用户选的那个文件夹,没有「片库根」这一层
+                root = local.rootPath
+                libraryRoot = nil
+            }
             rootDirectory = root
-            let stored = try await connection.libraryRoot(for: source.id)
-            libraryRoot = stored
-            // 进来先落在片库根;没配就落在应用目录。
+            // 进来先落在片库根;没配就落在应用目录(本地:文件夹本身)。
             // ⚠️ `currentDirectory` 优先:那是**导航**留下的位置(进目录 / 退回上层),
             // 不该被一次刷新抹掉。
-            directory = currentDirectory ?? stored?.path ?? root
+            directory = currentDirectory ?? libraryRoot?.path ?? root
             currentDirectory = directory
             let provider = makeProvider()
-            let content: BaiduPanSourceProvider.DirectoryContent
-            if !forceRefresh, let cached = directoryCache[directory] {
+            let content: FileSourceDirectoryContent
+            if !cachesDirectories {
+                // 本地:每次都读盘(理由见 `cachesDirectories`)
+                content = try await provider.content(directory: directory)
+            } else if !forceRefresh, let cached = directoryCache[directory] {
                 // 命中会话缓存:同一会话里重进已列过的目录 → 零请求(配额纪律)
                 content = cached
             } else if !forceRefresh, let disk = await container.baiduDirectoryCache.content(
@@ -603,13 +660,21 @@ final class BaiduPanSourceViewModel {
                 await loadFiles(allowingLibraryRootFallback: false, forceRefresh: forceRefresh)
                 return
             }
-            directoryFailure = BaiduPanDirectoryFailure(
+            directoryFailure = FileSourceDirectoryFailure(
                 message: error.userMessage,
                 isApplicationRootUnavailable: error.isDirectoryUnavailable
                     && directory == rootDirectory
             )
+        } catch let error as LocalFolderError {
+            // 访问权没了(文件夹被挪 / 盘没插 / 书签失效)→ 失败页给「重新选择文件夹…」;
+            // 某一层读不出来 → 只报原因,重试可能就好了
+            directoryFailure = FileSourceDirectoryFailure(
+                message: error.userMessage,
+                isApplicationRootUnavailable: false,
+                needsFolderReselection: error.needsFolderReselection
+            )
         } catch {
-            directoryFailure = BaiduPanDirectoryFailure(
+            directoryFailure = FileSourceDirectoryFailure(
                 message: "读取目录失败:\(error)", isApplicationRootUnavailable: false)
         }
     }
@@ -623,8 +688,9 @@ final class BaiduPanSourceViewModel {
     /// ⛔ 封面地址**不存**:`dlink` 8 小时过期,存下来只会端出一批打不开的图
     /// (见 `BaiduPanDirectoryCache` 的类型注释)。
     private func storeDirectoryCache(
-        _ content: BaiduPanSourceProvider.DirectoryContent, directory: String
+        _ content: FileSourceDirectoryContent, directory: String
     ) async {
+        guard cachesDirectories else { return }
         await container.baiduDirectoryCache.store(
             sourceID: source.id,
             directory: directory,
@@ -646,7 +712,7 @@ final class BaiduPanSourceViewModel {
     /// 紧接着的两趟(刮削缓存 / 后台刷新)会把封面补回来。
     private static func content(
         from entry: BaiduPanDirectoryCache.Entry, sourceID: UUID
-    ) -> BaiduPanSourceProvider.DirectoryContent {
+    ) -> FileSourceDirectoryContent {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: entry.files, sourceID: sourceID)
         let items = synthesized.map { synthesized -> SourceItem in
@@ -656,7 +722,7 @@ final class BaiduPanSourceViewModel {
             }
             return item
         }
-        return BaiduPanSourceProvider.DirectoryContent(
+        return FileSourceDirectoryContent(
             items: items,
             filesByID: Dictionary(uniqueKeysWithValues: entry.files.map { ($0.fsID, $0) }),
             durations: Dictionary(
@@ -688,7 +754,7 @@ final class BaiduPanSourceViewModel {
         let provider = makeProvider()
         backgroundRefreshTask = Task { [weak self] in
             guard let self else { return }
-            let fresh: BaiduPanSourceProvider.DirectoryContent
+            let fresh: FileSourceDirectoryContent
             do {
                 fresh = try await provider.content(directory: directory)
             } catch {
@@ -708,8 +774,8 @@ final class BaiduPanSourceViewModel {
     /// (用户可能已经进了子目录),分集那条看 `episodeGeneration`(可能已经换季)。
     /// 少了这一步,慢的那一趟回来就会把别的层画到眼前。
     private func applyBackgroundRefresh(
-        _ content: BaiduPanSourceProvider.DirectoryContent,
-        provider: BaiduPanSourceProvider,
+        _ content: FileSourceDirectoryContent,
+        provider: any FileSourceBrowsing,
         directory: String,
         target: BackgroundRefreshTarget
     ) async {
@@ -739,7 +805,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// 失败(没 token / token 无效 / 连不上)只挂一句提示到 `scrapeFailure`:
     /// 卡片保持本地合成的样子,降级成图标卡 —— ⛔ 不假装有封面。
-    private func startScrape(items directoryItems: [SourceItem], provider: BaiduPanSourceProvider) {
+    private func startScrape(items directoryItems: [SourceItem], provider: any FileSourceBrowsing) {
         let myGeneration = directoryGeneration
         scrapeFailure = nil
         scrapeTask = Task { [weak self] in
@@ -932,7 +998,7 @@ final class BaiduPanSourceViewModel {
         case .folder(let folder):
             guard let file = file(for: folder) else {
                 episodes = []
-                episodeFailure = "找不到「\(folder.title)」在网盘上的路径,没法读它的分集。"
+                episodeFailure = "找不到「\(folder.title)」在\(source.storageNoun)里的路径,没法读它的分集。"
                 return
             }
             await loadEpisodes(directory: file.path)
@@ -966,8 +1032,10 @@ final class BaiduPanSourceViewModel {
         defer { isLoadingEpisodes = false }
         do {
             let provider = makeProvider()
-            let content: BaiduPanSourceProvider.DirectoryContent
-            if let cached = directoryCache[directory] {
+            let content: FileSourceDirectoryContent
+            if !cachesDirectories {
+                content = try await provider.content(directory: directory)
+            } else if let cached = directoryCache[directory] {
                 content = cached
             } else if let disk = await container.baiduDirectoryCache.content(
                 sourceID: source.id, directory: directory) {
@@ -990,6 +1058,9 @@ final class BaiduPanSourceViewModel {
         } catch let error as BaiduPanError {
             episodes = []
             episodeFailure = error.userMessage
+        } catch let error as LocalFolderError {
+            episodes = []
+            episodeFailure = error.userMessage
         } catch {
             episodes = []
             episodeFailure = "读取这一季的分集失败:\(error)"
@@ -1002,8 +1073,8 @@ final class BaiduPanSourceViewModel {
     /// 后台刷新(`applyBackgroundRefresh`)。两处各写一遍就会有一处忘了合并 `filesByID`
     /// —— 那会让分集点不动(`file(for:)` 找不到路径)。
     private func applyEpisodeContent(
-        _ content: BaiduPanSourceProvider.DirectoryContent,
-        provider: BaiduPanSourceProvider,
+        _ content: FileSourceDirectoryContent,
+        provider: any FileSourceBrowsing,
         generation: Int,
         directory: String
     ) async {
@@ -1061,7 +1132,7 @@ final class BaiduPanSourceViewModel {
     /// 与目录那一趟同一个理由:TMDB 要发 N 次外部请求,让它参与列表加载就等于
     /// 「TMDB 连不上 → 分集列表打不开」。所以列表先出、这些字段后补。
     private func startEpisodeScrape(
-        items: [SourceItem], provider: BaiduPanSourceProvider, generation: Int
+        items: [SourceItem], provider: any FileSourceBrowsing, generation: Int
     ) {
         episodeScrapeTask = Task { [weak self] in
             let enriched = await provider.scrape(items: items)
@@ -1179,18 +1250,44 @@ final class BaiduPanSourceViewModel {
     /// 「nil → 有值」误判成「变了」,开局白列一次目录。
     func refreshLibraryRoot() async {
         guard hasLoadedOnce else { return }
+        guard case .baiduPan = source else {
+            // 本地文件夹没有片库根;这里会被调到,多半是设置里换了文件夹 / 改了名。
+            // 重读**当前这一层**(读盘不花配额):换了文件夹之后失败页要消失,
+            // ⛔ 不回到起点 —— 用户正看着的那一层不该因为改了个名字就被踢走
+            await refreshFiles()
+            return
+        }
         let stored = try? await connection.libraryRoot(for: source.id)
         guard stored != libraryRoot else { return }
         libraryRoot = stored
         await reload()
     }
 
+    /// 本地文件夹:用户重新选了文件夹(原来那个挪走了 / 访问权失效)。
+    ///
+    /// 换完从**根**重新列:原来停的那一层在新文件夹里未必还在。失败如实挂到 `notice`,
+    /// 失败页留着,用户可以再选一次。
+    func relinkFolder(to folderURL: URL) async {
+        guard case .localFolder(let local) = source else { return }
+        do {
+            let updated = try await container.relinkLocalFolder(local, to: folderURL)
+            source = .localFolder(updated)
+            notice = nil
+            await reload()
+        } catch let error as LocalFolderError {
+            notice = error.userMessage
+        } catch {
+            notice = "换文件夹失败:\(error.localizedDescription)"
+        }
+    }
+
     /// 把失效的片库根清掉(网盘里那个目录没了 / 改名了),回落到应用目录。
     /// ⛔ 不弹错误:它只是个「进来先落在哪」的便利,不值得为此打断浏览。
     private func clearLibraryRoot() async {
         libraryRoot = nil
-        // 写回设置,免得下次进来又撞同一个失效路径
-        try? await container.setLibraryRoot(nil, for: source)
+        // 写回设置,免得下次进来又撞同一个失效路径(片库根只有百度有)
+        guard case .baiduPan(let baidu) = source else { return }
+        try? await container.setLibraryRoot(nil, for: baidu)
     }
 
     /// 当前目录在标题栏上显示的名字。
@@ -1198,13 +1295,21 @@ final class BaiduPanSourceViewModel {
     /// 应用目录根用应用目录名(或「百度网盘」);其余用路径最后一段 ——
     /// 与 Emby 那边 `navigationTitle(媒体库名)` 的对位物。
     /// 片库根那一层因此显示的就是那个目录名(设 `Videos` 为片库根 → 标题「Videos」)。
+    ///
+    /// 本地文件夹的根那一层显示**来源名**(默认就是文件夹名,用户可在设置里改)。
     var currentDirectoryName: String {
-        guard let current = currentDirectory else { return "百度网盘" }
+        let fallback: String
+        switch source {
+        case .baiduPan: fallback = "百度网盘"
+        case .localFolder(let local): fallback = local.displayName
+        }
+        guard let current = currentDirectory else { return fallback }
         if let root = rootDirectory, current == root {
-            return folderName ?? "百度网盘"
+            if case .baiduPan = source { return folderName ?? fallback }
+            return fallback
         }
         let last = (current as NSString).lastPathComponent
-        return last.isEmpty ? "百度网盘" : last
+        return last.isEmpty ? fallback : last
     }
 
     /// - Parameter fromBeginning: 从头播放(详情页「从头播放」按钮用)。默认按本地进度续播。
@@ -1218,9 +1323,10 @@ final class BaiduPanSourceViewModel {
         let queueItems = directoryShape.isSeries ? episodes : sortedItems
         container.play(
             file,
+            in: source,
             subtitleFiles: BaiduPanSubtitle.files(for: file, in: Array(filesByID.values)),
             episodeQueue: Self.episodeQueue(
-                selecting: item, in: queueItems, filesByID: filesByID),
+                selecting: item, in: queueItems, filesByID: filesByID, source: source),
             fromBeginning: fromBeginning)
     }
 
@@ -1238,7 +1344,8 @@ final class BaiduPanSourceViewModel {
     static func episodeQueue(
         selecting item: SourceItem,
         in items: [SourceItem],
-        filesByID: [UInt64: BaiduPanFile]
+        filesByID: [UInt64: BaiduPanFile],
+        source: FileSource
     ) -> EpisodeQueue? {
         guard item.kind == .episode else { return nil }
         let episodes = items.filter { $0.kind == .episode }
@@ -1249,7 +1356,7 @@ final class BaiduPanSourceViewModel {
                 id: entry.ref.itemID,
                 label: entry.episodeNumber.map { "第 \($0) 集" },
                 title: entry.episodeTitle ?? entry.title,
-                source: .baiduPan(file: file),
+                source: source.playbackSource(for: file),
                 resumeItem: entry,
                 // 选集面板的封面:同目录同名图,或 TMDB 刮回来的分集剧照
                 poster: entry.poster,
@@ -1276,7 +1383,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// - Returns: 是否已经把播放请求写好(视图据此决定要不要唤起播放窗口)。
     @discardableResult
-    func play(_ card: BaiduResumeCard) async -> Bool {
+    func play(_ card: FileSourceResumeCard) async -> Bool {
         guard let file = card.reconstructedFile else { return false }
         guard preparingPlaybackFileID == nil else { return false }
         preparingPlaybackFileID = card.fileID
@@ -1285,7 +1392,8 @@ final class BaiduPanSourceViewModel {
         let content = await directoryContent(for: BaiduPanPath.directory(ofFilePath: file.path))
         let queue = content.flatMap { content in
             content.items.first { $0.ref.itemID == String(file.fsID) }.flatMap { item in
-                Self.episodeQueue(selecting: item, in: content.items, filesByID: content.filesByID)
+                Self.episodeQueue(
+                    selecting: item, in: content.items, filesByID: content.filesByID, source: source)
             }
         }
         // 外挂字幕与换集队列同一份来源:补列回来的 `filesByID` 里就有同目录的 .srt
@@ -1293,7 +1401,7 @@ final class BaiduPanSourceViewModel {
         let subtitles = content.map {
             BaiduPanSubtitle.files(for: file, in: Array($0.filesByID.values))
         } ?? []
-        container.play(file, subtitleFiles: subtitles, episodeQueue: queue)
+        container.play(file, in: source, subtitleFiles: subtitles, episodeQueue: queue)
         return true
     }
 
@@ -1310,7 +1418,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// ⚠️ 不越出这一页的最外层:用户把某一季设成了片库根时剧目录在它之上,
     /// 那就退回文件所在目录(见 `detailDirectory(ofFilePath:topmost:)`)。
-    func openDetail(for card: BaiduResumeCard) async {
+    func openDetail(for card: FileSourceResumeCard) async {
         // 卡片那一集属于哪一季,点进去就默认选哪一季 —— 否则「继续播放」会变成
         // 「播放第 1 集」(理由见 `applyDirectoryShape`)
         preferredSeasonNumber = Self.seasonNumber(ofFilePath: card.path)
@@ -1338,11 +1446,11 @@ final class BaiduPanSourceViewModel {
     /// 这里再弹一次只会把起播打断。
     private func directoryContent(
         for directory: String
-    ) async -> BaiduPanSourceProvider.DirectoryContent? {
+    ) async -> FileSourceDirectoryContent? {
         // ⚠️ 两个分支都要过隐藏过滤:从「继续观看」起播时,隐藏的兄弟集
         // 不该因为换了个入口就回到选集面板里。
         if directory == currentDirectory, !items.isEmpty {
-            return BaiduPanSourceProvider.DirectoryContent(
+            return FileSourceDirectoryContent(
                 items: sortedItems, filesByID: filesByID, durations: [:])
         }
         do {
@@ -1350,7 +1458,7 @@ final class BaiduPanSourceViewModel {
             let content = try await provider.content(directory: directory)
             // 逐集剧照只来自 TMDB 那一趟(⛔ 不抛错:没配 token / 连不上就退本地图)
             let enriched = await provider.scrape(items: content.items)
-            return BaiduPanSourceProvider.DirectoryContent(
+            return FileSourceDirectoryContent(
                 items: visible(enriched), filesByID: content.filesByID,
                 durations: content.durations)
         } catch {
@@ -1392,7 +1500,7 @@ final class BaiduPanSourceViewModel {
     ///
     /// ⚠️ 走 `remove(fileIDs:)` 而不是 `forget(fileIDs:)`:这是用户主动弃掉进度,
     /// 文件本身还在网盘 —— 他之后再点开这一集,进度当然要重新记下来。
-    func removeResumeCard(_ card: BaiduResumeCard) async {
+    func removeResumeCard(_ card: FileSourceResumeCard) async {
         let key = Self.seriesKey(title: card.title, locator: card.path)
         do {
             let ids = await container.watchProgress.resumeEntries(sourceID: source.id)
@@ -1424,7 +1532,7 @@ final class BaiduPanSourceViewModel {
     /// 目录卡片上「已看 N 集」的 N(0 = 不显示)。
     ///
     /// ⚠️ 只数本地有记录的集。总数那一半见 `episodeTotal(for:)` —— 它只有
-    /// **进过详情页**之后才有值,所以卡片文案分三种形态(`BaiduPanCard.subtitle`)。
+    /// **进过详情页**之后才有值,所以卡片文案分三种形态(`FileSourceCard.subtitle`)。
     func watchedEpisodeCount(for item: SourceItem) -> Int {
         guard item.kind.isContainer, let path = file(for: item)?.path else { return 0 }
         return watchedEpisodeCounts[path] ?? 0
@@ -1499,7 +1607,7 @@ final class BaiduPanSourceViewModel {
 
     /// 续播卡片上标已看:卡片是从记录折出来的,手上没有 `SourceItem`,
     /// 所以不给展示快照 —— 那条记录本来就有(卡片就是靠它才画得出来)。
-    func markPlayed(_ card: BaiduResumeCard) async {
+    func markPlayed(_ card: FileSourceResumeCard) async {
         await applyPlayed(
             [WatchProgressStore.PlayedMark(fileID: card.fileID, display: nil)], played: true)
     }
@@ -1586,7 +1694,12 @@ final class BaiduPanSourceViewModel {
     func delete(_ item: SourceItem, alsoDeleteRemotely: Bool) async throws {
         guard let file = file(for: item) else {
             throw BaiduPanError.configuration(
-                "找不到「\(item.title)」在网盘上的路径,没法删除。")
+                "找不到「\(item.title)」在\(source.storageNoun)里的路径,没法删除。")
+        }
+        // 本地文件夹只读:界面不给「连文件一起删」的开关(`FileSource.supportsDeletingFiles`),
+        // 走到这里就是调用方的 bug —— 如实抛,⛔ 不悄悄降级成隐藏
+        if alsoDeleteRemotely, !source.supportsDeletingFiles {
+            throw LocalFolderError.readOnly
         }
         // 删的是不是目录只认 `BaiduPanFile` 自己那一格,⛔ 不从 `item.kind` 反推
         // (`kind` 是给 UI 的分类,「认不出的文件」也是 `.unknown`,与目录语义无关)。
@@ -1613,6 +1726,7 @@ final class BaiduPanSourceViewModel {
             return
         }
 
+        guard case .baiduPan = source else { throw LocalFolderError.readOnly }
         try await connection.deleteFile(at: file.path)
 
         // 删掉的若是片库根,顺手清掉 —— 留着就是指向已不存在目录的悬空值
@@ -1693,7 +1807,7 @@ final class BaiduPanSourceViewModel {
     /// `includeDescendants: false` 用于「删掉的是某一层里的一个条目」:
     /// 那一层本身还得留着(只是少了一条),整层丢掉只会让下次进来白烧两次请求。
     private func evictCachedDirectory(_ path: String, includeDescendants: Bool = true) async {
-        guard !path.isEmpty else { return }
+        guard !path.isEmpty, cachesDirectories else { return }
         directoryCache = directoryCache.filter { key, _ in
             key != path
                 && !(includeDescendants && BaiduPanPath.isInside(key, applicationRoot: path))
@@ -1725,7 +1839,7 @@ final class BaiduPanSourceViewModel {
                 SourceItemRef(sourceID: source.id, itemID: record.fileID)) else { return false }
             return !Self.isHidden(record, by: hiddenPaths)
         }
-        resumeCards = Self.oneCardPerSeries(visibleRecords).compactMap(BaiduResumeCard.init(record:))
+        resumeCards = Self.oneCardPerSeries(visibleRecords).compactMap(FileSourceResumeCard.init(record:))
     }
 
     /// 这条记录的文件是不是落在某个被隐藏的路径里(纯函数,单测覆盖)。
@@ -1862,7 +1976,7 @@ final class BaiduPanSourceViewModel {
 /// 它是**从本地续播库的记录折出来的**(不是从目录列出来的)—— 因为续播区要
 /// 跨目录、甚至要能在目录读失败时也显示。展示所需的一切都来自播放那一刻
 /// 存下的快照(`WatchProgressStore.Display`)。
-struct BaiduResumeCard: Identifiable, Sendable, Equatable {
+struct FileSourceResumeCard: Identifiable, Sendable, Equatable {
     let fileID: String
     let title: String
     let positionSeconds: Double
@@ -1900,7 +2014,7 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
         self.isUpNext = record.isUpNext
     }
 
-    /// 重建一个够播放用的 `BaiduPanFile`(见 `BaiduPanSourceViewModel.play(_ card:)`)。
+    /// 重建一个够播放用的 `BaiduPanFile`(见 `FileSourceViewModel.play(_ card:)`)。
     var reconstructedFile: BaiduPanFile? {
         guard let fsID = UInt64(fileID) else { return nil }
         return BaiduPanFile(
@@ -1919,8 +2033,8 @@ struct BaiduResumeCard: Identifiable, Sendable, Equatable {
 /// 目录读失败时的用户可见信息。
 ///
 /// ⚠️ 没有复用 `LoadFailure`:那一个是给 Emby 那条的(带 `needsLogin`),
-/// 而这里的分支是百度独有的,塞进去会让两个来源的状态互相污染。
-struct BaiduPanDirectoryFailure: Sendable, Equatable {
+/// 而这里的分支是文件树来源独有的,塞进去会让两类来源的状态互相污染。
+struct FileSourceDirectoryFailure: Sendable, Equatable {
     let message: String
 
     /// 是不是**应用目录本身**读不出来(`/apps/{应用目录名}` 不在 / 没权限)。
@@ -1929,4 +2043,8 @@ struct BaiduPanDirectoryFailure: Sendable, Equatable {
     /// ⛔ 它**不是**「大概是权限问题」的猜测 —— 只有 `errno` 是
     /// `-7`(无权访问)/ `-9`(不存在)且失败的请求正是应用目录时才置 true。
     let isApplicationRootUnavailable: Bool
+
+    /// 本地文件夹的**访问权没了**(书签解析不出 / 系统不给读 / 文件夹不在):
+    /// 重试没用,失败页给「重新选择文件夹…」(`LocalFolderError.needsFolderReselection`)。
+    var needsFolderReselection = false
 }

@@ -589,7 +589,7 @@ actor BaiduPanMetadataScraper {
 
     /// 一张 TMDB **剧级海报**的 `ImageDescriptor`(没有 `poster_path` 时为 `nil`)。
     ///
-    /// ⚠️ 目录卡片(`apply`)与详情页的剧级信息(`BaiduPanSourceViewModel`)必须走
+    /// ⚠️ 目录卡片(`apply`)与详情页的剧级信息(`FileSourceViewModel`)必须走
     /// **同一把** `cacheKey` 拼法:同一个 `poster_path` + 同一个档位 → 同一条缓存。
     /// 于是「从目录卡片进来」与「从继续观看进来」看到的剧集海报是同一张
     /// —— 用户报的「两个入口封面 / 背景图不一样」正是各自拼各自的图造成的。

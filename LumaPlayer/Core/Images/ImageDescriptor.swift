@@ -19,7 +19,8 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         /// 一个自带凭据的远端地址(百度 `dlink`)。
         /// ⛔ 不要为它套自定义 scheme / 资源加载器:它就是普通 https 地址。
         case remote(url: URL, headers: [String: String])
-        /// 本地文件(预留:将来把 sidecar 图下到沙盒后走这条)
+        /// 本机文件:本地文件夹来源里同目录的封面图(`LocalFolderSourceProvider`)。
+        /// 读它要那个来源的访问权已打开(`LocalFolderAccess`)
         case localFile(URL)
     }
 
@@ -89,11 +90,20 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         let cacheKey: String
     }
 
-    /// 这张图能不能折成快照。只有远端图可以 ——
+    /// 这张图能不能折成快照。远端图与本机文件可以 ——
     /// Emby 图要带服务端认证头、语义绑在 `ImageSpec` 上,不进本地续播库。
+    ///
+    /// 本机文件的快照里存的是**绝对路径**:文件夹挪了 / 外接盘换了挂载点就读不到,
+    /// 与 `dlink` 过期是同一种处置 —— 靠磁盘缓存兜,兜不住就降级成占位图。
     var snapshot: Snapshot? {
-        guard case .remote(let url, let headers) = origin else { return nil }
-        return Snapshot(ownerID: ownerID, url: url, headers: headers, cacheKey: cacheKey)
+        switch origin {
+        case .remote(let url, let headers):
+            return Snapshot(ownerID: ownerID, url: url, headers: headers, cacheKey: cacheKey)
+        case .localFile(let url):
+            return Snapshot(ownerID: ownerID, url: url, headers: [:], cacheKey: cacheKey)
+        case .emby:
+            return nil
+        }
     }
 
     /// 这张图的**地址会过期**(百度的 `dlink` 8 小时,见 `docs/BAIDU_PAN_API.md` §2.2)。
@@ -131,6 +141,19 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
     static func tmdbPosterKey(sourceID: UUID, posterPath: String, size: String) -> String {
         "tmdb|\(sourceID.uuidString)|\(posterPath)|\(size)"
     }
+
+    /// 本地文件夹里一张封面的缓存 key:来源 + 文件 id + **文件修改时间**。
+    /// 版本语义与 `baiduCoverKey` 相同(换了图 → 修改时间变 → key 变)。
+    /// 命名空间与百度分开(`local|`):本机路径不会过期,`hasExpiringURL` 据此放行。
+    static func localCoverKey(
+        sourceID: UUID,
+        fileID: UInt64,
+        modifiedAt: Date?,
+        maxWidth: Int
+    ) -> String {
+        let stamp = modifiedAt.map { String(Int($0.timeIntervalSince1970)) } ?? "nomtime"
+        return "local|\(sourceID.uuidString)|\(fileID)|\(stamp)|cover|\(maxWidth)"
+    }
 }
 
 extension ImageDescriptor {
@@ -139,10 +162,14 @@ extension ImageDescriptor {
     /// ⚠️ 放在 extension 里而不是类型体内:类型体内定义任何 `init` 都会**抑制**
     /// 合成的逐成员构造器,而 `emby(_:)` / `remote(...)` / `localFile(...)`
     /// 三个工厂都靠那个构造器。
+    ///
+    /// 快照不单独记「是哪种图」(老记录里只有远端图),按地址分:`file://` 就是本机文件。
     init(snapshot: Snapshot) {
         self.init(
             ownerID: snapshot.ownerID,
-            origin: .remote(url: snapshot.url, headers: snapshot.headers),
+            origin: snapshot.url.isFileURL
+                ? .localFile(snapshot.url)
+                : .remote(url: snapshot.url, headers: snapshot.headers),
             cacheKey: snapshot.cacheKey
         )
     }

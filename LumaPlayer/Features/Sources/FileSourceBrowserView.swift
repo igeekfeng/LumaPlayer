@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// 百度网盘目录浏览(**海报墙**)。
+/// 文件树来源(百度网盘 / 本地文件夹)的目录浏览(**海报墙**)。
 ///
 /// ## 封面从哪来
 ///
-/// 百度不给视频封面,所以封面是**本地合成**的:同目录的
+/// 两个来源都不给视频封面,所以封面是**本地合成**的:同目录的
 /// `<同名>.jpg` / `poster.jpg` / `folder.jpg`(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
 /// 本地配不到时,再由后台第二趟问 TMDB 补(设置里填了 token 才走,
 /// 见 `BaiduPanMetadataScraper`;用户自己放的图优先,⛔ 不被盖掉)。
@@ -16,7 +16,7 @@ import SwiftUI
 /// 点目录就进目录,点文件就播 —— 与文件管理器一致,不需要中间那一层。
 ///
 /// ⚠️ 顶部的「继续观看」区是**例外**:它与 Emby 首页那一行是同一套交互 ——
-/// 悬停出播放按钮,点它直接续播;点卡片其余位置进详情页(见 `BaiduResumeCardView`)。
+/// 悬停出播放按钮,点它直接续播;点卡片其余位置进详情页(见 `FileSourceResumeCardView`)。
 ///
 /// ## 顺序
 ///
@@ -32,12 +32,12 @@ import SwiftUI
 /// 设为片库根 / 排序 / 刷新 / 解除授权那一条整个去掉了:刷新用顶栏的按钮
 /// (`refreshToken` 驱动),其余移进设置里的来源页(`BaiduPanSourceSettingsView`)。
 ///
-/// ⚠️ 返回只退到**片库根为止**(`BaiduPanSourceViewModel.canGoUp`)—— 它就是这一页
+/// ⚠️ 返回只退到**片库根为止**(`FileSourceViewModel.canGoUp`)—— 它就是这一页
 /// 的最外层。设 `apps/LumaPlayer/Videos` 为片库根时,根目录就是 `Videos`,
 /// 再往上是应用目录(那里只看得见「有个叫 Videos 的文件夹」),退上去没有意义。
 /// 没配片库根时最外层是应用目录。
-struct BaiduPanBrowserView: View {
-    @Bindable var viewModel: BaiduPanSourceViewModel
+struct FileSourceBrowserView: View {
+    @Bindable var viewModel: FileSourceViewModel
     let store: PosterImageStore
 
     /// ⛔ 唤起播放窗口。**写请求与开窗必须成对出现**:`AppState.nowPlaying`
@@ -75,6 +75,8 @@ struct BaiduPanBrowserView: View {
     @State private var renameRequest: RenameRequest?
     /// 删除失败的原因(面板关掉后由 alert 报出,见类型注释里的范式)。
     @State private var actionErrorMessage: String?
+    /// 本地文件夹访问权没了:失败页里点了「重新选择文件夹…」
+    @State private var showsFolderPicker = false
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Metrics.posterMinWidth), spacing: Metrics.gridSpacing)]
@@ -82,7 +84,7 @@ struct BaiduPanBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 剧目录走详情页(`BaiduPanSeriesDetailView`),它自己有剧名,不再叠一行目录名
+            // 剧目录走详情页(`FileSourceSeriesDetailView`),它自己有剧名,不再叠一行目录名
             if viewModel.directoryShape.seriesStructure == nil {
                 PageHeader(title: viewModel.currentDirectoryName) {
                     HStack(spacing: Metrics.spacingS) {
@@ -123,7 +125,7 @@ struct BaiduPanBrowserView: View {
             chrome?.setRootHasHero(isSeries, source: viewModel.sourceID)
         }
         .sheet(item: $pendingDeletion) { item in
-            BaiduPanDeleteItemView(item: item, viewModel: viewModel) { message in
+            FileSourceDeleteItemView(item: item, viewModel: viewModel) { message in
                 actionErrorMessage = message
             }
         }
@@ -134,6 +136,17 @@ struct BaiduPanBrowserView: View {
             ) {
                 // 名字全变了,缓存里的旧目录已经不对了
                 Task { await viewModel.refreshFiles() }
+            }
+        }
+        .fileImporter(
+            isPresented: $showsFolderPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            switch result {
+            case .success(let url):
+                Task { await viewModel.relinkFolder(to: url) }
+            case .failure(let error):
+                actionErrorMessage = "选择文件夹失败:\(error.localizedDescription)"
             }
         }
         // 与 `ServerListView` 破坏性操作同一范式:确认面板关掉后再报失败
@@ -174,7 +187,7 @@ struct BaiduPanBrowserView: View {
         } else if let structure = viewModel.directoryShape.seriesStructure {
             // 这一层是一部剧(剧目录下直接是集文件,或下面是一层层的季文件夹)
             // → 走详情页,而不是再铺一层文件网格。判定见 `BaiduPanSeriesLayout`。
-            BaiduPanSeriesDetailView(
+            FileSourceSeriesDetailView(
                 viewModel: viewModel,
                 structure: structure,
                 store: store
@@ -228,7 +241,7 @@ struct BaiduPanBrowserView: View {
     /// 抽出来是因为它有两个用武之地:主网格与「最近添加」那一行。⛔ 不各写一份 ——
     /// 两处的右键菜单必须完全一致(删除 / 改名 / 标记已看都在这里)。
     private func card(for item: SourceItem) -> some View {
-        BaiduPanCard(
+        FileSourceCard(
             item: item,
             store: store,
             resumeSeconds: viewModel.resumeSeconds(for: item),
@@ -255,7 +268,9 @@ struct BaiduPanBrowserView: View {
             }
             // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
             // 单集文件没有季 / 剧的上下文,改不出标准命名。
-            if item.kind.isContainer, let file = viewModel.file(for: item) {
+            // 改名是写操作:只读的本地文件夹来源不给(`FileSource.supportsRenamingSeries`)。
+            if item.kind.isContainer, viewModel.source.supportsRenamingSeries,
+               let file = viewModel.file(for: item) {
                 Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
                     renameRequest = RenameRequest(
                         directory: file,
@@ -350,13 +365,13 @@ struct BaiduPanBrowserView: View {
     // MARK: - 继续观看
 
     /// 顶部「继续观看」区:跨目录把看过的东西捞出来(Emby 首页那一行的对位物)。
-    /// 数据来自本地续播库(百度没有服务端进度),见 `BaiduPanSourceViewModel.resumeCards`。
+    /// 数据来自本地续播库(百度没有服务端进度),见 `FileSourceViewModel.resumeCards`。
     ///
     /// ⚠️ 交互也与 Emby 那一行对齐(用户要求):点播放按钮直接续播,点卡片其余位置进详情页。
     private var resumeShelf: some View {
         MediaShelf(title: "继续观看") {
             ForEach(viewModel.resumeCards) { card in
-                BaiduResumeCardView(
+                FileSourceResumeCardView(
                     card: card,
                     store: store,
                     isPreparing: viewModel.preparingPlaybackFileID == card.fileID,
@@ -393,9 +408,9 @@ struct BaiduPanBrowserView: View {
     /// 续播卡片的播放按钮 → 直接续播(起播位置由本地续播库给)。
     ///
     /// ⚠️ 起播前要先补列它所在的目录(换集入口要兄弟集,见
-    /// `BaiduPanSourceViewModel.play(_ card:)`),所以这里等它一次再开窗 ——
+    /// `FileSourceViewModel.play(_ card:)`),所以这里等它一次再开窗 ——
     /// 顺序反了会先弹一个黑窗口。
-    private func play(_ card: BaiduResumeCard) {
+    private func play(_ card: FileSourceResumeCard) {
         Task {
             if await viewModel.play(card) {
                 openWindow(id: PlayerSceneRoot.windowID)
@@ -405,7 +420,7 @@ struct BaiduPanBrowserView: View {
 
     /// 续播卡片其余位置 → 进它的详情页(与 Emby 首页那一行同一套交互)。
     /// ⛔ 这里不 `openWindow`:详情页是主窗口里的一屏,不是播放窗口。
-    private func openDetail(_ card: BaiduResumeCard) {
+    private func openDetail(_ card: FileSourceResumeCard) {
         Task { await viewModel.openDetail(for: card) }
     }
 
@@ -414,10 +429,20 @@ struct BaiduPanBrowserView: View {
     /// - **应用目录本身读不出来** → 给「核对应用目录名」(改那个名字),
     ///   而不是「重试」。因为这种失败九成是目录名与控制台里的应用名不一致,
     ///   重试多少次都是同一个结果(可访问范围完全由那一个值决定)。
+    /// - **本地文件夹的访问权没了**(挪走了 / 盘没插 / 书签失效)→ 给「重新选择文件夹…」:
+    ///   外接盘插回去之后「重试」就能好,所以重试也留着。
     /// - 其余(子目录、网络、token)→ 老实的错误 + 重试。
-    private func failurePane(_ failure: BaiduPanDirectoryFailure) -> some View {
+    private func failurePane(_ failure: FileSourceDirectoryFailure) -> some View {
         VStack(spacing: Metrics.spacingM) {
-            if failure.isApplicationRootUnavailable {
+            if failure.needsFolderReselection {
+                OnboardingFormHeader(
+                    systemImage: "folder.badge.questionmark",
+                    title: "打不开这个文件夹",
+                    subtitle: failure.message
+                )
+                Button("重新选择文件夹…") { showsFolderPicker = true }
+                    .buttonStyle(.borderedProminent)
+            } else if failure.isApplicationRootUnavailable {
                 OnboardingFormHeader(
                     systemImage: "folder.badge.questionmark",
                     title: "读不到应用目录",
@@ -459,8 +484,11 @@ struct BaiduPanBrowserView: View {
 
     private var emptyHint: String {
         guard viewModel.items.isEmpty else {
-            return "这些条目只是在本机被隐藏了,网盘上的文件都还在。"
+            return "这些条目只是在本机被隐藏了,\(viewModel.source.storageNoun)里的文件都还在。"
                 + "设置 →「已隐藏」里可以逐条恢复。"
+        }
+        guard case .baiduPan = viewModel.source else {
+            return "这一层没有可播的文件。把视频放进这个文件夹,再回来刷新。"
         }
         let name = viewModel.folderName ?? "应用目录"
         // 当前是应用目录根时,「空的」更可能是**整个应用目录还没建出来** ——
@@ -482,12 +510,12 @@ struct BaiduPanBrowserView: View {
     }
 }
 
-/// 百度来源的一张卡片。
+/// 文件树来源的一张卡片。
 ///
 /// 视觉与 `MediaCard`(Emby 那边)保持一致:非玻璃卡片、`.fill` 的图只当 overlay
 /// 绘制(否则会按自己的比例报告溢出尺寸、把网格撑乱)、续播用文字而不是只靠颜色
 /// (DesignTokens.swift「界面规则」)。
-private struct BaiduPanCard: View {
+private struct FileSourceCard: View {
     let item: SourceItem
     let store: PosterImageStore
     /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
@@ -497,7 +525,7 @@ private struct BaiduPanCard: View {
     /// 目录卡:这一层之下本地已记录看过的集数(0 = 不显示)
     let watchedEpisodeCount: Int
     /// 目录卡:这一部剧**一共几集**。nil = 还没进过详情页,不知道总数
-    /// (见 `BaiduPanSourceViewModel.episodeTotal(for:)`)
+    /// (见 `FileSourceViewModel.episodeTotal(for:)`)
     let episodeTotal: Int?
     let onOpen: () -> Void
 
@@ -673,10 +701,10 @@ private struct BaiduPanCard: View {
 /// 出现玻璃播放按钮,**点它直接续播**;**点卡片其余位置进详情页**。
 /// ⚠️ 点空白处不再直接播 —— 那是这一版之前的行为,与 Emby 不一致。
 ///
-/// 视觉与 `BaiduPanCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
+/// 视觉与 `FileSourceCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
 /// 副标题报「已看到 mm:ss」(「下一集」占位则报「下一集」)、有总时长时在图上画进度条。
-private struct BaiduResumeCardView: View {
-    let card: BaiduResumeCard
+private struct FileSourceResumeCardView: View {
+    let card: FileSourceResumeCard
     let store: PosterImageStore
     /// 正在为这张卡片补列目录(换集入口要兄弟集)。转圈 + 禁止重复点击
     var isPreparing = false
@@ -690,7 +718,7 @@ private struct BaiduResumeCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             // 尺寸由 Color.clear 钉死,图片 / 播放按钮 / 进度条只当 overlay
-            // (与 `BaiduPanCard` 同理)
+            // (与 `FileSourceCard` 同理)
             Color.clear
                 .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
                 .frame(width: Metrics.landscapeCardWidth)

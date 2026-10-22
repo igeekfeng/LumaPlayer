@@ -96,6 +96,8 @@ final class PlayerViewModel {
             return .emby(serverID: server.id, item: item)
         case .baiduPan(let file):
             return .baiduPan(file: file, isEpisodeSeries: episodeQueue != nil)
+        case .localFolder(let file, let source):
+            return .localFolder(sourceID: source.id, file: file, isEpisodeSeries: episodeQueue != nil)
         }
     }
 
@@ -268,11 +270,11 @@ final class PlayerViewModel {
     private var startTask: Task<Void, Never>?
     /// 最近一次 `finishReporting` 的任务(finish + drain),供关窗后等待
     private var reportingFinishTask: Task<Void, Never>?
-    /// 百度来源「这一集播完了」之后要落进本地续播库的东西(已看 + 下一集占位)。
+    /// 文件树来源「这一集播完了」之后要落进本地续播库的东西(已看 + 下一集占位)。
     ///
     /// 单独存一份是为了**关窗时能等它**:续播区(on `lastFinishedPlayback`)刷新得
     /// 比它早,就会读到还没写进去的库 —— 表现为「刚播完,继续观看里没有下一集」。
-    private var baiduFinishTask: Task<Void, Never>?
+    private var fileSourceFinishTask: Task<Void, Never>?
     /// 合并后的倍速上报任务(拖滑块时只留最后一次)
     private var rateReportTask: Task<Void, Never>?
     /// 转码 seek 合并后的重新起流任务(连点时只留最后一次)
@@ -415,11 +417,11 @@ final class PlayerViewModel {
     var playingServer: ServerProfile? { server }
 
     /// 来源无关的播放标题(窗口标题 / 系统「正在播放」兜底)。
-    /// 百度来源没有 Emby 那套剧集结构,标题就是文件名。
+    /// 文件树来源(百度 / 本地文件夹)没有 Emby 那套剧集结构,标题就是文件名。
     var playingTitle: String {
         switch request.source {
         case .emby(_, let item): return item.name
-        case .baiduPan(let file): return file.name
+        case .baiduPan(let file), .localFolder(let file, _): return file.name
         }
     }
 
@@ -465,7 +467,7 @@ final class PlayerViewModel {
 
     /// 媒体指纹(前 16 MiB 的 MD5),给弹幕 `/match` 的 `fileHash`。
     ///
-    /// 只在**直连流**上算:
+    /// Emby 只在**直连流**上算(本地文件夹走 `localFileFingerprint`,百度不算):
     /// - 转码流的前 16 MiB 是编码器输出,与源文件不是同一份字节,MD5 没有意义;
     /// - 指纹要等播放会话就绪才知道地址与认证头 —— 这里最多等 10 秒,
     ///   超时就当没有(`DanmakuFingerprint` 的调用方会把 nil 当「退回文件名匹配」)。
@@ -476,7 +478,13 @@ final class PlayerViewModel {
     /// 设置 › 弹幕 的「用文件指纹提高匹配准确度」(默认开)。
     private func mediaFingerprint() async -> String? {
         guard container.danmakuSettings.settings.usesFileFingerprint else { return nil }
-        guard case .emby = request.source else { return nil }
+        switch request.source {
+        case .emby: break
+        // 百度:为一个指纹多拉 16 MiB 网盘流量不划算(`DanmakuFingerprint` 的成本说明)
+        case .baiduPan: return nil
+        // 本地文件:读盘不花流量,会话就绪后直接读文件头
+        case .localFolder: return await localFileFingerprint()
+        }
         // 会话可能还在准备(与弹幕并行),等一小会儿而不是直接放弃
         let deadline = Date().addingTimeInterval(10)
         while session == nil, Date() < deadline {
@@ -489,6 +497,17 @@ final class PlayerViewModel {
             headers: session.plan.headers,
             expectedFileSize: session.mediaSource.size,
             session: container.session)
+    }
+
+    /// 本地文件的指纹:等会话就绪拿到文件地址(访问权由组合根打开),再读前 16 MiB。
+    private func localFileFingerprint() async -> String? {
+        let deadline = Date().addingTimeInterval(10)
+        while session == nil, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return nil }
+        }
+        guard let url = session?.plan.url, url.isFileURL else { return nil }
+        return await DanmakuFingerprint.md5(ofFileAt: url)
     }
 
     /// 起播位置:Emby 读服务端 `UserData`,百度读本地续播库 —— 由组合根按来源给
@@ -1112,17 +1131,18 @@ final class PlayerViewModel {
 
     /// 换到某一集:装配新请求交给播放窗口(换集 = 换请求,见 `PlaybackRequest`)。
     ///
-    /// 队列**只在百度来源**带过去:它的兄弟集只存在于这次请求里,丢了就得再列一遍
-    /// 网盘(配额);Emby 的兄弟集在服务端,新播放页自己查更全(还能补齐跨季边界)。
+    /// 队列**只在文件树来源**(百度 / 本地文件夹)带过去:它的兄弟集只存在于这次请求里,
+    /// 丢了就得再列一遍目录(百度还要烧配额);Emby 的兄弟集在服务端,新播放页自己查更全
+    /// (还能补齐跨季边界)。
     private func switchToEpisode(_ episode: PlaybackEpisode?) {
         guard let episode else { return }
         stopUpNextCountdown()
-        // 百度:换集同样要补记「继续观看」的展示快照(复用起播那一刻的 `SourceItem`),
-        // ⛔ 不能等渲染续播区时再列网盘(配额,见 `AppContainer.rememberResumeCard`)。
-        if let item = episode.resumeItem, let file = episode.source.baiduFile {
+        // 文件树来源:换集同样要补记「继续观看」的展示快照(复用起播那一刻的 `SourceItem`),
+        // ⛔ 不能等渲染续播区时再列目录(百度配额,见 `AppContainer.rememberResumeCard`)。
+        if let item = episode.resumeItem, let file = episode.source.file {
             Task { await container.rememberResumeCard(item: item, file: file) }
         }
-        let carried = episode.source.baiduFile != nil ? episodeQueue?.selecting(episode) : nil
+        let carried = episode.source.file != nil ? episodeQueue?.selecting(episode) : nil
         // 沿用本页的 `pageID`:播放窗口据此只换会话、不重建播放页(见 `PlaybackRequest`)
         container.play(PlaybackRequest(
             source: episode.source,
@@ -1680,24 +1700,25 @@ final class PlayerViewModel {
     /// 播放页关闭后,详情页据此再向服务端读续播位置(docs/PITFALLS.md Q22)。
     /// 从未开始收尾时立即返回。
     ///
-    /// ⚠️ 百度那笔要**等**:续播区在同一个广播之后刷新,不等就可能读到还没写进去的库。
+    /// ⚠️ 文件树来源那笔要**等**:续播区在同一个广播之后刷新,不等就可能读到还没写进去的库。
     func waitUntilReportingFinished() async {
         await reportingFinishTask?.value
-        await baiduFinishTask?.value
+        await fileSourceFinishTask?.value
     }
 
-    /// 百度来源自然播完的收尾:已看 + 下一集占位(见 `AppContainer.finishBaiduEpisode`)。
+    /// 文件树来源(百度 / 本地文件夹)自然播完的收尾:已看 + 下一集占位
+    /// (见 `AppContainer.finishFileSourceEpisode`)。
     ///
     /// ⚠️ 先等最终进度落盘(`reportingFinishTask`)再写「已看」—— 反过来的话,
     /// 随后那次「播到 99%」的进度写会把它翻回「进行中」。
-    private func finishBaiduEpisodeIfNeeded() {
+    private func finishFileSourceEpisodeIfNeeded() {
         guard let queue = episodeQueue, let finished = queue.current,
-              finished.source.baiduFile != nil else { return }
+              finished.source.file != nil else { return }
         let final = reportState
         let previous = reportingFinishTask
-        baiduFinishTask = Task { [container] in
+        fileSourceFinishTask = Task { [container] in
             await previous?.value
-            await container.finishBaiduEpisode(
+            await container.finishFileSourceEpisode(
                 finished,
                 in: queue,
                 endedAt: final.positionSeconds,
@@ -1815,10 +1836,10 @@ final class PlayerViewModel {
             // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)
             updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
-            // 百度来源:这一集落成「已看」,再补一条「下一集」占位 —— 否则看完一集
+            // 文件树来源:这一集落成「已看」,再补一条「下一集」占位 —— 否则看完一集
             // 整部剧就停在上一集 / 从续播区消失(Emby 由服务端算 NextUp,不需要这一步)。
             // 队列是起播时装配的,零请求。
-            finishBaiduEpisodeIfNeeded()
+            finishFileSourceEpisodeIfNeeded()
             // 没有片尾标记、也没赶上结束前的提示(比如直接拖到了最后)时,
             // 播完卡片同样按设置倒计时播下一集
             if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
