@@ -5,16 +5,7 @@ import os
 import mpv
 import Synchronization
 
-/// `MPVPlayer` 的生命周期状态机(MPV_INTEGRATION.md §8)。
-///
-/// ```text
-/// idle ──load()──▶ loading ──FILE_LOADED──▶ playing ⇄ paused
-///                    │                        │
-///                    └──失败──────────────▶ failed
-/// playing/paused/… ──stop()/shutdown()──▶ tearingDown ──▶ destroyed
-/// ```
-///
-/// destroyed 不可复用(一实例一 URL;换台 = 销毁重建)。
+/// `MPVPlayer` 的生命周期状态机(MPV_INTEGRATION.md §8)。destroyed 不可复用:一实例一 URL,换台即销毁重建。
 enum MPVPlayerPhase: String, Sendable, Equatable {
     case idle
     case loading
@@ -111,11 +102,9 @@ struct MPVPropertyRequests {
 
 /// libmpv 的薄 Swift 封装(业务代码不得直接调 C API,MPV_INTEGRATION.md §1)。
 ///
-/// `@unchecked Sendable` 论证(MPV_INTEGRATION.md §6.3):
-/// - mpv client API 本身全线程安全(client.h);本类全部可变状态在 `mutex` 内;
-/// - mpv 句柄创建后不再更换,只在 `shutdown()` 里锁内销毁并置 nil;
-/// - MainActor 调用方、mpv 事件线程、渲染(draw)三方并发,经 `mutex` / `renderMutex`
-///   或 mpv 自身线程安全串行;锁序见 `renderMutex`。
+/// `@unchecked Sendable` 的论证见 MPV_INTEGRATION.md §6.3:client API 全线程安全,本类可变状态都在
+/// `mutex` 内,句柄只在 `shutdown()` 里锁内销毁;三方并发(MainActor 调用方 / 事件线程 / draw)靠
+/// `mutex`、`renderMutex` 与 mpv 自身串行,锁序见 `renderMutex`。
 final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 内部状态
@@ -372,11 +361,8 @@ final class MPVPlayer: @unchecked Sendable {
         }
 
         // 3. 释放渲染上下文(必须先于 core 销毁,render.h:119-122)。
-        //    锁序 renderMutex → mutex:renderMutex 保证此刻没有 draw 线程
-        //    正在 render,mutex 保护 state 字段本身。
-        //    render.h 66-69 要求 mpv_render* 调用时 GL context 在调用线程
-        //    current——free 也不例外,因此借用挂接的 CGL context 并在结束后
-        //    恢复原状(CGLSetCurrentContext(nil) = 解绑,合法)。
+        //    锁序 renderMutex → mutex。render.h 66-69 要求 mpv_render* 调用时 GL context 在当前线程,
+        //    free 也不例外,所以借用挂接的 CGL context 并在结束后解绑。
         withRenderAndStateLock {
             if let rctx = state.renderContext {
                 let previous = CGLGetCurrentContext()
@@ -385,10 +371,8 @@ final class MPVPlayer: @unchecked Sendable {
                 CGLSetCurrentContext(previous)
                 state.renderContext = nil
             }
-            // 与 attachGLContext 里的 CGLRetainContext 配对:layer 可能
-            // 早于本次 shutdown 就把它自己那份引用还掉了,没有这对
-            // retain/release,上面那行 CGLSetCurrentContext 就是在用
-            // 已释放的 context。
+            // 与 attachGLContext 里的 CGLRetainContext 配对:layer 可能早于本次 shutdown 还掉它那份引用,
+            // 少了这对 retain/release,上面那行 CGLSetCurrentContext 就是在用已释放的 context。
             if let cgl = state.cglContext {
                 CGLReleaseContext(cgl.raw)
                 state.cglContext = nil
@@ -488,27 +472,12 @@ final class MPVPlayer: @unchecked Sendable {
         try setStringProperty("sid", id.map(String.init) ?? "no")
     }
 
-    /// 挂一条**外挂字幕**(`sub-add` 命令)。
+    /// 挂一条外挂字幕(`sub-add`)。片源常把字幕单独放成 .srt / .ass,内核发现不了,只能显式加轨:
+    /// 百度同目录字幕与用户手动加载的本地文件都走这里。
     ///
-    /// ## 为什么需要它
-    ///
-    /// 片源常把字幕单独放成 `.srt` / `.ass`,它们不在视频容器里 ——
-    /// 内核自己发现不了,只能由客户端显式加轨。两条通路都走这里:
-    /// 百度同目录字幕(配对在 `BaiduPanSubtitle`)与用户手动加载的本地文件
-    /// (`SubtitleFileStore` 复制进容器后的路径)。
-    ///
-    /// ## 三个必须说清的约束
-    ///
-    /// 1. **必须在文件加载之后调用**:`sub-add` 在 `no file loaded` 时直接失败。
-    ///    调用方是 `PlayerViewModel` 的 `.playing` 事件 / 起播后的用户操作,
-    ///    不是 `load()` 之后立刻。
-    /// 2. `flags` 决定加载后选不选中,见 `SubtitleAddFlag`:百度自动字幕用 `auto`
-    ///    (不抢用户已选的轨),手动 / 在线字幕用 `select`。
-    /// 3. **本地文件传路径,不传 `file://` URL**:`sub-add` 接受路径或 URL,
-    ///    但 `file:///…` 要经 lavf 的 file 协议再绕一层,多一个可能失败的地方。
-    ///
-    /// ⚠️ 远程地址里的凭据(百度 `access_token`)必须已经带好 —— 这里只负责传地址;
-    /// 请求头沿用 `load()` 时设的 `http-header-fields`(字幕与主文件同一个 UA)。
+    /// ⚠️ 必须在文件加载之后调用(`no file loaded` 时 `sub-add` 直接失败);`flags` 决定加载后选不选中
+    /// (`auto` 不抢用户已选的轨,手动 / 在线字幕用 `select`);本地文件传路径而不是 `file://` URL。
+    /// 远程地址里的凭据要由调用方带好,这里只传地址;请求头沿用 `load()` 设的 `http-header-fields`。
     func addSubtitle(url: URL, title: String?, flags: SubtitleAddFlag = .auto) throws {
         try withLiveHandle { handle, _ in
             let target = url.isFileURL ? url.path : url.absoluteString
@@ -534,8 +503,7 @@ final class MPVPlayer: @unchecked Sendable {
     /// 值由 `SubtitleStyle.mpvProperties` 生成;全是运行时可改的选项属性,
     /// 播放中改也立即生效。
     ///
-    /// 只放行 `sub-` 前缀:这是给字幕外观开的口子,⛔ 不是通用的「随便设个属性」,
-    /// 业务代码借它绕过封装去改别的选项会让本类型的状态机失去意义。
+    /// 只放行 `sub-` 前缀:这是给字幕外观开的口子,⛔ 不是通用 setter,业务代码借它绕过封装会让状态机失去意义。
     /// 中途某一项被拒即抛错,前面已设上的保持生效(mpv 无批量事务)。
     func setSubtitleProperties(_ properties: [(name: String, value: String)]) throws {
         try withLiveHandle { handle, _ in
@@ -553,13 +521,9 @@ final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 轮询读取(统计信息 / 缓冲进度)
 
-    /// 一次读出若干属性的字符串形式(`mpv_get_property_string`)。
-    ///
-    /// 仅为既有同步测试/探针保留。此方法持 state mutex 等待核心,不得用于 MainActor 播放监控;
-    /// 生产统计/缓冲轮询改用 stringPropertiesAsync,避免阻塞界面与 render 取状态锁。
-    /// 当前不可用的属性(没有视频轨时的 `video-params/w`、未缓冲时的
-    /// `cache-buffering-state`)mpv 返回 NULL,结果里就没有这个键 —— 不填占位值。
-    /// 为兼容旧测试,实例已销毁 / 初始化失败时仍返回空字典;异步 API 则明确抛错。
+    /// 一次读出若干属性的字符串形式。仅为既有同步测试/探针保留:它持 state mutex 等核心,
+    /// 不得用于 MainActor 播放监控(生产用 stringPropertiesAsync)。
+    /// 属性当前不可用时 mpv 返回 NULL,结果里就没有这个键 —— ⛔ 不填占位值;实例已销毁时返回空字典。
     func stringProperties(_ names: [String]) -> [String: String] {
         do {
             return try withLiveHandle { handle, _ in
@@ -760,14 +724,11 @@ final class MPVPlayer: @unchecked Sendable {
         return .success(renderContext)
     }
 
-    /// 挂载 GL 渲染上下文(由 MPVGLLayer 在拿到自己的 CGL context 后调用)。
-    /// 非抛出:失败置 failed 并记日志(layer 的 override 里不能抛)。
+    /// 挂载 GL 渲染上下文(由 MPVGLLayer 拿到自己的 CGL context 后调用)。非抛出:失败置 failed 并记日志。
     ///
-    /// 可重复调用:CAOpenGLLayer 在切显示器 / 切 GPU / 换 pixel format 时会
-    /// 重新走一次 copyCGLContext。render.h:117「there can be only 1
-    /// mpv_render_context at a time per mpv core」——所以重挂之前必须先把
-    /// 旧的 render context free 掉,否则第二次 create 必失败。
-    /// 锁序 renderMutex → mutex(与 shutdown、render 一致)。
+    /// 可重复调用(切显示器 / 切 GPU / 换 pixel format 时 layer 会再走一次 copyCGLContext)。
+    /// ⚠️ render.h:117 规定一个 core 同时只能有一个 render context,所以重挂前必须先 free 旧的。
+    /// 锁序 renderMutex → mutex。
     func attachGLContext(_ cglContext: CGLContextObj?) {
         let created: Result<OpaquePointer, MPVError> = withRenderAndStateLock {
             guard let handle = state.handle, state.phase != .destroyed, state.phase != .tearingDown else {
@@ -783,15 +744,13 @@ final class MPVPlayer: @unchecked Sendable {
             if let existing = state.renderContext, state.cglContext?.raw == cglContext {
                 return .success(existing.raw)
             }
-            // render.h 66-69:mpv_render* 调用要求该 GL context 在调用线程
-            // current。copyCGLContext 钩子里 context 尚未 current,这里显式
-            // 切换并在结束后恢复(CGLSetCurrentContext(nil) = 解绑,合法)。
+            // render.h 66-69:mpv_render* 要求该 GL context 在调用线程 current。copyCGLContext 钩子里
+            // 尚未 current,这里显式切换并在结束后恢复。
             let previous = CGLGetCurrentContext()
             CGLSetCurrentContext(cglContext)
             defer { CGLSetCurrentContext(previous) }
 
-            // 换了一个 context:先拆旧的(用旧 context current 去 free),
-            // 再建新的。顺序不可换——render.h 只允许同时存在一个。
+            // 换 context:先用旧 context current 去 free 旧的,再建新的 —— 顺序不可换,render.h 只允许一个。
             if let stale = state.renderContext {
                 CGLSetCurrentContext(state.cglContext?.raw)
                 mpv_render_context_free(stale.raw)
@@ -839,19 +798,13 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
-    /// GL draw 线程调用:把当前帧渲染到 layer 当前绑定的 framebuffer。
+    /// GL draw 线程调用:把当前帧渲染到 layer 绑定的 framebuffer。
     ///
-    /// 官方模式(render.h 638-643、687-688;示例 sdl.c 的 on_redraw):
-    /// update 回调通知后(`needsRender`,由 layer 的 `canDraw` 把关)调 update() 再**无条件** render()——
-    /// render() 自己从内部队列拉帧,无新帧时重画上一帧;update() 在非 ADVANCED_CONTROL 下
-    /// 是可选的,返回 flags 不能拿来 gate render()。S2 实测教训:按
-    /// flags gate 后 flags 恒 0、一帧都渲不出。
-    /// 标志在 render **之前**清:render 期间 VO 送来下一帧,回调会重新置位,不会漏。
-    /// 锁:整帧只持有 `renderMutex`(仅与 attach / free 互斥),`mutex` 只在
-    /// 取指针和回写统计这两个瞬间短暂持有。之前整帧持有 `mutex` 会让
-    /// MainActor 侧的 `phase` / `pause()` / `seek()` 排队等一次 GPU 提交
-    /// ——60fps 下每次调用都可能卡到主线程(§6.3「渲染路径内不得做重活」)。
-    /// 指针在 renderMutex 内保持有效:free 也要拿同一把锁。
+    /// 官方模式(render.h 638-643、687-688):update 回调后调 update() 再**无条件** render(),
+    /// render() 自己从内部队列拉帧。⚠️ 不能拿 update 返回的 flags 去 gate render —— 那样 flags 恒 0、一帧都渲不出。
+    /// 标志在 render 之前清:render 期间 VO 送来下一帧会重新置位,不会漏。
+    /// 锁:整帧只持 `renderMutex`(仅与 attach / free 互斥),`mutex` 只在取指针与回写统计时短暂持有 ——
+    /// 整帧持 `mutex` 会让 MainActor 侧的 `phase` / `pause()` / `seek()` 等一次 GPU 提交。
     func renderIntoBoundFramebuffer(width: Int, height: Int) {
         renderMutex.withLock {
             let renderContext: OpaquePointer? = mutex.withLock {
@@ -863,17 +816,13 @@ final class MPVPlayer: @unchecked Sendable {
 
             renderRequest.take()
             let flags = mpv_render_context_update(renderContext)
-            // 这一帧是不是 VO 送来的真实视频帧(第一帧判据,见 `firstVideoFrameRendered`)。
-            // ⛔ 不能只看 UPDATE_FRAME:VO 刚建好时的重绘请求同样带它,那一帧还没有画面
-            // (vo_libmpv.c:`redraw || !current`),拿它当首帧会提前撤掉定格画面。
+            // 这一帧是不是 VO 送来的真实视频帧(见 `firstVideoFrameRendered`)。
+            // ⛔ 不能只看 UPDATE_FRAME:VO 刚建好时的重绘请求也带它,那一帧还没有画面。
             let isFirstVideoFrame = flags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) != 0
                 && !mutex.withLock({ state.hasRenderedVideoFrame })
                 && Self.nextFrameIsVideo(renderContext)
-            // 不能写死 fbo=0:CAOpenGLLayer 调 draw 时绑定的是 layer 自己的
-            // 离屏 FBO,不是默认 framebuffer。画到 0 等于画进空气 —— 解码、
-            // 音频、时钟全都正常,画面却永远是黑的(S2 只数了渲染次数没目检,
-            // 所以当时没发现)。与 mpv 自家 macOS 后端 cocoa-cb 的做法一致:
-            // 每帧查询当前绑定的 draw framebuffer 传给 mpv。
+            // ⛔ 不能写死 fbo=0:CAOpenGLLayer 调 draw 时绑的是 layer 自己的离屏 FBO,
+            // 画到 0 等于画进空气(解码、音频、时钟全正常,画面永远黑)。与 cocoa-cb 一样每帧查询。
             var boundFramebuffer: GLint = 0
             glGetIntegerv(GLenum(GL_DRAW_FRAMEBUFFER_BINDING), &boundFramebuffer)
             var fbo = mpv_opengl_fbo(
