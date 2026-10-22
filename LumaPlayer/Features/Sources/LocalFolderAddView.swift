@@ -1,9 +1,7 @@
 import SwiftUI
 
 /// 添加本地文件夹来源:选文件夹 →(可选)起个名字 → 落库并切过去。
-///
-/// 访问权就是在这一刻拿到的:用户在打开面板里选中的文件夹,本次运行可读;
-/// `AppContainer.addLocalFolderSource` 当场做成安全作用域书签,之后每次启动靠它。
+/// 访问权在这一刻拿到:本次运行直接可读,`AppContainer.addLocalFolderSource` 当场做成安全作用域书签供后续启动。
 struct LocalFolderAddView: View {
     let container: AppContainer
     let onBack: () -> Void

@@ -1,22 +1,12 @@
 import Foundation
 
-/// 「把这一整个剧集目录改成标准 TMDB 命名」这条流程的编排者。
+/// 「把这一整个剧集目录改成标准 TMDB 命名」这条流程的编排者:列目录 → 认剧 → 生成计划(预览) → 提交。
 ///
-/// ## 四步,每一步都可能停下来等人
-///
-/// ```
-/// 列目录树 → 认剧(有 id 直取 / 没 id 搜索后请你选) → 生成计划(预览) → 提交
-/// ```
-///
-/// ⛔ **不自动替你认剧**。目录名没写 `{tmdbid-N}` 时只能按标题搜,而同名剧可能有好几部
-/// (`一拳超人` 就不止一条)。搜出来多条就列给你选,**只有一条也让你点一下确认** ——
-/// 选错剧的代价是整个目录按错的剧改名,那比不改还糟(CLAUDE.md 硬规则 4)。
-///
-/// ## 网络与配额
+/// ⛔ **不自动替你认剧**。目录名没写 `{tmdbid-N}` 时只能按标题搜,同名剧常有好几部,
+/// 搜出一条也要你点一下确认 —— 选错就是整个目录按错的剧改名(CLAUDE.md 硬规则 4)。
 ///
 /// 一次流程要发:1 次列剧目录 + N 次列季目录 + (0~1 次搜索) + N 次季详情 + 若干次提交。
-/// ⛔ 前两类走**百度配额(见 §7)**,TMDB 那几类不走,所以 UI 里
-/// `submittedBatches` 之外还要把「列目录用了几次」说出来 —— 让用户知道自己在花什么。
+/// ⛔ 只有列目录走百度配额(§7),所以 UI 除了 `submittedBatches` 还要说出列目录用了几次。
 @MainActor
 @Observable
 final class BaiduPanRenameSeriesViewModel {
@@ -26,9 +16,7 @@ final class BaiduPanRenameSeriesViewModel {
         case idle
         /// 正在列目录 / 问 TMDB
         case preparing(String)
-        /// 搜出多条候选,等用户认剧
         case choosingSeries
-        /// 计划出来了,等用户确认
         case preview
         case executing
         case finished
@@ -69,7 +57,6 @@ final class BaiduPanRenameSeriesViewModel {
 
     // MARK: - 第一步:列目录 + 认剧
 
-    /// 从用户选中的剧目录开始。
     func start(directory: BaiduPanFile) async {
         root = directory
         isBusy = true
@@ -84,7 +71,6 @@ final class BaiduPanRenameSeriesViewModel {
             let entries = try await loadTree(root: directory)
             tree = entries
 
-            // 目录名里写了权威 id 就不用问了
             if let explicit = BaiduPanMetadataSynthesizer
                 .extractExplicitTMDBID(in: directory.name)?.id {
                 stage = .preparing("正在取剧的信息…")
@@ -111,9 +97,7 @@ final class BaiduPanRenameSeriesViewModel {
     }
 
     /// 递归列两层:剧目录 → 季目录里的文件。
-    ///
-    /// ⚠️ 只列两层(剧 / 季 / 文件)。更深的嵌套不是标准库的形状,列下去只会多烧配额;
-    /// 而配额见 `BAIDU_PAN_API.md` §7。
+    /// ⚠️ 只列两层,更深的嵌套不是标准库的形状,列下去只会多烧配额(`BAIDU_PAN_API.md` §7)。
     private func loadTree(root: BaiduPanFile) async throws -> [BaiduPanFile] {
         let connection = container.baiduConnection()
         let topLevel = try await connection.files(inDirectory: root.path)
@@ -128,7 +112,6 @@ final class BaiduPanRenameSeriesViewModel {
 
     // MARK: - 第二步:认剧后生成计划
 
-    /// 用户选定是哪部剧。
     func choose(_ match: TMDBMatch) async {
         selectedSeries = match
         isBusy = true
@@ -146,8 +129,7 @@ final class BaiduPanRenameSeriesViewModel {
     private func apply(series: TMDBMatch) async throws {
         guard let root, let readToken = token else { return }
         selectedSeries = series
-        // ⚠️ 问哪几季必须与 `makePlan` 的判据一致:平铺存法(剧根下直接是集文件)
-        // 在那边按第 1 季处理,这里就得把第 1 季的分集表取回来,否则集标题全丢。
+        // ⚠️ 季号必须与 `makePlan` 的判据一致:平铺存法那边按第 1 季处理,集标题才不丢。
         let seasons = BaiduPanRenamePlanner.seasonNumbers(in: tree, root: root)
         var titles: [Int: [Int: String]] = [:]
         for season in seasons {
@@ -195,10 +177,7 @@ final class BaiduPanRenameSeriesViewModel {
     }
 
     /// 改名后同步本地快照。
-    ///
-    /// ⚠️ 进度本身按 `fs_id` 存,**不会丢**;但「续播卡片」用的展示快照里存的是
-    /// `path` 与文件名(`WatchProgressStore.Display.locator`),那两个会失效 ——
-    /// 不更新的话卡片还在、点下去却定位不到文件。
+    /// ⚠️ 进度按 `fs_id` 存不会丢,但续播卡片的 `path` / 文件名(`WatchProgressStore.Display.locator`)会失效。
     private func applyLocalSideEffects(_ result: BaiduPanRenameExecutor.Outcome) async {
         for item in result.succeeded {
             await container.watchProgress.relocate(
@@ -211,7 +190,6 @@ final class BaiduPanRenameSeriesViewModel {
     // MARK: - 撤销
 
     /// 把这次已经改成功的部分改回原名。
-    ///
     /// ⚠️ 只能撤销**已确认成功**的那部分 —— 执行器「失败即停」正是为了让这份清单算得出来。
     func rollback() async {
         guard let result = outcome, !result.succeeded.isEmpty else { return }

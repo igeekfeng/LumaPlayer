@@ -1,10 +1,7 @@
 import Foundation
 
 /// 条目在**来源内**的身份。路由与图片缓存 key 都用它。
-///
-/// 与 `PlaybackSource` 的分工:`PlaybackSource` 装的是「**要播这一项**」所需的
-/// 全部东西(含 `EmbyItem` / `BaiduPanFile` 这类重对象);这里只装身份,
-/// 可以安全地进 `NavigationStack` 的 path、当 `Identifiable` 的 id。
+/// 与 `PlaybackSource` 分工:那边装要播的全部东西(含重对象),这里只装身份,可进 `NavigationStack` path。
 struct SourceItemRef: Sendable, Equatable, Hashable, Codable {
     let sourceID: UUID
     /// 来源内的 id:Emby 是 `ItemId`;百度是 `fs_id`
@@ -21,22 +18,17 @@ struct SourceItemRef: Sendable, Equatable, Hashable, Codable {
     }
 }
 
-/// 条目的媒体分类。
-///
-/// ⛔ 判不出来就是 `.unknown` —— 不猜(`CLAUDE.md` 硬规则 4)。
+/// 条目的媒体分类。⛔ 判不出来就是 `.unknown` —— 不猜(`CLAUDE.md` 硬规则 4)。
 enum SourceItemKind: String, Sendable, Equatable, Hashable {
     case movie
     case episode
     case video
     case audio
-    /// 图片(百度目录里的 `poster.jpg` 一类)。
-    /// ⚠️ 合成器**不**给它们成卡 —— 它们是封面来源,不是片单成员。
-    /// 留着这个 case 是为了「这个文件确实存在且是图片」这件事有处安放。
+    /// 图片(`poster.jpg` 一类)。⚠️ 合成器**不**给它们成卡 —— 是封面来源,不是片单成员。
     case image
     case folder
     case unknown
 
-    /// 能不能直接播(目录与图片不行)
     var isPlayable: Bool {
         switch self {
         case .movie, .episode, .video, .audio: return true
@@ -44,34 +36,21 @@ enum SourceItemKind: String, Sendable, Equatable, Hashable {
         }
     }
 
-    /// 能不能进去(目录)
     var isContainer: Bool { self == .folder }
 }
 
-/// 元数据是从哪来的。
-///
-/// 用途有二:诊断(「这个标题是解析出来的还是服务端给的」),
-/// 以及 UI 做取舍(文件名解析出来的标题不冒充「官方名称」)。
+/// 元数据的来源。用于诊断(标题是解析出来的还是服务端给的)与 UI 取舍(解析出的标题不冒充「官方名称」)。
 enum MetadataOrigin: String, Sendable, Equatable, Hashable {
-    /// 服务端给的(Emby)
     case server
-    /// 同目录的 `.nfo`(Kodi / Emby 风格 sidecar)。
-    /// ⚠️ 目前**没有生产者**:读 `.nfo` 要先向百度换 `dlink` 再下载内容,
-    /// 在配额下这笔账不划算(见 `docs/BAIDU_PAN_API.md` 的配额说明)。
-    /// 契约先在场,免得将来接上时又要动一遍 `MetadataOrigin` 的所有分支。
+    /// 同目录的 `.nfo`。⚠️ 目前**没有生产者**:读它要先换 `dlink` 再下载,配额下不划算
+    /// (见 `docs/BAIDU_PAN_API.md` 配额说明);契约先在场,免得将来接上时改动所有分支。
     case sidecarNFO
-    /// 从文件名解析出来的
     case filename
-    /// 没有元数据可合成
     case none
 }
 
-/// 来源无关的媒体条目。
-///
-/// **所有可选字段缺就是缺**,⛔ 不填假值(`CLAUDE.md` 硬规则 4;
-/// 与 `EmbyItem`「`Name` 不是文件名」的教训一致)。百度只给文件名,
-/// 所以它的 `overview` 恒为 nil、`year` 只有能从文件名解析出来时才有值 ——
-/// 这不是缺陷,是**如实**。
+/// 来源无关的媒体条目。⛔ 所有可选字段缺就是缺,不填假值(`CLAUDE.md` 硬规则 4)。
+/// 百度只给文件名,所以 `overview` 恒为 nil、`year` 多半没有 —— 这不是缺陷,是如实。
 struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let ref: SourceItemRef
     /// 必有:Emby 是 `Name`;百度是去掉扩展名与发布组后缀的文件名
@@ -80,37 +59,20 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let overview: String?
     let year: Int?
     /// 名称里**显式写出**的 TMDB id(`一拳超人 (2015) {tmdbid-63926}`)。
-    ///
-    /// 来源有二:
-    /// 1. 文件名或目录名里的 `{tmdbid-N}` / `[tmdbid-N]` 标签
-    ///    (`BaiduPanMetadataSynthesizer.extractExplicitTMDBID`)。有了它刮削层就
-    ///    **直接按 id 查**,跳过搜索与标题匹配 —— 这是 tinyMediaManager / Jellyfin
-    ///    一类媒体库的标准命名(`docs/KNOWN_ISSUES.md`);
-    /// 2. **刮削命中后回填**(`withScrapedMetadata`):按标题搜到的 id 写回来,
-    ///    下游(详情页取演职员 / 剧级信息)就不必再搜一次。
-    ///
-    /// ⚠️ 标签本身**不区分影 / 剧**(TMDB 的两个 id 空间各自编号),
-    /// 所以这一格只说「是这个 id」,由刮削层按上下文决定查哪个端点。
+    /// 来源有二:文件名 / 目录名的 `{tmdbid-N}` 标签(`extractExplicitTMDBID`,刮削层直接按 id 查,
+    /// 跳过搜索与标题匹配),或刮削命中后回填(`withScrapedMetadata`),让下游不必再搜一次。
+    /// ⚠️ 标签本身**不区分影 / 剧**,这一格只说「是这个 id」,查哪个端点由刮削层按上下文决定。
     let tmdbID: Int?
     /// 集号。`nil` = 不是剧集 / 不知道是第几集。
-    ///
-    /// 来源有二:文件名里的 `S01E02` / `第12集`,或**剧集文件夹结构**
-    /// (`琅琊榜/01.mp4` —— 目录名是剧名,文件名只是集号)。后者见
-    /// `BaiduPanMetadataSynthesizer.mediaItem`:那种文件名给不出剧名,
-    /// 只能借目录名,而集号必须单独留一格,否则 `title` 一被目录名占掉
-    /// 就再也分不清是第几集了。
+    /// 来源:文件名里的 `S01E02` / `第12集`,或**剧集文件夹结构**(`琅琊榜/01.mp4` ——
+    /// 目录名给剧名,集号必须单独留一格,否则被 `title` 占掉就分不清了;见 `BaiduPanMetadataSynthesizer.mediaItem`)。
     let episodeNumber: Int?
-    /// 季号。`nil` = 不知道是第几季。
-    ///
-    /// 来源:`Show.S02E07` 这类文件名解析出的季,或**季文件夹**(`琅琊榜/第13季/01.mp4`
-    /// —— 这部剧有 13 季,季号判错就会拿第 1 季的分集剧照去配第 13 季的文件)。
-    /// ⚠️ 解析不出来时**留 nil**,⛔ 不在模型层填 1 冒充;由刮削层决定拿哪一季去问
-    /// (`BaiduPanMetadataScraper` 的注释)。
+    /// 季号。`nil` = 不知道是第几季。来源:文件名的 `Show.S02E07`,或**季文件夹**
+    /// (`琅琊榜/第13季/01.mp4` —— 季号判错会拿第 1 季的分集剧照去配第 13 季的文件)。
+    /// ⚠️ 解析不出来时**留 nil**,⛔ 不在模型层填 1 冒充;取哪一季由 `BaiduPanMetadataScraper` 决定。
     let seasonNumber: Int?
     /// 集名(`第 3 集` 的那个名字)。`nil` = 还不知道。
-    ///
-    /// ⚠️ 与 `title` **分开**:剧集文件夹结构下 `title` 是**剧名**(`琅琊榜`),
-    /// 集名只有 TMDB 的分集数据里有(TMDB 未命中 / 未配置 token 时就是 `nil`)。
+    /// ⚠️ 与 `title` **分开**:剧集文件夹结构下 `title` 是剧名,集名只有 TMDB 分集数据里有(未命中 / 未配 token 即 nil)。
     let episodeTitle: String?
     let durationSeconds: Double?
     /// 封面。nil = 这个条目没找到任何可用的图 → UI 降级成图标卡
@@ -122,11 +84,8 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     /// 播放 / 上报用的内容标识(Emby 是 ItemId,百度是 `fs_id`)
     var contentID: String { ref.itemID }
 
-    /// 换一张封面。
-    ///
-    /// 为什么需要它:百度侧的封面要**先取 `dlink` 才有地址**,而合成器是纯函数、
-    /// 不认识网络。所以合成器先出条目(`poster == nil`),再由
-    /// `BaiduPanSourceProvider` 批量取地址后回填 —— 那里就用这个方法。
+    /// 换一张封面。百度侧要先取 `dlink` 才有地址,而合成器是纯函数、不认识网络,
+    /// 所以由 `BaiduPanSourceProvider` 取到地址后回填。
     func withPoster(_ poster: ImageDescriptor?) -> SourceItem {
         SourceItem(
             ref: ref,
@@ -144,15 +103,9 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
         )
     }
 
-    /// 补上时长。
-    ///
-    /// 为什么单独一个方法:百度 `method=list` **不给时长**,要另外问一次
-    /// `filemetas`(`needmedia=1`)才有;而合成器是纯函数、不认识网络。
-    /// 所以合成器先出条目(`durationSeconds == nil`),由
-    /// `BaiduPanSourceProvider` 批量取回来再回填。
-    ///
-    /// ⚠️ 只补**原来没有值**的那一格:已经有值的(播放时由
-    /// `authoritativeDurationSeconds` 填过的)不被覆盖。
+    /// 补上时长。百度 `method=list` 不给时长,要另问 `filemetas`(`needmedia=1`),
+    /// 合成器不联网,故由 `BaiduPanSourceProvider` 批量取回后回填。
+    /// ⚠️ 只补**原来没有值**的那一格:已由 `authoritativeDurationSeconds` 填过的不覆盖。
     func withDuration(_ seconds: Double?) -> SourceItem {
         guard let seconds, seconds > 0, durationSeconds == nil else { return self }
         return SourceItem(
@@ -171,15 +124,10 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
         )
     }
 
-    /// 补上**在线刮削**(TMDB)取回来的字段。
-    ///
-    /// ⚠️ 只补**原来没有值**的那几个:本地合成出来的东西优先。
-    /// 最要紧的一条是封面 —— 网盘目录里放着的 `poster.jpg` 是用户**故意**配的,
-    /// ⛔ 不能被 TMDB 的海报盖掉(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
-    ///
+    /// 补上**在线刮削**(TMDB)取回来的字段。⚠️ 只补**原来没有值**的那几个:本地合成出来的东西优先。
+    /// ⛔ 封面不能被 TMDB 盖掉 —— 网盘目录里的 `poster.jpg` 是用户**故意**配的。
     /// - Parameter tmdbID: 搜索命中的 TMDB id。**回填它是为了下游**:详情页要按 id
-    ///   取剧级信息与演职员(`TMDBSeriesProfile`),有这一格就不必再搜一次标题。
-    ///   名称里本来就写了显式 id 时以**原来的**为准(那是权威标签)。
+    ///   取剧级信息与演职员(`TMDBSeriesProfile`)。名称里本来就写了显式 id 时以**原来的**为准。
     func withScrapedMetadata(
         poster: ImageDescriptor?,
         overview: String?,

@@ -1,16 +1,13 @@
 import SwiftUI
 
 /// 某个媒体库的页面:海报网格 + 分页。
-///
-/// 空状态 / 错误状态 / 重试入口三件套齐全;加载更多的失败只在页脚提示,
-/// 不清空已经加载出来的内容。
+/// 空态 / 错误态 / 重试齐全;加载更多的失败只在页脚提示,不清空已加载内容。
 struct LibraryView: View {
     let container: AppContainer
     let server: ServerProfile
     let view: EmbyView?
-    /// 打开某一项的详情(主窗口 push 详情页)
     var onOpenItem: (EmbyItem) -> Void
-    /// 变化即重新加载(「Reload」(⌘R))
+    /// 变化即重新加载(⌘R)
     var refreshToken: Int = 0
 
     @State private var viewModel: LibraryViewModel
@@ -33,7 +30,6 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 页名与排序 / 筛选在页内大标题行(主窗口没有系统工具栏,见 `BrowseChromeBar.swift`)
             PageHeader(title: title, subtitle: countText) {
                 pageTools
             }
@@ -41,7 +37,6 @@ struct LibraryView: View {
         }
         // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
         .allowsHitTesting(!viewModel.isLoading)
-        // 「窗口」菜单与调度中心里的窗口名
         .navigationTitle(title)
         .alert(
             "操作失败",
@@ -54,8 +49,7 @@ struct LibraryView: View {
         } message: {
             Text(viewModel.userDataError ?? "")
         }
-        // 服务器 / 媒体库 / 刷新三者任一变化都重新配置:
-        // 查询没变(刷新)只重拉第一页、保留已显示内容;查询变了才重建列表。
+        // 服务器 / 媒体库 / 刷新任一变化都重新配置:刷新只重拉首页,查询变了才重建。
         .task(id: "\(server.id.uuidString)-\(view?.id ?? "")-\(refreshToken)") {
             viewModel.configure(server: server, view: view)
         }
@@ -172,7 +166,6 @@ struct LibraryView: View {
         openWindow(id: PlayerSceneRoot.windowID)
     }
 
-    /// 分页页脚:自动加载下一页,失败时给重试入口。
     @ViewBuilder
     private func loadMoreFooter(_ list: PagedItemList) -> some View {
         if list.hasMore {

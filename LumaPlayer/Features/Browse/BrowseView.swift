@@ -2,18 +2,14 @@ import SwiftUI
 
 /// 主窗口导航栈上的一页(首页是栈根,不在这里)。
 private enum BrowseRoute: Hashable {
-    /// 某个媒体库(首页「我的媒体」或「最新」的「查看全部」进入)
+    /// 某个媒体库
     case library(EmbyView)
     /// 搜索结果。`submission` 每次回车 +1:同一关键词再按一次回车也要重新搜
     case search(term: String, submission: Int)
     case detail(DetailItem)
 }
 
-/// 详情页的路由值。
-///
-/// `NavigationStack(path:)` 要求元素 `Hashable`,而 `EmbyItem` 只有 `Equatable`
-/// (给它补 `Hashable` 要连带 `EmbyPerson` / `EmbyMediaStream` 等一堆模型)。
-/// 这里按 Id 判定同一页就够了:同一项不会在栈上出现两次。
+/// 详情页的路由值。`EmbyItem` 只有 `Equatable`,按 id 判等就够了:同一项不会在栈上出现两次。
 private struct DetailItem: Hashable {
     let item: EmbyItem
 
@@ -26,12 +22,9 @@ private struct DetailItem: Hashable {
     }
 }
 
-/// 主窗口:单个 `NavigationStack`,根页随**当前来源**变化
-/// (Emby → 首页;百度网盘 → 它的授权/浏览页),媒体库 / 搜索结果 / 详情 push 上来。
+/// 主窗口:单个 `NavigationStack`,栈根随**当前来源**变化,媒体库 / 搜索 / 详情 push 上来。
 ///
-/// 没有系统工具栏:返回 / 搜索 / 来源 / 刷新画在浮动顶栏上(`BrowseChromeBar.swift`),
-/// 页面名称与页内工具在各页自己的 `PageHeader` 里。
-/// 来源管理在设置窗口的「来源」标签页,切换在顶栏的来源菜单。
+/// 没有系统工具栏:返回 / 搜索 / 来源画在浮动顶栏(`BrowseChromeBar.swift`),页名在各页 `PageHeader`。
 struct BrowseView: View {
     let container: AppContainer
 
@@ -40,11 +33,10 @@ struct BrowseView: View {
     @State private var actionErrorMessage: String?
     /// 手动刷新计数器:变化即触发各页重新加载
     @State private var refreshToken = 0
-    /// 工具栏搜索框里正在输入的文字
     @State private var searchText = ""
     /// 搜索提交次数(见 `BrowseRoute.search`)
     @State private var searchSubmission = 0
-    /// 顶栏来源菜单里的「管理来源…」——打开设置窗口(⌘,)
+    /// 「管理来源…」:打开设置窗口(⌘,)
     @Environment(\.openSettings) private var openSettings
     /// 浮动顶栏的全屏 / 自动隐藏状态,以及页面登记的返回动作
     @State private var chrome = BrowseChromeController()
@@ -57,8 +49,7 @@ struct BrowseView: View {
         NavigationStack(path: $path) {
             rootPage
         }
-        // 顶栏挂在**导航栈外**,每一页共用一条(DesignTokens.swift「界面规则」)。
-        // 详情页与首页顶部是 hero:栏底换成很轻的黑色压暗,不在背景图上盖出一条窗口底色。
+        // 顶栏挂在**导航栈外**共用一条;hero 页栏底用轻压暗,不盖窗口底色(DesignTokens.swift「界面规则」)。
         .browseChrome(
             chrome,
             scrim: isOverHero ? .hero : .page,
@@ -68,7 +59,7 @@ struct BrowseView: View {
         ) {
             chromeBar
         }
-        // 菜单栏的 View →「Reload」(⌘R)与「Source」菜单(`BrowseCommands`)
+        // 菜单栏 View → Reload(⌘R)与 Source 菜单(`BrowseCommands`)
         .focusedSceneValue(\.browseActions, BrowseActions(
             isLoading: container.state.isPageLoading,
             reload: refresh,
@@ -76,7 +67,7 @@ struct BrowseView: View {
             currentSourceID: container.state.currentSource?.id,
             switchTo: { source in Task { await switchTo(source) } }
         ))
-        // 设置窗口里增 / 改 / 删来源后重读,菜单里的名称跟着变
+        // 设置窗口增删改来源后重读,菜单名称跟着变
         .task(id: container.state.serverListRevision) { await reloadSources() }
         .onChange(of: container.state.currentSource?.id) {
             // 栈上的页属于上一个来源,换来源必须清掉(不串台)
@@ -84,8 +75,7 @@ struct BrowseView: View {
             searchText = ""
             Task { await reloadSources() }
         }
-        // 列表/详情里的 401 会标出「需要重新登录的服务器」;这里给登录面板,
-        // 否则「重新登录」按钮点了没反应。
+        // 401 标出的服务器在这里给登录面板,否则「重新登录」点了没反应
         .sheet(item: Binding(
             get: { container.state.serverNeedingLogin },
             set: { if $0 == nil { container.state.serverNeedingLogin = nil } }
@@ -93,7 +83,7 @@ struct BrowseView: View {
             LoginView(container: container, server: server)
         }
         .onChange(of: container.state.serverNeedingLogin?.id) { _, newValue in
-            // 重新登录成功(标记被清掉)→ 刷新当前页面,否则还停在失败态
+            // 重新登录成功(标记清空)→ 刷新当前页,否则停在失败态
             if newValue == nil { refreshToken += 1 }
         }
         .alert(
@@ -111,7 +101,7 @@ struct BrowseView: View {
 
     // MARK: - 页面
 
-    /// 导航栈的根:**按当前来源分派**。Emby 是首页,百度网盘是它自己的页。
+    /// 导航栈的根:按当前来源分派。
     @ViewBuilder
     private var rootPage: some View {
         switch container.state.currentSource {
@@ -125,31 +115,21 @@ struct BrowseView: View {
             )
             .navigationDestination(for: BrowseRoute.self) { route in
                 page(for: route, server: server)
-                    // ⛔ 系统返回按钮:有它 SwiftUI 就会给窗口建一条 NSToolbar,
-                    // 红绿灯被挪进 52pt 的工具栏带里、全屏又冒出实色栏(Q37)。返回在浮动顶栏上。
+                    // ⛔ 系统返回按钮会让 SwiftUI 建出 NSToolbar:红绿灯被挤进工具栏带、
+                    // 全屏冒出实色栏(Q37)。返回放浮动顶栏。
                     .navigationBarBackButtonHidden(true)
             }
         case .some(.baiduPan(let source)):
-            // ⛔ 百度来源没有 Emby 那套库 / 搜索 / 详情,所以顶栏不给搜索框;
-            // 刷新走 `refreshToken`,由它自己重读授权状态与目录;
+            // ⛔ 百度来源没有库 / 搜索 / 详情,顶栏不给搜索框;刷新走 `refreshToken`,
             // 「上一层」由它经 `BrowseChromeController.pageBackAction` 登记到顶栏。
             BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
-                // ⚠️ 按来源 id 重建,别省。
-                //
-                // `FileSourceViewModel` 在 init 时就把 `source` 收进去(片库根 / 隐藏项 /
-                // 续播库 / 封面缓存分区全按 `source.id`),而它是 `@State` —— **只在视图身份
-                // 变化时**才重新初始化。百度 → 百度切换时视图类型没变、`refreshToken` 也没变,
-                // 两个 `.task(id:)` 都不重跑,于是停在**上一个来源**的目录上(用户报的
-                // 「百度源之间切换不刷新」)。接到 Emby 再切回来能刷新,是因为那次换了视图类型、
-                // 身份重建了 —— 与「有没有切过别的来源」无关,❌ 不是刷新逻辑的偶发问题。
-                //
-                // Emby 那边不需要这个:它的 `HomeViewModel` 不绑定服务器,按 `server.id` 分格存,
-                // 靠 `.task(id: "\\(server.id)-\\(refreshToken)")` 重新加载。百度这一页是
-                // 一个来源一份状态,换来源就该是一张新页。
+                // ⚠️ 按来源 id 重建,别省:`FileSourceViewModel` 在 init 时收下 `source`
+                // (片库根 / 隐藏项 / 续播库 / 封面分区全按 `source.id`),而它是 `@State`,
+                // 只在视图身份变化时重新初始化。百度 → 百度切换时视图类型与 `refreshToken`
+                // 都没变,两个 `.task(id:)` 不重跑,会停在**上一个来源**的目录上。
                 .id(source.id)
         case .some(.localFolder(let source)):
-            // 与百度同一个浏览页(`FileSourceBrowserView`),只是没有授权那两屏。
-            // 按来源 id 重建的理由同上(ViewModel 在 init 时就收下了来源)
+            // 与百度同一个浏览页(`FileSourceBrowserView`),没有授权那两屏;按来源 id 重建的理由同上。
             LocalFolderSourceView(container: container, source: source, refreshToken: refreshToken)
                 .id(source.id)
         case .none:
@@ -194,10 +174,8 @@ struct BrowseView: View {
 
     // MARK: - 顶栏
 
-    /// 顶栏右侧:搜索 / 来源(返回由 `browseChrome(back:)` 单独定位在红绿灯旁)。
-    ///
-    /// ⛔ 不放刷新按钮:手动刷新是菜单栏「Reload」(⌘R),加载状态看栏下沿的加载线
-    /// (DesignTokens.swift「界面规则」加载态)。
+    /// 顶栏右侧:搜索 / 来源(返回由 `browseChrome(back:)` 定位在红绿灯旁)。
+    /// ⛔ 不放刷新按钮:刷新走菜单栏「Reload」(⌘R),加载状态看栏下沿的加载线。
     @ViewBuilder
     private var chromeBar: some View {
         HStack(spacing: Metrics.spacingM) {
@@ -205,9 +183,7 @@ struct BrowseView: View {
             if case .emby? = container.state.currentSource {
                 ChromeSearchField(text: $searchText, chrome: chrome, onSubmit: submitSearch)
             }
-            // 来源切换器不上详情页:详情页属于当前这台服务器,而切换会清掉
-            // 整个导航栈(见 `onChange(of: container.state.currentSource?.id)`),
-            // 在一页详情上切来源没有意义。
+            // 详情页不给来源切换器:切换会清空整个导航栈
             if !isShowingDetail {
                 sourceMenu
             }
@@ -216,7 +192,6 @@ struct BrowseView: View {
 
     private var sourceMenu: some View {
         Menu {
-            // inline Picker:系统在当前来源那一项前画原生勾选标记
             Picker("来源", selection: currentSourceSelection) {
                 ForEach(sources) { source in
                     Text("\(source.displayName) · \(source.kindDescription)")
@@ -226,7 +201,6 @@ struct BrowseView: View {
             .pickerStyle(.inline)
             .labelsHidden()
             Divider()
-            // 来源管理(增 / 改 / 删 / 登录)在设置窗口的「来源」标签页
             Button {
                 openSettings()
             } label: {
@@ -245,7 +219,7 @@ struct BrowseView: View {
         .accessibilityLabel("来源:\(currentSourceName)")
     }
 
-    /// 返回:导航栈不空时弹栈;栈空时用页面自己登记的返回(百度目录的上一层);都没有就不显示。
+    /// 返回:栈不空时弹栈,否则用页面登记的返回(百度目录的上一层);都没有就不显示。
     private var backAction: (@MainActor () -> Void)? {
         if !path.isEmpty {
             return { path.removeLast() }
@@ -253,8 +227,7 @@ struct BrowseView: View {
         return chrome.pageBackAction
     }
 
-    /// 搜索提交:结果页直接叠在首页上(替换掉栈上原有的页):从详情页里搜索也不会被压在下面,
-    /// 返回一次就回到首页
+    /// 搜索提交:结果页替换整个栈(从详情页搜索也不会被压住),返回一次即回首页
     private func submitSearch() {
         searchSubmission += 1
         path = [.search(term: searchText, submission: searchSubmission)]
@@ -277,13 +250,11 @@ struct BrowseView: View {
 
     private func refresh() {
         Task {
-            // Emby 来源:刷新 = 用户要最新数据,先作废接口缓存,
-            // 否则 TTL 内的缓存命中会让刷新看起来「没反应」
+            // Emby:刷新前先作废接口缓存,否则 TTL 内的命中会让刷新「没反应」
             if case .emby(let server)? = container.state.currentSource {
                 await container.invalidateResponses(for: server)
             }
-            // 各页的 ViewModel 由各页自己持有,用 refreshToken 触发它们的
-            // `.task(id:)` 重新加载,而不是把内部结构暴露到这里。
+            // 各页 ViewModel 自己持有,用 refreshToken 触发它们的 `.task(id:)`
             refreshToken += 1
         }
     }
@@ -306,7 +277,7 @@ struct BrowseView: View {
         return false
     }
 
-    /// 来源菜单里 Picker 的选中值:读当前来源,选中别的即切换
+    /// 来源菜单的选中值:选中别的即切换
     private var currentSourceSelection: Binding<UUID?> {
         Binding(
             get: { container.state.currentSource?.id },

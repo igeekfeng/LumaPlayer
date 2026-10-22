@@ -1,14 +1,9 @@
 import SwiftUI
 
-/// 添加**播放来源**的第一屏:先选来源类型,再进具体表单。
+/// 添加**播放来源**的第一屏:先选来源类型,再进具体表单。用于启动引导页(无取消)
+/// 与设置里「来源」标签页的 +(sheet,有取消)。
 ///
-/// 这是本次改造的入口形态 —— ⛔ 不是「Emby 表单 + 一个侧门按钮」,
-/// 而是「来源是一层,Emby 与百度网盘是它的两个实现」
-/// (`docs/SOURCE_ABSTRACTION_PLAN.md` §0)。
-///
-/// 两种使用场景:
-/// - 首次启动的引导页(无取消按钮 —— 没有可返回的地方);
-/// - 设置窗口「来源」标签页里的 +(sheet,有取消按钮)。
+/// ⛔ 形态是「来源是一层,Emby / 百度网盘 / 本地文件夹是它的实现」,不是「Emby 表单 + 侧门按钮」。
 struct AddSourceView: View {
     let container: AppContainer
 
@@ -107,8 +102,7 @@ struct AddSourceView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// 子流程完成(百度授权成功 / 本地文件夹选好,并已落库):切来源已经在容器里做掉了,
-    /// 这里只负责把这一 sheet 关掉。
+    /// 子流程完成(已落库、已切来源):只负责关掉这个 sheet。
     private func onFinish() {
         dismiss()
     }

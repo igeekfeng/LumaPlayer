@@ -1,9 +1,7 @@
 import Foundation
 
-/// 媒体库排序项(参照 Emby Web 的排序菜单)。
-///
-/// `SortBy` 取值一律出自 API_CONTRACT.md 3.2 参数表(官方 4.1.1.0 核实 2026-09-23)。
-/// 每项带一个「自然方向」:名称默认升序,日期 / 评分默认降序(新的、高的在前)。
+/// 媒体库排序项。`SortBy` 取值出自 API_CONTRACT.md 3.2 参数表。
+/// 每项带自然方向:名称 / 时长升序,日期 / 评分降序(新的、高的在前)。
 enum LibrarySort: String, CaseIterable, Identifiable, Sendable {
     case name
     case dateAdded
@@ -48,9 +46,8 @@ enum LibrarySort: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// 媒体库筛选(`Filters` 取值出自 API_CONTRACT.md 3.2,官方 4.1.1.0 核实)。
-///
-/// ⛔ 不提供「可续播」:`Filters=IsResumable` 在 4.7.11.0 上的行为未核实(Q28)。
+/// 媒体库筛选(`Filters` 取值出自 API_CONTRACT.md 3.2)。
+/// ⛔ 不提供「可续播」:`Filters=IsResumable` 行为未核实(Q28)。
 enum LibraryFilter: String, CaseIterable, Identifiable, Sendable {
     case all
     case unplayed
@@ -78,18 +75,15 @@ enum LibraryFilter: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// 媒体库网格(分页)的 ViewModel(@MainActor + @Observable)。
-///
-/// 分页与 generation 的并发正确性在 `PagedItemList` 里,本类型只负责
-/// 「按服务器 + 媒体库 + 排序 / 筛选构造查询」:查询参数一律取 `API_CONTRACT.md` 3.2 的
-/// 参数表,不发明新参数。
+/// 媒体库网格(分页)的 ViewModel。分页与 generation 的并发正确性在 `PagedItemList`,
+/// 本类型只负责按「服务器 + 媒体库 + 排序 / 筛选」构造查询(参数一律出自 API_CONTRACT.md 3.2)。
 @MainActor
 @Observable
 final class LibraryViewModel {
     private let container: AppContainer
 
     private(set) var list: PagedItemList?
-    /// 当前列表的查询标识(服务器 + 媒体库 + 排序 + 筛选)。**不含**刷新计数 ——
+    /// 当前列表的查询标识(服务器 + 媒体库 + 排序 + 筛选),**不含**刷新计数 ——
     /// 手动刷新不改查询,走 `PagedItemList.refresh()` 保留已显示的内容。
     private var configuredQueryKey: String?
     private var server: ServerProfile?
@@ -112,7 +106,6 @@ final class LibraryViewModel {
         didSet { if filter != oldValue { reconfigure() } }
     }
 
-    /// 标记已看 / 收藏失败的提示
     var userDataError: String?
     private(set) var updatingItemIDs: Set<String> = []
 
@@ -120,12 +113,8 @@ final class LibraryViewModel {
         self.container = container
     }
 
-    /// 按「服务器 + 媒体库」配置列表。
-    ///
-    /// 查询没变就不重建 —— 否则 SwiftUI 每次重绘视图都会丢掉已加载的分页,
-    /// 并向服务器重复发请求(服务器不是我们的,见项目 MEMORY.md 的低频纪律)。
-    /// 查询变了(换服务器 / 换媒体库 / 改排序筛选)才重建,旧请求由
-    /// `PagedItemList` 取消;查询没变(手动刷新)只重拉第一页、保留已显示内容。
+    /// 按「服务器 + 媒体库」配置列表。查询没变只重拉第一页、保留已显示内容;
+    /// 查询变了才重建(旧请求由 `PagedItemList` 取消),避免每次重绘丢分页并重复请求。
     func configure(server: ServerProfile, view: EmbyView?) {
         self.server = server
         self.view = view
@@ -138,7 +127,6 @@ final class LibraryViewModel {
             server.id.uuidString, view?.id ?? "",
             sort.rawValue, String(ascending), filter.rawValue,
         ].joined(separator: "|")
-        // 查询没变(手动刷新 / 同一页重新配置):保留已显示的内容,只重拉第一页
         if configuredQueryKey == queryKey, let list {
             list.refresh()
             return
@@ -209,7 +197,7 @@ final class LibraryViewModel {
         }
     }
 
-    /// 一页的查询条件(纯函数,便于测试;参数名全部出自 API_CONTRACT.md 3.2)。
+    /// 一页的查询条件(纯函数,便于测试;参数名出自 API_CONTRACT.md 3.2)。
     nonisolated static func makeQuery(
         parentID: String?,
         collectionType: String?,
@@ -236,12 +224,9 @@ final class LibraryViewModel {
         return query
     }
 
-    /// 媒体库 → `IncludeItemTypes`。
-    ///
-    /// `CollectionType` 可能为 null(混合库,API_CONTRACT.md 3.2),此时退化为
-    /// 「电影 + 剧集」两类:LumaPlayer 是视频播放器,把音乐/书籍混进海报网格
-    /// 比少显示几个条目更糟。这个取舍尚未在混合库上验证过
-    /// (docs/KNOWN_ISSUES.md Q14)。
+    /// 媒体库 → `IncludeItemTypes`。`CollectionType` 为 null(混合库)时退化为
+    /// 「电影 + 剧集」—— 音乐 / 书籍混进海报网格比少显示更糟;此取舍未在混合库上
+    /// 验证过(docs/KNOWN_ISSUES.md Q14)。
     nonisolated static func includeItemTypes(forCollectionType collectionType: String?) -> [String] {
         switch collectionType {
         case "movies": return ["Movie"]

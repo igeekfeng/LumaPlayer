@@ -1,16 +1,13 @@
 import SwiftUI
 import AppKit
 
-// 详情页的各个区块。拆成独立视图:详情页 body 不至于大到
-// 类型检查器吃不消,且每块只读自己用到的字段。
+// 详情页的各个区块:拆成独立视图,免得详情页 body 大到类型检查器吃不消。
 
 // MARK: - Hero
 
 /// 背景图 hero:整幅剧照 + 底部渐变到窗口背景,海报与标题区压在渐变上。
-///
-/// 背景图用 `backgroundExtensionEffect()` 延伸到工具栏下面
-/// (macOS 27 Liquid Glass 的原生做法,内容本身不被拉伸)。
-/// 没有背景图时 hero 变矮,只留一层很淡的渐变 —— 不拿占位图撑出一大块灰。
+/// 背景用 `backgroundExtensionEffect()` 延伸到工具栏下(macOS 27 Liquid Glass,内容不被拉伸);
+/// 没有背景图时 hero 变矮,只留淡渐变,不拿占位图撑出一大块灰。
 struct DetailHero<Header: View>: View {
     let detail: EmbyItem
     let server: ServerProfile
@@ -103,9 +100,8 @@ struct DetailHero<Header: View>: View {
 
 // MARK: - 标题
 
-/// 有 Logo 图就用 Logo(Infuse / Apple TV 的做法),没有就用文字标题。
-/// Logo 加载失败时 `PosterImage` 会停在占位图 —— 所以这里只在确有 tag 时才走图片,
-/// 且始终保留文字标题给 VoiceOver。
+/// 有 Logo 图就用 Logo,没有就用文字标题。
+/// Logo 加载失败时 `PosterImage` 停在占位图,所以只在确有 tag 时走图片;文字标题始终保留给 VoiceOver。
 struct DetailTitle: View {
     let detail: EmbyItem
     let server: ServerProfile
@@ -200,8 +196,7 @@ struct DetailMetaLine: View {
 
 // MARK: - 媒体信息
 
-/// 视频 / 音频 / 字幕概况。文案直接用服务端的 `DisplayTitle`(如 `720p H264`),
-/// 不在客户端拼编码名 —— 服务端已经本地化并处理过各种边角情况。
+/// 视频 / 音频 / 字幕概况。文案直接用服务端的 `DisplayTitle`(`720p H264`),不在客户端拼编码名。
 struct DetailMediaInfo: View {
     let streams: [EmbyMediaStream]
 
@@ -249,7 +244,6 @@ struct DetailMediaInfo: View {
         return rows
     }
 
-    /// 同类轨道最多列 3 条,其余合成「等 N 条」。
     private func summary(of type: String) -> String? {
         let titles = streams
             .filter { $0.type == type }
@@ -325,7 +319,6 @@ struct DetailPeopleRow: View {
 
 // MARK: - 其他信息
 
-/// 导演 / 编剧 / 制片公司 / 首映。都没有就整块不显示。
 struct DetailFacts: View {
     let detail: EmbyItem
 

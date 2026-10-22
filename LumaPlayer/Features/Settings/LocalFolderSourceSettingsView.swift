@@ -1,13 +1,8 @@
 import SwiftUI
 
-/// 本地文件夹来源的设置(设置 →「来源」→ 选中本地文件夹 → 编辑…)。
-///
-/// 同 `BaiduPanSourceSettingsView` 的形:sheet + `OnboardingFormHeader` + `Form` +
-/// `OnboardingActionBar`。能改的只有两样:**显示名**与**指向哪个文件夹**。
-///
-/// 「换文件夹」是给「原来那个挪走了 / 外接盘换了 / 访问权失效」用的:条目路径挂在来源的
-/// 根名下(`LocalFolderSource.rootName`),换过去之后同名同路径的文件续播 / 已看记录都还在。
-/// 与显示名一样**保存时才提交**,点取消就什么都不改。
+/// 本地文件夹来源的设置(设置 →「来源」→ 选中本地文件夹 → 编辑…)。能改的只有
+/// **显示名**与**指向哪个文件夹**,都是保存时才提交。换文件夹后同名同路径的文件仍记得
+/// 看到哪儿、看没看过(条目路径挂在 `LocalFolderSource.rootName` 下)。
 struct LocalFolderSourceSettingsView: View {
     let container: AppContainer
     let source: LocalFolderSource

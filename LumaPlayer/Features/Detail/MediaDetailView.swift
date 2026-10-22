@@ -1,14 +1,11 @@
 import SwiftUI
 
 /// 媒体详情:电影详情 / 剧集的季与分集。
+/// 布局参照 Emby Web 的信息结构,呈现按 macOS 原生做:整幅背景图 hero、播放主按钮用带 tint 的玻璃
+/// (DesignTokens.swift「界面规则」)。
 ///
-/// 布局参照 Emby Web 的信息结构(海报 + 标题 + 元信息 + 播放 / ✓ / ♡),
-/// 呈现上按 macOS 原生做:整幅背景图做 hero(`backgroundExtensionEffect`
-/// 让它延伸到工具栏下面)、播放主按钮用带 tint 的玻璃(DesignTokens.swift「界面规则」)。
-///
-/// 剧集是**单页**:季、分集和播放按钮都在这一页里,
-/// 页面只有**一个**播放主按钮,它作用于当前定位的那一集
-/// (`MediaDetailViewModel.focusedEpisode`)。点分集行只换定位,不跳页。
+/// 剧集是**单页**:季、分集与播放按钮都在这里,只有一个播放主按钮,它作用于
+/// `MediaDetailViewModel.focusedEpisode`;点分集行只换定位,不跳页。
 struct MediaDetailView: View {
     let container: AppContainer
     let server: ServerProfile
@@ -18,11 +15,9 @@ struct MediaDetailView: View {
     /// 变化即重新加载(「Reload」(⌘R))。同一项再次加载是原地刷新,保留已有内容。
     var refreshToken: Int = 0
 
-    /// 每个 push 出来的详情页自带一份:栈上同时存在多页时各读各的项,
-    /// 共用一个 ViewModel 会让上层页面显示下层那一项的内容。
+    /// 每个 push 出来的详情页自带一份:共用会让上层页面显示下层那一项的内容。
     @State private var viewModel: MediaDetailViewModel
     @State private var isOverviewExpanded = false
-    /// 勾选分集批量标记的面板
     @State private var isBatchPickerPresented = false
     @Environment(\.openWindow) private var openWindow
 
@@ -65,9 +60,8 @@ struct MediaDetailView: View {
             viewModel.load(item: item, server: server)
         }
         .reportsPageLoading(viewModel.isLoading, page: .detail, to: container.state)
-        // Q22:续播位置、已看状态以服务端为准。播放器在独立窗口里,
-        // 收尾上报发完后经 AppState 广播;只要是这台服务器上的播放就重读一次
-        // (播的可能是本页的某一集,也可能是从播放器里连播过去的下一集)。
+        // 续播位置、已看状态以服务端为准:播放器在独立窗口,收尾上报后经 AppState 广播,
+        // 只要是这台服务器上的播放就重读一次。
         .onChange(of: container.state.lastFinishedPlayback) { _, finished in
             guard let finished, finished.serverID == server.id else { return }
             viewModel.refreshAfterPlayback(server: server)
@@ -83,8 +77,7 @@ struct MediaDetailView: View {
         } message: {
             Text(viewModel.userDataError ?? "")
         }
-        // 批量标记的结果:成功也要说一声(几十集的写入不该静默结束),
-        // 有失败时文案里带失败条数与原因(API_CONTRACT.md 5.8)
+        // 批量标记的结果:成功也要说一声,失败时文案里带条数与原因(API_CONTRACT.md 5.8)
         .alert(
             "批量标记",
             isPresented: Binding(
@@ -165,8 +158,7 @@ struct MediaDetailView: View {
         .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
     }
 
-    /// 播放主按钮 + 从头播放 + ✓ + ♡。作用对象:剧集是定位的那一集(✓ ♡ 作用于整部剧),
-    /// 电影 / 单集是它自己;季本身不可播,不给一个点了没反应的按钮。
+    /// 播放主按钮 + 从头播放 + ✓ + ♡。剧集作用于定位的那一集(✓ ♡ 作用于整部剧);季不可播,不给空按钮。
     @ViewBuilder
     private func actions(_ detail: EmbyItem) -> some View {
         let playable: EmbyItem? = detail.kind == .series
@@ -259,7 +251,6 @@ struct MediaDetailView: View {
         return "\(percent) · 剩余 \(remaining)"
     }
 
-    /// 剧集:定位的那一集是谁,它的简介与进度(播放主按钮作用于它)。
     @ViewBuilder
     private var focusedEpisodeSummary: some View {
         if let episode = viewModel.focusedEpisode {
@@ -377,7 +368,6 @@ struct MediaDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                // 点集只换定位(按钮与简介就地更新),不再把整页换成另一个详情页
                 EpisodeListView(
                     episodes: episodes,
                     selectedEpisodeID: viewModel.focusedEpisode?.id,
@@ -398,8 +388,7 @@ struct MediaDetailView: View {
     }
 
     private func retrySeasons() {
-        // 季失败时重跑一次完整流程即可补上。用最初打开的项而不是已加载的剧:
-        // 从分集点进来时,重试后仍要定位回那一集。
+        // 用最初打开的项而不是已加载的剧:从分集点进来时,重试后仍要定位回那一集。
         viewModel.load(item: item, server: server)
     }
 

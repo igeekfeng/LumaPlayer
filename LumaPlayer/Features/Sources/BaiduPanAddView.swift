@@ -1,10 +1,7 @@
 import SwiftUI
 
 /// 添加百度网盘来源的流程:填密钥 → 扫码 → 授权成功后落库。
-///
-/// 复用了来源页那套 `FileSourceViewModel` 与 `BaiduPanAuthorizationView` ——
-/// 「保存配置 → 立刻走扫码」本来就是同一条连续流程,不必在添加流程里再写一遍。
-/// 差别只在**收尾**:这里授权成功后要把来源写进注册表并切换过去。
+/// 复用 `FileSourceViewModel` 与 `BaiduPanAuthorizationView`,差别只在收尾:授权成功后写进注册表并切过去。
 struct BaiduPanAddView: View {
     let container: AppContainer
     let onBack: () -> Void
@@ -22,10 +19,8 @@ struct BaiduPanAddView: View {
         self._viewModel = State(
             initialValue: FileSourceViewModel(
                 container: container,
-                // 添加流程里来源还没落库,这里的 `id` 是临时的;
-                // 真正定下来是 `registerBaiduSource` 那一刻。
-                // ⛔ 传 `loadsDirectory: false` 就是为了让临时的 id 永远用不上
-                // (一旦列了目录就会用临时 id 去取封面 —— 白烧一次配额)。
+                // 来源还没落库,这里的 `id` 是临时的;⛔ 传 `loadsDirectory: false`,
+                // 免得用临时 id 去取封面白烧一次配额。
                 source: BaiduPanSource(folderName: ""),
                 loadsDirectory: false
             )

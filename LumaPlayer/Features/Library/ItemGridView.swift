@@ -9,14 +9,11 @@ struct ItemGridActions {
     var updatingIDs: Set<String> = []
 }
 
-/// 海报网格(DesignTokens.swift 的网格 token;卡片不用玻璃)。
-///
-/// 滚动时不为每个卡片创建玻璃容器(DesignTokens.swift「界面规则」)。
+/// 海报网格(DesignTokens.swift 的网格 token;卡片不用玻璃,滚动时不为每张卡建玻璃容器)。
 struct ItemGridView: View {
     let items: [EmbyItem]
     let serverID: UUID
     let store: PosterImageStore
-    /// 打开某一项的详情(主窗口 push 详情页)
     var onOpenItem: (EmbyItem) -> Void
     var actions = ItemGridActions()
 

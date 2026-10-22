@@ -3,9 +3,7 @@ import AppKit
 import CoreImage
 
 /// 百度网盘授权:配置密钥 → 扫码 → 完成。
-///
-/// 分两屏是刻意的:**缺密钥**与**缺授权**是两件不同的事
-/// (前者要去开放平台建应用,后者扫码就行)。合成一个「未授权」会让人找不到北。
+/// ⚠️ 分两屏是刻意的:缺密钥(去开放平台建应用)与缺授权(扫码)是两件事,合成一屏会让人找不到北。
 struct BaiduPanAuthorizationView: View {
     let viewModel: FileSourceViewModel
 
@@ -80,8 +78,7 @@ struct BaiduPanAuthorizationView: View {
                 busyTitle: "正在保存…",
                 isBusy: isSaving,
                 canSubmit: canSave,
-                // 从「读不到应用目录」那条路进来改名字时,给个退路 ——
-                // 不改了就回到原来那一屏,⛔ 别让人只能硬着头皮提交。
+                // 从「读不到应用目录」那条路进来改名字时给个退路,⛔ 别让人只能硬着头皮提交。
                 onCancel: isEditing ? { Task { await viewModel.cancelConfigurationEdit() } } : nil,
                 onSubmit: save
             )
@@ -89,7 +86,6 @@ struct BaiduPanAuthorizationView: View {
         .task(seedFromDraft)
     }
 
-    /// 是不是「已授权之后回头改配置」。首次配置时 `configurationDraft` 为 nil。
     private var isEditing: Bool { viewModel.configurationDraft != nil }
 
     /// 用现值预填表单。⛔ 只填空着的:用户已经在改的字段不该被覆盖。
@@ -151,8 +147,7 @@ struct BaiduPanAuthorizationView: View {
             }
             .padding(.bottom, Metrics.spacingXL)
         }
-        // ⚠️ 只在**没在等**的时候自动起一次:两条路径都能进到这里
-        // (首次进入、以及用户在手机上取消之后),重复起会多要一次设备码。
+        // ⚠️ 只在没在等的时候自动起一次(首次进入 / 手机端取消后都会走到这里),重复起会多要一次设备码。
         .task {
             guard !viewModel.isWaitingForAuthorization, viewModel.deviceCode == nil else { return }
             await viewModel.startAuthorization()
@@ -197,8 +192,7 @@ struct BaiduPanAuthorizationView: View {
 
     // MARK: - 二维码
 
-    /// 本地渲染二维码。内容是官方给的规则串(`qrCodeContent`),
-    /// 不额外发一次请求去取 `qrcode_url` 那张图。
+    /// 本地渲染二维码(内容取自 `qrCodeContent`),不额外请求 `qrcode_url` 那张图。
     static func qrImage(content: String, size: CGFloat) -> NSImage? {
         guard let data = content.data(using: .utf8),
               let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }

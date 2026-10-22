@@ -1,14 +1,9 @@
 import SwiftUI
 
-/// 设置 › 弹幕:弹弹play 的应用凭据 + 弹幕外观。
+/// 设置 › 弹幕:弹弹play 应用凭据 + 弹幕外观。
 ///
-/// ## 为什么要用户自己填 AppId / AppSecret
-///
-/// 弹弹play 开放平台按应用发凭据,官方明确要求不要把 AppSecret 硬编码进客户端;
-/// 本项目没有自己的服务器可以代签名,所以由用户去开发者中心(dev.dandanplay.com)
-/// 申请自己的应用并填在这里(`docs/DANDANPLAY_API.md` §1)。
-/// 存凭据文件(`CredentialStore`,0600、不进备份),⛔ 不进 UserDefaults、不进仓库。
-/// AppSecret 只用于本地算签名,不会作为请求头发出去。
+/// 弹弹play 要求 AppSecret 不硬编码进客户端,本项目没有服务端可代签名,由用户自填
+/// (`docs/DANDANPLAY_API.md` §1)。⛔ 凭据进 `CredentialStore`(0600、不进备份),不进 UserDefaults、不进仓库。
 struct DanmakuSettingsView: View {
     let credentials: CredentialStore
     @Bindable var store: DanmakuSettingsStore
@@ -66,10 +61,8 @@ struct DanmakuSettingsView: View {
     }
 }
 
-/// AppId / AppSecret 的输入。做法与「元数据刮削」的 TMDB token 一致:
-/// 保存才落盘、两项都留空 = 清除、读不出来如实报错。
-///
-/// ⛔ 不做「测试连接」按钮:弹弹play 对接口有滥用检测,验证就留给第一次播放时的真实请求。
+/// AppId / AppSecret 输入:保存才落盘、两项都留空 = 清除、读不出来如实报错。
+/// ⛔ 不做「测试连接」:接口有滥用检测,验证留给第一次播放的真实请求。
 private struct DandanplayCredentialsSection: View {
     let credentials: CredentialStore
 

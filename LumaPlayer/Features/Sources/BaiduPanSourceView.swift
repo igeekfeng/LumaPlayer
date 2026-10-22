@@ -1,10 +1,8 @@
 import SwiftUI
 
 /// 百度网盘来源的内容页:按授权状态切三屏(填密钥 → 扫码 → 浏览目录)。
-///
-/// ⚠️ 它是**主窗口导航栈的根页**(来源 = 百度网盘时),不是独立 sheet ——
-/// 「来源」是一层平等的东西,Emby 与百度共用一个导航栈与工具栏
-/// (`docs/SOURCE_ABSTRACTION_PLAN.md` §0)。
+/// ⚠️ 它是**主窗口导航栈的根页**,不是独立 sheet —— 「来源」是一层平等的东西,
+/// Emby 与百度共用一个导航栈与工具栏。
 struct BaiduPanSourceView: View {
     let container: AppContainer
     /// 当前来源(决定 `sourceID` —— 封面缓存 key 按它分区)
@@ -24,23 +22,17 @@ struct BaiduPanSourceView: View {
 
     var body: some View {
         content
-            // 授权那两屏(填密钥 / 扫码)也占着主窗口的标题栏 —— 给一个兜底标题,
-            // 免得空着。浏览屏自己有 `navigationTitle(当前目录名)`,更靠内层,
-            // 会覆盖这一条。
+            // 授权那两屏也占着主窗口标题栏,给个兜底标题;浏览屏自己的 `navigationTitle` 更靠内层,会覆盖它。
             .navigationTitle("百度网盘")
-            // 「Reload」(⌘R):首次进入 = 结构性重载(回片库根),之后只重读
-            // **当前所在**的目录 —— 刷新不该把人踢回起点(`refreshFromToolbar`)。
+            // ⌘R:首次进入结构性重载(回片库根),之后只重读当前目录,不把人踢回起点。
             .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
-            // 设置里改过来源(片库根 / 显示名 / 增删来源)→ 重读片库根。
-            // ⚠️ 只在片库根**真的变了**时才重载目录 —— 其余变更(改名 / 增删来源)
-            // 不该白列一次目录(`refreshLibraryRoot`)。
+            // 设置里改过来源 → 重读片库根(`refreshLibraryRoot`)。
+            // ⚠️ 只有片库根真变了才重载目录,改名 / 增删来源不该白列一次。
             .task(id: container.state.serverListRevision) {
                 await viewModel.refreshLibraryRoot()
             }
-            // 百度来源没有服务端进度上报(进度记在本地续播库),所以播完一场
-            // 要自己重读一次,「已看到 mm:ss」才会立刻反映在列表上。
-            // ⚠️ 只重读**本地**续播状态 —— ⛔ 不重新列目录(那是 2 次百度请求,
-            // 而播完一场目录内容一个字节都没变,见 `refreshResumeState`)。
+            // 百度没有服务端进度上报(进度记在本地续播库),播完一场要自己重读,列表才跟得上。
+            // ⚠️ 只重读本地续播状态(`refreshResumeState`),⛔ 不重新列目录(2 次百度请求,内容没变)。
             .onChange(of: container.state.lastFinishedPlayback) { _, finished in
                 guard finished?.serverID == nil else { return }
                 Task { await viewModel.refreshResumeState() }
@@ -65,9 +57,7 @@ struct BaiduPanSourceView: View {
     }
 
     /// 整页级别的错误(读不出凭据文件之类)。
-    ///
-    /// ⚠️ 只在 `authorization == nil` 时显示:授权那一屏自己有更合适的
-    /// 错误位置(表单里的提示),盖一层整页错误会把表单挤掉,让人没法改。
+    /// ⚠️ 只在 `authorization == nil` 时显示:授权屏自己有表单内提示,整页错误会把表单挤掉。
     private func failurePane(_ failure: LoadFailure) -> some View {
         VStack(spacing: Metrics.spacingL) {
             OnboardingFormHeader(

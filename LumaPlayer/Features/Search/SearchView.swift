@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// 搜索结果页。
-///
-/// 输入框在主窗口浮动顶栏上(`ChromeSearchField`,⌘F 可达),
-/// 本页只负责展示「已提交」的关键词的结果;提交式搜索,结果复用媒体库网格与分页。
+/// 搜索结果页。输入框在主窗口浮动顶栏(`ChromeSearchField`,⌘F),本页只展示已提交的
+/// 关键词结果;提交式搜索,结果复用媒体库网格与分页。
 struct SearchView: View {
     let container: AppContainer
     let server: ServerProfile
@@ -11,7 +9,6 @@ struct SearchView: View {
     let term: String
     /// 每次提交 +1:同一关键词再按一次回车也要重新搜
     let submission: Int
-    /// 打开某一项的详情(主窗口 push 详情页)
     var onOpenItem: (EmbyItem) -> Void
 
     @State private var viewModel: SearchViewModel
@@ -36,15 +33,13 @@ struct SearchView: View {
         VStack(spacing: 0) {
             PageHeader(title: title)
             results
-                // 空态 / 引导页(`ContentUnavailableView`)在 macOS 上不吃满剩余高度:
-                // 不撑开的话整页按内容高度排、被窗口垂直居中,顶栏跟着掉到窗口中间
+                // 空态 / 引导页不吃满高度的话,整页会被垂直居中,顶栏跟着掉到窗口中间
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧结果做操作
         .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(title)
-        // 换服务器后旧结果属于别的服务器:按新服务器重搜(不串台)
+        // 换服务器后旧结果属于别的服务器,按新服务器重搜
         .task(id: "\(server.id.uuidString)-\(submission)-\(term)") {
             viewModel.search(term, server: server)
         }

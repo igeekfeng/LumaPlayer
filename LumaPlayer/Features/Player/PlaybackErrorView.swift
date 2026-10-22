@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// 播放失败态。
-///
-/// 文案来自 `LoadFailure`:接口层失败(`EmbyAPIError`)与「服务端给了响应
-/// 但没有可播路径」(`PlaybackError`)都要在这里说得清是哪一种,
-/// 401 额外给「重新登录」入口(API_CONTRACT.md 2.5)。
+/// 播放失败态。文案来自 `LoadFailure`,要分清接口失败(`EmbyAPIError`)与「服务端给了
+/// 响应但没有可播路径」(`PlaybackError`);401 额外给「重新登录」入口(API_CONTRACT.md 2.5)。
 struct PlaybackErrorView: View {
     let failure: LoadFailure
     var retry: () -> Void

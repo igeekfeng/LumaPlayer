@@ -1,11 +1,8 @@
 import Foundation
 import Observation
 
-/// 已有服务器的重新登录(token 缺失或 401 之后)。
-///
-/// 用户名预填上次成功的那个;
-/// 密码不预填;记住密码默认不勾 —— 走到这里说明静默重登没成立(没记住,或服务端改过密码),
-/// 是否再记一次交给用户。
+/// 已有服务器的重新登录(token 缺失或 401 之后)。用户名预填上次成功的那个,
+/// 记住密码默认不勾 —— 静默重登既然没成立,是否再记一次交给用户。
 @MainActor
 @Observable
 final class LoginViewModel {
@@ -33,8 +30,7 @@ final class LoginViewModel {
         server.baseURL.absoluteString
     }
 
-    /// 该服务器最终是不是 http 连接(含探测阶段的局域网回退)。
-    /// 是则必须明确标注未加密(API_CONTRACT.md 1.4、CLAUDE.md「安全与隐私」)。
+    /// http 连接(含局域网回退)必须标注未加密(API_CONTRACT.md 1.4、CLAUDE.md「安全与隐私」)。
     var isUnencrypted: Bool {
         server.baseURL.scheme == "http"
     }
@@ -43,7 +39,6 @@ final class LoginViewModel {
         !isSubmitting && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 登录成功返回 true(视图随即关闭)。
     func submit() async -> Bool {
         guard !isSubmitting else { return false }
         isSubmitting = true

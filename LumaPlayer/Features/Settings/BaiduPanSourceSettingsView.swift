@@ -2,27 +2,18 @@ import SwiftUI
 
 /// 百度网盘来源的设置(设置 →「来源」→ 选中百度网盘 → 编辑…)。
 ///
-/// ## 为什么这些动作在这里
+/// 与 `ServerSettingsView` 同形(sheet + header + `Form` + action bar),差别是这里改
+/// **显示名**与**片库根**。
 ///
-/// 它们原本挤在浏览页顶部那条路径栏里(「设为片库根」「解除授权」)。
-/// 那条栏已经去掉 —— 低频的配置动作不该占着每天看的页面
-/// (DesignTokens.swift「界面规则」),所以搬进来源设置。
-///
-/// ## 与 `ServerSettingsView`(Emby)的关系
-///
-/// 同形:sheet + `OnboardingFormHeader` + `Form` + `OnboardingActionBar`。
-/// 差别在内容:Emby 改的是地址(要重新探测),这里改的是**显示名**与**片库根**。
-///
-/// ⚠️ 授权与密钥**不在这里改**:它们是所有百度来源共用的、且改 AppKey 会作废 token
-/// (`BaiduPanConnection.saveConfiguration`),那条路仍在授权页
-/// (`BaiduPanAuthorizationView`)。
+/// ⚠️ 授权与密钥**不在这里改**:它们所有百度来源共用,且改 AppKey 会作废 token
+/// (`BaiduPanConnection.saveConfiguration`),那条路仍在 `BaiduPanAuthorizationView`。
 struct BaiduPanSourceSettingsView: View {
     let container: AppContainer
     let source: BaiduPanSource
 
     /// 编辑中的显示名
     @State private var displayName: String
-    /// 编辑中的片库根(**保存时才写库** —— 与显示名同一批提交)。nil = 没设。
+    /// 编辑中的片库根(**保存时才写库**,与显示名同一批提交)。nil = 没设。
     @State private var root: BaiduPanLibraryRoot?
     /// 磁盘上的现值(判断有没有改,没改就不发写请求)
     @State private var savedDisplayName = ""
@@ -87,7 +78,7 @@ struct BaiduPanSourceSettingsView: View {
         }
     }
 
-    /// 表单本身不长,给一个够用的固定高度(与 `ServerSettingsView` 同一口径)。
+    /// 与 `ServerSettingsView` 同一口径的固定高度。
     private static let windowHeight: CGFloat = 420
 
     // MARK: - 表单

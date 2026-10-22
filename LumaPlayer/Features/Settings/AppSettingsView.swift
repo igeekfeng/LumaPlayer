@@ -1,35 +1,20 @@
 import AppKit
 import SwiftUI
 
-/// 设置窗口的标签页。选中项存在 `@AppStorage` 里而不是 `@State`:
-/// 播放器字幕菜单的「字幕外观…」要先把它切到「字幕」再打开设置窗口。
+/// 设置窗口的标签页。选中项存 `@AppStorage`:播放器的「字幕外观…」要先切到「字幕」页再开窗口。
 enum SettingsTab: String {
     case general
     case playback
     case subtitles
-    /// 弹幕:弹弹play 凭据 + 外观
     case danmaku
     case servers
-    /// 被隐藏的条目(只在本机隐藏的那些,可恢复)
     case hidden
-    /// 图片缓存(占用 / 上限 / 清空)
     case cache
 
     static let storageKey = "settings.selectedTab"
 }
 
-/// 设置窗口(⌘,)。七个标签页:
-///
-/// - **通用**:网络(自定义 User-Agent)+ 首页顶部推荐开关 + 元数据刮削(TMDB token);
-/// - **播放**:播放偏好(`PlaybackSettingsView`)—— 起播默认值与播放期开关;
-/// - **字幕**:字幕外观(`SubtitleSettingsView`)+ 在线字幕站(assrt)的 API 密钥;
-/// - **弹幕**:弹弹play 的 AppId / AppSecret 与弹幕外观(`DanmakuSettingsView`);
-/// - **来源**:播放来源管理(增 / 改 / 删 / 切换 / 登录,`ServerListView`);
-/// - **已隐藏**:本机隐藏的条目(`HiddenItemsSettingsView`),逐条恢复;
-/// - **缓存**:图片缓存的占用 / 上限 / 清空(`ImageCacheSettingsView`)。
-///
-/// 来源管理放在这里而不是主窗口:它是低频的配置动作,不属于日常浏览路径
-/// (DesignTokens.swift「界面规则」)。缓存同理 —— 一年也点不了两次。
+/// 设置窗口(⌘,)。来源管理与缓存页放在这里而不是主窗口:低频配置动作,不属于日常浏览路径。
 struct AppSettingsView: View {
     let container: AppContainer
 
@@ -69,7 +54,7 @@ struct AppSettingsView: View {
     }
 }
 
-/// 通用:网络(自定义 User-Agent)+ 首页 + 元数据刮削(TMDB token)。
+/// 通用页:网络(User-Agent)+ 首页 + 元数据刮削(TMDB token)。
 private struct GeneralSettingsView: View {
     let credentials: CredentialStore
     let homeAppearance: HomeAppearancePreferences
@@ -100,11 +85,7 @@ private struct GeneralSettingsView: View {
     }
 }
 
-/// 首页:顶部那一大块随机推荐。
-///
-/// 关掉是**整块 hero 不显示**(首页直接从「我的媒体」开始),⛔ 不是退回去显示
-/// 「继续观看 / 各库最新」那一张 —— 那是请求**失败**时的容错,不是用户的选择。
-/// 关掉时也顺带不发那个推荐请求。
+/// 首页:顶部那块随机推荐。关掉是整块 hero 不显示,⛔ 不是退回「继续观看」那张 —— 那是请求失败时的容错。
 private struct HomeAppearanceSection: View {
     @Bindable var preferences: HomeAppearancePreferences
 
@@ -119,25 +100,15 @@ private struct HomeAppearanceSection: View {
     }
 }
 
-/// 元数据刮削:TMDB v4 Read Access Token 的输入。
+/// 元数据刮削:TMDB v4 Read Access Token。
 ///
-/// ## 为什么让用户自己填 token
-///
-/// 内置一串等于把凭据编进二进制分发,而且所有人共用一份配额;
-/// 自用场景下由用户填自己的(在 themoviedb.org 免费注册即得)才是对的形状。
-/// token 存 `CredentialStore`,⛔ 不进 UserDefaults、不进仓库
-/// (`docs/TMDB_API.md` §1)。
-///
-/// ## 为什么不做「测试连接」按钮
-///
-/// 那需要真发一次搜索请求,而刮削本来就是低频动作 —— 真要验证,
-/// 浏览一次百度目录就会走到;多一个按钮只是多一个失败点。
+/// 内置 token 等于把凭据编进二进制、还共用一份配额,自用场景让用户填自己的才是对的形状。⛔ 不做「测试连接」按钮:
+/// 那要真发一次搜索请求,而刮削是低频动作,多一个按钮只是多一个失败点。
 private struct MetadataScrapeSettingsView: View {
     let credentials: CredentialStore
 
-    /// 编辑中的值
     @State private var token = ""
-    /// 磁盘上的现值(用于判断「有没有改」与「能不能清除」)
+    /// 磁盘上的现值,用来判断「有没有改」与「能不能清除」
     @State private var savedToken = ""
     @State private var status: Status = .idle
 
@@ -199,7 +170,7 @@ private struct MetadataScrapeSettingsView: View {
             savedToken = existing
             status = .idle
         } catch {
-            // ⛔ 不静默吞:读不出来如实说,不假装「未配置」
+            // ⛔ 读不出来如实说,不假装「未配置」
             status = .error("读凭据文件失败")
         }
     }
@@ -208,7 +179,7 @@ private struct MetadataScrapeSettingsView: View {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             if trimmed.isEmpty {
-                // 留空 = 关闭刮削。删掉条目而不是存一个空串,读回来的语义更干净。
+                // 留空 = 关闭刮削;删条目而不是存空串
                 try await credentials.deleteTMDBReadAccessToken()
             } else {
                 try await credentials.saveTMDBReadAccessToken(trimmed)
@@ -233,11 +204,7 @@ private struct MetadataScrapeSettingsView: View {
     }
 }
 
-/// 播放偏好(`PlaybackPreferences`):起播默认值 + 播放期开关,全部服务器共用。
-///
-/// 起播类的偏好(倍速 / 音量 / 字幕)**下一次起播才生效**,不追溯正在播放的那一集:
-/// 半途把画面上的倍速或音量改掉,比「我调了默认值,当前这集却跟着变」更难解释。
-/// 三个开关是同一份状态,在播放窗口的「播放选项」菜单里改也一样。
+/// 播放偏好(`PlaybackPreferences`),全部服务器共用。起播类偏好**下一次起播才生效**,不追溯正在播放的那一集。
 private struct PlaybackSettingsView: View {
     @Bindable var preferences: PlaybackPreferences
 
@@ -336,10 +303,8 @@ struct SettingsValueSlider: View {
     }
 }
 
-/// 字幕外观(`SubtitleStyle`):全部服务器共用,改完对正在播放的视频立即生效。
-///
-/// ⛔ 不做「预览字幕」:SwiftUI 画出来的样子和 libass 的渲染(描边算法、字体回退、
-/// 按窗口缩放)对不上,一个不准的预览比没有更误导。正在播放的画面就是准确的预览。
+/// 字幕外观(`SubtitleStyle`),全部服务器共用,改完对正在播放的视频立即生效。
+/// ⛔ 不做「预览字幕」:SwiftUI 的样子和 libass 渲染对不上,不准的预览比没有更误导。
 private struct SubtitleSettingsView: View {
     @Bindable var store: SubtitleStyleStore
     let credentials: CredentialStore
@@ -473,7 +438,7 @@ private struct SubtitleSettingsView: View {
         }
     }
 
-    /// 空串 = 清除。与弹幕凭据同一套做法(保存 / 清除共用一条通路)。
+    /// 空串 = 清除。与弹幕凭据同一条通路。
     private func saveAssrtToken(_ token: String) async {
         do {
             if token.isEmpty {
@@ -489,7 +454,7 @@ private struct SubtitleSettingsView: View {
         }
     }
 
-    /// 预设色 + 系统取色器。预设是一排色块,选中的那个带描边与 `.isSelected`(VoiceOver 读得出)。
+    /// 预设色 + 系统取色器,选中的色块带描边与 `.isSelected`。
     private var colorRow: some View {
         HStack(spacing: Metrics.spacingS) {
             ForEach(SubtitleColor.presets, id: \.color) { preset in
@@ -514,8 +479,7 @@ private struct SubtitleSettingsView: View {
         }
     }
 
-    /// `Color` ↔ `SubtitleColor`。取色器给的颜色可能不在 sRGB(比如 Display P3),
-    /// 转不过去时保持原值不动 —— 宁可这一下没变,也不写一个算错的颜色进偏好。
+    /// `Color` ↔ `SubtitleColor`。取色器可能给出非 sRGB(如 Display P3),转不过去就保持原值,⛔ 不写算错的颜色。
     private var customColor: Binding<Color> {
         Binding(
             get: { Self.color(store.style.textColor) },
@@ -539,19 +503,8 @@ private struct SubtitleSettingsView: View {
     }
 }
 
-/// 缓存:图片(海报 / 背景图 / 剧照 / 网盘封面)的磁盘占用、上限与清空。
-///
-/// ## 为什么只放图片缓存
-///
-/// 这里只摆**随时可以丢掉的派生数据**。接口响应缓存(`EmbyResponseCache`)不进这页:
-/// 它按服务器隔离、跟随登录态整片作废,清掉之后用户感知不到任何「腾出了空间」,
-/// 却要白等一轮接口往返(见 `Core/Cache/EmbyResponseCache.swift`)。
-///
-/// ## 数字从哪来
-///
-/// 占用**现扫磁盘**(`PosterImageStore.diskUsage()`),不读缓存层自己的字节簿记 ——
-/// 簿记只覆盖 App 自己的写入,手删目录 / 系统清理之后就偏了,而这一页正是要「准」的地方。
-/// 上限一经改动立即生效并立刻淘汰,不需要重启或等下一次写盘。
+/// 缓存页:图片的磁盘占用、上限与清空。只摆随时可丢的派生数据 —— 接口响应缓存清掉用户感知不到,
+/// 却要白等一轮往返,所以不进这页。占用现扫磁盘,不读缓存层簿记(手删目录后簿记就不准了)。
 private struct ImageCacheSettingsView: View {
     @Bindable var preferences: ImageCachePreferences
     let store: PosterImageStore
@@ -605,7 +558,7 @@ private struct ImageCacheSettingsView: View {
 
     private var usageText: String {
         guard let usage else { return "统计中…" }
-        // 一条都没有时不能落进 ByteCountFormatter:它对 0 字节给的是「Zero KB」
+        // 0 条时不能落进 ByteCountFormatter:它对 0 字节给的是「Zero KB」
         guard usage.fileCount > 0 else { return Self.sizeText(0) }
         return "\(Self.sizeText(usage.bytes))(\(usage.fileCount.formatted()) 张)"
     }
@@ -621,24 +574,14 @@ private struct ImageCacheSettingsView: View {
         isBusy = false
     }
 
-    /// 二进制单位(1024)。与档位数字同一套进制:256 MB 就显示「256 MB」,
-    /// ⛔ 不用十进制单位把它显示成「268.4 MB」。
+    /// 二进制单位(1024)。⛔ 不用十进制单位把 256 MB 显示成「268.4 MB」。
     private static func sizeText(_ bytes: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
     }
 }
 
-/// 已隐藏:本机隐藏的条目,逐条恢复。
-///
-/// ## 这里只有「只隐藏」的那些
-///
-/// 连网盘一起删掉的条目⛔ 不进这个列表 —— 文件已经不在网盘,恢复不出任何东西
-/// (`FileSourceViewModel.delete` 的注释)。所以这个列表的每一条都是
-/// **网盘上还在、只是不想看见**的条目。
-///
-/// ⚠️ 恢复只把**条目**放回列表,**不还原观看记录**:隐藏时本地进度已经清掉了
-/// (这也是「继续观看」里那张卡消失的原因)。⛔ 按钮别写成「撤销」——
-/// 那会让人以为进度也能一起回来。
+/// 已隐藏:本机隐藏的条目,逐条恢复。只收「只隐藏」的那些,连网盘一起删掉的不进列表(文件已不在,恢复不出东西)。
+/// ⚠️ 恢复只放回条目,**不还原观看记录** —— 所以按钮⛔ 别写成「撤销」,那会让人以为进度能一起回来。
 private struct HiddenItemsSettingsView: View {
     let store: HiddenItemsStore
 

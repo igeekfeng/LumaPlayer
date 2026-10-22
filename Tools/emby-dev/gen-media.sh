@@ -2,56 +2,34 @@
 #
 # 生成本地 Emby 开发实例的测试媒体(素材不入库,脚本入库,随时可重建)。
 #
-# 目录结构对齐 Emby 官方命名规则(TV-Naming.html),否则剧集扫不出来:
+# 目录与文件名对齐 Emby 官方命名规则(TV-Naming.html),否则剧集扫不出来:
 #
 #   media/
-#     Movies/                                     ← 媒体库「movies」指向这里
-#       01-direct-h264-aac.mp4 (+ .zh.srt)
-#       02-multi-track.mkv
-#       03-transcode-hevc.mkv
-#       演示长片 (2024)/演示长片 (2024).mp4 (+ .zh.srt)
-#     TV/                                         ← 媒体库「tvshows」指向这里
-#       演示剧集 (2024)/
-#         Season 01/演示剧集 S01E01 ... mp4 (+ .zh.srt)
-#         Season 02/...
-#         Season 00/演示剧集 S00E01 ... mp4      ← 特辑季(官方 Specials 章节)
+#     Movies/                                 ← 媒体库「movies」
+#       01-direct-h264-aac.mp4 (+ .zh.srt)     直连基线
+#       02-multi-track.mkv                     多音轨多字幕
+#       03-transcode-hevc.mkv                  1080p10bit,HEVC 转码判定
+#       演示长片 (2024)/                        30 分钟,测拖动精度与断点续播上报
+#     TV/                                     ← 媒体库「tvshows」
+#       演示剧集 (2024)/Season 01|02|00/        2 季 6 集 + 特辑,测 Series/Season/Episode 三级浏览
 #
-# 原有 01/02/03 三条短片规格保持不变(720p/2Mbps),覆盖 LumaPlayer 的
-# DirectStream 基线、多音轨多字幕、HEVC 转码判定三件事。
+# 长片与剧集都做三重「自证身份」:画面底部烧标签、色相按集错开、音轨频率按集错开。
+# 手工验收最容易搞混(点开 E03 结果播的是 E01,截图里看不出来),所以留了这三重冗余。
+# testsrc2 自带左上角时间码,是判断 seek 生效的依据,因此标签只放底部。
 #
-# 新增的两类是为了解决「只有 60 秒短片测不了的东西」:
-#
-#   04 长片 30 分钟      → 进度条拖动精度、RunTimeTicks 换算、断点续播(Resume)、
-#                          10 秒定时上报(30 分钟 = 180 次上报机会)
-#   TV  2 季 6 集        → Series/Season/Episode 三级浏览、
-#                          /Shows/{Id}/Seasons 与 /Shows/{Id}/Episodes、
-#                          SeasonId/SeriesId/SeriesName 字段、季与集的排序
-#
-# 每条新增素材都做三件事来「自证身份」,这是手工验收最容易搞混的地方
-# (点开 E03 结果播的是 E01,截图里根本看不出来):
-#
-#   1. 画面底部烧一条标签(剧名 + 季集号 + 时长),由 make-label.py + Pillow 生成
-#   2. hue 色相按集号错开,肉眼一扫就能区分
-#   3. 音轨频率按集号错开,靠听也能区分
-#
-# testsrc2 自带左上角时间码与帧号,那是判断 seek 是否生效的依据,所以标签只放底部。
-#
-# 时长与分辨率都可用环境变量覆盖,例如:
-#   LONG_DUR=7200 ./gen-media.sh          # 长片改 2 小时
-#   WIDTH=1280 HEIGHT=720 ./gen-media.sh  # 提高分辨率
-#
-# 用法:  ./gen-media.sh          # 全部重建
-#        FFMPEG=/path/to/ffmpeg ./gen-media.sh
+# 时长与分辨率可用环境变量覆盖:LONG_DUR=7200 ./gen-media.sh、WIDTH=1280 HEIGHT=720 ./gen-media.sh
+# 用法:./gen-media.sh          # 全部重建
+#       FFMPEG=/path/to/ffmpeg ./gen-media.sh
 
 set -euo pipefail
 
 FFMPEG="${FFMPEG:-/opt/homebrew/bin/ffmpeg}"
-# 生成标签用;Pillow 缺失时脚本降级为「不烧标签」而不是失败。
+# 生成标签用;Pillow 缺失时降级为「不烧标签」而不是失败。
 PYTHON="${PYTHON:-python3}"
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIR="$BASE/media"
-# 标签 PNG 放在 media 之外:Emby 会把媒体目录里的图片当海报/背景图收走。
+# 标签 PNG 放在 media 之外:Emby 会把媒体目录里的图片当海报收走。
 LABELS="$BASE/.labels"
 
 WIDTH="${WIDTH:-854}"
@@ -61,10 +39,10 @@ CRF="${CRF:-30}"
 PRESET="${PRESET:-veryfast}"
 
 # 时长(秒)。默认总素材约 60 分钟 / 155 MB。
-LONG_DUR="${LONG_DUR:-1800}"   # 长片 30 分钟
+LONG_DUR="${LONG_DUR:-1800}"
 EP_S01E01="${EP_S01E01:-720}"  # 首集 12 分钟,用来验证「同一部剧里集与集时长不同」
-EP_DUR="${EP_DUR:-240}"        # 其余正片各 4 分钟
-EP_S00="${EP_S00:-120}"        # 特辑 2 分钟
+EP_DUR="${EP_DUR:-240}"
+EP_S00="${EP_S00:-120}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -87,7 +65,7 @@ else
   echo "提示: 没有可用的 Pillow($PYTHON),跳过画面标签烧制。" >&2
 fi
 
-# 秒 -> 可用于标签显示的时长文本
+# 秒 -> 标签上显示的时长文本
 fmt_dur() {
   local s=$1
   if [ "$s" -ge 3600 ]; then
@@ -106,8 +84,7 @@ make_label() {
 
 # encode_clip <主标题> <副标题> <hue> <音轨频率> <时长秒> <输出文件>
 #
-# 关键帧间隔固定 2 秒(-g = FPS*2):seek 到任意位置最多等 2 秒就有可解码的入口,
-# 拖动进度条不会出现长时间黑屏。
+# 关键帧间隔固定 2 秒(-g = FPS*2):seek 到任意位置最多等 2 秒就有解码入口,拖进度条不会长时间黑屏。
 encode_clip() {
   local main="$1" sub="$2" hue="$3" freq="$4" dur="$5" out="$6"
   local stem="${out##*/}"; stem="${stem%.*}"
@@ -232,7 +209,6 @@ echo "== 剧集(2 季 + 特辑,共 6 集)"
 
 SERIES="$DIR/TV/演示剧集 (2024)"
 
-# 集与集之间色相、音调都错开,便于一眼/一耳分辨当前播的是哪一集。
 encode_clip "演示剧集 (2024) · S01E01" "S01E01 · $(fmt_dur "$EP_S01E01")" \
   40 300 "$EP_S01E01" "$SERIES/Season 01/演示剧集 S01E01 - 首播集.mp4"
 encode_clip "演示剧集 (2024) · S01E02" "S01E02 · $(fmt_dur "$EP_DUR")" \

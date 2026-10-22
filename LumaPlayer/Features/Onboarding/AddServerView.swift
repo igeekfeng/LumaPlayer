@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// 添加服务器表单(地址 + 用户名 + 密码,保存即探测并登录)。
-///
-/// 两种使用场景:
-/// - 首次启动的引导页(无取消按钮 —— 没有可返回的地方);
-/// - 设置窗口「服务器」标签页里的 +(sheet,有取消按钮)。
+/// 添加服务器表单(地址 + 用户名 + 密码,保存即探测并登录)。用于启动引导页(无取消)
+/// 与「添加来源」流程(sheet,有取消)。
 struct AddServerView: View {
     @State private var viewModel: AddServerViewModel
     @Environment(\.dismiss) private var dismiss
@@ -13,7 +10,7 @@ struct AddServerView: View {
     @State private var saveTask: Task<Void, Never>?
 
     private let showsCancelButton: Bool
-    /// 非 nil = 这是「添加来源」流程里的一步,顶部给一条回到「选来源类型」的路。
+    /// 非 nil = 「添加来源」流程中的一步,顶部给一条返回选类型的路。
     private let onBack: (() -> Void)?
 
     private enum Field: Hashable {

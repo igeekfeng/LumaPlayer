@@ -2,22 +2,16 @@
 #
 # 把 Tools/emby-dev/config/ 从零配置成一个可用的开发实例(幂等,可重复跑)。
 #
-# 为什么需要它:config/ 不入库(含媒体库定义与用户),删掉重来时如果靠手点 Emby
-# 网页向导,下面这些「只有踩过才知道」的细节每次都要重新摸一遍:
+# config/ 不入库,删掉重来时靠手点网页向导,下面这些「踩过才知道」的细节每次都要重新摸:
 #
-#   · 判断向导是否已完成,只能看「匿名 GET /Startup/Configuration 返回 401」——
-#     4.9 的 /System/Info/Public 里**没有** StartupWizardCompleted 字段,
-#     照名字猜会永远判成「未完成」,然后朝已配置好的实例重复 POST Startup/User
-#   · Startup/Complete 之后既有 token 会失效,必须重新登录(这里靠 401 自动重登兜底)
-#   · 操作媒体库路径的 API 必须用 **Id(整数)**,用 Name 会报 "Unrecognized Guid format";
-#     而 POST /Library/VirtualFolders/Paths 还会「报 500 但实际生效」——
-#     所以每一步都要 GET 回读验证,不能只看状态码
-#   · LibraryOptions 的 body 是 {"Id":..,"LibraryOptions":{..}} 包装形式,
-#     直接提交裸的 LibraryOptions 会报 "Object reference not set to an instance of an object"
-#   · POST /Users/New 建出来的用户默认就是非管理员(IsAdministrator=false),
-#     不用再补一次 Policy 更新
-#   · 给**别的**用户改密码时 CurrentPw 传空串即可(只有改自己才必须填旧密码);
-#     Emby 不回显明文,所以幂等判断只能看 HasPassword 这个布尔
+#   · 判断向导是否完成只能看「匿名 GET /Startup/Configuration 返回 401」——
+#     /System/Info/Public 里没有 StartupWizardCompleted 字段,照名字猜会永远判成未完成
+#   · Startup/Complete 之后既有 token 失效,必须重登(这里靠 401 自动重登兜底)
+#   · 操作媒体库路径的 API 要用整数 Id,传 Name 报 "Unrecognized Guid format";
+#     而 POST /Library/VirtualFolders/Paths 会「报 500 但实际生效」,所以每步都 GET 回读,不看状态码
+#   · LibraryOptions 的 body 要 {"Id":..,"LibraryOptions":{..}} 包一层,裸提交报 NullReference
+#   · POST /Users/New 建出来就是非管理员;给别的用户改密码时 CurrentPw 传空串,
+#     Emby 不回显明文,幂等判断只能看 HasPassword
 #
 # 用法:
 #   export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
@@ -62,15 +56,9 @@ WANTED = [
     ("本地剧集库", "tvshows", "/mnt/media/TV"),
 ]
 
-# 期望的非管理员用户。建它的用途是测「多账号」:同一台服务器换个账号登录,
-# 续播位置是否按 UserId 隔离;以及一个**真服务器上不敢试**的场景——
-# 把某个用户临时禁用,看客户端怎么处理。
-#
-# ⚠️ 实测(4.9.5.0):禁用用户后 POST /Users/AuthenticateByName 返回的是
-# **403 +「您的账户已被禁用」**,不是 401。所以它走的是客户端
-# `ServerLoginError.api(.forbidden)` 那条分支,文案是
-# 「没有访问权限,请检查该服务器上的用户权限。」——**与真实原因不符**。
-# 实测见 README.md「非管理员用户」一节。
+# 期望的非管理员用户,用途是测「多账号」(续播是否按 UserId 隔离)与「禁用用户」这种真服务器上不敢试的场景。
+# ⚠️ 实测 4.9.5.0:禁用用户后 AuthenticateByName 返回 **403 +「您的账户已被禁用」**而不是 401,
+# 于是走 `ServerLoginError.api(.forbidden)` 分支,文案「没有访问权限,请检查该用户权限」与真实原因不符。
 WANTED_USERS = [
     (VIEWER_USER, VIEWER_PASS),
 ]
@@ -110,8 +98,7 @@ def login():
 
 
 def authed(method, path, payload=None, query=None):
-    """带认证的请求。收到 401 就重新登录一次再重试——
-    Startup/Complete 会让既有 token 失效,这一步不能省。"""
+    """带认证的请求。收到 401 就重新登录一次再重试(Startup/Complete 会让既有 token 失效)。"""
     for attempt in (1, 2):
         status, body = call(method, path, payload=payload, query=query, token=STATE["token"])
         if status != 401 or attempt == 2:

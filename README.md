@@ -7,7 +7,7 @@
 
 macOS 原生 Emby 客户端。SwiftUI 写界面，自编 libmpv（gpu-next）负责解码播放，直接对接你自己（或朋友的）Emby 服务器；百度网盘也可以作为播放来源接入。
 
-> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍：libmpv 及其依赖也是按 27.0 编译的，部署目标更低会有链接器 warning 且产物跑不起来。
+> **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— libmpv 及其依赖也是按 27.0 编译的，部署目标更低会有链接器 warning 且产物跑不起来。
 
 ## 目录
 
@@ -52,7 +52,7 @@ brew install meson ninja pkgconf
 ./Scripts/build-libmpv.sh          # 产物在 Vendor/mpv/prefix/
 ```
 
-为什么要自编，而不是用 `brew install mpv`：Dolby Vision（Profile 5）片源在老 `gpu` 渲染器上会发紫发绿，只有 `gpu-next`（libplacebo）才处理得对，而它进 render API 依赖一个尚未合并的上游 draft PR。脚本把该 PR 的 commit 钉死，并复用 Homebrew 那份 ffmpeg / libplacebo / libass 等依赖。
+为什么不用 `brew install mpv`：Dolby Vision（Profile 5）片源在老 `gpu` 渲染器上会发紫发绿，只有 `gpu-next`（libplacebo）处理得对，而它进 render API 依赖一个未合并的上游 draft PR。脚本把该 PR 的 commit 钉死，并复用 Homebrew 那份 ffmpeg / libplacebo / libass。
 
 编好之后：
 
@@ -94,7 +94,7 @@ App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 3. **百度网盘**：按提示完成设备码授权，再指定一个目录作为**片库根**（就是浏览页能退到的最外层）
 4. 首页 / 媒体库点开条目播放；播放是独立窗口，关窗触发最终进度上报
 
-设置窗口（⌘,）分六页：**通用**（含自定义 User-Agent）、**播放**、**字幕**、**弹幕**、**来源**（增 / 改 / 删 / 授权 / 设片库根）、**已隐藏**。
+设置窗口（⌘,）分七页：**通用**（含自定义 User-Agent）、**播放**、**字幕**、**弹幕**、**来源**（增 / 改 / 删 / 授权 / 设片库根）、**已隐藏**、**缓存**（图片占用与清空）。
 
 - 弹幕：需先到弹弹play 开放平台申请 AppId / AppSecret 并在「弹幕」页填入
 - 元数据刮削：在「通用」页填 TMDB 的 v4 *API Read Access Token*，留空则不刮削（只写在本机凭据文件里）
@@ -151,4 +151,4 @@ Scripts/          构建、打包、部署、隐私自检脚本
 
 本项目以 [GPL-3.0](LICENSE) 发布。Copyright (C) 2026 LumaPlayer contributors。
 
-之所以不是 MIT 之类的宽松许可：播放内核 **libmpv**、以及随 App 一起打包进 `Contents/Frameworks/` 的 **FFmpeg 系列动态库**，都是 **GPL 构建**（见 `Scripts/build-libmpv.sh` 中的 `-Dgpl=true`，以及该脚本复用 Homebrew ffmpeg 的说明）。链接 GPL 库意味着整个作品要跟着 GPL 走，因此本项目的分发条款必须与之一致。
+之所以不是 MIT 之类的宽松许可：播放内核 **libmpv** 以及随 App 打包进 `Contents/Frameworks/` 的 **FFmpeg 动态库**都是 GPL 构建（见 `Scripts/build-libmpv.sh` 的 `-Dgpl=true`），链接 GPL 库意味着整个作品跟着 GPL 走。

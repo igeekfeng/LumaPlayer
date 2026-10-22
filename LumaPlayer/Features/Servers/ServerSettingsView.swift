@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// 编辑服务器(显示名 / 地址)。地址变了会先重新探测,探测不通不保存
-/// (`AppContainer.editServer`)。token 不动:新地址若不认旧 token,
-/// 第一次鉴权请求 401 后会清掉 token、回到登录页(密码不存,不静默重登)。
-///
-/// 外壳与「添加服务器」共用(`OnboardingFormHeader` / `OnboardingNotice` / `OnboardingActionBar`)。
+/// 编辑服务器(显示名 / 地址)。地址变了先重新探测,探测不通不保存(`AppContainer.editServer`)。
+/// token 不动:新地址若不认旧 token,首次鉴权 401 会清掉 token、回到登录页。
 struct ServerSettingsView: View {
     let container: AppContainer
 
@@ -12,7 +9,7 @@ struct ServerSettingsView: View {
     @State private var displayName: String
     @State private var address: String
     @State private var errorMessage: String?
-    /// 地址变了要探测一次,期间禁用保存,免得连点发出多轮探测
+    /// 保存中(含探测):禁用表单,免得连点发出多轮探测
     @State private var isSaving = false
     /// 进行中的保存。取消 = 连探测请求一起取消
     @State private var saveTask: Task<Void, Never>?
@@ -81,7 +78,6 @@ struct ServerSettingsView: View {
         .onAppear { focusedField = .displayName }
     }
 
-    /// 错误优先,其次未加密警告,最后是「行为说明」(改地址会发生什么)。
     @ViewBuilder
     private var footer: some View {
         if let errorMessage {

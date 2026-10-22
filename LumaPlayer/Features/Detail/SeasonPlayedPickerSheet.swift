@@ -1,18 +1,13 @@
 import SwiftUI
 
 /// 勾选分集批量标记已看 / 未看(API_CONTRACT.md 5.8)。
+/// 详情页的 ✓ 只作用于整部剧或一集,而补标常是「第 1 季前 6 集」这种中间粒度 ——
+/// 清单默认只勾**还不在目标状态**的集,省掉空写。
 ///
-/// 为什么要有这个面板:详情页的 ✓ 只作用于一项(剧集 = 整部剧,分集 = 那一集),
-/// 而「播放记录被重置后补标」往往既不是整部剧、也不是一集 —— 比如「第 1 季前 6 集看过」。
-/// 面板把当前这一季的分集摆成可勾选的清单,默认勾上**还没到目标状态**的那些
-/// (已经标好的不必再发一次请求),再一次性提交。
-///
-/// Emby 没有批量端点,提交是逐条串行发的(5.8),所以应用后面板先关掉,
-/// 进度显示在分集区的标题行上,不在这里再挂一层等待。
+/// Emby 没有批量端点,提交逐条串行(5.8),所以应用后面板先关掉,进度显示在分集区标题行。
 struct SeasonPlayedPickerSheet: View {
     /// 当前这一季的分集(已加载的列表,不在这里发请求)
     let episodes: [EmbyItem]
-    /// 季名,只用于标题
     let seasonName: String
     /// 默认目标:已看的集多就默认「标记为未看」,否则默认「标记为已看」
     @State private var played: Bool
@@ -127,7 +122,6 @@ struct SeasonPlayedPickerSheet: View {
                 .keyboardShortcut(.cancelAction)
                 .controlSize(.large)
             Button(applyTitle) {
-                // 只提交「还不在目标状态」的集:勾了已经标好的那些是空写
                 let ids = episodes.filter { selectedIDs.contains($0.id) && $0.isPlayed != played }.map(\.id)
                 onApply(ids, played)
             }
@@ -140,11 +134,8 @@ struct SeasonPlayedPickerSheet: View {
 
     // MARK: - 内部
 
-    /// 清单高度按行数算,并封顶到 `playedPickerListMaxHeight`。
-    ///
-    /// `List` 在弹性容器里会**按容器高度硬裁**(2026-10-18 截图:5 集的季把第 5 行
-    /// 裁掉一半),而给固定高度又会让集少的季下方空一大片。行高是固定的,
-    /// 所以直接算:一行 = `playedPickerRowHeight` + `spacingXXS` 的列表内边距。
+    /// 清单高度按行数算并封顶到 `playedPickerListMaxHeight`。
+    /// ⚠️ `List` 在弹性容器里会按容器高度硬裁(裁掉半行),给固定高度又会让集少的季空一大片。
     private var listHeight: CGFloat {
         let rows = CGFloat(episodes.count)
         let estimated = rows * (Metrics.playedPickerRowHeight + Metrics.spacingXXS) + Metrics.spacingM
@@ -161,7 +152,7 @@ struct SeasonPlayedPickerSheet: View {
             : "\(played ? "标记为已看" : "标记为未看")(\(applicableIDs.count))"
     }
 
-    /// 「3. 集名」;集号来自服务端,没有就只显示集名(与分集卡片同一口径,不猜不占位)。
+    /// 「3. 集名」;没有集号就只显示集名(与分集卡片同一口径)。
     private func label(for episode: EmbyItem) -> String {
         guard let index = episode.indexNumber else { return episode.name }
         return "\(index). \(episode.name)"

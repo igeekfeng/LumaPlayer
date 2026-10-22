@@ -1,8 +1,6 @@
 import Foundation
 
-/// Emby 用户对象(认证响应里的 `User`,API_CONTRACT.md 3.1)。
-///
-/// `Id` 必填(8.1 必填表:认证响应必含 `User.Id`);`Name` 可选。
+/// Emby 用户对象(认证响应里的 `User`,API_CONTRACT.md 3.1)。`Id` 必填(8.1 必填表),`Name` 可选。
 struct EmbyUser: Decodable, Sendable, Equatable {
     let id: String
     let name: String?
@@ -14,14 +12,12 @@ struct EmbyUser: Decodable, Sendable, Equatable {
 }
 
 /// `POST /Users/AuthenticateByName` 的响应(API_CONTRACT.md 3.1)。
-///
-/// ⚠️ 字段名拼写的核实状态:`AccessToken` / `User` 已核实 ✅;
-/// 请求体的 `Pw` 已在 4.7.11.0 实测(docs/PITFALLS.md Q10)。
+/// ⚠️ 拼写核实状态:`AccessToken` / `User` 已核实 ✅;请求体的 `Pw` 已实测(docs/PITFALLS.md Q10)。
 struct AuthenticationResult: Decodable, Sendable, Equatable {
     /// 后续所有请求的 `X-Emby-Token`(API_CONTRACT.md 2.2)。必填(8.1)。
     let accessToken: String
     let user: EmbyUser
-    /// 服务器 Id。不在 8.1 的必填表里 → 可选
+    /// 不在 8.1 的必填表里 → 可选
     let serverID: String?
 
     enum CodingKeys: String, CodingKey {

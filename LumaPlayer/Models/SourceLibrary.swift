@@ -18,14 +18,12 @@ struct SourceLibrary: Sendable, Equatable, Hashable, Identifiable {
         case shows
         case music
         case mixed
-        /// 普通目录(百度侧)
         case folder
     }
 
     var id: SourceLibraryRef { ref }
 
-    /// Emby 的 `CollectionType` → 本枚举。
-    /// ⛔ 不认识或缺失就是 `.mixed` —— 不猜(`API_CONTRACT.md` 3.2 同一条立场)。
+    /// Emby 的 `CollectionType` → 本枚举。⛔ 不认识或缺失就是 `.mixed` —— 不猜(API_CONTRACT.md 3.2 同一条立场)。
     static func kind(forCollectionType type: String?) -> Kind {
         switch type?.lowercased() {
         case "movies": return .movies

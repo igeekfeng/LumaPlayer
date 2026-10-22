@@ -1,15 +1,12 @@
-// render-icon.swift
+// render-icon.swift —— App 图标的唯一源文件:用 CoreGraphics 直接画,输出 AppIcon.appiconset 需要的 10 张 PNG。
+// 本机没有 SVG 渲染工具,脚本绘制可复现且不引入依赖。
 //
-// LumaPlayer App 图标的唯一源文件:用 CoreGraphics 直接绘制,输出 AppIcon.appiconset
-// 所需的 10 张 PNG。本机没有 SVG 渲染工具,用脚本绘制可复现且不引入依赖。
+// 用法(仓库根执行):swift Tools/app-icon/render-icon.swift LumaPlayer/Resources/Assets.xcassets/AppIcon.appiconset
 //
-// 用法(仓库根执行):
-//   swift Tools/app-icon/render-icon.swift LumaPlayer/Resources/Assets.xcassets/AppIcon.appiconset
+// 放 Tools/ 而不是 LumaPlayer/ 下:后者是同步文件夹,放进去会被编进 App。
 //
-// 放在 Tools/ 而不是 LumaPlayer/ 下:后者是同步文件夹,放进去会被编进 App。
-//
-// 几何按 macOS 图标网格:1024 画布,主体 824×824 圆角矩形居中(四周留 100 给阴影),
-// 圆角半径约 185。主体不贴合这个形状时,macOS 26 起会把图标塞进灰色底板里。
+// 几何按 macOS 图标网格:1024 画布、主体 824×824 居中(四周留 100 给阴影)、圆角约 185。
+// 主体不贴合这个形状时,macOS 26 起会把图标塞进灰色底板。
 
 import AppKit
 import CoreGraphics

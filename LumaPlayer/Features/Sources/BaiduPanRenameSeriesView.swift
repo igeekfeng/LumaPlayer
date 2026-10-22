@@ -1,19 +1,10 @@
 import SwiftUI
 
-/// 把**整个剧集目录**改成标准 TMDB 命名的面板。
+/// 把**整个剧集目录**改成标准 TMDB 命名的面板:列目录 → 认剧(要你确认) → 预览 → 执行。
 ///
-/// ```
-/// 列目录 → 认剧(要你确认是哪一部) → 预览 → 执行
-/// ```
-///
-/// ## 三步里两步要等人
-///
-/// - **认剧**:目录名没写 `{tmdbid-N}` 时只能按标题搜,同名剧往往不止一部。
-///   ⛔ 不自动挑一个 —— 挑错就是整目录按错的剧改名;
-/// - **预览**:改名清单、跳过清单、配额消耗都摆出来,确认了才提交。
-///
-/// 执行之后网盘里的名字就变了(百度没有 undo),所以面板底部给「撤销这次改名」——
-/// 它只能撤销**已确认成功**的部分(执行器失败即停,正是为了让这份清单算得出来)。
+/// ⛔ 认剧不自动挑一个 —— 挑错就是整目录按错的剧改名;预览要把改名 / 跳过清单与配额都摆出来。
+/// 执行后网盘里的名字就变了(百度没有 undo),所以底部给「撤销这次改名」,
+/// 它只能撤销**已确认成功**的部分。
 struct BaiduPanRenameSeriesView: View {
     @Bindable var viewModel: BaiduPanRenameSeriesViewModel
     let directory: BaiduPanFile
@@ -21,7 +12,6 @@ struct BaiduPanRenameSeriesView: View {
     let onFinished: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    /// 候选列表里选中的 TMDB id
     @State private var selection: Int?
     @State private var didStart = false
 
@@ -37,8 +27,7 @@ struct BaiduPanRenameSeriesView: View {
             actionBar
         }
         .frame(minWidth: 660, minHeight: 500)
-        // ⚠️ `.task` 会随视图重算重复触发(选完候选后 stage 变),用 `didStart` 兜住,
-        // ⛔ 不然每进一个阶段就重新列一遍目录 —— 那是白烧一次列目录请求。
+        // ⚠️ `.task` 会随 stage 变化重复触发,用 `didStart` 兜住,⛔ 否则每进一个阶段白烧一次列目录。
         .task {
             guard !didStart else { return }
             didStart = true

@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// 重新登录一台已存在的服务器。地址只读 —— 只补用户名与密码。
-///
-/// 记住了密码时 401 会先静默重新登录,走到这里说明静默登录也没成立
-/// (密码在服务端改过、或没勾选记住密码)。
+/// 重新登录一台已存在的服务器(地址只读)。记住密码时 401 会先静默重登,走到这里
+/// 说明静默登录也没成立(密码改过或没记住)。
 struct LoginView: View {
     @State private var viewModel: LoginViewModel
     @Environment(\.dismiss) private var dismiss
@@ -31,8 +29,7 @@ struct LoginView: View {
                     }
                 } footer: {
                     if viewModel.isUnencrypted {
-                        // 局域网 http 回退后的服务器也要警告
-                        // (API_CONTRACT.md 1.4、CLAUDE.md「安全与隐私」)
+                        // 局域网 http 回退的服务器也要警告(API_CONTRACT.md 1.4)
                         OnboardingNotice(text: "未加密连接(HTTP),密码将以明文发送。", style: .warning)
                     }
                 }

@@ -1,8 +1,7 @@
 import SwiftUI
 
 extension FocusedValues {
-    /// 当前处于前台的主窗口提供的动作。只有主窗口是 key window 时才有值,
-    /// 菜单项据此启用 / 禁用 —— 播放器窗口在前台时 ⌘R 不会去刷新背后的页面。
+    /// 前台主窗口提供的动作。只有主窗口是 key window 时才有值,菜单据此启用 / 禁用。
     @Entry var browseActions: BrowseActions?
 }
 
@@ -17,15 +16,11 @@ struct BrowseActions {
     let switchTo: @MainActor (SourceProfile) -> Void
 }
 
-/// 菜单栏的主窗口命令:View →「Reload」(⌘R),以及「Source」菜单(⌘1…⌘9 切换来源)。
-///
-/// 主窗口没有系统工具栏(`BrowseChromeBar.swift`):刷新不再是常驻按钮,走这里;
-/// 来源在顶栏也有一个图标按钮,这里给键盘入口。
-/// 文案用英文,与 `PlayerCommands` 同一理由(系统菜单都是英文,菜单栏不中英混排)。
+/// 菜单栏的主窗口命令:View →「Reload」(⌘R)与「Source」菜单(⌘1…⌘9 切换来源)。
+/// 文案用英文,与系统菜单一致。
 struct BrowseCommands: Commands {
     @FocusedValue(\.browseActions) private var actions
 
-    /// 配快捷键的来源个数(⌘1…⌘9)
     private static let shortcutCount = 9
 
     var body: some Commands {
@@ -47,7 +42,6 @@ struct BrowseCommands: Commands {
             if !sources.isEmpty {
                 Divider()
             }
-            // 来源管理(增 / 改 / 删 / 登录)在设置窗口的「来源」标签页
             SettingsLink {
                 Text("Manage Sources…")
             }

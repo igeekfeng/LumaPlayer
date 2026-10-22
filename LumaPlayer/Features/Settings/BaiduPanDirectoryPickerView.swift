@@ -1,10 +1,8 @@
 import SwiftUI
 
 /// 从网盘里挑一个目录作为片库根(`BaiduPanSourceSettingsView` 的「从网盘添加…」)。
-///
-/// ⚠️ 只列**目录**(片库根只能是目录),而且**一次只列一层** —— 每进一层发一次
-/// `list` 请求,不预取子树(配额见 `docs/BAIDU_PAN_API.md` §7)。
-/// 起点固定是应用目录 `/apps/{应用目录名}`,⛔ 退不出去:那以外第三方应用访问不到。
+/// ⚠️ 只列**目录**、一次只列一层(每层一次 `list` 请求,配额见 `docs/BAIDU_PAN_API.md` §7);
+/// 起点固定是应用目录 `/apps/{应用目录名}`,⛔ 退不出去(那以外第三方应用访问不到)。
 struct BaiduPanDirectoryPickerView: View {
     let container: AppContainer
     /// 选中一个目录(完整路径)。
@@ -151,7 +149,6 @@ struct BaiduPanDirectoryPickerView: View {
         failure = nil
         do {
             let files = try await container.baiduConnection().files(inDirectory: directory)
-            // 只列目录:片库根只能是目录
             folders = files.filter(\.isDirectory)
             currentDirectory = directory
         } catch let error as BaiduPanError {

@@ -1,13 +1,8 @@
 import SwiftUI
 
-/// 播放来源管理:增 / 改 / 删 / 切换 / 登录。
-/// 点击行切换当前来源;行尾按钮与右键菜单提供编辑、删除、登录。
-///
-/// 「来源」是 Emby / 百度网盘 / 本地文件夹**平等共存**的一层(`docs/SOURCE_ABSTRACTION_PLAN.md` §0):
-/// 同一个列表装两种来源,可切换、可删除、可标记最近使用。
-///
-/// 作为设置窗口「来源」标签页的内容(`AppSettingsView`):这里不再自带
-/// `NavigationStack` 与工具栏 —— 设置窗口的标签页就是它的外壳。
+/// 播放来源管理:增 / 改 / 删 / 切换 / 登录。点行切换当前来源,行尾按钮与右键菜单提供
+/// 编辑、删除、登录。「来源」是 Emby / 百度网盘 / 本地文件夹平等共存的一层,作为设置窗口
+/// 「来源」标签页的内容(不自带 `NavigationStack` 与工具栏)。
 struct ServerListView: View {
     let container: AppContainer
 
@@ -15,8 +10,7 @@ struct ServerListView: View {
     /// 已能免输入进入的 Emby 服务器(百度来源的授权状态由它自己那一页判断)
     @State private var loggedInServerIDs: Set<UUID> = []
     @State private var showsAddSheet = false
-    /// 正在编辑的来源(Emby → `ServerSettingsView`;百度 → `BaiduPanSourceSettingsView`;
-    /// 本地文件夹 → `LocalFolderSourceSettingsView`)
+    /// 正在编辑的来源(三种类型各开自己的设置页)
     @State private var editingSource: SourceProfile?
     @State private var sourcePendingDeletion: SourceProfile?
     @State private var serverToLogin: ServerProfile?
@@ -143,8 +137,7 @@ struct ServerListView: View {
         guard container.state.currentSource?.id != source.id else { return }
         do {
             try await container.switchCurrent(to: source)
-            // 切换改了库内 lastUsedAt,同步刷新本地快照,
-            // 避免把过期副本带进编辑表单
+            // 切换改了库内 lastUsedAt,同步刷新本地快照,避免把过期副本带进编辑表单
             await reload()
         } catch {
             actionErrorMessage = "切换来源失败,请重试。"
@@ -173,7 +166,6 @@ struct ServerListView: View {
     }
 }
 
-/// 来源列表的一行:图标 + 名称 + 类型相关明细 + 登录状态 + 更多操作。
 private struct SourceRow: View {
     let source: SourceProfile
     let isCurrent: Bool
@@ -263,7 +255,7 @@ private struct SourceRow: View {
             if let version = server.serverVersion { parts.append("Emby \(version)") }
             return parts.joined(separator: " · ")
         case .baiduPan(let baidu):
-            // 应用目录名是这一行唯一有信息量的字段:它决定了能访问网盘里的什么
+            // 应用目录名决定能访问网盘里的什么,是这一行唯一有信息量的字段
             return "/apps/\(baidu.folderName)"
         case .localFolder(let local):
             // 上一次解析书签得到的路径(展示用;访问走书签)
@@ -319,8 +311,7 @@ private struct SourceRow: View {
 
     @ViewBuilder
     private var menuItems: some View {
-        // 登录只有 Emby 有;「编辑…」两种来源都有 —— 各自打开自己的设置页
-        // (百度那边是片库根 / 显示名 / 解除授权,见 `BaiduPanSourceSettingsView`)。
+        // 「编辑…」三种来源都有,各开自己的设置页(百度见 `BaiduPanSourceSettingsView`)
         if case .emby = source, !isLoggedIn {
             Button("登录…", systemImage: "person.crop.circle", action: onLogin)
         }

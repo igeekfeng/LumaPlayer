@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
-"""批量填充本地 Emby 开发实例的测试数据(列表/分页/排序/筛选 这些只有「量大」才测得动)。
+"""批量填充本地 Emby 开发实例的测试数据(列表/分页/排序/筛选这些只有「量大」才测得动)。
 
-与 gen-media.sh 的分工:
+与 gen-media.sh 的分工:那个给约 10 条规格各异的标本(验证判定/播放/字幕/转码),这个给数百条填充物。
 
-    gen-media.sh        ≈ 10 条**标本**:每条规格不同,用来验证判定/播放/字幕/转码。
-    gen-bulk-media.py   ≈ 数百条**填充物**:规格从少数几条基线里挑,用来把列表填满。
+为什么用硬链接:需求只是「把列表填满」,150 部电影各存一份 720p 素材要多几百 MB 却毫无信息量。
+硬链接让 N 个条目共用一份 inode —— Emby 按路径识别条目,看到的是 N 个独立条目。要真副本时用 `--mode copy`。
 
-为什么用**硬链接**:需求是「视频地址都一样也可以」。150 部电影如果各存一份 720p 素材,
-要额外几百 MB 却毫无信息量。硬链接让 N 个条目共用同一份 inode ——
-Emby 按**路径**识别条目,所以它看到的是 N 个独立条目,而磁盘只多出基线池那一份。
-需要真副本(例如想让 DateCreated 各不相同)时用 `--mode copy`。
-
-元数据一律走**本地 .nfo**(实测 Emby 4.9.5.0 会读):
-    title / year / genre / rating / mpaa / plot / studio / director / actor
-不依赖任何在线刮削 —— 否则扫一遍库要等网络超时,且结果不可复现。
-海报同理,由 Pillow 就地画 `poster.jpg`,让 UI 里「看起来是满的」。
+元数据一律走本地 .nfo(Emby 4.9.5.0 实测会读),不依赖在线刮削:否则扫一遍库要等网络超时,结果也不可复现。
+海报同理,由 Pillow 就地画 poster.jpg。
 
 用法:
     PY="$HOME/.workbuddy/binaries/python/envs/default/bin/python"
-    $PY gen-bulk-media.py                    # 150 部电影 + 12 部剧(默认)
+    $PY gen-bulk-media.py                          # 150 部电影 + 12 部剧
     $PY gen-bulk-media.py --movies 40 --series 3   # 小批量
-    $PY gen-bulk-media.py --pool-only        # 只生成基线素材池
-    $PY gen-bulk-media.py --clean            # 按 manifest 删干净(不动 gen-media.sh 的素材)
-    $PY gen-bulk-media.py --no-scan          # 只落文件,不触发 Emby 扫描
+    $PY gen-bulk-media.py --pool-only              # 只生成基线素材池
+    $PY gen-bulk-media.py --clean                  # 按 manifest 删干净(不动 gen-media.sh 的素材)
+    $PY gen-bulk-media.py --no-scan                # 只落文件,不触发 Emby 扫描
 
-素材**不入库**(与 gen-media.sh 同理),脚本入库。
+素材不入库,脚本入库。
 """
 
 import argparse
@@ -64,9 +57,8 @@ FONTS = [
 
 # ---------------------------------------------------------------- 素材基线池
 #
-# 「视频地址都一样」的落点:所有填充条目都硬链接到这 6 条基线之一。
-# 规格仍然刻意错开,这样列表里能同时看到 mp4/mkv、单/双音轨、
-# 15 秒到 5 分钟的不同时长 —— 不需要为每一条单独编码。
+# 所有填充条目都硬链接到这 6 条基线之一。规格刻意错开,列表里就能同时看到 mp4/mkv、单/双音轨、
+# 15 秒到 5 分钟的不同时长,不必为每条单独编码。
 
 POOLS = [
     dict(key="A", w=854, h=480, dur=30, hue=0, freq=300, ext="mp4", audio=1, subs=0, weight=30),
@@ -598,8 +590,7 @@ def gen_series(builder, count):
 # ---------------------------------------------------------------- 清理
 
 
-# 只清理自己认识的扩展名。这样即便有人往批量目录里丢了别的东西,
-# --clean 也不会连它一起删掉,而是把那个目录留下。
+# 只清理自己认识的扩展名:别人往批量目录里丢的东西不动,那个目录也就留下来。
 GENERATED_EXT = {".mp4", ".mkv", ".nfo", ".srt", ".jpg", ".png"}
 
 

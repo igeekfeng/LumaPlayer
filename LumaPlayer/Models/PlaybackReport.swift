@@ -1,22 +1,14 @@
 import Foundation
 
-/// `POST /Sessions/Playing*` 三个上报端点共用的请求体
-/// (API_CONTRACT.md 5.1,来源官方 Playback-Check-ins.html)。
-///
-/// 三个端点 body **结构完全相同**,只有 Progress 多一个 `EventName` ——
-/// 这里用可选字段表达:`eventName` 仅在 Progress 请求里非 nil,
-/// 其余端点编码时省略(`encodeIfPresent`)。
-///
-/// 不使用的字段(`LiveStreamId` / `PlaylistIndex` / `PlaylistLength`)按 5.1 的
-/// 「不使用」标注直接不建模,而不是发 null。
-/// `SubtitleOffset` 同样不建模,但原因不同:字幕延迟功能已有,只是官方没写这个字段的
-/// **单位**(KNOWN_ISSUES.md Q39)—— 发错单位比不发更糟,核实后再补。
+/// `POST /Sessions/Playing*` 三个上报端点共用的请求体(API_CONTRACT.md 5.1,官方 Playback-Check-ins.html)。
+/// 三个端点 body 结构完全相同,只有 Progress 多一个 `EventName` —— 用可选字段表达,nil 时 `encodeIfPresent` 省略。
+/// 不使用的字段(`LiveStreamId` / `PlaylistIndex` / `PlaylistLength`)按 5.1 标注不建模,而不是发 null。
+/// `SubtitleOffset` 也不建模:官方没写这个字段的**单位**(KNOWN_ISSUES.md Q39),发错单位比不发更糟,核实后再补。
 struct PlaybackReportBody: Encodable, Sendable, Equatable {
     let itemID: String
     let mediaSourceID: String
     let playSessionID: String
-    /// `DirectStream` / `Transcode`(`PlaybackMethod` 的 rawValue 与
-    /// 5.1 的合法值一致,不是巧合 —— 4.2 定义的取值集合相同)
+    /// `DirectStream` / `Transcode`(`PlaybackMethod` 的 rawValue 与 5.1 的合法值一致)
     let playMethod: String
     let positionTicks: Int64?
     let isPaused: Bool
@@ -65,8 +57,7 @@ struct PlaybackReportBody: Encodable, Sendable, Equatable {
         self.eventName = eventName
     }
 
-    /// ⛔ 不用合成的 `encode`:它把 nil 写成 `null`
-    /// (`"SubtitleStreamIndex": null`),而 5.1 里这些字段是「有值才给」。
+    /// ⛔ 不用合成的 `encode`:它把 nil 写成 `null`,而 5.1 里这些字段是「有值才给」。
     /// 关字幕时**不发**这个键才是准确的表达(发 0 会指向第一条字幕轨)。
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -105,11 +96,8 @@ struct PlaybackReportBody: Encodable, Sendable, Equatable {
     }
 }
 
-/// Progress 上报的事件名(API_CONTRACT.md 5.2)。
-///
-/// 只建模 LumaPlayer 实际会用到的映射;官方全集里的
-/// `RepeatModeChange` / `PlaylistItem*` / `QualityChange` 等
-/// 用不到,不先建(用不到的不解/不建,同 8.1 精神)。
+/// Progress 上报的事件名(API_CONTRACT.md 5.2)。只建模 LumaPlayer 实际会用到的映射,
+/// 官方全集里的 `RepeatModeChange` / `PlaylistItem*` / `QualityChange` 等用不到,不建(同 8.1 精神)。
 enum PlaybackEventName: String, Sendable, Equatable {
     case timeUpdate = "TimeUpdate"
     case pause = "Pause"
