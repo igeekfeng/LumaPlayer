@@ -1,11 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 百度文件名 → 元数据的**本地合成**(纯函数)。
-///
-/// 这是「百度也有 Emby 观感」的核心一步:百度只给文件名,
-/// 标题 / 年份 / 封面全靠本地合成 —— ⛔ 不联网刮削、⛔ 不硬造简介
-/// (`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+/// 百度文件名 → 元数据的本地合成(纯函数)。⛔ 不联网刮削、⛔ 不硬造简介。
 final class BaiduPanMetadataSynthesizerTests: XCTestCase {
 
     private let sourceID = UUID()
@@ -21,8 +17,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(parsed.episode)
     }
 
-    /// ★ 片名里的 4 位数字不能被当成年份。
-    /// 判据是「年份后面必须紧跟发布标记」—— `1917` 后面跟的是 `2019`,不是发布标记。
+    /// 年份后面必须紧跟发布标记:`1917` 后面跟的是 `2019`。
     func testDoesNotMistakeTitleNumberForYear() {
         let parsed = BaiduPanMetadataSynthesizer.parse(
             name: "1917.2019.1080p.WEB-DL.mp4")
@@ -46,7 +41,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(parsed.episode, 12)
     }
 
-    /// 中文字幕 / 语言标记常常**连写成一个 token**(`国语中字`),所以要按「包含」判。
+    /// 语言 / 字幕标记常连写成一个 token(`国语中字`),按「包含」判。
     func testChineseReleaseMarkerStopsTitle() {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "流浪地球.2019.国语中字.mkv")
 
@@ -54,14 +49,13 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(parsed.year, 2019)
     }
 
-    /// `高码率` 这类中文清晰度词也算发布标记 → 标题在它前面截断。
     func testHighBitrateMarkerStopsTitle() {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "某剧.高码率.1080p.mkv")
 
         XCTAssertEqual(parsed.title, "某剧")
     }
 
-    /// 没有任何发布标记时,整个文件名都是标题 —— ⛔ 不为了「看起来像个标题」而截断。
+    /// ⛔ 不为了「看起来像标题」而截断。
     func testTitleWithoutTagsKeepsEverything() {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "我的电影.mp4")
 
@@ -82,8 +76,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(synthesized[0].cover)
     }
 
-    /// ⛔ 图片与 `.nfo` 不单独成卡 —— 本 App 是播放器不是图库。
-    /// 否则一个 1 部片 + 1 张封面的目录会变成两张卡。
+    /// ⛔ 图片与 `.nfo` 不单独成卡(播放器不是图库)。
     func testImagesAndSidecarsDoNotBecomeCards() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -107,7 +100,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.cover?.fsID, 99)
     }
 
-    /// 同名图优先于目录级封面(`poster.jpg`)
     func testSameNameImageBeatsDirectoryPoster() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -128,7 +120,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.cover?.fsID, 50)
     }
 
-    /// 大写的 `Poster.JPG` 也得认 —— 网盘里大小写不受我们控制。
+    /// 网盘里大小写不受我们控制。
     func testCoverMatchingIsCaseInsensitive() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("Movie.MKV", fsID: 1), makeFile("Poster.JPG", fsID: 50)],
@@ -137,7 +129,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.cover?.fsID, 50)
     }
 
-    /// 配不到封面就**如实**留空(UI 降级成图标卡),⛔ 不塞一张假的占位图。
+    /// 如实留空(UI 降级成图标卡),⛔ 不塞假占位图。
     func testNoCoverWhenDirectoryHasNoImage() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("movie.mkv", fsID: 1), makeFile("other.txt", fsID: 2)],
@@ -147,7 +139,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(synthesized.first?.item.poster)
     }
 
-    /// 剧集(文件名带 SxxExx)在条目上要标成 `.episode`
     func testEpisodeFileBecomesEpisodeItem() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("Show.S01E02.1080p.mkv", fsID: 1)],
@@ -166,8 +157,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
 
     // MARK: - 剧集文件夹结构(目录名是剧名,文件名只是集号)
 
-    /// ★ `琅琊榜/01.mp4` 这类存法:标题取目录名,集号单独记。
-    /// 否则「01」会被当电影名拿去搜 TMDB,配回来的必然是别的片。
+    /// `琅琊榜/01.mp4`:否则「01」会被当片名去搜 TMDB。
     func testNumberedFilesInFolderAdoptFolderNameAsSeries() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -179,12 +169,11 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.title), ["琅琊榜", "琅琊榜"])
         XCTAssertEqual(synthesized.map(\.item.kind), [.episode, .episode])
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
-        // 从目录结构解析出来的,照样算「有元数据」,刮削才会去问 TMDB
+        // 照样算「有元数据」,刮削才会去问 TMDB
         XCTAssertEqual(synthesized.first?.item.metadataOrigin, .filename)
     }
 
-    /// ⛔ 孤零零一个 `300.mp4` 不能变成「《Movies》第 300 集」—— 那是配错片。
-    /// 目录里**成串**的数字才是剧集的特征。
+    /// ⛔ 孤零零一个 `300.mp4` 不能变成「第 300 集」;目录里成串的数字才是剧集。
     func testSingleNumberedFileKeepsItsOwnTitle() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("300.mp4", fsID: 1, inDirectory: "Movies")],
@@ -195,7 +184,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(synthesized.first?.item.episodeNumber)
     }
 
-    /// 文件名带明确集标记但没带标题(`E01.mp4` / `第02集.mp4`)也借目录名。
     func testEpisodeMarkerWithoutTitleAdoptsFolderName() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -208,8 +196,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
 
-    /// ★ `47-4K.高码率.mkv` 这类「集号-发布标记」存法:同目录成串时借目录名当剧名,
-    /// 集号单独记。⛔ 否则「47」会被当电影名拿去搜 TMDB,配回来的必然是别的片。
+    /// `47-4K.高码率.mkv`:同目录成串时借目录名当剧名,否则「47」会被当片名去搜 TMDB。
     func testEpisodeWithReleaseTagsAdoptsFolderName() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -224,8 +211,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.item.metadataOrigin, .filename)
     }
 
-    /// ⛔ 孤零零一个 `300.1080p.BluRay.mkv` 不能变成「第 300 集」——
-    /// 它与 `47-4K.高码率.mkv` 结构一样,靠**同目录成串**区分(见 `bareEpisodeNumber`)。
+    /// 与 `47-4K.高码率.mkv` 结构一样,靠同目录成串区分(见 `bareEpisodeNumber`)。
     func testSingleEpisodeWithReleaseTagsStaysMovie() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("300.1080p.BluRay.mkv", fsID: 1, inDirectory: "Movies")],
@@ -236,7 +222,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(synthesized.first?.item.episodeNumber)
     }
 
-    /// 文件名自己认得出剧名时**以文件名为准**,⛔ 不拿目录名盖掉它。
+    /// ⛔ 不拿目录名盖掉文件名自带的剧名。
     func testFileWithOwnTitleKeepsItInsideEpisodeFolder() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -250,7 +236,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized[2].item.episodeNumber, 9)
     }
 
-    /// 集号只认 1–3 位纯数字:4 位是年份的形状(`2012.mp4` 是一部电影)。
+    /// 4 位是年份的形状(`2012.mp4` 是一部电影)。
     func testBareEpisodeNumberOnlyAcceptsShortDigits() {
         XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("01.mp4"), 1)
         XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("12.mkv"), 12)
@@ -258,8 +244,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.bareEpisodeNumber("movie.mp4"))
     }
 
-    /// ★ 「集号 + 发布标记」也当「整个文件名就是集号」:`47-4K.高码率.mkv` → 47。
-    /// 判据是集号后面**紧跟**发布标记(与 `parse` 一致),所以连写的 `WEB-DL` 也不影响。
+    /// 集号后面紧跟发布标记(与 `parse` 一致),连写的 `WEB-DL` 也不影响。
     func testBareEpisodeNumberAcceptsEpisodeFollowedByReleaseTags() {
         XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("47-4K.高码率.mkv"), 47)
         XCTAssertEqual(BaiduPanMetadataSynthesizer.bareEpisodeNumber("01-4K.高码率.mkv"), 1)
@@ -274,8 +259,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
 
     // MARK: - 季文件夹(剧名取祖父目录,季号取父目录)
 
-    /// ★ `琅琊榜/第13季/01.mp4`:剧名取**祖父**目录,季号取**父**目录。
-    /// 这部剧有 13 季,季号判错就会拿第 1 季的分集剧照去配第 13 季的文件。
+    /// 剧有 13 季时季号判错,就会拿第 1 季的分集剧照去配第 13 季的文件。
     func testSeasonFolderTakesGrandparentAsSeriesAndParentAsSeason() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -290,8 +274,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
 
-    /// 「集号-发布标记」与季文件夹叠加:`剧名/第13季/01-4K.高码率.mkv`
-    /// → 剧名取祖父目录、季号取父目录、集号取文件名。
     func testEpisodeWithReleaseTagsInsideSeasonFolder() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -305,7 +287,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
 
-    /// `Season 13` 这种英文写法同样识别,剧名照取祖父目录。
     func testEnglishSeasonFolderIsRecognized() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -318,8 +299,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.seasonNumber), [13, 13])
     }
 
-    /// 平铺存法(没有季文件夹、文件名也没写季号)→ 季号**留 nil**,
-    /// ⛔ 不在合成器里填 1 冒充(拿哪一季去问由刮削层决定)。
+    /// ⛔ 合成器不填 1 冒充,拿哪一季去问由刮削层决定。
     func testFlatFolderLeavesSeasonUnknown() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [
@@ -332,7 +312,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.map(\.item.episodeNumber), [1, 2])
     }
 
-    /// 文件名里的 `SxxExx` 自己带季号 → 直接用它(⛔ 不因为父目录不是季文件夹就丢掉)。
+    /// ⛔ 不因为父目录不是季文件夹就丢掉文件名里的季号。
     func testSeasonNumberFromFileNameIsKept() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("Show.S02E07.1080p.mkv", fsID: 1, inDirectory: "剧集")],
@@ -342,9 +322,8 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(synthesized.first?.item.episodeNumber, 7)
     }
 
-    /// 季文件夹名识别:只认**整个目录名就是季标记**的写法。
+    /// 只认整个目录名就是季标记的写法。
     func testSeasonNumberFromDirectoryNameFormats() {
-        // 中文
         XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第13季"), 13)
         XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第2季"), 2)
         // 英文:空格 / 无空格 / `.` `_` `-` 都当分隔符
@@ -364,11 +343,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season"))
     }
 
-    /// ★ **季号 0 是特别篇,不是「没解析出来」**(Q43)。
-    ///
-    /// `docs/TMDB_API.md` §7:TMDB 的第 0 季就是特别篇,标准命名库把特别篇放在
-    /// `S0` / `Season 00` / `第0季`。所以这里必须返回 `0`,⛔ 不能返回 `nil`
-    /// —— 一返回 `nil`,`seriesFolder` 就把剧名认成那个季文件夹名(`S0`)。
+    /// 季号 0 是特别篇(Q43、`docs/TMDB_API.md` §7),⛔ 不能返回 nil:否则 `seriesFolder` 会把剧名认成 `S0`。
     func testSeasonZeroIsRecognizedAsSpecials() {
         XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "S0"), 0)
         XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "Season 0"), 0)
@@ -376,10 +351,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: "第0季"), 0)
     }
 
-    /// ★ 季文件夹是**强信号**:哪怕里面只有一集,也要认出剧名与季号。
-    ///
-    /// ⛔ 之前 `looksLikeEpisodeSequence` 的闸门也套在季文件夹分支上,于是
-    /// `一拳超人/S0/01.mp4`(特别篇只有一集)会被判成「剧名 = S0」—— 刮削直接配错片。
+    /// 季文件夹是强信号:哪怕只有一集(`一拳超人/S0/01.mp4`),也不能套「成串」闸门把剧名判成 `S0`。
     func testSingleEpisodeInSeasonDirectoryStillResolvesSeriesTitle() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("01.mp4", fsID: 1, inDirectory: "一拳超人/S0")],
@@ -393,8 +365,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
 
     // MARK: - 显式 TMDB id(`{tmdbid-63926}`)
 
-    /// 认标准命名里的 `{tmdbid-N}` / `[tmdbid-N]` / 裸写,键名 `tmdbid` 与 `tmdb`,
-    /// 分隔符 `-` 与 `=` —— 并把该标签从名称里剥掉。
+    /// `{tmdbid-N}` / `[tmdbid-N]` / 裸写,键名 `tmdbid` / `tmdb`,分隔符 `-` / `=`;标签要从名称里剥掉。
     func testExtractsAndStripsExplicitTMDBID() {
         let braced = BaiduPanMetadataSynthesizer.extractExplicitTMDBID(
             in: "一拳超人 (2015) {tmdbid-63926}")
@@ -414,7 +385,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(BaiduPanMetadataSynthesizer.extractExplicitTMDBID(in: "{tmdbid-}"))
     }
 
-    /// 文件名里的标签不参与标题,id 被解析出来。
     func testParseStripsTagFromFileName() {
         let parsed = BaiduPanMetadataSynthesizer.parse(
             name: "Fight.Club.1999.{tmdbid-550}.1080p.BluRay.mkv")
@@ -424,7 +394,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(parsed.year, 1999)
     }
 
-    /// 目录卡片:目录名里的 id 进 `tmdbID`,展示名剥掉标签(标签是元数据,不是片名)。
+    /// 标签是元数据,不是片名。
     func testFolderCardCarriesExplicitTMDBID() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile("一拳超人 (2015) {tmdbid-63926}", fsID: 1, isDirectory: true)],
@@ -436,8 +406,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(item?.title, "一拳超人 (2015)")
     }
 
-    /// ★ 剧集文件:文件名自己认不出干净剧名(中英混排 + 年份),但**祖先目录**带显式 id
-    /// → 剧名与 id 都取自那个目录,季集仍按文件名。
+    /// 文件名认不出干净剧名(中英混排 + 年份)时,剧名与 id 取自带标签的祖先目录,季集仍按文件名。
     func testEpisodeBorrowsExplicitIDFromAnnotatedAncestor() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile(
@@ -454,7 +423,6 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(item?.episodeNumber, 12)
     }
 
-    /// 文件名没写季号时,季号从祖先目录与文件之间的**季文件夹**(`Season 1`)取。
     func testAnnotatedAncestorSeasonFromSeasonFolder() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile(
@@ -469,8 +437,7 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertEqual(item?.episodeNumber, 1)
     }
 
-    /// ⛔ 带标签的祖先目录只对**剧集文件**生效:认不出集号的普通视频不借它的 id,
-    /// 免得把预告片 / 花絮当成正片配上那部剧的海报。
+    /// 认不出集号的普通视频不借祖先的 id,免得预告片 / 花絮配上那部剧的海报。
     func testAnnotatedAncestorDoesNotApplyToNonEpisode() {
         let synthesized = BaiduPanMetadataSynthesizer.synthesize(
             files: [makeFile(

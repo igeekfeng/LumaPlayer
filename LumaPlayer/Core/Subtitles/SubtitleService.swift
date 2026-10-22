@@ -1,14 +1,11 @@
 import Foundation
 import os
 
-/// 一条**在线字幕**的搜索结果(来源无关的形态)。
-///
-/// UI 只认它,⛔ 不认 assrt 的 JSON 字段名 —— 以后换 / 加字幕站时,
-/// 改的是 `SubtitleService` 的映射,不是面板。
+/// 在线字幕搜索结果(来源无关)。UI 只认它,⛔ 不认 assrt 的 JSON 字段名。
 struct SubtitleSearchResult: Sendable, Equatable, Identifiable {
     let id: Int
     let title: String
-    /// 字幕对应的视频文件名(帮用户判断是不是自己这一版)
+    /// 字幕对应的视频文件名(帮用户判断版本)
     let videoName: String?
     let language: String?
     let format: String?
@@ -16,7 +13,7 @@ struct SubtitleSearchResult: Sendable, Equatable, Identifiable {
     let uploadTime: String?
     let voteScore: Int
 
-    /// 副标题行:`语言 · 格式 · 字幕组`,空项跳过;全空返回 nil(不显示空括号)。
+    /// `语言 · 格式 · 字幕组`,空项跳过;全空返回 nil。
     var detailLine: String? {
         let parts = [language, format, releaseSite].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -37,16 +34,12 @@ extension SubtitleSearchResult {
     }
 }
 
-/// 在线字幕的编排层:凭据 → 搜索 → 挑文件 → 下载 → 落盘。
+/// 在线字幕编排:凭据 → 搜索 → 挑文件 → 下载 → 落盘。不碰 mpv(挂载在 `PlayerViewModel`),不碰 UI。
 ///
-/// 目前只有 **assrt(伪射手)** 一个来源。⛔ 现在不抽 `SubtitleProvider` 协议:
-/// 一个实现撑不起协议,等真的接第二个站(OpenSubtitles 之类)时按两个真实差异再抽,
-/// 免得先编一层谁都不合身的抽象。
-///
-/// 职责边界:不碰 mpv(挂载在 `PlayerViewModel`),不碰 UI。
+/// 目前只有 assrt 一个来源。⛔ 接第二个站之前不抽 `SubtitleProvider` 协议。
 actor SubtitleService {
 
-    /// assrt 的归因要求(文档原话:请在合适的位置添加来源说明及本站链接)。
+    /// assrt 要求在合适位置注明来源及链接。
     static let attribution = "字幕服务由 assrt.net 提供"
     static let attributionURL = URL(string: "https://assrt.net")!
 
@@ -72,18 +65,15 @@ actor SubtitleService {
 
     // MARK: - 下载
 
-    /// 取一条字幕并落进容器,返回可以直接 `sub-add` 的本地文件。
+    /// 返回可以直接 `sub-add` 的本地文件。
     func download(_ result: SubtitleSearchResult) async throws -> SubtitleFileStore.Stored {
         try await download(assrtID: result.id)
     }
 
-    /// 按 assrt 字幕 id 取一条字幕(自动挂上次用的字幕、缓存被清掉时也走这里)。
-    ///
-    /// 顺序:**先查本地缓存**(命中就零请求)→ 详情 → 挑文本文件 → 下载单文件 → 转码落盘。
-    /// 单文件下载失败(assrt 的服务端解压会坏,见 `SubtitleArchiveExtractor`)时,
-    /// 改下同一次详情里的**整包**、本地解压,优先取同名的那个文件;
-    /// `filelist` 为空、只有整包时直接走整包。
-    /// ⚠️ 详情里的地址是**一次性**的,所以缓存的是**文件**而不是地址。
+    /// 先查本地缓存(命中零请求)→ 详情 → 挑文本文件 → 下载单文件 → 转码落盘。
+    /// 单文件下载失败(assrt 服务端解压会坏,见 `SubtitleArchiveExtractor`)时改下整包本地解压,
+    /// 优先取同名文件;`filelist` 为空时直接走整包。
+    /// ⚠️ 详情里的地址是一次性的,所以缓存的是文件而不是地址。
     func download(assrtID id: Int) async throws -> SubtitleFileStore.Stored {
         let group = Self.cacheGroup(assrtID: id)
         if let cached = try await store.cachedFile(group: group) {
@@ -94,8 +84,7 @@ actor SubtitleService {
         let detail = try await client.detail(id: id, token: token)
 
         guard let picked = Self.pick(detail.files) else {
-            // 列表里有文件却没有文本字幕(只有图形字幕):如实拒绝,⛔ 不偷偷下载一个挂不上的东西。
-            // 整包里装的也是同一批文件,不必再下。
+            // 有文件却没有文本字幕(只有图形字幕):如实拒绝,整包里也是同一批文件
             guard detail.files.isEmpty, let archiveURL = detail.archiveURL else {
                 throw AssrtError.noTextFile
             }
@@ -117,11 +106,10 @@ actor SubtitleService {
         return stored
     }
 
-    /// 一条 assrt 字幕在缓存里的组名(`SubtitleFileStore` 的目录布局)
+    /// `SubtitleFileStore` 里的组名
     static func cacheGroup(assrtID: Int) -> String { "assrt-\(assrtID)" }
 
-    /// 下整包、本地解压、挑一个落盘:包里有与 `preferredFileName` 同名的就取它
-    /// (与单文件那条路拿到的是同一份),没有就按格式优先级挑。
+    /// 有与 `preferredFileName` 同名的就取它,没有就按格式优先级挑。
     private func downloadFromArchive(
         _ archiveURL: URL, preferredFileName: String?, group: String
     ) async throws -> SubtitleFileStore.Stored {
@@ -147,13 +135,7 @@ actor SubtitleService {
         return token
     }
 
-    /// 从文件列表里挑一条能挂的文本字幕。
-    ///
-    /// 优先级 `srt > ass > ssa > vtt`(见 `SubtitleFormats.downloadableOrder`)。
-    /// ⛔ 在线这一路**不收 `.sub`**:站上的 `.sub` 多半是 VobSub 的配套图形文件
-    /// (与 `.idx` 成对),挂上去只会失败;本地导入那条路仍然认它(MicroDVD)。
-    ///
-    /// `internal` 而非 `private`:单测直接验优先级,不必为了测它去搭一整套下载。
+    /// 按 `SubtitleFormats.downloadableOrder` 挑一条能挂的文本字幕(⛔ 不收 `.sub`,理由见那里)。
     static func pick(_ files: [AssrtSubtitleFile]) -> (file: AssrtSubtitleFile, index: Int)? {
         let candidates = files.enumerated().filter {
             SubtitleFormats.downloadableOrder.contains(

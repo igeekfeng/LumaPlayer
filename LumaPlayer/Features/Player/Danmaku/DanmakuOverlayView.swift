@@ -2,30 +2,15 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-/// 弹幕渲染层:叠在视频上、控制层下,⛔ 不接收点击(`allowsHitTesting(false)` 由挂载处给)。
+/// 弹幕渲染层:叠在视频上、控制层下,⛔ 不接收点击。
 ///
-/// ## 为什么不交给 mpv
+/// ⛔ 不交给 mpv(ASS):改外观要重载字幕轨,还会占掉用户的字幕轨(`docs/DANMAKU.md` §4)。
 ///
-/// mpv 的字幕 / OSD 只能画 ASS,弹幕要先转成整份 ASS 再 `sub-add`;那样改字号 / 透明度 /
-/// 显示区域 / 偏移都得重新生成并重载字幕轨,还会占掉用户正在用的字幕轨。
-/// 自己画一层则所有外观参数都能即时生效(`docs/DANMAKU.md` §4)。
+/// ⛔ 不用 SwiftUI `Canvas` 每帧重画(主线程光栅化,120 Hz 屏上掉到约 40 帧)。
+/// 每条出场时预渲染位图(`DanmakuSprite`),每帧只改图层位置,按 displayLink 的 `targetTimestamp` 算。
 ///
-/// ## 为什么是 CALayer + displayLink,不是 SwiftUI `Canvas`
-///
-/// 最早用 `TimelineView` + `Canvas`:每帧在主线程把整窗口连同每条文字的模糊阴影重新光栅化,
-/// 实测 120 Hz 屏上 30–40 条在场时只剩约 40 帧且间隔在 8 / 33 / 42 ms 之间乱跳,滚动一顿一顿
-/// (`DanmakuFrameDiagnostics` 取证)。现在每条出场时预渲染一次位图(`DanmakuSprite`),
-/// 之后每帧只改图层位置,由 Core Animation 在 GPU 上合成;位置按 displayLink 的
-/// `targetTimestamp`(这一帧**上屏**的时刻)算,每帧步长均匀。
-///
-/// ## 时间从哪来
-///
-/// 播放位置 `positionSeconds` 只有 5 Hz(`MPVPlayer` 节流 0.2 s),直接用会一跳一跳。
-/// `DanmakuClock` 在两次位置更新之间按倍速外推;新位置到来时小误差靠微调速度连续吸收(位置不跳)、
-/// 大误差(seek)直接对齐。
-/// 暂停时时间轴停住,displayLink 也停。
-///
-/// 滚动顺不顺的逐帧取证(帧间隔、掉帧、时钟跳动)见 `DanmakuFrameDiagnostics`,默认关闭。
+/// `positionSeconds` 只有 5 Hz,由 `DanmakuClock` 外推。暂停时时间轴与 displayLink 都停。
+/// 逐帧诊断见 `DanmakuFrameDiagnostics`。
 struct DanmakuOverlayView: View {
     let controller: DanmakuController
     let settings: DanmakuDisplaySettings
@@ -64,16 +49,12 @@ private struct DanmakuLayerRepresentable: NSViewRepresentable {
     }
 }
 
-/// 弹幕图层的承载视图:一个容器层 + 每条在场弹幕一个子层(内容是预渲染位图)。
-///
-/// 图层按「排版结果里的下标」缓存;`DanmakuController.layoutGeneration` 变了(换弹幕库、
-/// 字号 / 窗口尺寸 / 显示区域变了)或屏幕像素密度变了,整批丢弃重建。
+/// 容器层 + 每条在场弹幕一个子层。子层按排版下标缓存;`layoutGeneration` 或像素密度变了整批重建。
 final class DanmakuLayerView: NSView {
 
     /// `settings.fontSize` 以 1080 高的画面为基准
     private static let referenceHeight: CGFloat = 1080
     private static let minimumFontSize: CGFloat = 12
-    /// 回收池上限:够同屏峰值复用,不无限囤
     private static let poolLimit = 128
 
     private var controller: DanmakuController
@@ -102,14 +83,13 @@ final class DanmakuLayerView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
-        // 本视图只在代码里创建
         fatalError("init(coder:) has not been implemented")
     }
 
     /// 自上而下排版,与 `DanmakuLayout` 的行号方向一致
     override var isFlipped: Bool { true }
 
-    /// 不吃点击(双保险,挂载处另有 `allowsHitTesting(false)`)
+    /// 双保险,挂载处另有 `allowsHitTesting(false)`
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     // MARK: - 输入
@@ -128,14 +108,14 @@ final class DanmakuLayerView: NSView {
         self.speed = speed.isFinite && speed > 0 ? speed : 1
         container.opacity = Float(settings.opacity)
 
-        // 只在三项真变了时同步时钟:父视图因别的原因刷新时位置还是旧值,拿它去「校正」会把时钟往回拽
+        // 只在三项真变了时同步时钟:父视图因别的原因刷新时位置是旧值,会把时钟往回拽
         let clockInput = (position: position, isPaused: isPaused, speed: speed)
         if lastClockInput.map({ $0 != clockInput }) ?? true {
             clock.update(position: position, isPaused: isPaused, speed: speed, now: CACurrentMediaTime())
             lastClockInput = clockInput
         }
         displayLink?.isPaused = isPaused
-        // 暂停时没有逐帧刷新:seek / 改外观 / 拖窗口都要手动画一帧
+        // 暂停时没有逐帧刷新,手动画一帧
         if isPaused { renderFrame(at: CACurrentMediaTime()) }
     }
 
@@ -187,7 +167,7 @@ final class DanmakuLayerView: NSView {
         removeAllSprites()
     }
 
-    /// 跑满屏幕的最高刷新率(ProMotion 120 Hz;系统按功耗策略可能再降)
+    /// 跑满屏幕最高刷新率(系统按功耗策略可能再降)
     private func updatePreferredFrameRate() {
         guard let displayLink, let fps = window?.screen?.maximumFramesPerSecond, fps > 0 else { return }
         let rate = Float(fps)
@@ -212,8 +192,7 @@ final class DanmakuLayerView: NSView {
             windowVisible: window?.occlusionState.contains(.visible) ?? false))
     }
 
-    /// 把 `hostTime` 时刻(宿主时钟,= `CACurrentMediaTime`)该在场的弹幕摆好。
-    /// 返回本帧用的时间与条数(给诊断);画面尺寸为 0 时返回 nil。
+    /// `hostTime` 与 `CACurrentMediaTime` 同基。返回值给诊断用;画面尺寸为 0 时返回 nil。
     @discardableResult
     private func renderFrame(at hostTime: Double) -> (time: Double, velocity: Double, visibleCount: Int)? {
         let size = bounds.size
@@ -307,7 +286,7 @@ final class DanmakuLayerView: NSView {
     }
 }
 
-/// 一条弹幕的图层;`margin` 是预渲染位图四周给描边留的白(pt),摆放时把行框原点换算成位图原点。
+/// `margin`:位图四周给描边留的白(pt),摆放时把行框原点换算成位图原点。
 private final class DanmakuSpriteLayer: CALayer {
     var margin: CGFloat = 0
 
@@ -328,33 +307,24 @@ private final class DanmakuSpriteLayer: CALayer {
     }
 }
 
-/// 弹幕时间轴的时钟:在两次播放位置更新之间按倍速外推(见 `DanmakuOverlayView` 的注释)。
+/// 弹幕时间轴时钟:两次播放位置更新之间按倍速外推。时间基是 `CACurrentMediaTime`(秒)。
 ///
-/// 时间基是宿主时钟(`CACurrentMediaTime`,秒),与 displayLink 的 `targetTimestamp` 同源。
-///
-/// ## 小误差怎么收:微调速度,不挪位置
-///
-/// 新位置到来时,锚点取**当前外推值**(位置连续、不跳),误差在 `slewDuration` 内匀速吸收:
-/// 这段时间外推速度 = 倍速 + 误差 / 吸收时长,吸收完回到倍速,不会过冲。
-/// 吸收时速度最多偏离倍速 `maxSlewRatio`(误差大就拉长吸收时间),肉眼看不出变速。
-/// 早先是每次更新直接把锚点挪 20% 误差:位置每秒跳 4–5 次,每次约 1pt(诊断实测),盯着字看会一顿一顿。
-///
-/// 误差 ≥ `snapThreshold`(seek)、或刚从暂停恢复时直接对齐。
+/// 小误差微调速度吸收,⛔ 不直接挪锚点(位置会一跳一跳):锚点取当前外推值,误差在吸收窗口内匀速吸收,
+/// 速度最多偏离倍速 `maxSlewRatio`(误差大就拉长窗口)。
+/// 误差 ≥ `snapThreshold`(seek)或刚从暂停恢复时直接对齐。
 @MainActor
 final class DanmakuClock {
     private var anchorTime = 0.0
     private var anchorHostTime = 0.0
     private var rate = 1.0
     private var isPaused = true
-    /// 正在吸收的误差(秒,弹幕时间)与吸收时长(秒,宿主时间)
+    /// 正在吸收的误差(弹幕时间)与吸收时长(宿主时间),秒
     private var slewError = 0.0
     private var slewWindow = 0.0
 
-    /// 误差小于它视为抖动,微调速度吸收;大于它视为 seek,直接对齐
     nonisolated static let snapThreshold = 0.5
-    /// 小误差的吸收时长(秒);位置约每 0.2–0.3 秒来一次,取它的几倍,新误差接力时速度变化平缓
+    /// 秒;取位置更新间隔(0.2–0.3s)的几倍,新误差接力时速度变化平缓
     static let slewDuration = 1.0
-    /// 吸收误差时外推速度相对倍速的最大偏离
     static let maxSlewRatio = 0.1
 
     func update(position: Double, isPaused paused: Bool, speed: Double, now: Double) {

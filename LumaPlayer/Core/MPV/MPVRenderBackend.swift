@@ -1,48 +1,34 @@
 import Foundation
 
-/// mpv 渲染后端(render.h 的 `MPV_RENDER_PARAM_BACKEND`)。
+/// mpv 渲染后端(render.h `MPV_RENDER_PARAM_BACKEND`)。`rawValue` 即统计里记的 `renderBackend`。
 ///
-/// - `gpuNext`:libplacebo,能正确处理 Dolby Vision(Profile 5)/ HDR;
-///   代价是 GPU 负载明显高于 legacy(`KNOWN_ISSUES.md` Q42)。
-/// - `legacy`:mpv 默认的 `gpu` 渲染器(不传 BACKEND 参数),不处理 DV 的 RPU,
-///   DV Profile 5 会发紫发绿;HDR10 / HLG 有它自己的色调映射,颜色是对的。
-///
-/// `rawValue` 即统计里 `renderBackend` 记的名字。
+/// - `gpuNext`:libplacebo,正确处理 Dolby Vision Profile 5 / HDR,GPU 负载明显更高(Q42)。
+/// - `legacy`:mpv 默认 `gpu`(不传 BACKEND),不处理 DV RPU,DV P5 会发紫发绿;HDR10 / HLG 颜色正确。
 enum MPVRenderBackend: String, Sendable, Equatable {
     case gpuNext = "gpu-next"
     case legacy = "gpu"
 }
 
-/// 渲染后端策略(设置 →「播放 → 色彩」)。默认 `automatic`。
+/// 渲染后端策略。默认 `automatic` 按片源选:只有少数 DV 片源需要 gpu-next,一律开着太耗电。
 ///
-/// 为什么默认按片源选、而不是一律 gpu-next:需要 gpu-next 的只有少数 DV 片源,
-/// 一律开着等于让所有 SDR / HDR10 片子都多付几倍 GPU 能耗。
-///
-/// 「按片源」的判据来自 **mpv 自己** demux 出的 `track-list/N/dolby-vision-profile`,
-/// 不用 Emby 的 MediaStream 字段 —— 那些字段未在 `API_CONTRACT.md` 核实(CLAUDE.md 硬规则 1)。
-/// 时机是 `on_preloaded` hook:轨道已知、VO 还没建,此时换后端不需要重开流
-/// (见 `MPVPlayer.handlePreloadedHook`)。
+/// 判据用 mpv 自己 demux 出的 `track-list/N/dolby-vision-profile`,⛔ 不用 Emby MediaStream 字段
+/// (未在 `API_CONTRACT.md` 核实)。在 `on_preloaded` hook 判:轨道已知、VO 未建,换后端不用重开流
+/// (`MPVPlayer.handlePreloadedHook`)。
 enum MPVRenderBackendPolicy: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 
-    /// 先建 legacy;demux 出 DV 配置记录时在 VO 建立前换成 gpu-next
     case automatic
-    /// 一律 gpu-next(旧版「杜比视界 / HDR 兼容渲染」开着的行为)
     case gpuNext
-    /// 一律 legacy(gpu-next 走的是上游未合并的 draft PR,万一让别的片源出问题时的退路)
+    /// gpu-next 来自上游未合并的 draft PR,出问题时的退路
     case legacy
 
-    /// GL 上下文挂上时先建的后端。`automatic` 先建省电的 legacy,
-    /// 因为这时还不知道片源是什么。
+    /// GL 上下文挂上时先建的;此时片源未知,`automatic` 先建省电的 legacy。
     var initialBackend: MPVRenderBackend {
         self == .gpuNext ? .gpuNext : .legacy
     }
 
-    /// 文件的轨道已知后应使用的后端。
-    ///
-    /// `automatic` 只看「有没有带 DV 配置记录的真视频轨」(封面图不算);
-    /// HDR10 / HLG 不切 —— legacy 处理得了,切过去只是多耗电。
-    /// 此时 mpv 还没选轨(`on_preloaded` 在选轨之前),所以看的是全部视频轨。
+    /// `automatic` 只看有没有带 DV 配置记录的真视频轨(封面图不算),HDR10 / HLG 不切。
+    /// `on_preloaded` 时 mpv 尚未选轨,所以看全部视频轨。
     func backend(for tracks: [MPVTrack]) -> MPVRenderBackend {
         switch self {
         case .gpuNext: return .gpuNext
@@ -55,7 +41,6 @@ enum MPVRenderBackendPolicy: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 设置页显示名
     var label: String {
         switch self {
         case .automatic: "自动(按片源)"
@@ -64,7 +49,7 @@ enum MPVRenderBackendPolicy: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 设置页 footer 里的一句解释
+    /// 设置页 footer
     var detail: String {
         switch self {
         case .automatic:

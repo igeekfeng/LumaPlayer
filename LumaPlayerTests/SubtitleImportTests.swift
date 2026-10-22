@@ -2,14 +2,8 @@ import CoreFoundation
 import XCTest
 @testable import LumaPlayer
 
-/// 本地外挂字幕(2026-10-21):编码归一 + 复制进容器。
-///
-/// 分两层验:
-/// - `SubtitleTextDecoder`:纯函数,直接喂字节;
-/// - `SubtitleFileStore`:临时目录,验「扩展名闸门 / 大小上限 / 编码转换 / 落盘」。
-///
-/// ⛔ 验不到的部分:系统文件选择面板(`fileImporter`)与沙箱授权弹窗、
-/// mpv 是否真的把这条轨画出来 —— 都要真机手验(见 `KNOWN_ISSUES.md` B 节)。
+/// 本地外挂字幕:`SubtitleTextDecoder`(编码归一,纯函数)+ `SubtitleFileStore`(扩展名闸门 / 大小上限 / 编码转换 / 落盘)。
+/// ⛔ 验不到:文件选择面板与沙箱授权、mpv 是否真画出这条轨(要真机,`KNOWN_ISSUES.md` B 节)。
 final class SubtitleImportTests: XCTestCase {
 
     private var directory: URL!
@@ -71,8 +65,7 @@ final class SubtitleImportTests: XCTestCase {
     }
 
     func testBinaryGarbageIsKeptAsIs() {
-        // 0x81 在 GB18030 / BIG5 里是双字节首字节,但后面跟的 0x20 / 0xFF 都接不上;
-        // 又没有 NUL 之类能被误认成 UTF-16 的特征 —— 三种编码都解不出
+        // 0x81 是 GB18030 / BIG5 的双字节首字节,但后面的 0x20 / 0xFF 接不上;又没有像 UTF-16 的 NUL —— 三种编码都解不出
         let data = Data([0x81, 0x20, 0xFF])
 
         let result = SubtitleTextDecoder.normalize(data)

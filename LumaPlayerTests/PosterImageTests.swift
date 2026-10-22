@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 @testable import LumaPlayer
 
-/// 图片加载器:计数用的替身(actor,不使用 `@unchecked Sendable`)。
+/// 计数用的图片加载器替身(actor)。
 private actor CountingImageLoader: ImageDataLoading {
     private(set) var callCount = 0
     private let payload: Data
@@ -17,10 +17,7 @@ private actor CountingImageLoader: ImageDataLoading {
     }
 }
 
-/// 海报图片的内存缓存(API_CONTRACT.md 3.3 的缓存 key 规则)。
-///
-/// 缓存 key 必须含 `Tag` 与服务器:两台共享媒体库的服务器 item id 可能相同,
-/// key 不含这些就会互相串图(3.3 的多服务器提醒)。
+/// 海报内存缓存:key 必须含 `Tag` 与服务器(两台共享媒体库的服务器 item id 可能相同,API_CONTRACT.md 3.3)。
 final class PosterImageTests: XCTestCase {
     private let serverA = UUID()
     private let serverB = UUID()
@@ -118,12 +115,11 @@ final class PosterImageTests: XCTestCase {
         let loader = CountingImageLoader(payload: try makeImageData())
         let spec = ImageSpec(serverID: serverA, itemID: "ITEM-1", type: .primary, tag: "TAG-1", maxWidth: 300)
 
-        // 第一个 store:走网络并落盘
         let first = PosterImageStore(loader: loader, disk: disk)
         _ = try await first.image(for: spec)
         let afterFirst = await loader.callCount
 
-        // 第二个 store:内存为空,磁盘必须接住 —— 不再发网络请求
+        // 新 store 内存为空,应由磁盘接住、不发网络
         let second = PosterImageStore(loader: loader, disk: disk)
         _ = try await second.image(for: spec)
         let afterSecond = await loader.callCount
@@ -167,7 +163,6 @@ final class PosterImageTests: XCTestCase {
         let loader = CountingImageLoader(payload: try makeImageData())
         // 不注入磁盘层:纯测内存 LRU
         let store = PosterImageStore(loader: loader)
-        // 填满内存上限
         for index in 0..<PosterImageStore.cacheLimit {
             let spec = ImageSpec(serverID: serverA, itemID: "ITEM-\(index)", type: .primary, tag: "TAG-\(index)", maxWidth: 300)
             _ = try await store.image(for: spec)
@@ -203,7 +198,6 @@ final class PosterImageTests: XCTestCase {
 
     // MARK: - 设置 → 缓存
 
-    /// 设置页看的数字就是磁盘层的真实占用
     @MainActor
     func testDiskUsageReflectsStoredImages() async throws {
         let disk = PosterDiskCache(directory: diskDirectory)
@@ -218,7 +212,7 @@ final class PosterImageTests: XCTestCase {
         XCTAssertEqual(usage?.bytes, payload.count)
     }
 
-    /// 没有磁盘层时占用是 `nil`(设置页据此不显示数字),不是 0
+    /// nil = 没有磁盘层(设置页不显示数字),不是 0
     @MainActor
     func testDiskUsageIsNilWithoutDiskLayer() async throws {
         let store = PosterImageStore(loader: CountingImageLoader(payload: try makeImageData()))
@@ -226,7 +220,6 @@ final class PosterImageTests: XCTestCase {
         XCTAssertNil(usage)
     }
 
-    /// 「清空图片缓存」要清**两层**:内存清了、磁盘也清了,下一次访问重新走网络
     @MainActor
     func testClearAllDropsMemoryAndDisk() async throws {
         let disk = PosterDiskCache(directory: diskDirectory)
@@ -248,7 +241,6 @@ final class PosterImageTests: XCTestCase {
         XCTAssertEqual(calls, 2, "清空后再取同一张图必须重新走网络")
     }
 
-    /// 设置页改上限走的就是磁盘层的 `setByteLimit`
     @MainActor
     func testSetDiskByteLimitThroughStore() async throws {
         let disk = PosterDiskCache(directory: diskDirectory)

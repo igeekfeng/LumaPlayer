@@ -1,10 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 弹幕本地数据的清理:磁盘缓存按 `fetchedAt` 过期删除(`DanmakuCommentCache.cleanUp`)、
+/// 弹幕本地数据清理:磁盘缓存按 `fetchedAt` 过期删除(`DanmakuCommentCache.cleanUp`)、
 /// 删服务器时按前缀删绑定(`DanmakuBindingStore.purge`、`AppContainer.removeSource`)。
-///
-/// 全走临时目录,零网络。
 @MainActor
 final class DanmakuCacheTests: XCTestCase {
 
@@ -97,7 +95,7 @@ final class DanmakuCacheTests: XCTestCase {
         let removed = try await store.purge(keyPrefix: "emby|SERVER-A|")
         XCTAssertEqual(removed, 3)
 
-        // 换实例读盘:确认是落了盘的,不只是内存里删了
+        // 换实例读盘:确认落了盘
         let reopened = DanmakuBindingStore(fileURL: fileURL)
         let a1 = await reopened.episode(for: "emby|SERVER-A|1")
         let a2 = await reopened.episode(for: "emby|SERVER-A|2")
@@ -118,7 +116,7 @@ final class DanmakuCacheTests: XCTestCase {
         XCTAssertEqual(again, 0)
     }
 
-    /// 删服务器时组合根按 `emby|<id>|` 清掉这台的弹幕绑定,别的服务器不动。
+    /// 按 `emby|<id>|` 前缀清,别的服务器不动。
     func testRemovingServerPurgesItsDanmakuBindings() async throws {
         let credentials = CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred")))
         let registry = try ServerRegistry(

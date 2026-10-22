@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 浏览类端点的 URL 与查询串构造
-/// (API_CONTRACT.md 3.2、3.3;参数名一律出自这两节的参数表)。
-///
-/// 纯构造测试,不发网络请求。
+/// 浏览类端点的 URL 与查询串构造(纯构造;参数名出自 API_CONTRACT.md 3.2、3.3 的参数表)。
 final class EmbyRequestBuilderQueryTests: XCTestCase {
     private func makeBuilder() -> EmbyRequestBuilder {
         EmbyRequestBuilder(
@@ -116,7 +113,7 @@ final class EmbyRequestBuilderQueryTests: XCTestCase {
     }
 
     func testImageRequestCarriesAuthHeadersUntilVerified() throws {
-        // 「图片是否需要认证头」未核实(docs/KNOWN_ISSUES.md Q12) → 一律带上(多带无害)
+        // 「图片是否需要认证头」未核实(Q12) → 一律带上(多带无害)
         let request = try makeBuilder().makeRequest(
             for: .image(itemID: "ITEM-1", type: .backdrop, query: EmbyImageQuery(maxWidth: 1360)),
             accessToken: "FAKE_TOKEN_0123456789",

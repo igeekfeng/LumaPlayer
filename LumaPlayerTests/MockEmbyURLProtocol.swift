@@ -1,15 +1,9 @@
 import Foundation
 import os
 
-/// 测试用 URLProtocol:按「scheme + path」返回预设响应,并记录收到的请求。
-///
-/// 目的:让集成测试**零真实网络依赖**。
-///
-/// 静态状态用 `OSAllocatedUnfairLock` 保护:URLProtocol 的回调在任意线程同步执行,
-/// 进不了 actor(不能 await),也 ⛔ 不允许用 `nonisolated(unsafe)`
-/// (CLAUDE.md「并发分层」全项目禁止)。
+/// 测试用 URLProtocol:按「scheme + path」返回预设响应并记录请求,让集成测试零真实网络。
+/// 静态状态用 `OSAllocatedUnfairLock`:URLProtocol 回调在任意线程同步执行、进不了 actor;⛔ 不用 `nonisolated(unsafe)`。
 final class MockEmbyURLProtocol: URLProtocol {
-    /// 预设响应
     struct Stub: Sendable {
         enum Outcome: Sendable {
             case response(statusCode: Int, body: Data?)
@@ -20,12 +14,11 @@ final class MockEmbyURLProtocol: URLProtocol {
         /// 额外的响应头(如 `Content-Range` / `Content-Type`)。默认只给 JSON。
         var headers: [String: String] = [:]
 
-        /// 200 + JSON 字符串
         static func json(_ body: String, statusCode: Int = 200) -> Stub {
             Stub(outcome: .response(statusCode: statusCode, body: Data(body.utf8)))
         }
 
-        /// 只关心状态码(如 401 —— Emby 的鉴权失败响应通常没有 body)
+        /// 如 401:Emby 的鉴权失败响应通常没有 body
         static func status(_ code: Int) -> Stub {
             Stub(outcome: .response(statusCode: code, body: nil))
         }
@@ -40,7 +33,6 @@ final class MockEmbyURLProtocol: URLProtocol {
         }
     }
 
-    /// 记录下来的请求(用于断言请求头与 body)
     struct RecordedRequest: Sendable {
         let method: String
         let url: URL

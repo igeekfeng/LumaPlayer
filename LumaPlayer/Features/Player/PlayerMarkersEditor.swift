@@ -1,16 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// 手动输入片头 / 片尾的表单(播放页「播放选项 › 片头片尾 › 手动输入…」打开)。
+/// 手动输入片头 / 片尾的表单。输入格式见 `PlayerTime.parse`,留空 = 不标这一格。
 ///
-/// 三格:片头起点 / 片头终点 / 片尾起点。每格是文本框 + 「用当前位置」按钮,
-/// 输入接受 `hh:mm:ss` / `mm:ss` / 秒数(见 `PlayerTime.parse`),留空 = 不标这一格。
+/// 保存原始值:逻辑校验(两端齐全、终点晚于起点)只提示不拦保存,中间态要能存下来。
 ///
-/// 保存的是**原始值**,逻辑校验(片头两端齐全、终点晚于起点)只在提示里说,
-/// 不拦保存 —— 用户可能先把起点标好、过一会儿再标终点,中间态要能存下来。
-///
-/// ⚠️ 表体⛔ **不要**读 `viewModel.positionSeconds`:它是每 0.2s 变一次的值。
-/// 「用当前位置」按钮在**点击时**才去读(见 `fieldRow` 的 action),不是渲染依赖。
+/// ⛔ 表体不要读 `viewModel.positionSeconds`(每 0.2s 变一次);「用当前位置」只在点击时读。
 struct PlayerMarkersEditor: View {
     let viewModel: PlayerViewModel
     var onClose: () -> Void
@@ -68,18 +63,12 @@ struct PlayerMarkersEditor: View {
         }
         .frame(width: 460)
         .background(Self.background)
-        // 播放页用 `.environment(\.colorScheme, .dark)` 强制深色,那只改**内容**配色,
-        // ⛔ 不改 sheet 这个新窗口的底色 —— 结果是文字全白、窗口还是浅色,整个面板看不见
-        // (2026-10-12 用户实测)。`preferredColorScheme` 才会把 sheet 窗口本身也设成深色,
-        // 让系统控件(输入框、按钮、分隔线)与底色一致。
+        // 播放页的 `.environment(\.colorScheme, .dark)` 不改 sheet 窗口底色(会白字浅底);
+        // 必须用 `preferredColorScheme` 把 sheet 窗口本身设成深色
         .preferredColorScheme(.dark)
     }
 
-    /// 面板底色。
-    ///
-    /// 深色是**写死的**、不跟随系统外观:播放页固定深色,sheet 却在浅色系统下会拿到浅底,
-    /// 光靠 `preferredColorScheme` 万一没落到窗口上就是白字白底。铺一层不透明的深色兜底,
-    /// 两种情况下都可读。
+    /// 写死的不透明深色兜底:`preferredColorScheme` 没落到窗口上时也不会白字白底。
     private static let background = Color(nsColor: NSColor(white: 0.12, alpha: 1))
 
 
@@ -159,7 +148,7 @@ struct PlayerMarkersEditor: View {
 
     // MARK: - 校验
 
-    /// 一个输入格:空白 = 不标;非空则必须能解析出来。
+    /// 空白 = 不标;非空则必须能解析。
     private struct Field {
         let text: String
         private var trimmed: String { text.trimmingCharacters(in: .whitespaces) }
@@ -176,7 +165,7 @@ struct PlayerMarkersEditor: View {
         introStart.isValid && introEnd.isValid && creditsStart.isValid
     }
 
-    /// 提示:格式错误优先说错;否则说片头填得不完整 / 顺序不对(不拦保存,只提醒「这么填不生效」)。
+    /// 格式错误优先;片头不完整 / 顺序不对只提醒不拦保存。
     private var hintText: String? {
         if !allFieldsValid { return "时间格式不对:用 hh:mm:ss、mm:ss 或秒数。" }
         let start = introStart.seconds

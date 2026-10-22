@@ -1,58 +1,44 @@
 import Darwin
 import Foundation
 
-// 地址规范化 + 本地地址判定,全部是纯函数、零网络(API_CONTRACT.md 1.3)。
-// 公开信息端点探测(`/emby` 前缀判定)在 `ServerConnection.probeServer`。
-//
-// 注意:本文件名 ServerDiscovery 指的是「手动添加服务器时的地址处理」,
-// 不包含局域网自动发现(UDP 7359 属非目标,清单见 README.md「已知限制」)。
+// 手动添加服务器时的地址规范化 + 本地地址判定,纯函数、零网络(API_CONTRACT.md 1.3)。
+// 不含局域网自动发现(UDP 7359 属非目标)。
 
-/// `normalizeServerURL` 的返回值。
-///
-/// 之所以不只返回 URL:局域网 http 回退需要知道 scheme 是不是
-/// 本算法补的 —— 用户明确写了 `https://` 就不得降级(API_CONTRACT.md 1.3、1.4)。
 struct NormalizedServerURL: Sendable, Equatable {
-    /// 规范化后的站点根:无 `/emby` 后缀、无末尾斜杠、无 query/fragment/userinfo
+    /// 站点根:无 `/emby` 后缀、无末尾斜杠、无 query/fragment/userinfo
     let url: URL
-    /// 用户输入里**没有**写 scheme、由本算法补了 `https://`。
-    /// 只有这种情况才允许 API_CONTRACT.md 1.4 的 http 回退。
+    /// 用户没写 scheme、由本算法补了 `https://`。只有这种情况才允许 http 回退(API_CONTRACT.md 1.4)
     let schemeWasInferred: Bool
 }
 
-/// 服务器地址规范化错误(API_CONTRACT.md 1.3)。
 enum ServerURLError: Error, Equatable {
-    /// 字符串无法解析为 URL
     case malformed
-    /// scheme 不是 http / https
+    /// 不是 http / https
     case unsupportedScheme
-    /// 缺少主机名
     case missingHost
 }
 
-/// 用户输入的服务器地址规范化。
-/// 算法步骤与必测用例见 API_CONTRACT.md 1.3(共 10 步,按序执行)。
+/// 步骤与必测用例见 API_CONTRACT.md 1.3,按序执行。
 func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
     // 1. 去除首尾空白
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    // 2. 不含 `://` 时补 https://,并记下 scheme 是推断出来的
+    // 2. 不含 `://` 时补 https://
     let schemeWasInferred = !trimmed.contains("://")
     let candidate = schemeWasInferred ? "https://" + trimmed : trimmed
 
-    // 3. URLComponents 解析
+    // 3. 解析
     guard var components = URLComponents(string: candidate) else {
         throw ServerURLError.malformed
     }
 
-    // 4. scheme 只允许 http / https(小写比较)
+    // 4. scheme 只允许 http / https
     guard let scheme = components.scheme?.lowercased(),
           scheme == "http" || scheme == "https" else {
         throw ServerURLError.unsupportedScheme
     }
 
-    // 5. host 非 nil 且非空字符串
-    // ⚠️ 实现陷阱(API_CONTRACT.md 1.3):`URLComponents(string: "https://")`
-    //    的 host 是空字符串 "" 而不是 nil,`guard let host` 会放过它。
+    // 5. ⚠️ `URLComponents(string: "https://")` 的 host 是 "" 而不是 nil
     guard let host = components.host, !host.isEmpty else {
         throw ServerURLError.missingHost
     }
@@ -60,7 +46,7 @@ func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
     // 6. host 小写化
     components.host = host.lowercased()
 
-    // 7. 端口等于 scheme 默认值(http=80, https=443)时置空
+    // 7. 默认端口置空
     switch (scheme, components.port) {
     case ("http", 80?), ("https", 443?):
         components.port = nil
@@ -68,13 +54,13 @@ func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
         break
     }
 
-    // 8. path 去掉末尾所有 "/"
+    // 8. 去末尾 "/"
     var path = components.path
     while path.hasSuffix("/") {
         path.removeLast()
     }
 
-    // 9. path 以 /emby 结尾(大小写不敏感)时去掉该段
+    // 9. 去掉末尾 /emby(大小写不敏感)
     if path.lowercased().hasSuffix("/emby") {
         path.removeLast("/emby".count)
     }
@@ -84,9 +70,7 @@ func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
     components.query = nil
     components.fragment = nil
 
-    // 11. 丢弃 userinfo(用户名/密码)。1.3 的十步没写这一条,但
-    // CLAUDE.md「安全与隐私」明确「密码不做本地持久化」,
-    // 若保留 `https://user:pass@host` 会把密码写进 UserDefaults,故剥除。
+    // 11.(1.3 之外)丢弃 userinfo:否则 `https://user:pass@host` 会把密码写进 UserDefaults
     components.user = nil
     components.password = nil
 
@@ -96,13 +80,11 @@ func normalizeServerURL(_ input: String) throws -> NormalizedServerURL {
     return NormalizedServerURL(url: url, schemeWasInferred: schemeWasInferred)
 }
 
-/// 判定 host 是否为 localhost / `.local` / 私有网段 / IPv6 本地地址。
-/// 纯函数;判定表与必测用例见 API_CONTRACT.md 1.4。
-/// 用途:scheme 回退**仅允许**对本地/私有地址把 https 降为 http。
+/// localhost / `.local` / 私有网段 / IPv6 本地地址。判定表见 API_CONTRACT.md 1.4。
+/// http 回退**仅允许**对这些地址。
 func isLocalOrPrivateHost(_ host: String) -> Bool {
     let lowered = host.lowercased()
 
-    // 主机名:localhost、*.local(大小写不敏感)
     if lowered == "localhost" || lowered.hasSuffix(".local") {
         return true
     }

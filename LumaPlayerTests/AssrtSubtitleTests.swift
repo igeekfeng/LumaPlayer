@@ -1,11 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 在线字幕(assrt):端点拼装、响应解码、错误映射、下载与缓存。
-///
-/// 全部走 `MockEmbyURLProtocol`(按 scheme + host + path 拦截),零真实网络。
-/// ⛔ 验不到的部分:真实 assrt 的返回、配额、以及真实字幕挂到画面上 ——
-/// 前者要有 API 密钥,后两者要真机(见 `KNOWN_ISSUES.md` B 节)。
+/// 在线字幕(assrt):端点、解码、错误映射、下载与缓存。
+/// ⛔ 验不到:真实 assrt 的返回(要 API 密钥)、配额、字幕上屏(要真机),见 `KNOWN_ISSUES.md` B 节。
 final class AssrtSubtitleTests: XCTestCase {
 
     private static let token = "TESTTOKEN123"
@@ -148,7 +145,7 @@ final class AssrtSubtitleTests: XCTestCase {
         XCTAssertEqual(detail.archiveFileName, "pack.rar")
         XCTAssertNotNil(detail.archiveURL)
         XCTAssertTrue(detail.hasAnyDownload)
-        // 返回的是明文 http,ATS 会拒:assrt 自家主机必须升成 https
+        // 返回的是明文 http,ATS 会拒:assrt 自家主机升 https
         XCTAssertEqual(detail.files.map { $0.url.scheme }, ["https", "https"])
         XCTAssertEqual(detail.archiveURL?.scheme, "https")
         XCTAssertEqual(detail.archiveURL?.query, "_=1&-=abc&api=1", "升级不能动查询串(签名在里面)")
@@ -309,7 +306,7 @@ final class AssrtSubtitleTests: XCTestCase {
     }],"action":"search","keyword":"big","result":"succeed"}}
     """#
 
-    /// 下载地址照官方文档示例写成转义的明文 `http:\/\/file0.assrt.net`(真实返回也是 http)
+    /// 照官方文档示例写成转义的明文 `http:\/\/file0.assrt.net`(真实返回也是 http)
     private static let detailJSON = #"""
     {"status":0,"sub":{"result":"succeed","action":"detail","subs":[{
       "id":602333,"filename":"pack.rar","native_name":"洛东江大决战","subtype":"VobSub",

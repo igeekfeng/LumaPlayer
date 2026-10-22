@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// 首页 / 详情页的横向货架:标题 +「查看全部」+ 左右翻页按钮。
-///
-/// macOS 上没有触摸横滑,只有触控板用户能顺手横向滚动;鼠标用户需要
-/// 明确的翻页按钮(Apple TV App / Music 的做法)。按钮放在标题行右侧,
-/// 内容能继续滚动时才可点,到头了禁用,不让它们遮住卡片。
+/// 横向货架:标题 +「查看全部」+ 左右翻页按钮(鼠标用户没法横滑)。按钮在标题行右侧,不遮卡片。
 struct MediaShelf<Content: View>: View {
     let title: String
     /// 有值时标题旁出现「查看全部」
@@ -55,10 +51,7 @@ struct MediaShelf<Content: View>: View {
 
 }
 
-/// 横向货架的左右翻页按钮。内容能滚动时才显示,到头的一侧禁用。
-///
-/// 抽出来是因为首页货架与详情页的分集都要它 —— macOS 上鼠标用户没法横滑,
-/// 翻页按钮不是装饰。
+/// 左右翻页按钮(首页货架与详情页分集共用)。内容能滚动时才显示,到头的一侧禁用。
 struct ShelfPagingButtons: View {
     @Binding var position: ScrollPosition
     let geometry: ShelfGeometry
@@ -84,7 +77,7 @@ struct ShelfPagingButtons: View {
         .fixedSize()
     }
 
-    /// 一次翻大半屏,留一张卡的重叠,让人知道接着的是哪里。
+    /// 一次翻大半屏,留一张卡的重叠。
     private func page(by direction: CGFloat) {
         let step = geometry.containerWidth * Self.pageFraction * direction
         let target = min(max(0, geometry.offset + step), geometry.maxOffset)
@@ -107,7 +100,7 @@ struct ShelfGeometry: Equatable {
     var canScrollForward: Bool { offset < maxOffset - 1 }
 }
 
-/// 「查看全部 ›」:文字在前、图标在后。
+/// 「查看全部 ›」
 private struct TrailingIconLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: Metrics.spacingXS) {

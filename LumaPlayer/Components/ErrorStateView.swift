@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// 页面级错误状态:图标 + 文本 + 操作。
-///
-/// 颜色不是错误状态的唯一表达(DesignTokens.swift「界面规则」),因此图标与文案都在;
-/// 401 时给「重新登录」而不是「重试」—— 重试一个必然被拒的请求没有意义
-/// (API_CONTRACT.md 2.5:401 = token 失效,没有 refresh 机制)。
+/// 页面级错误状态:图标 + 文本 + 操作。401 给「重新登录」而不是「重试」(没有 refresh 机制,API_CONTRACT.md 2.5)。
 struct ErrorStateView: View {
     let failure: LoadFailure
     let retry: () -> Void

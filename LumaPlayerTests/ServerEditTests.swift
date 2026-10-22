@@ -1,11 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 编辑服务器地址:要重新探测(前缀 / http 回退跟着地址走),探测不通不保存,
-/// 保存后浏览用的连接要换成新地址 —— 以前缓存的连接一直拿着旧地址,要重启 App 才生效。
-///
-/// 并发写法同 `AddServerNamingTests`:AppContainer 相关操作放进 `Task { @MainActor in }`,
-/// 闭包只捕获 Sendable 值。
+/// 编辑服务器地址:要重新探测(前缀 / http 回退跟着地址走),探测不通不保存,保存后浏览用的连接换成新地址。
+/// AppContainer 相关操作放进 `Task { @MainActor in }`,闭包只捕获 Sendable 值。
 final class ServerEditTests: XCTestCase {
     private var suiteName: String!
     private var storage: CredentialFileStore!
@@ -156,8 +153,7 @@ final class ServerEditTests: XCTestCase {
         )
     }
 
-    /// registry 是 actor(Sendable),在这里建好再交给 MainActor 任务;
-    /// UserDefaults 作为新构造值直接传进 init,不跨隔离(同 `AddServerNamingTests`)
+    /// registry 是 actor(Sendable),在这里建好再交给 MainActor 任务;UserDefaults 作为新构造值直接传进 init,不跨隔离。
     private func makeRegistry(with profile: ServerProfile) async throws -> ServerRegistry {
         let suiteName: String = self.suiteName
         let credentials: CredentialStore = self.credentials

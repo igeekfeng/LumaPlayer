@@ -1,48 +1,36 @@
 import Foundation
 
-/// 一个 URL 查询参数。
-///
-/// ⛔ 键名只能取 `API_CONTRACT.md` 3.2 / 3.3 表格里出现过的名字
-/// (CLAUDE.md:禁止发明端点与参数)。
+/// ⛔ 键名只能取 `API_CONTRACT.md` 3.2 / 3.3 表格里出现过的名字。
 struct EmbyQueryItem: Sendable, Equatable, Hashable {
     let name: String
     let value: String
 
-    /// 位置参数写法:调用处是 `EmbyQueryItem("Limit", "20")`,
-    /// 参数名在键名里已经写了一遍,再加标签只是噪音。
     init(_ name: String, _ value: String) {
         self.name = name
         self.value = value
     }
 }
 
-/// `/Users/{UserId}/Items` 与 `/Users/{UserId}/Items/Resume` 的查询条件
-/// (API_CONTRACT.md 3.2 的参数表)。
-///
-/// 每个字段都是「不给就不拼」:Emby 对默认值有自己的一套,
-/// 显式传空字符串会把意图改掉。
+/// `/Users/{UserId}/Items` 与 `.../Items/Resume` 的查询条件(API_CONTRACT.md 3.2)。
+/// 每个字段都是「不给就不拼」:显式传空值会改掉 Emby 自己的默认语义。
 struct EmbyItemsQuery: Sendable, Equatable {
     var parentID: String?
     var recursive: Bool?
-    /// 逗号分隔,如 `Movie` / `Episode` / `Series`(API_CONTRACT.md 3.2)
+    /// 如 `Movie` / `Episode` / `Series`
     var includeItemTypes: [String] = []
-    /// 🔶→✅ 按媒体大类过滤,视频是 `Video`。官方 OpenAPI 4.1.1.0 已把它列在
-    /// `/Items/Resume` 等端点上(2026-09-23 核实),Emby Web 自己查「继续观看」
-    /// 用的就是 `MediaTypes=Video`,不是 `IncludeItemTypes`。
+    /// ✅ 按媒体大类过滤,视频是 `Video`。Emby Web 查「继续观看」用的是它,不是 `IncludeItemTypes`。
     var mediaTypes: [String] = []
     var sortBy: [String] = []
     var sortOrder: [String] = []
     var fields: [String] = []
     var filters: [String] = []
-    /// 🔶 搜索关键词。官方 4.1.1.0 OpenAPI 未把它列在 `/Items` 上
-    /// (只在 `/Search/Hints` 上列出),`API_CONTRACT.md` 3.2 标 🔶 允许实现,
-    /// 仍需在 4.7 真机上核实(docs/KNOWN_ISSUES.md Q12)。
+    /// 🔶 官方 OpenAPI 只在 `/Search/Hints` 上列出,`/Items` 上待真机核实(KNOWN_ISSUES.md Q12)。
     var searchTerm: String?
-    /// 🔶 分页偏移。已由官方 OpenAPI 核实 ✅(2026-09-22)
+    /// ✅ 分页偏移
     var startIndex: Int?
     var limit: Int?
 
-    /// 固定顺序拼装,便于测试断言与回归比对。
+    /// 固定顺序,便于测试断言。
     var queryItems: [EmbyQueryItem] {
         var items: [EmbyQueryItem] = []
         if let parentID { items.append(.init("ParentId", parentID)) }
@@ -60,11 +48,8 @@ struct EmbyItemsQuery: Sendable, Equatable {
     }
 }
 
-/// `/Users/{UserId}/Items/Latest` 的查询条件(API_CONTRACT.md 3.2)。
-///
-/// 该端点**没有** `StartIndex` / `SortBy` —— 官方 OpenAPI 只列出
-/// Limit / ParentId / Fields / IncludeItemTypes(2026-09-22 核实),
-/// 因此这里不提供分页与排序,免得拼出服务端不认的参数。
+/// `/Users/{UserId}/Items/Latest`(API_CONTRACT.md 3.2)。端点没有 `StartIndex` / `SortBy`,
+/// 故不提供分页与排序。
 struct EmbyLatestQuery: Sendable, Equatable {
     var parentID: String?
     var includeItemTypes: [String] = []
@@ -81,12 +66,8 @@ struct EmbyLatestQuery: Sendable, Equatable {
     }
 }
 
-/// `/Shows/{Id}/Episodes` 的查询条件(API_CONTRACT.md 3.2)。
-///
-/// 官方 OpenAPI 列出的可用参数:UserId / Fields / Season / SeasonId /
-/// StartIndex / Limit / SortBy / SortOrder(2026-09-22 核实)。
-/// `Season` 是季号数字,与 `SeasonId` 二选一;LumaPlayer 用 `SeasonId`
-/// (来自季对象的 Id),不用季号——季号对特别篇等场景不可靠。
+/// `/Shows/{Id}/Episodes`(API_CONTRACT.md 3.2)。用 `SeasonId`(季对象的 Id),
+/// 不用季号 `Season`:季号对特别篇等场景不可靠。
 struct EmbyEpisodesQuery: Sendable, Equatable {
     var userID: String?
     var seasonID: String?
@@ -109,12 +90,8 @@ struct EmbyEpisodesQuery: Sendable, Equatable {
     }
 }
 
-/// `/Shows/NextUp` 的查询条件(API_CONTRACT.md 3.2)。
-///
-/// ⚠️ 官方 OpenAPI 4.1.1.0 里的路径是 **`/Shows/NextUp`**,`SeriesId` 是查询参数,
-/// 不是 `/Shows/{Id}/NextUp`(2026-09-23 核实,Q25 之前就是卡在这里)。
-/// 该端点还列出 `ParentId` / `Fields` / `Limit` / `StartIndex` 等。
-/// `SeriesId` 可选(4.1.1.0 核实 2026-09-23):nil = 跨所有剧集(首页「下一集」行)。
+/// `/Shows/NextUp`(API_CONTRACT.md 3.2)。⚠️ `SeriesId` 是查询参数,不是 `/Shows/{Id}/NextUp`(Q25)。
+/// `seriesID` 为 nil = 跨所有剧集(首页「下一集」行)。
 struct EmbyNextUpQuery: Sendable, Equatable {
     var userID: String
     var seriesID: String?
@@ -130,10 +107,7 @@ struct EmbyNextUpQuery: Sendable, Equatable {
     }
 }
 
-/// `/Items/{Id}/Similar` 的查询条件(API_CONTRACT.md 3.2)。
-///
-/// 官方 OpenAPI 4.1.1.0 列出 UserId / Limit / Fields / IncludeItemTypes 等(2026-09-23 核实)。
-/// 必须带 `UserId`:否则响应里没有 `UserData`,卡片上的已看 / 进度标记无从显示。
+/// `/Items/{Id}/Similar`(API_CONTRACT.md 3.2)。必须带 `UserId`,否则响应里没有 `UserData`。
 struct EmbySimilarQuery: Sendable, Equatable {
     var userID: String
     var limit: Int?
@@ -147,9 +121,8 @@ struct EmbySimilarQuery: Sendable, Equatable {
     }
 }
 
-/// `/Items/{Id}/Images/{Type}` 的查询条件(API_CONTRACT.md 3.3)。
-///
-/// `MaxWidth` / `MaxHeight` 至少给一个:不给服务端会返回原图(可能几十 MB)。
+/// `/Items/{Id}/Images/{Type}`(API_CONTRACT.md 3.3)。`MaxWidth` / `MaxHeight` 至少给一个,
+/// 否则返回原图(可能几十 MB)。
 struct EmbyImageQuery: Sendable, Equatable {
     var maxWidth: Int?
     var maxHeight: Int?

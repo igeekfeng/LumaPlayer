@@ -1,11 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 添加服务器时的默认名称:用户没填 → 服务器自报的 `ServerName`;
-/// 服务器也没报 → 主机名。用户填了 → 原样使用。
-///
-/// 并发写法同 `SessionRestoreTests`:UserDefaults 在方法内按 suiteName 重建,
-/// AppContainer 相关操作放进 `Task { @MainActor in }`,闭包只捕获 Sendable 值。
+/// UserDefaults 在方法内按 suiteName 重建,AppContainer 相关操作放进 `Task { @MainActor in }`,闭包只捕获 Sendable 值。
 final class AddServerNamingTests: XCTestCase {
     private var suiteName: String!
     private var storage: CredentialFileStore!

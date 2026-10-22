@@ -2,7 +2,6 @@ import Synchronization
 import XCTest
 @testable import LumaPlayer
 
-/// CredentialFileStore 的存取语义、落盘属性与旧版钥匙串导入。
 /// 每个用例一个临时文件,tearDown 删除,不碰真实沙盒容器。
 final class CredentialFileStoreTests: XCTestCase {
     private var fileURL: URL!
@@ -49,7 +48,7 @@ final class CredentialFileStoreTests: XCTestCase {
     }
 
     func testRemoveMissingIsIdempotentAndWritesNothing() async throws {
-        // 不存在的条目删除不抛错(ServerRegistry.remove 重试依赖幂等),也不凭空建文件
+        // 删除不存在的条目不抛错(ServerRegistry.remove 重试依赖幂等),也不凭空建文件
         try await store.removeValue(forAccount: "never-exists")
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
     }
@@ -65,8 +64,7 @@ final class CredentialFileStoreTests: XCTestCase {
     }
 
     func testValueOrDefaultCreatesOnceAndReuses() async throws {
-        // DeviceId 的「全 App 唯一」依赖这个原子 get-or-set:
-        // 第二次调用读到首次写入的值,不再生成
+        // DeviceId 的「全 App 唯一」依赖这个原子 get-or-set
         let first = try await store.value(forAccount: "device", defaultingTo: {
             Data("generated".utf8)
         })
@@ -138,7 +136,7 @@ final class CredentialFileStoreTests: XCTestCase {
     }
 
     func testLegacyImportDoesNotOverrideNewerValues() async throws {
-        // 文件先于导入存在(例如宿主外的旧写入):文件里的值更新,优先
+        // 文件里的值比钥匙串新,优先
         try await store.setValue(Data("NEW-TOKEN".utf8), forAccount: "server-token:A")
         let migrating = CredentialFileStore(fileURL: fileURL) {
             ["server-token:A": Data("OLD-TOKEN".utf8), "deviceId": Data("LEGACY-DEVICE".utf8)]
@@ -176,7 +174,7 @@ final class CredentialFileStoreTests: XCTestCase {
     }
 }
 
-/// 导入闭包被调用了几次。闭包是 `@Sendable` 的,计数要跨线程安全。
+/// 闭包是 `@Sendable` 的,计数要跨线程安全。
 private final class CallCounter: Sendable {
     private let count = Mutex(0)
 

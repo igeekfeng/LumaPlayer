@@ -1,17 +1,11 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 启动会话恢复:
-/// 「重新启动后自动恢复最近一次可用会话」。
-/// 「重启」= 从同一 defaults / 凭据文件重建 registry + AppContainer。
+/// 启动会话恢复。「重启」= 从同一 defaults / 凭据文件重建 registry + AppContainer。
 ///
-/// 并发说明:UserDefaults(non-Sendable)不能从测试方法的隔离区域发送给
-/// ServerRegistry 的 init —— 无论直接用 `self.defaults` 存储还是先拷贝成
-/// 局部常量,region 都与存储共享,会触发数据竞争诊断(提取成 helper 也一样)。
-/// UserDefaults(suiteName:) 对同名 suite 返回同一实例,因此在方法内重新
-/// 构造局部实例,语义与 setUp 建的完全等价,且作为新构造值可跨隔离传递。
-/// AppContainer 是 @MainActor,相关交互统一放进 `Task { @MainActor in }`,
-/// 闭包只捕获 Sendable 值,不捕获 self。
+/// 并发:`UserDefaults`(non-Sendable)从存储属性或其局部拷贝发给 `ServerRegistry.init` 都会触发数据竞争诊断,
+/// 所以方法内按同名 suite 重新构造(同名返回同一实例,语义等价)。AppContainer 交互放进
+/// `Task { @MainActor in }`,闭包只捕获 Sendable 值、不捕获 self。
 final class SessionRestoreTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
@@ -48,8 +42,7 @@ final class SessionRestoreTests: XCTestCase {
         )
     }
 
-    /// 恢复会话并断言最终状态。在 MainActor 上构造 AppContainer 并触发恢复;
-    /// 参数全部 Sendable,Task 闭包不捕获 self。
+    /// 在 MainActor 上构造 AppContainer、触发恢复并断言最终状态。
     private func assertRestoredSession(
         registry: ServerRegistry,
         credentials: CredentialStore,
@@ -65,8 +58,6 @@ final class SessionRestoreTests: XCTestCase {
     }
 
     func testRestorePicksMostRecentlyUsedServer() async throws {
-        // 同名 suite 返回同一 UserDefaults 实例(单例语义),等价于 self.defaults;
-        // 每处构造都用独立的新构造值,发送后不再复用(region 可转移)
         let defaults = UserDefaults(suiteName: suiteName)!
         let firstBoot = try ServerRegistry(defaults: defaults, credentials: credentials)
         let a = makeProfile(name: "alpha")
@@ -95,8 +86,7 @@ final class SessionRestoreTests: XCTestCase {
     }
 
     func testEditingAfterSwitchDoesNotChangeRestoreTarget() async throws {
-        // 回归:切到 alpha 后,用切换前的旧快照编辑 alpha,
-        // 不得把它的 lastUsedAt 回退到切换之前(否则重启恢复成 beta)
+        // 用切换前的旧快照编辑 alpha,不得把 lastUsedAt 回退到切换之前(否则重启恢复成 beta)
         let defaults = UserDefaults(suiteName: suiteName)!
         let firstBoot = try ServerRegistry(defaults: defaults, credentials: credentials)
         let a = makeProfile(name: "alpha")
@@ -132,8 +122,7 @@ final class SessionRestoreTests: XCTestCase {
         try await firstBoot.add(b)
         try await firstBoot.markUsed(id: a.id, at: Date(timeIntervalSince1970: 300))
 
-        // 模拟重启:独立构造的 defaults 与局部凭据,
-        // Task 闭包内只捕获 Sendable 值、不捕获 self
+        // 模拟重启
         let restarted = try ServerRegistry(defaults: UserDefaults(suiteName: suiteName)!, credentials: credentials)
         let credentials = try XCTUnwrap(self.credentials)
 

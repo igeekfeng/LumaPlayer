@@ -1,44 +1,30 @@
 import Foundation
 import os
 
-/// 从字幕压缩包(rar / zip / 7z …)里取出**文本字幕**。
+/// 从字幕压缩包(rar / zip / 7z …)里取出文本字幕。用作 assrt 单文件直链
+/// (`/onthefly/…`,服务端临时解压,会稳定失败)的兜底,见 `SubtitleService.download`。
 ///
-/// ## 为什么要自己解压
+/// 用系统自带的 `/usr/bin/bsdtar`(libarchive,读得了 rar / rar5 / zip / 7z;SDK 没有其头文件)。
+/// 子进程继承 App 沙箱,只能读写容器。
 ///
-/// assrt 详情里有两种地址:`filelist` 的单文件直链(`/onthefly/…`,服务端临时解压)
-/// 和整包地址(`/download/…`)。单文件那条会坏 —— 2026-10-21 实测一条
-/// `[CHS&CHT]` 命名的字幕稳定 302 到 `assrt.net/download/error/…`(HTTP 493,
-/// 页面文案「服务器抽风啦」),同一次详情里的整包却能正常下下来(RAR)。
-/// 所以整包是兜底(`SubtitleService.download`)。
+/// 安全:
+/// - bsdtar 默认拒绝带 `..` 的条目、去掉开头的 `/`,不会写出工作目录;
+/// - 只解压 `SubtitleFormats.downloadableOrder` 的扩展名,符号链接跳过;
+/// - 单个文件超过 `SubtitleFileStore.maximumBytes` 跳过不读。
 ///
-/// ## 为什么用 `/usr/bin/bsdtar`
-///
-/// 系统自带(libarchive 3.7.4,读得了 rar / rar5 / zip / 7z),SDK 里却没有 libarchive
-/// 的头文件;为几十 KB 的字幕包再编一个解压库不值得。沙箱里起的子进程继承 App 的沙箱,
-/// 只能读写容器 —— 正好就是工作目录所在的地方。
-///
-/// ## 安全
-///
-/// - bsdtar 默认拒绝带 `..` 的条目、去掉开头的 `/`(本机实测),不会写出工作目录;
-/// - 只解压 `SubtitleFormats.downloadableOrder` 里的扩展名(`--include`),
-///   视频、可执行文件之类不落盘;解出来的符号链接跳过,只认普通文件;
-/// - 单个文件超过 `SubtitleFileStore.maximumBytes` 不读进内存(记日志后跳过)。
-///
-/// ⚠️ bsdtar 在「一个都没匹配上」或「有条目被拒」时退出码都是 1,⛔ 不能只凭退出码判成败:
-/// 先列目录(`-t`)确认包读得开、里面有没有文本字幕,再解压。
+/// ⚠️ 「一个都没匹配上」和「有条目被拒」退出码都是 1,⛔ 不能只凭退出码判成败:
+/// 先 `-t` 列目录确认读得开、有文本字幕,再解压。
 enum SubtitleArchiveExtractor {
 
-    /// 包里的一个文本字幕。
     struct Entry: Sendable, Equatable {
-        /// 文件名(不含包内目录)
+        /// 不含包内目录
         let fileName: String
         let data: Data
     }
 
     enum ExtractError: LocalizedError, Equatable {
-        /// 起不了解压进程
         case launchFailed(String)
-        /// 包读不开(格式不认、损坏、加密)
+        /// 格式不认、损坏、加密
         case unreadable(String)
 
         var errorDescription: String? {
@@ -55,8 +41,7 @@ enum SubtitleArchiveExtractor {
 
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "subtitles")
 
-    /// 解出包里全部文本字幕,按包内路径排序(结果稳定,挑选可复现)。
-    /// 包读得开但里面没有文本字幕时返回空数组,由调用方决定怎么报。
+    /// 按包内路径排序(挑选可复现)。读得开但没有文本字幕时返回空数组,由调用方决定怎么报。
     static func textSubtitles(in archive: Data) async throws -> [Entry] {
         let work = FileManager.default.temporaryDirectory
             .appending(path: "subtitle-archive-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -94,7 +79,7 @@ enum SubtitleArchiveExtractor {
         return entries
     }
 
-    /// `*.[sS][rR][tT]` 这类大小写无关的模式;bsdtar 的 `*` 会跨目录匹配(本机实测)。
+    /// `*.[sS][rR][tT]` 这类大小写无关的模式;bsdtar 的 `*` 会跨目录匹配。
     private static var includePatterns: [String] {
         SubtitleFormats.downloadableOrder.flatMap { ext -> [String] in
             let pattern = ext.map { "[\($0.lowercased())\($0.uppercased())]" }.joined()
@@ -134,8 +119,7 @@ enum SubtitleArchiveExtractor {
         }
     }
 
-    /// 跑一次 bsdtar。输出写到工作目录下的文件而不是管道 —— 管道满了(包里文件很多时
-    /// 列目录输出超过 64 KB)子进程会阻塞,等终止的这边就永远等不到。
+    /// 输出写文件而不是管道:管道满了(超过 64 KB)子进程会阻塞,永远等不到终止。
     private static func run(_ arguments: [String], in work: URL) async throws -> RunResult {
         let stdoutURL = work.appending(path: "stdout-\(UUID().uuidString)")
         let stderrURL = work.appending(path: "stderr-\(UUID().uuidString)")

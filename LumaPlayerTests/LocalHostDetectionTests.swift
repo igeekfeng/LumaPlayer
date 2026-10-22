@@ -1,8 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// isLocalOrPrivateHost 测试:判定表见 API_CONTRACT.md 1.4。
-/// 该函数是局域网 http 回退的前提条件,必须纯函数可单测。
+/// `isLocalOrPrivateHost`(判定表见 API_CONTRACT.md 1.4),局域网 http 回退的前提。
 final class LocalHostDetectionTests: XCTestCase {
 
     // MARK: - 命中

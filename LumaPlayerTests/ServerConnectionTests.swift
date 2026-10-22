@@ -4,13 +4,8 @@ import XCTest
 /// 与 `authenticate_success_synthetic.json` 里的 `User.Id` 一致。
 private let fixtureUserID = "00000000-0000-0000-0000-000000000003"
 
-/// 探测(`/emby` 前缀 + 局域网 http 回退)、登录、登出,以及**多服务器隔离**
-/// (API_CONTRACT.md 1.4、2.5)。
-///
-/// 全部走 `MockEmbyURLProtocol`,零真实网络依赖。
-/// `public_info.json` 是**真实响应脱敏**后的 fixture(4.7.11.0,2026-09-22);
-/// 登录与 Views 仍是 `_synthetic` 构造数据 —— 它们的响应含 token,只能靠结构推断
-/// (API_CONTRACT.md 9.4),见 docs/KNOWN_ISSUES.md Q11。
+/// 探测(`/emby` 前缀 + 局域网 http 回退)、登录、登出、多服务器隔离(API_CONTRACT.md 1.4、2.5)。
+/// `public_info.json` 是真实响应脱敏(4.7.11.0);登录与 Views 的响应含 token,只能用 `_synthetic` 构造数据(9.4、Q11)。
 final class ServerConnectionTests: XCTestCase {
     private var session: URLSession!
     private var credentialsFile: URL!
@@ -90,7 +85,7 @@ final class ServerConnectionTests: XCTestCase {
     }
 
     func testProbeDoesNotDowngradeExplicitHTTPS() async throws {
-        // 用户明确写了 https:// —— 即使是局域网也不得降级(1.4 的禁止项)
+        // 用户明确写了 https://,局域网也不得降级
         try stubPublicInfo(scheme: "http", host: "192.168.1.10", path: "/emby/System/Info/Public")
         let connection = makeConnection(host: "192.168.1.10", port: 8096, schemeWasInferred: false)
         do {
@@ -104,7 +99,7 @@ final class ServerConnectionTests: XCTestCase {
     }
 
     func testProbeDoesNotFallbackForPublicHost() async throws {
-        // 公网 host 即使没写 scheme 也不做 http 回退(1.4 的禁止项)
+        // 公网 host 没写 scheme 也不做 http 回退
         try stubPublicInfo(scheme: "http", host: "emby.test", path: "/emby/System/Info/Public")
         let connection = makeConnection(host: "emby.test", schemeWasInferred: true)
         do {
@@ -116,7 +111,7 @@ final class ServerConnectionTests: XCTestCase {
     }
 
     func testFallbackResultIsPersistedAsHTTP() async throws {
-        // 1.4:baseURL 存**回退后**的 http,不要存原来的 https
+        // 存回退后的 http,不是原来的 https
         try stubPublicInfo(scheme: "http", host: "192.168.1.10", path: "/emby/System/Info/Public")
         try stubAuth(scheme: "http", host: "192.168.1.10")
         try stubViews(scheme: "http", host: "192.168.1.10")
@@ -156,7 +151,7 @@ final class ServerConnectionTests: XCTestCase {
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: String])
         XCTAssertEqual(object["Username"], "alice")
         XCTAssertEqual(object["Pw"], "secret")
-        // 登录请求本身没有 UserId(此时还不知道,API_CONTRACT.md 2.1)
+        // 登录请求还不知道 UserId(API_CONTRACT.md 2.1)
         XCTAssertFalse(request.header("Authorization")?.contains("UserId") == true)
     }
 
@@ -165,13 +160,12 @@ final class ServerConnectionTests: XCTestCase {
         _ = try await makeConnection(host: "emby.test").login(username: "alice", password: "secret")
 
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Views"))
-        // 验证请求必须带 token 与 UserId(后续所有鉴权请求都靠这一套头)
         XCTAssertEqual(request.header("X-Emby-Token"), "FAKE_TOKEN_0123456789")
         XCTAssertTrue(request.header("Authorization")?.contains("UserId=\"\(fixtureUserID)\"") == true)
     }
 
     func testLogin401IsInvalidCredentialsAndStoresNothing() async throws {
-        // 登录请求本身的 401 = 密码错,**不是**「token 失效」
+        // 登录请求本身的 401 = 密码错,不是 token 失效
         try stubPublicInfo(path: "/emby/System/Info/Public")
         MockEmbyURLProtocol.stub(.status(401), path: "/emby/Users/AuthenticateByName")
         let profile = makeProfile(host: "emby.test")
@@ -213,7 +207,6 @@ final class ServerConnectionTests: XCTestCase {
     func testUnauthorizedClearsOnlyThatServersToken() async throws {
         let (connectionA, profileA, profileB) = try await loginTwoServers()
 
-        // A 的 token 突然失效
         MockEmbyURLProtocol.stub(.status(401), host: "a.test", path: "/emby/Users/USER-A/Views")
         do {
             _ = try await connectionA.userViews()
@@ -236,7 +229,7 @@ final class ServerConnectionTests: XCTestCase {
         let authBefore = authRequests(host: "a.test").count
         _ = try? await connectionA.userViews()
 
-        // 密码不存 = 没有重新拿 token 的办法:重试只会再 401(API_CONTRACT.md 2.5)
+        // 密码不存就没法重新拿 token,重试只会再 401
         XCTAssertEqual(viewRequests(host: "a.test").count - viewsBefore, 1)
         XCTAssertEqual(authRequests(host: "a.test").count - authBefore, 0, "不得静默重新登录")
     }
@@ -284,7 +277,6 @@ final class ServerConnectionTests: XCTestCase {
         let remembered = try await credentials.password(forServer: profile.id)
         XCTAssertEqual(remembered, "secret")
 
-        // 再登一次但不勾选 = 忘记
         _ = try await connection.login(username: "alice", password: "secret", rememberPassword: false)
         let forgotten = try await credentials.password(forServer: profile.id)
         XCTAssertNil(forgotten)
@@ -554,7 +546,7 @@ final class ServerConnectionTests: XCTestCase {
 
     // MARK: - 辅助
 
-    /// 带响应缓存的连接(缓存集成测试用;目录每个测试一份,互不串)。
+    /// 目录每个测试一份,互不串。
     private func makeCachedConnection(profile: ServerProfile) -> ServerConnection {
         ServerConnection(
             profile: profile,
@@ -565,7 +557,7 @@ final class ServerConnectionTests: XCTestCase {
         )
     }
 
-    /// 播放上报的请求体(字段值对失效测试无关紧要,合法即可)。
+    /// 字段值与失效测试无关,合法即可。
     private func makeReportBody(eventName: String?) -> PlaybackReportBody {
         PlaybackReportBody(
             itemID: "ITEM-1",
@@ -615,7 +607,7 @@ final class ServerConnectionTests: XCTestCase {
         )
     }
 
-    /// 一条龙:公开信息 + 登录 + Views,全部 200。
+    /// 公开信息 + 登录 + Views,全部 200。
     private func stubHappyPath(
         scheme: String = "https",
         host: String = "emby.test"

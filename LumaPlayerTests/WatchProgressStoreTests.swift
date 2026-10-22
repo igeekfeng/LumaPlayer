@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 本地续播库(百度来源唯一的进度存储 —— 百度没有上报接口,`docs/BAIDU_PAN_API.md`)。
+/// 本地续播库:百度没有上报接口,进度只存本地(`docs/BAIDU_PAN_API.md`)。
 final class WatchProgressStoreTests: XCTestCase {
 
     private var fileURL: URL!
@@ -34,7 +34,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 123.5)
     }
 
-    /// 看完(≥90%)就不再续播,从头开始。
+    /// 看完(≥90%)从头开始。
     func testFinishedPlaybackResetsToBeginning() async throws {
         let store = makeStore()
         try await store.record(fileID: "42", positionSeconds: 590, durationSeconds: 600)
@@ -50,7 +50,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 480)
     }
 
-    /// 时长未知时照样续播(只是判不了「已看完」)。
     func testResumeWorksWithoutDuration() async throws {
         let store = makeStore()
         try await store.record(fileID: "42", positionSeconds: 88, durationSeconds: nil)
@@ -116,8 +115,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 10)
     }
 
-    /// ⚠️ 删掉的若是**正在播**的那一条,上报器每 10 秒还会写一次进度 ——
-    /// 不能让它把记录写回来(否则「继续观看」又冒出一张点开就播不了的卡)。
+    /// 删的若是正在播的那条,上报器还会继续写进度 —— ⛔ 不能把记录写回来(续播卡点开会播不了)。
     func testForgottenRecordIsNotResurrectedByLateProgressReports() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -135,7 +133,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty, "「继续观看」里也不该再有它")
     }
 
-    /// 批量清之后,盘上也没有了(换个实例重开验证)。
     func testForgetIsPersisted() async throws {
         try await makeStore().record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
         try await makeStore().forget(fileIDs: ["1"])
@@ -145,8 +142,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
-    /// 「移出继续观看」走 `remove(fileIDs:)`:那是用户主动弃掉进度,文件还在网盘,
-    /// 之后再点开这一集必须还能记下来 —— ⛔ 不能落进「已忘」那道门。
+    /// `remove(fileIDs:)`(移出继续观看)只是弃进度,文件还在;⛔ 不能落进「已忘」那道门。
     func testRemovedRecordsCanBeWrittenAgain() async throws {
         let store = makeStore()
         try await store.record(fileID: "1", positionSeconds: 10, durationSeconds: nil)
@@ -160,7 +156,7 @@ final class WatchProgressStoreTests: XCTestCase {
 
     // MARK: - 存档记录(删除时圈范围用)
 
-    /// `storedRecords` 不过滤:位置 0 的、已看完的都要在 —— 删条目时要清的是「全部」。
+    /// 删条目时要清「全部」,所以位置 0、已看完的都要在。
     func testStoredRecordsIncludeUnfinishedFinishedAndZeroPosition() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -187,7 +183,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertTrue(stored.isEmpty)
     }
 
-    /// 只给本来源的记录(多来源不串台)。
     func testStoredRecordsFilterBySource() async throws {
         let store = makeStore()
         let mine = UUID()
@@ -210,7 +205,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 321)
     }
 
-    /// 文件坏了不能静默「当作没有记录」:原因要留下来。
     func testCorruptedFileIsReportedNotSwallowed() async throws {
         try Data("not json".utf8).write(to: fileURL)
         let store = makeStore()
@@ -244,7 +238,7 @@ final class WatchProgressStoreTests: XCTestCase {
         )
     }
 
-    /// 起播时先记展示(此刻位置还是 0),上报器随后才写位置 —— 两者不能互相抹掉。
+    /// 起播时先记展示(位置 0),上报器随后写位置 —— 两者不能互相抹掉。
     func testRememberDisplayThenRecordKeepsBoth() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -257,7 +251,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.first?.display.title, "电影")
     }
 
-    /// 反过来:先有进度、再补展示,位置不能被抹掉。
     func testRecordThenRememberDisplayKeepsPosition() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -281,7 +274,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.fileID), ["3"])
     }
 
-    /// 看完(≥90%)的集不该再占一张「继续观看」卡 —— 与 `resumeSeconds` 同一把尺子。
+    /// 与 `resumeSeconds` 同一把尺子(≥90%)。
     func testResumeEntriesSkipsFinishedEntries() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -294,7 +287,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.fileID), ["b"])
     }
 
-    /// 时长未知时判不了「看完」,按未看完留在列表里(⛔ 不猜)。
+    /// 时长未知判不了「看完」,⛔ 不猜。
     func testResumeEntriesKeepsUnfinishedWhenDurationUnknown() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -321,7 +314,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.fileID), ["b", "a"], "只出本来源,且最近看的在前")
     }
 
-    /// 封面快照随进度一起持久化,重启后「继续观看」还端得出封面。
     func testCoverSnapshotSurvivesRestart() async throws {
         let sourceID = UUID()
         let cover = ImageDescriptor.Snapshot(
@@ -339,7 +331,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.first?.display.cover, cover)
     }
 
-    /// 旧文件(没有 `display` 字段)必须照常解码 —— 升级不该把已有进度判成损坏。
+    /// 没有 `display` 字段的文件不能判成损坏。
     func testLegacyFileWithoutDisplayDecodes() async throws {
         let legacy = #"{"42":{"positionSeconds":123,"durationSeconds":600,"updatedAt":"2026-01-01T00:00:00Z"}}"#
         try Data(legacy.utf8).write(to: fileURL)
@@ -353,7 +345,7 @@ final class WatchProgressStoreTests: XCTestCase {
 
     // MARK: - 观看状态(已看 / 未看)
 
-    /// 越过 90% 的上报就地落成「已看」:位置归 0,状态置 true。
+    /// 越过 90% 就地落成「已看」:位置归 0。
     func testProgressCrossingThresholdBecomesWatched() async throws {
         let store = makeStore()
         try await store.record(fileID: "42", positionSeconds: 590, durationSeconds: 600)
@@ -365,7 +357,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries["42"]?.positionSeconds, 0)
     }
 
-    /// 手动标已看:不再续播,也不再占「继续观看」的卡。
     func testMarkPlayedClearsProgressAndResumeEntry() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -383,9 +374,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty, "标了已看的不该再占一张续播卡")
     }
 
-    /// 没播过的条目也能标已看:没有记录就新建一条。
-    ///
-    /// ⚠️ 标记时顺手带的展示快照要落下来 —— 否则删网盘文件时按路径圈不到这条记录。
+    /// 标记时带的展示快照要落下来,否则删网盘文件时按路径圈不到这条记录。
     func testMarkPlayedCreatesRecordAndKeepsDisplay() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -419,7 +408,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertNil(position, "未看不该带一个续播位置")
     }
 
-    /// 已经是未看的、以及压根没有记录的,标未看不算改动。
     func testMarkUnplayedOnUnknownOrUnwatchedIsNoOp() async throws {
         let store = makeStore()
         let unknown = try await store.setPlayed(
@@ -434,9 +422,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(again, 0, "已经是未看了,再标一次不算改动")
     }
 
-    /// 标完已看又重新播起来:进度上报会把显式标记清掉,回到「进行中」。
-    ///
-    /// ⚠️ 这是刻意的(见 `record` 的注释):用户确实还在看,状态就该如实跟着走。
+    /// 刻意的(见 `record`):用户确实还在看,状态如实跟着走。
     func testProgressAfterMarkPlayedTurnsBackToInProgress() async throws {
         let store = makeStore()
         try await store.setPlayed(
@@ -448,7 +434,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(state, .inProgress(seconds: 30))
     }
 
-    /// 0 秒的起播上报会删记录,但**不能**抹掉显式标过的已看。
     func testZeroPositionReportKeepsExplicitPlayed() async throws {
         let store = makeStore()
         try await store.setPlayed(
@@ -460,7 +445,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(state, .watched)
     }
 
-    /// 批量读状态时**未看的不占一格**(调用方按「查不到 = 未看」处理)。
+    /// 调用方按「查不到 = 未看」处理。
     func testWatchStatesSkipsUnwatched() async throws {
         let store = makeStore()
         try await store.record(fileID: "a", positionSeconds: 100, durationSeconds: 600)
@@ -471,7 +456,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(states, ["a": .inProgress(seconds: 100), "b": .watched])
     }
 
-    /// 老文件(没有 `played` 字段)按比例现算 —— 90% 以上算已看,其余算进行中。
+    /// 没有 `played` 字段的记录按比例现算。
     func testLegacyEntryWithoutPlayedDerivesStateFromThreshold() async throws {
         let legacy = #"""
         {"done":{"positionSeconds":590,"durationSeconds":600,"updatedAt":"2026-01-01T00:00:00Z"},
@@ -488,7 +473,7 @@ final class WatchProgressStoreTests: XCTestCase {
 
     // MARK: - 「下一集」占位(Emby 的 NextUp 对位物)
 
-    /// 看完一集之后,下一集靠占位进续播区:位置 0、`isUpNext`,但**不算看过**。
+    /// 下一集占位:位置 0、`isUpNext`,但不算看过。
     func testUpNextPlaceholderShowsInResumeShelfWithoutCountingAsWatched() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -508,7 +493,6 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertNil(resume, "占位不续播,从 0 开始")
     }
 
-    /// 占位那一集真的播起来之后,占位就该让位给普通进度记录。
     func testProgressReplacesUpNextPlaceholder() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -524,7 +508,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.first?.positionSeconds, 30)
     }
 
-    /// 已经看过的集不能被占位盖掉(否则 ✓ 会凭空消失)。
+    /// 否则 ✓ 会凭空消失。
     func testUpNextSkipsWatchedEpisode() async throws {
         let store = makeStore()
         try await store.setPlayed(
@@ -539,7 +523,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(state, .watched)
     }
 
-    /// 还有进度的集也不能被占位抹成 0 秒(用户看起来像进度丢了)。
+    /// 否则看起来像进度丢了。
     func testUpNextSkipsEpisodeWithProgress() async throws {
         let store = makeStore()
         try await store.record(fileID: "2", positionSeconds: 300, durationSeconds: 600)
@@ -553,7 +537,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(position, 300)
     }
 
-    /// 起播那一集(还没走过 10 秒)的一次 0 秒上报,不能把「下一集」占位删掉。
+    /// 起播那一集(还没走过 10 秒)的 0 秒上报。
     func testZeroSecondReportKeepsUpNextPlaceholder() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -571,10 +555,7 @@ final class WatchProgressStoreTests: XCTestCase {
 
     // MARK: - 自然播完(`markFinished`)
 
-    /// 用户报的那条:播完一集但**时长未知**时,续播卡必须让给下一集。
-    ///
-    /// 之前只靠「位置 / 时长 ≥ 90%」推「看完」,时长未知就判不出来 —— 那集停在
-    /// 「看到 99%」,继续占着这部唯一的一张卡,下一集的占位永远出不来。
+    /// 时长未知时只靠「≥ 90%」判不出看完,那集会一直占着续播卡,下一集占位出不来。
     func testMarkFinishedWithoutDurationFreesTheCardForNextEpisode() async throws {
         let store = makeStore()
         let sourceID = UUID()
@@ -605,7 +586,7 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(entries.first?.isUpNext, true)
     }
 
-    /// 已知时长时不能被「终点」覆盖:记录里的时长仍是那一次真实值。
+    /// 时长已知时不被「终点」覆盖。
     func testMarkFinishedKeepsKnownDuration() async throws {
         let store = makeStore()
         try await store.markFinished(

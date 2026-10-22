@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `ServerConnection` 的浏览方法:列表 / Resume / Latest / 详情 / 季 / 分集 / 图片
-/// (端点与参数见 API_CONTRACT.md 3.2、3.3)。
-///
-/// 全部走 `MockEmbyURLProtocol`,**零真实网络依赖**。
+/// `ServerConnection` 的浏览方法(端点与参数见 API_CONTRACT.md 3.2、3.3),全部走 `MockEmbyURLProtocol`。
 final class MediaLibraryBrowsingTests: XCTestCase {
     private static let userID = "USER-1"
     private static let token = "FAKE_TOKEN_0123456789"
@@ -67,9 +64,8 @@ final class MediaLibraryBrowsingTests: XCTestCase {
 
     // MARK: - Resume / Latest
 
-    /// ⚠️ `/Items/Resume` **必须带 `MediaTypes=Video` + `Recursive=true`**:本地
-    /// Emby 4.9.5.0 不带时恒返回 0 条,继续观看会变成永远空白。这是 Emby Web
-    /// 自己查继续观看的写法。实测见 `PITFALLS.md 第 3 节「继续观看」`。
+    /// ⛔ `/Items/Resume` 必须带 `MediaTypes=Video` + `Recursive=true`:不带时 4.9.5.0 恒返回 0 条
+    /// (与 Emby Web 写法一致,见 `PITFALLS.md` 第 3 节)。
     func testResumeUsesResumeEndpointWithMediaTypes() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_resume_synthetic.json")),
@@ -173,8 +169,7 @@ final class MediaLibraryBrowsingTests: XCTestCase {
 
     // MARK: - NextUp(剧集页定位「接着看哪一集」,Q25)
 
-    /// ⚠️ 路径是 `/Shows/NextUp`,`SeriesId` 是**查询参数** —— 不是 `/Shows/{Id}/NextUp`。
-    /// 官方 OpenAPI 4.1.1.0 核实 2026-09-23。
+    /// 路径是 `/Shows/NextUp`,`SeriesId` 是查询参数,不是 `/Shows/{Id}/NextUp`(官方 OpenAPI 4.1.1.0 ✅)。
     func testNextUpUsesShowsNextUpWithSeriesIDQuery() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_resumable_episode_synthetic.json")),
@@ -192,7 +187,6 @@ final class MediaLibraryBrowsingTests: XCTestCase {
         XCTAssertEqual(queryValue(request.url, "Fields"), "Overview")
     }
 
-    /// 定位顺序是 NextUp → 可续播:两条都有结果时取 NextUp 的。
     func testFocusEpisodePrefersNextUpOverResumable() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_resumable_episode_synthetic.json")),
@@ -210,7 +204,7 @@ final class MediaLibraryBrowsingTests: XCTestCase {
         XCTAssertEqual(episode?.id, "00000000-0000-0000-0000-000000000202")
     }
 
-    /// NextUp 没有结果(老版本可能没有这个端点)时退回「可续播」那条路。
+    /// 老版本可能没有 NextUp 端点,无结果时退回「可续播」。
     func testFocusEpisodeFallsBackToResumableWhenNextUpIsEmpty() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_empty_synthetic.json")),
@@ -231,7 +225,6 @@ final class MediaLibraryBrowsingTests: XCTestCase {
 
     // MARK: - hero 剧集「播放」(`seriesPlaybackEpisode`)
 
-    /// 看过(NextUp 有结果)就播那一集,不去拉季 / 分集
     func testSeriesPlaybackEpisodeUsesFocusEpisodeWhenWatched() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_resumable_episode_synthetic.json")),
@@ -245,7 +238,6 @@ final class MediaLibraryBrowsingTests: XCTestCase {
         XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Seasons"))
     }
 
-    /// 没看过(NextUp、可续播都为空)就播第一季的第一集
     func testSeriesPlaybackEpisodeFallsBackToFirstEpisodeOfFirstSeason() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_empty_synthetic.json")),
@@ -272,7 +264,7 @@ final class MediaLibraryBrowsingTests: XCTestCase {
         XCTAssertEqual(queryValue(request.url, "SeasonId"), "00000000-0000-0000-0000-000000000210")
     }
 
-    /// 一季都没有:返回 nil(调用方提示「没有可播放的分集」),不编一集出来
+    /// 一季都没有返回 nil,⛔ 不编一集出来。
     func testSeriesPlaybackEpisodeReturnsNilWithoutSeasons() async throws {
         MockEmbyURLProtocol.stub(
             .json(try FixtureLoader.json("items_empty_synthetic.json")),

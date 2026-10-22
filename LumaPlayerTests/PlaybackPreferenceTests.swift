@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `PlaybackPreferences`:默认值、跨实例持久化、以及「UserDefaults 被手改过」时的夹取。
-///
-/// 每个用例都用一次性 suite —— 偏好存在 UserDefaults 里,共用 `.standard` 会让
-/// 用例之间互相污染(前一个用例把默认倍速改成 2×,后一个用例的默认值断言就站不住)。
+/// 每个用例用一次性 suite:共用 `.standard` 会让用例之间互相污染默认值断言。
 @MainActor
 final class PlaybackPreferenceTests: XCTestCase {
 
@@ -45,8 +42,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertEqual(reopened.renderBackendPolicy, .gpuNext)
     }
 
-    /// 旧版 Bool 开关的迁移:显式关过 → legacy;开着(含「恢复默认」写下的 true)→ 自动。
-    /// ⛔ 「没存过」不能被当成「关过」。
+    /// 旧 Bool 开关迁移:显式关过 → legacy;开着(含「恢复默认」写下的 true)→ 自动。⛔ 「没存过」不能当成「关过」。
     func testLegacyGPUNextToggleMigrates() {
         defaults.set(false, forKey: PlaybackPreferences.Key.legacyPreferGPUNextRenderer)
         XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .legacy)
@@ -60,7 +56,6 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .gpuNext)
     }
 
-    /// 手改成不认识的值:退回默认,不崩
     func testUnknownRenderBackendPolicyFallsBackToDefault() {
         defaults.set("vulkan", forKey: PlaybackPreferences.Key.renderBackendPolicy)
         XCTAssertEqual(PlaybackPreferences(defaults: defaults).renderBackendPolicy, .automatic)
@@ -68,7 +63,6 @@ final class PlaybackPreferenceTests: XCTestCase {
 
     // MARK: - 持久化
 
-    /// 设置窗口改完关掉,下次启动还在 —— P0-4 要求的就是「改完留得住」
     func testValuesSurviveReopening() {
         let store = PlaybackPreferences(defaults: defaults)
         store.defaultSpeed = 1.5
@@ -135,7 +129,7 @@ final class PlaybackPreferenceTests: XCTestCase {
         XCTAssertEqual(PlaybackPreferences(defaults: defaults).seekStep, 15)
     }
 
-    /// 存了不认识的模式名(以后删档位 / 手改)→ 退回默认,不整份偏好判坏
+    /// 删档位 / 手改留下的未知模式名:退回默认,不整份偏好判坏
     func testUnknownSubtitleModeFallsBackToDefault() {
         defaults.set("OnlyForced", forKey: PlaybackPreferences.Key.subtitleMode)
         XCTAssertEqual(PlaybackPreferences(defaults: defaults).subtitleMode, .smart)

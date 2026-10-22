@@ -43,17 +43,10 @@ echo "扫描 $total 个已跟踪文件…"
 
 # ── 1. 真实域名 ──
 #
-# ⚠️ 两处过滤是**必需**的,否则这份检查会被噪声淹掉(2026-10-21 修):
-#
-# ① **右边界**:TLD 后面必须是非标识符字符。少了它,`…durations.compactMap` 里的
-#    `com` 会被当成 TLD、`…APIClient.topLevelKeys` 里的 `top` 同理 ——
-#    上一版就是这样积了 40 条误报,检查等于失效。
-# ② **全小写**:域名标签里出现大写就当成 Swift 类型名 / 枚举 case
-#    (`TMDBEndpoint.tv` / `HomeHero.info` / `geometry.contentInsets.top`)。
-#    真实服务器域名一律小写;万一真有人写了大写域名,这条会漏 —— 由人工复核兜。
-#    目录名 / 主机名里混大写的写法不常见,这个取舍值得。
-#
-# `sed` 去掉 ① 匹配到的那个尾随分隔符,还原成干净域名再比对白名单。
+# 两处过滤防误报:
+# ① 右边界:TLD 后面必须是非标识符字符(否则 `durations.compactMap` 的 `com` 也算 TLD);
+# ② 全小写:带大写的当 Swift 类型名 / 成员(`HomeHero.info`)。大写域名会漏,由人工复核兜。
+# `sed` 去掉 ① 匹配到的尾随分隔符,还原成干净域名再比对白名单。
 DOMAIN_RE='([a-zA-Z0-9][a-zA-Z0-9-]*\.)+(org|com|net|cn|io|tv|cc|xyz|top|info|biz|online|site|club|live|link|space|fun|shop)([^a-zA-Z0-9-]|$)'
 dom=$(git grep -hoE "$DOMAIN_RE" -- . 2>/dev/null \
       | sed -E 's/[^a-zA-Z0-9-]$//' \

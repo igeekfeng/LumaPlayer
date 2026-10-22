@@ -2,12 +2,8 @@ import AppKit
 import XCTest
 @testable import LumaPlayer
 
-/// 视频层只在需要时 render(`MPVPlayer.needsRender`,Q49):
-/// - 暂停后 mpv 不再送帧,layer 一次都不画(之前按屏幕刷新率每次都 render);
-/// - layer 尺寸变了照样重画一次(mpv 不知道尺寸变化,靠 `requestRender()`)。
-///
-/// ⚠️ 覆盖边界(照实说):要真窗口 + GPU(无 GPU 的环境会失败而不是 skip)。
-/// 只数 draw 次数,不看画面;播放中是否按片源帧率出帧、音画同步、能耗都不在这里验。
+/// 视频层只在需要时 render(`MPVPlayer.needsRender`,Q49):暂停后不再画;layer 尺寸变了照样重画一次(靠 `requestRender()`)。
+/// 要真窗口 + GPU(没有会失败而不是 skip);只数 draw 次数,不验出帧节奏、音画同步、能耗。
 @MainActor
 final class MPVRenderGateTests: XCTestCase {
 
@@ -51,8 +47,7 @@ final class MPVRenderGateTests: XCTestCase {
         try player.load(url: url, headers: [:])
         await fulfillment(of: [firstFrame], timeout: 5)
 
-        // 视频在同一主线程 draw 时,监控读取通过异步回复完成,不需要主线程同步等核心。
-        // 这里只验读取与出帧能共存,不把墙钟耗时当作真实播放顺滑 / 音画同步证据。
+        // 只验监控读取(异步回复)与同一主线程出帧能共存,墙钟耗时不当作顺滑 / 音画同步的证据
         let properties = try await player.stringPropertiesAsync(["video-codec", "container-fps"])
         XCTAssertNotNil(properties["video-codec"])
         XCTAssertNotNil(properties["container-fps"])

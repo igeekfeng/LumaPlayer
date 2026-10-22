@@ -2,11 +2,8 @@ import CoreGraphics
 import XCTest
 @testable import LumaPlayer
 
-/// 弹幕链路:弹弹play 端点 / 签名 / 传输(`DandanplayClient`)、弹幕解析、媒体身份、
-/// 匹配编排(`DanmakuService`)、排版(`DanmakuLayout`)、时钟外推(`DanmakuClock`)、预渲染(`DanmakuSprite`)、逐帧诊断。
-///
-/// ⛔ **零真实网络**:全走 `MockEmbyURLProtocol`。真实弹弹play 调用要等用户在设置里
-/// 填了自己的 AppId / AppSecret 才能跑,在此之前按 CLAUDE.md 硬规则 2 标「未在真实服务验证」。
+/// 弹幕链路:弹弹play 端点 / 签名 / 传输、解析、媒体身份、匹配编排、排版、时钟外推、预渲染、逐帧诊断。
+/// ⛔ 零真实网络,全走 `MockEmbyURLProtocol`。
 final class DanmakuTests: XCTestCase {
 
     private let host = DandanplayEndpoint.host
@@ -38,8 +35,7 @@ final class DanmakuTests: XCTestCase {
 
     // MARK: - 签名(§1)
 
-    /// `base64(sha256(AppId + Timestamp + Path + AppSecret))`。
-    /// 期望值由 Python `hashlib` 独立算出,不是拿被测实现自己算的。
+    /// `base64(sha256(AppId + Timestamp + Path + AppSecret))`;期望值由 Python `hashlib` 独立算出,不是被测实现自己算的。
     func testSignatureMatchesOfficialFormula() {
         XCTAssertEqual(
             DandanplayClient.signature(
@@ -48,7 +44,7 @@ final class DanmakuTests: XCTestCase {
             "xTBDPIDKEWp4x9CBkFe/rUk8O7DQtcInPlSZEKxwNlw=")
     }
 
-    /// 请求带签名三件套;⛔ AppSecret 本身绝不出现在请求里(不用凭证模式)。
+    /// ⛔ AppSecret 本身绝不出现在请求里(不用凭证模式)。
     func testRequestCarriesSignatureHeadersButNeverTheSecret() async throws {
         MockEmbyURLProtocol.stub(.json(#"{"count":0,"comments":[]}"#), host: host, path: "/api/v2/comment/123450001")
         _ = try await makeClient().comments(episodeID: 123450001, conversion: .simplified, credentials: credentials)
@@ -281,7 +277,6 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual((json["fileHash"] as? String)?.count, 32, "服务端要求 32 位,少一位就回 errorCode 2")
     }
 
-    /// 模糊结果 ⛔ 不自动取第一个,交给用户挑。
     func testFuzzyMatchAsksUserToChoose() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"""
@@ -295,7 +290,7 @@ final class DanmakuTests: XCTestCase {
         XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/comment/1"))
     }
 
-    /// 剧绑定过作品:其它集按集号在作品剧集列表里对上,⛔ 不再走 `/match`。
+    /// 其它集按集号在作品剧集列表里对上,⛔ 不再走 `/match`。
     func testSeriesBindingResolvesOtherEpisodesByNumber() async throws {
         let (service, bindings) = try await makeService()
         try await bindings.bind(
@@ -324,7 +319,7 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(DanmakuService.episode(number: 5, in: Array(episodes.prefix(1)))?.episodeId, 1)
     }
 
-    /// 第二次加载同一集走磁盘缓存(官方要求缓存,§6)。
+    /// 官方要求缓存(§6)。
     func testCommentsAreCachedPerEpisode() async throws {
         let (service, bindings) = try await makeService()
         try await bindings.bind(
@@ -353,7 +348,6 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(half.laneCount, 2)
     }
 
-    /// 同一行的下一条要等上一条尾巴离开右缘(含间距);所有行都占着就丢弃。
     func testScrollingCommentsNeverOverlapAndOverflowIsDropped() {
         let comments = (0..<7).map { comment(Int64($0), 0) }
         let placed = DanmakuLayout.layout(
@@ -526,7 +520,6 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(summary.windowVisibleFrames, 120)
     }
 
-    /// 时钟微调速度(每帧多走 2% 的时间)不算跳动,只体现为速度偏差
     func testFrameStatsReportsSlewAsSpeedDeviationNotJumps() throws {
         var stats = DanmakuFrameStats()
         for i in 0..<120 {
@@ -539,8 +532,7 @@ final class DanmakuTests: XCTestCase {
         XCTAssertTrue(summary.description.contains("可见 100/120"))
     }
 
-    /// 回归:整体只跟上每 4 次刷新里的 1 次(120 Hz 屏上 30 帧)。
-    /// 按中位数判定会把 33ms 当正常、一帧也数不出来;按刷新间隔判定每次都跳过 3 次刷新。
+    /// 整体只跟上每 4 次刷新里的 1 次(120 Hz 屏上 30 帧):按中位数判定会把 33ms 当正常、一帧也数不出来。
     func testFrameStatsCountsDropsAgainstRefreshIntervalNotMedian() throws {
         var stats = DanmakuFrameStats()
         for i in stride(from: 0, to: 80, by: 4) { stats.record(frame(i)) }

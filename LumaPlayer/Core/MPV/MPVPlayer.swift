@@ -14,7 +14,7 @@ import Synchronization
 /// playing/paused/… ──stop()/shutdown()──▶ tearingDown ──▶ destroyed
 /// ```
 ///
-/// destroyed 不可复用(一个实例一次只播一个 URL;换台 = 销毁重建)。
+/// destroyed 不可复用(一实例一 URL;换台 = 销毁重建)。
 enum MPVPlayerPhase: String, Sendable, Equatable {
     case idle
     case loading
@@ -25,36 +25,30 @@ enum MPVPlayerPhase: String, Sendable, Equatable {
     case destroyed
 }
 
-/// 播放统计(诊断用:渲染帧数、time-pos 原始回调频率、hwdec;开发期渲染 spike 靠它取证)。
+/// 播放统计(诊断用)。
 struct MPVPlayerStatistics: Sendable, Equatable {
-    /// `mpv_render_context_render` 实际执行次数(GL draw 轮询 update flags 置位时)
+    /// `mpv_render_context_render` 实际执行次数
     var renderedFrames = 0
-    /// 节流**之前**的 time-pos 属性变化次数(衡量 M6 原始频率)
+    /// 节流之前的 time-pos 变化次数
     var timePosEvents = 0
-    /// 第一次 / 最近一次 time-pos 事件时刻(秒,用于计算平均频率)
+    /// 秒,用于算平均频率
     var timePosFirstAt: Double?
     var timePosLastAt: Double?
-    /// 最后一次 `hwdec-current`
     var hwdecCurrent: String?
-    /// `renderIntoBoundFramebuffer` 的进入次数(S2 诊断:draw 是否在跑)
+    /// `renderIntoBoundFramebuffer` 进入次数
     var drawCalls = 0
     /// 最近一次 `mpv_render_context_update()` 返回值(0 = 无新帧)
     var lastUpdateFlags: UInt64 = 0
-    /// update() 返回值里 MPV_RENDER_UPDATE_FRAME 置位的次数(新帧流动证明)
+    /// MPV_RENDER_UPDATE_FRAME 置位次数
     var updateFrameFlags = 0
-    /// attachGLContext 是否成功创建过 GL 渲染上下文
     var glAttached = false
-    /// 当前渲染上下文的后端：`"gpu-next"` / `"gpu"`(legacy 或回退)。
-    /// `automatic` 策略下起初是 `"gpu"`,DV 片源会在 `on_preloaded` 时换成 `"gpu-next"`。
-    /// ⚠️ 这是**请求并成功建起**的后端名，不等于 mpv 内部一定用了它：
-    /// 实测后端名不被识别时 mpv 会静默退回默认 gpu 渲染器而不报错
-    /// (见 `createRenderContext` 注释)。要确证得看 mpv 日志里的
-    /// `Using gpu-next backend.` 行。
+    /// `"gpu-next"` / `"gpu"`。这是请求并建起的后端名,后端名不被识别时 mpv 会静默退回 gpu;
+    /// 确证要看 mpv 日志 `Using gpu-next backend.`。
     var renderBackend: String?
 }
 
-/// 单个异步属性请求的完成闸。取消可能先于 continuation 注册,结果必须留到注册时交付。
-/// 所有可变状态由 Mutex 保护;finish/install 都在锁外 resume,且恰好完成一次。
+/// 单个异步属性请求的完成闸。取消可能先于 continuation 注册,结果留到注册时交付。
+/// 状态由 Mutex 保护;resume 都在锁外,且恰好一次。
 final class MPVPropertyRequest: Sendable {
     private struct State {
         var continuation: CheckedContinuation<String?, any Error>?
@@ -117,22 +111,17 @@ struct MPVPropertyRequests {
 
 /// libmpv 的薄 Swift 封装(业务代码不得直接调 C API,MPV_INTEGRATION.md §1)。
 ///
-/// ## 线程安全论证(`@unchecked Sendable`)
-/// - mpv client API 本身全线程安全(client.h「The client API is generally
-///   fully thread-safe」);本类的全部可变状态都放在 `state` 锁内;
-/// - mpv 句柄一经创建不再更换,只在 `shutdown()` 里销毁并置 nil(锁内);
-/// - 调用方(MainActor)、mpv 事件线程、CAOpenGLLayer 渲染线程三方并发,
-///   分别经 `state` 锁或 mpv 自身线程安全保证串行;
-/// - Core/MPV/ 是全项目唯一允许并发逃逸的目录(CLAUDE.md「并发分层」),
-///   已登记 docs/MPV_INTEGRATION.md §6.3。
+/// `@unchecked Sendable` 论证(MPV_INTEGRATION.md §6.3):
+/// - mpv client API 本身全线程安全(client.h);本类全部可变状态在 `mutex` 内;
+/// - mpv 句柄创建后不再更换,只在 `shutdown()` 里锁内销毁并置 nil;
+/// - MainActor 调用方、mpv 事件线程、渲染(draw)三方并发,经 `mutex` / `renderMutex`
+///   或 mpv 自身线程安全串行;锁序见 `renderMutex`。
 final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 内部状态
 
-    /// C 指针的 Sendable 包装(Core/MPV/ 允许的并发逃逸点)。
-    /// 论证:指针只作为「句柄」跨隔离域传递;所有实际调用 C API 的
-    /// 解引用都发生在 `state` 锁内;生命周期(teardown/destroy)同样
-    /// 在锁内串行。已登记 docs/MPV_INTEGRATION.md §6.3。
+    /// C 指针的 Sendable 包装。指针只作为句柄跨隔离域传递,解引用调 C API 与生命周期
+    /// (teardown / destroy)都在锁内串行。
     fileprivate struct LockedPointer<Pointee>: @unchecked Sendable {
         let raw: Pointee
         init(_ raw: Pointee) { self.raw = raw }
@@ -142,51 +131,35 @@ final class MPVPlayer: @unchecked Sendable {
         var phase: MPVPlayerPhase = .idle
         var handle: LockedPointer<OpaquePointer>?
         var renderContext: LockedPointer<OpaquePointer>?
-        /// 挂接的 CGL context(render.h 66-69:mpv_render* 全部调用都要求
-        /// 该 GL context 在调用线程 current;shutdown 里 free 渲染上下文前
-        /// 需要它来恢复 current)
+        /// mpv_render* 都要求它在调用线程 current(render.h 66-69);shutdown free 前用它恢复 current
         var cglContext: LockedPointer<CGLContextObj>?
         var bridge: MPVEventBridge?
-        /// 本片源该用的渲染后端。起初是策略的 `initialBackend`,`on_preloaded`
-        /// 按轨道定下来之后改写;layer 重挂 GL context 时按它重建。
+        /// 起初是策略的 `initialBackend`,`on_preloaded` 定下后改写;重挂 GL context 时按它重建
         var targetBackend: MPVRenderBackend = .legacy
         var stats = MPVPlayerStatistics()
-        /// init 失败的原因(phase == .failed 时有值)
+        /// phase == .failed 时有值
         var initializationFailure: String?
-        /// `load()` 是否已调用过。§8「一个实例一次只播一个 URL,换台 =
-        /// 销毁重建」是一次性契约,不能只靠 phase 把关:EOF 之后 phase
-        /// 不会停在某个「已结束」态(§8 的状态机里根本没有这个态),
-        /// 单靠 phase 判断会让同一实例被二次 load。
+        /// 一实例只 load 一次(§8)。不能靠 phase 把关:EOF 后没有「已结束」态。
         var hasLoaded = false
-        /// 拆卸信号。事件线程的退出条件**只看它**,不看 phase。
-        ///
-        /// 为什么不能用 `phase == .tearingDown` 当退出条件:事件线程自己
-        /// 会在 START_FILE / FILE_LOADED / END_FILE(error) / SHUTDOWN 里
-        /// 无条件改写 phase。关窗时 mpv 往往正好投递一个 END_FILE,
-        /// 于是 tearingDown 被覆写成 failed,循环条件失效、线程回到
-        /// `mpv_wait_event` 继续阻塞,而 `shutdown()` 是在**主线程**上
-        /// 同步等它——整整 5s 超时,UI 冻结。一次性写入的 isStopping
-        /// 不会被任何 phase 迁移抹掉。
+        /// 拆卸信号,事件线程的退出条件只看它。⛔ 不能用 `phase == .tearingDown`:事件线程会在
+        /// START_FILE / FILE_LOADED / END_FILE / SHUTDOWN 里改写 phase,关窗时 END_FILE 会把它
+        /// 覆写成 failed,线程继续阻塞,主线程上的 `shutdown()` 等满 5s 超时。
         var isStopping = false
-        /// 已画出过第一帧**真实视频帧**(`firstVideoFrameRendered` 只发一次)
+        /// `firstVideoFrameRendered` 只发一次
         var hasRenderedVideoFrame = false
-        /// 最近的 mpv 日志(已脱敏、按条截断),环形缓冲。
-        /// 只用于播放失败时留档:`Unrecognized file format` 之类的错误码本身看不出
-        /// 服务端回的是媒体、HTML 还是 JSON 错误页,demuxer / ffmpeg 的日志才有线索。
+        /// 最近 mpv 日志(已脱敏、截断)的环形缓冲,只在播放失败时留档:错误码本身看不出
+        /// 服务端回的是媒体还是 HTML / JSON 错误页。
         var recentLogs: [String] = []
         var propertyRequests = MPVPropertyRequests()
-        /// 事件循环已经退出时拒绝新读取,否则不会再有 GET_PROPERTY_REPLY。
+        /// 事件循环退出后拒绝新读取,否则不会再有 GET_PROPERTY_REPLY
         var eventLoopEnded = false
     }
 
-    /// 环形缓冲保留的日志条数 / 单条字符上限
     private static let recentLogLimit = 200
     private static let recentLogLineLimit = 300
 
-    /// 互斥锁(非重入)。为什么不用 `OSAllocatedUnfairLock`:它的
-    /// `withLock` 闭包是 `@Sendable` 且要求返回值 `Sendable`,
-    /// 与「锁内调用 C API、返回非 Sendable 指针」的本类用法天然冲突
-    /// (Core/MPV/ 允许的逃逸场景,论证见类注释)。
+    /// 非重入。⛔ 不用 `OSAllocatedUnfairLock`:它的闭包要求 `@Sendable` 与 Sendable 返回值,
+    /// 与锁内调 C API、返回非 Sendable 指针冲突。
     private final class Mutex: Sendable {
         private let lock = NSLock()
         func withLock<R>(_ body: () throws -> R) rethrows -> R {
@@ -196,15 +169,14 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
-    /// 仅在 `mutex` 内访问(字段含 C 指针,无 Sendable 约束)
+    /// 仅在 `mutex` 内访问
     private var state = MutableState()
     private let mutex = Mutex()
 
-    /// 「有东西要画」标志:mpv 的 update 回调、layer 尺寸变化置位,draw 取走(`needsRender`)。
+    /// 「有东西要画」标志:update 回调、layer 尺寸变化置位,draw 取走(`needsRender`)。
     ///
-    /// 为什么是原子量而不放进 `state`:update 回调由 mpv 的 VO 线程在**持有 mpv 内部锁**时调用
-    /// (vo_libmpv.c `update()`),而 `shutdown()` / 换后端是在持有 `mutex` 时调 `mpv_render_context_free`,
-    /// 后者要等 VO 线程退出 —— 回调里抢 `mutex` 就是互等死锁。
+    /// ⛔ 不能放进 `state`:update 回调由 VO 线程持有 mpv 内部锁时调用,而 `shutdown()` / 换后端
+    /// 持有 `mutex` 调 `mpv_render_context_free` 要等 VO 线程退出,回调里抢 `mutex` 就互等死锁。
     private final class RenderRequest: Sendable {
         /// 初值为真:渲染上下文刚建好时先画一次
         private let pending = Atomic<Bool>(true)
@@ -213,31 +185,25 @@ final class MPVPlayer: @unchecked Sendable {
         func take() { pending.store(false, ordering: .releasing) }
     }
 
-    /// 生命周期 ≥ 渲染上下文:回调上下文按 unretained 指针交给 mpv,而渲染上下文在 `shutdown()`
-    /// (含 deinit 兜底,属性此时尚未释放)里 free,free 返回后 mpv 不再调回调。
+    /// 以 unretained 指针交给 mpv 当回调上下文。安全:渲染上下文在 `shutdown()`(含 deinit 兜底,
+    /// 此时属性尚未释放)里 free,free 返回后 mpv 不再调回调。
     private let renderRequest = RenderRequest()
 
-    /// 渲染上下文专用锁:只在 GL draw 线程的 render、`attachGLContext`
-    /// 的 create、`shutdown()` 的 free 三者之间互斥。
+    /// 渲染上下文专用锁:只在 draw 的 render、`attachGLContext` 的 create、`shutdown()` 的 free 间互斥。
+    /// 与 `mutex` 分开,整帧渲染才不会阻塞 MainActor 的 `pause()` / `seek()` 等(§6.3)。
     ///
-    /// 为什么要和 `mutex` 分开:`mutex` 是 MainActor 侧 `phase` / `pause()` /
-    /// `seek()` 也要抢的锁,若整帧渲染都持有它,主线程每次调用都要排队等一次
-    /// GPU 提交(§6.3「渲染路径内不得做重活」)。拆开后渲染只与生命周期互斥,
-    /// 不再阻塞 MainActor。
-    ///
-    /// ⚠️ 锁序恒为 `renderMutex` → `mutex`,任何地方都不得反向,否则死锁。
+    /// ⛔ 锁序恒为 `renderMutex` → `mutex`,不得反向,否则死锁。
     private let renderMutex = Mutex()
 
-    /// 同时需要「渲染上下文不被换掉」和「state 可写」时的唯一入口。
-    /// 把锁序固化在这里,调用点就不可能写反(attach / free 两处都走它)。
+    /// 同时要两把锁时的唯一入口,把锁序固化在这里。
     private func withRenderAndStateLock<R>(_ body: () -> R) -> R {
         renderMutex.withLock { mutex.withLock(body) }
     }
 
-    /// 事件线程退出信号(shutdown 等待它,确保销毁时无并发 wait_event)
+    /// shutdown 等它,确保销毁时没有并发的 wait_event
     private let eventThreadDone = DispatchSemaphore(value: 0)
 
-    /// 运行时打印一次 client API 版本(§4:确认与 3.1.1 版本表一致)
+    /// 运行时打印一次 client API 版本(§4)
     private static let loggedClientAPIVersion: Int32 = {
         let raw = mpv_client_api_version()
         let major = Int32((raw >> 16) & 0xFFFF)
@@ -247,36 +213,31 @@ final class MPVPlayer: @unchecked Sendable {
         return Int32(raw)
     }()
 
-    /// OpenGL 框架的 dlopen 句柄,供 `get_proc_address` 解析 GL 符号。
-    /// (mpv 不直接链 GL,符号必须由宿主提供,render_gl.h。)
-    /// 用实例属性而非 static let:UnsafeMutableRawPointer 非 Sendable,
-    /// static 需 Sendable 类型;dlopen 幂等(返回同一句柄),每实例一次零成本。
+    /// mpv 不直接链 GL,`get_proc_address` 靠这个 dlopen 句柄解析符号(render_gl.h)。
+    /// 实例属性而非 static:指针非 Sendable;dlopen 幂等。
     private let openGLFramework =
         dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", RTLD_LAZY)
 
-    /// §3 必设选项(全部在 `mpv_initialize` 之前,用 init 前合法的
-    /// `mpv_set_option_string` 设置;`config`/`terminal` 是防御性显式设置)。
+    /// §3 必设选项,`mpv_initialize` 之前设。
     private static let startupOptions: [(name: String, value: String)] = [
         ("config", "no"),
         ("load-scripts", "no"),
         ("terminal", "no"),
-        // 禁内置 ytdl_hook:它在无 yt-dlp 时每次起播刷 "Subprocess failed" 挤掉真正的失败线索
-        // (`load-scripts=no` 只管用户脚本,管不到它)。
+        // 内置 ytdl_hook 在无 yt-dlp 时每次刷 "Subprocess failed",`load-scripts=no` 管不到它
         ("ytdl", "no"),
-        // 其余保持 warn;仅打开打开流 / 探测格式的几个模块,供 issue #2 类失败取证。
+        // 只打开流 / 探测相关模块的 v 级日志,供起播失败取证
         ("msg-level", "all=warn,stream=v,demux=v,lavf=v,ffmpeg=v"),
         ("vo", "libmpv"),
         ("hwdec", "auto"),
         ("cache", "yes"),
-        // 128 MiB 起点(§3:值待 M2 用真实码率流实测后调整)
+        // 128 MiB(§3,待 M2 实测调整)
         ("demuxer-max-bytes", "134217728"),
-        // 不提前渲染再等:默认 0.05 时 `mpv_render_context_render` 画完要阻塞到这一帧的上屏时刻,
-        // 而 `CAOpenGLLayer` 的 draw 跑在主线程 → 播放时主线程约 78% 时间卡在等待里,
-        // 界面与弹幕被压到视频帧率(render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
+        // 默认 0.05 时 render 要阻塞到上屏时刻,而 draw 在主线程,界面与弹幕会被压到视频帧率
+        // (render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
         ("video-timing-offset", "0"),
     ]
 
-    /// §6.1 需要观察的属性(demuxer-cache-state 未使用)。
+    /// §6.1
     private static let observedProperties: [(name: String, format: mpv_format)] = [
         ("time-pos", MPV_FORMAT_DOUBLE),
         ("duration", MPV_FORMAT_DOUBLE),
@@ -287,16 +248,13 @@ final class MPVPlayer: @unchecked Sendable {
         ("volume", MPV_FORMAT_DOUBLE),
         ("speed", MPV_FORMAT_DOUBLE),
         ("hwdec-current", MPV_FORMAT_STRING),
-        // 轨道菜单(第 7 节)与静音(PlayerCommands.swift 的 M 键)。
-        // track-list 是 NODE:一次拿到全部轨道,比逐个读 track-list/N/* 便宜。
+        // NODE:一次拿全部轨道,比逐个读 track-list/N/* 便宜
         ("track-list", MPV_FORMAT_NODE),
         ("mute", MPV_FORMAT_FLAG),
-        // 字幕延迟(MPV_INTEGRATION.md 7.1):读回值驱动屏显与菜单里的当前值
         ("sub-delay", MPV_FORMAT_DOUBLE),
     ]
 
-    /// GL 符号解析回调(ctx = `openGLFramework` 的 dlopen 句柄)。
-    /// 注意第二个参数是 Optional(render_gl.h 的 C 签名允许 NULL)。
+    /// ctx = `openGLFramework`;两个参数都可能为 NULL(render_gl.h)。
     private let getProcAddress: @convention(c) (
         UnsafeMutableRawPointer?, UnsafePointer<CChar>?
     ) -> UnsafeMutableRawPointer? = { frameworkHandle, name in
@@ -304,12 +262,10 @@ final class MPVPlayer: @unchecked Sendable {
         return dlsym(frameworkHandle, name)
     }
 
-    /// 渲染后端策略(设置 →「播放 → 色彩」,见 `MPVRenderBackendPolicy`)。
     private let backendPolicy: MPVRenderBackendPolicy
 
-    /// `automatic` 策略注册的 hook 名。loadfile.c 里它在「demuxer 轨道已加入」之后、
-    /// 「选轨 / 建解码器与 VO」之前运行 —— 轨道的 DV 配置记录已可读,渲染上下文又还没被 VO 用上,
-    /// 换后端不用重开流。
+    /// `automatic` 注册的 hook:在轨道已加入之后、选轨 / 建 VO 之前运行(loadfile.c),
+    /// DV 配置记录已可读,换后端不用重开流。
     private static let preloadedHook = "on_preloaded"
 
     // MARK: - 生命周期
@@ -323,7 +279,7 @@ final class MPVPlayer: @unchecked Sendable {
             return
         }
 
-        // 默认 UA 是 `libmpv`,与 Authorization 里的 Client 不一致(issue #2)
+        // 默认 UA 是 `libmpv`,与 Authorization 里的 Client 不一致
         for (name, value) in Self.startupOptions + [("user-agent", ClientUserAgent.value)] {
             let err = mpv_set_option_string(handle, name, value)
             guard err >= 0 else {
@@ -343,21 +299,18 @@ final class MPVPlayer: @unchecked Sendable {
             return
         }
 
-        // 失败取证:v 级日志进环形缓冲,只在播放失败时随诊断日志落盘(见 recentLogLines)。
-        // 失败不影响播放,但不静默:记一行 stderr。
+        // v 级日志进环形缓冲,只在播放失败时落盘(`recentLogLines`);请求失败不影响播放,记 stderr
         let logStatus = mpv_request_log_messages(handle, "v")
         if logStatus < 0 {
             logLine("[MPV] 警告: mpv_request_log_messages 失败: \(String(cString: mpv_error_string(logStatus)))")
         }
 
         for (name, format) in Self.observedProperties {
-            // mpv 的 C enum 无 enum_extensibility 标注,Swift 导入为 struct,
-            // 参数直接传常量本身(不是 rawValue)
+            // C enum 导入为 struct,直接传常量(不是 rawValue)
             _ = mpv_observe_property(handle, 0, name, format)
         }
 
-        // 按片源选后端要在轨道已知、VO 未建时插一脚(见 `handlePreloadedHook`)。
-        // 注册失败不致命:退化为一直用 legacy(DV 会发紫发绿),但要留痕。
+        // 注册失败不致命:退化为一直用 legacy(DV 会发紫发绿),但要留痕
         if backendPolicy == .automatic {
             let hookStatus = mpv_hook_add(handle, 0, Self.preloadedHook, 0)
             if hookStatus < 0 {
@@ -371,16 +324,9 @@ final class MPVPlayer: @unchecked Sendable {
             state.targetBackend = backendPolicy.initialBackend
         }
 
-        // Thread 闭包是 @Sendable,句柄经 LockedPointer 捕获传递(见其论证)。
-        //
-        // ⚠️ 这里刻意不写成 `Thread { [weak self] in self?.eventLoop(...) }`:
-        // optional chaining 会把 weak 提升成强引用,并持有到 eventLoop 返回为止,
-        // 而 eventLoop 只有 shutdown() 把 phase 置成 tearingDown 才会返回。
-        // 结果是「调用方丢弃实例但忘了 shutdown」时引用计数永不归零,
-        // deinit 里的兜底 shutdown 形同虚设,句柄与线程永久泄漏。
-        // 正确做法:强引用逐轮获取、逐轮释放,阻塞在 mpv_wait_event 期间
-        // 不持有 self;退出信号用值捕获的信号量,这样即便拥有者已经释放,
-        // 仍能唤醒正在 wait 的 shutdown()。
+        // ⛔ 不写成 `Thread { [weak self] in self?.eventLoop(...) }`:强引用会一直持有到循环结束,
+        // 忘了 shutdown 时 deinit 永不触发,句柄与线程泄漏。强引用逐轮获取释放,阻塞在
+        // mpv_wait_event 时不持有 self;退出信号用值捕获的信号量,拥有者释放后仍能唤醒 shutdown()。
         let boxedHandle = LockedPointer(handle)
         let owner: @Sendable () -> MPVPlayer? = { [weak self] in self }
         let done = eventThreadDone
@@ -388,9 +334,7 @@ final class MPVPlayer: @unchecked Sendable {
             Self.runEventLoop(handle: boxedHandle, owner: owner, done: done)
         }
         thread.name = "mpv-event-loop"
-        // 事件线程承载 phase 迁移等 UI 前置状态,且 shutdown 会同步等它退出;
-        // Default QoS 会让高 QoS 调用方(MainActor/测试)等低 QoS 线程,
-        // XCTest 把它报成优先级反转 warning——按事件驱动的 UI 语义给满 QoS
+        // shutdown 会在高 QoS 线程同步等它,低 QoS 会造成优先级反转
         thread.qualityOfService = .userInteractive
         thread.start()
     }

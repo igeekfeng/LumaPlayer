@@ -2,10 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 字幕压缩包:本地解压(`SubtitleArchiveExtractor`)与 assrt 单文件失败后的整包兜底。
-///
-/// 包在测试里现场用 `/usr/bin/bsdtar` 打(zip),不进 fixture —— 测试宿主就是带沙箱的 App,
-/// 这里能跑通也就验了「沙箱里起得了 bsdtar 子进程」。
-/// ⛔ 验不到的:真实 assrt 的 RAR 包(本机没有 RAR 打包工具,libarchive 能读不能写)。
+/// 包用 `/usr/bin/bsdtar` 现场打,顺带验了沙箱里能起 bsdtar 子进程。⛔ 验不到真实 RAR 包(libarchive 能读不能写)。
 final class SubtitleArchiveTests: XCTestCase {
 
     private static let token = "TESTTOKEN123"
@@ -74,7 +71,7 @@ final class SubtitleArchiveTests: XCTestCase {
         let (service, directory) = try await makeService()
         defer { try? FileManager.default.removeItem(at: directory) }
         MockEmbyURLProtocol.stub(.json(Self.detailJSON), host: "api.assrt.net", path: "/v1/sub/detail")
-        // 单文件那条:服务端解压坏了(实测是 302 到错误页再 493,这里直接给 493)
+        // 单文件那条:服务端解压坏了(真实是 302 到错误页再 493,这里直接给 493)
         MockEmbyURLProtocol.stub(
             .bytes(Data("<page/>".utf8), statusCode: 493),
             host: "file0.assrt.net", path: "/onthefly/712929/-/1/a.srt")

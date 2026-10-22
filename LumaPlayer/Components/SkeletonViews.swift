@@ -1,24 +1,13 @@
 import SwiftUI
 
-/// 首屏还没有内容时的灰色骨架占位(替代原先的居中转圈)。
+/// 首屏无内容时的灰色骨架,形状照真实布局摆,内容到达时是「填进去」。慢呼吸表示在加载,「减弱动态效果」下静止。
 ///
-/// 形状照着真实布局摆(海报网格 / 货架 / 详情页),这样内容到达时是「填进去」而不是
-/// 「整页换掉」,不会有白屏一闪。明暗用很慢的呼吸表示「在加载」;
-/// 开启「减弱动态效果」时保持静止。
+/// 本身是弹性形状,每个用例都要钉死尺寸:宽度已知用 `.frame(width: w, height: w / 宽高比)`;
+/// 宽度由容器定用 `Color.clear` + `.aspectRatio(比, contentMode: .fit)` 算高度,再把它当 overlay。
+/// ⛔ 不写 `.frame(width: w).aspectRatio(比, contentMode: .fit)`:高度按外层提议算,会被拉长。
 ///
-/// ⚠️ 本类型是 `RoundedRectangle`(形状),本身是**弹性**的 —— 谁给它多大就填多大。
-/// 所以每个用例都必须把尺寸钉死,两种写法二选一:
-/// - 宽度已知:`.frame(width: w, height: w / 宽高比)`;
-/// - 宽度由容器决定:`.aspectRatio(比, contentMode: .fit)` 交给 `Color.clear` 之类的
-///   弹性占位算出高度,再把 `SkeletonBlock` 当 overlay。
-/// ⛔ 不要写 `.frame(width: w).aspectRatio(比, contentMode: .fit)`:宽度被 frame 钉死、
-/// 高度却由 aspectRatio 按外层(往往是 `nil`)的提议去算,结果高度失控 —— 灰色块会被
-/// 上下拉长(2026-10-10 踩过)。
-///
-/// ⚠️ 呼吸动画必须用**限定作用域**的 `.animation(_:body:)`,只动 body 里那一个 opacity。
-/// ⛔ 不要写回 `.animation(.repeatForever…, value:)`:那种写法会把同一事务里的**位置变化**
-/// 也卷进无限循环 —— 骨架出现后上方的行加载完把它往下推,它就在旧位置和新位置之间
-/// 永远来回晃(首页「继续观看」一带上下晃动的灰色卡片,2026-10-15 录屏确认)。
+/// 呼吸动画必须用限定作用域的 `.animation(_:body:)` 只动 opacity。⛔ 不用 `.animation(.repeatForever…, value:)`:
+/// 会把位置变化卷进无限循环,骨架被上方内容推下后会在新旧位置间永远来回晃。
 struct SkeletonBlock: View {
     var cornerRadius: CGFloat = Radius.card
 
@@ -28,7 +17,7 @@ struct SkeletonBlock: View {
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius)
             .fill(Color.secondary)
-            // 只动透明度(见类型注释的 ⚠️):位置 / 尺寸变化不进这个无限循环的动画
+            // 只动透明度(见类型注释)
             .animation(reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
                 $0.opacity(isDim ? 0.10 : 0.18)
             }
@@ -37,8 +26,7 @@ struct SkeletonBlock: View {
     }
 }
 
-/// 海报网格骨架:列宽 / 间距 / 单元结构都与 `ItemGridView` 的 `MediaCard` 对齐。
-/// 媒体库页与搜索页首屏用它。
+/// 海报网格骨架,与 `ItemGridView` 的 `MediaCard` 对齐。
 struct SkeletonGrid: View {
     var count = 18
 
@@ -58,8 +46,7 @@ struct SkeletonGrid: View {
         .scrollDisabled(true)
     }
 
-    /// 单元宽度由自适应网格决定,这里学 `MediaCard`:让 `Color.clear` 吃下提议、
-    /// 由 `aspectRatio` 算出高度,`SkeletonBlock` 只当 overlay 填满。
+    /// 同 `MediaCard`:`Color.clear` + `aspectRatio` 算高度,`SkeletonBlock` 当 overlay。
     private var posterCell: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
             Color.clear
@@ -70,7 +57,7 @@ struct SkeletonGrid: View {
         }
     }
 
-    /// 卡片标题 / 副标题的两行占位。用「占满再留白」表达宽度比例,不写死像素宽。
+    /// 标题 / 副标题两行占位,用「占满再留白」表达宽度比例,不写死像素宽。
     private func titleLine(widthFraction: CGFloat) -> some View {
         GeometryReader { proxy in
             SkeletonBlock(cornerRadius: Radius.card)
@@ -80,12 +67,11 @@ struct SkeletonGrid: View {
     }
 }
 
-/// 首页一行货架的骨架:真实标题 + 一排卡片占位(海报或横版)。
-/// `HomeLibrariesRow` / `HomeResumeRow` / `HomeLatestRow` 首屏用它。
+/// 首页一行货架的骨架:真实标题 + 一排卡片占位。
 struct SkeletonShelf: View {
     let title: String
     var cardWidth: CGFloat = Metrics.posterMinWidth
-    /// 卡片的宽高比(宽 / 高),与 `Metrics.posterAspectRatio` 同义
+    /// 宽 / 高
     var aspectRatio: Double = Metrics.posterAspectRatio
     var count = 6
 
@@ -110,8 +96,7 @@ struct SkeletonShelf: View {
     private var cardHeight: CGFloat { cardWidth / aspectRatio }
 }
 
-/// 详情页骨架:整幅 hero + 海报 + 标题 / 元信息 / 按钮的占位。
-/// 结构照着 `MediaDetailView.detailContent` 摆。
+/// 详情页骨架,结构照 `MediaDetailView.detailContent`。
 struct SkeletonDetail: View {
     var body: some View {
         ScrollView {
@@ -122,12 +107,9 @@ struct SkeletonDetail: View {
     }
 }
 
-/// 详情页骨架的内容(不含滚动容器)。单独拆出来是为了能用 `ImageRenderer`
-/// 渲染验证 —— `ScrollView` 的内容不会被 `ImageRenderer` 画出来。
-///
-/// 结构与 `MediaDetailView.detailContent` 一一对应:hero 与「海报 + 标题」是同一个
-/// `spacing: 0` 的 `VStack`,标题区再用负 `padding(.top,)` 压进 hero(和 `DetailHero`
-/// 同款),否则多出来的 `spacingXL` 会把海报行顶下去、负 padding 又压回来,视觉错位。
+/// 不含滚动容器,便于 `ImageRenderer` 渲染验证(它画不出 `ScrollView` 内容)。
+/// hero 与「海报 + 标题」在同一个 `spacing: 0` 的 `VStack`,标题区用负 `padding(.top,)` 压进 hero
+/// (同 `DetailHero`),否则视觉错位。
 struct SkeletonDetailBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingXL) {
@@ -161,7 +143,7 @@ struct SkeletonDetailBody: View {
 
     private var heroHeight: CGFloat { Metrics.contentMaxWidth * 9 / 16 }
     private var posterHeight: CGFloat { Metrics.posterMinWidth / Metrics.posterAspectRatio }
-    /// 与 `DetailHero.overlapRatio` 一致:标题区压进 hero 的比例
+    /// 与 `DetailHero.overlapRatio` 一致
     private var overlapRatio: CGFloat { 0.45 }
 
     private func line(width: CGFloat, height: CGFloat) -> some View {
@@ -170,8 +152,7 @@ struct SkeletonDetailBody: View {
     }
 }
 
-/// 分集横向卡片骨架:与 `EpisodeListView` 的 `EpisodeCard` 同宽同结构。
-/// 剧集详情页的「正在加载季 / 分集」用它。
+/// 分集卡片骨架,与 `EpisodeListView` 的 `EpisodeCard` 同宽同结构。
 struct SkeletonEpisodeStrip: View {
     var count = 5
 

@@ -1,16 +1,11 @@
 import Foundation
 
-/// App 层面的、需要呈现给用户的异常状态。
-/// 领域错误(ServerURLError / CredentialFileError / ServerRegistryError)的
-/// 具体文案由使用处映射;本类型只描述整个应用层面的状态。
+/// 应用层面要呈现给用户的异常;领域错误的文案由使用处映射。
 enum AppError: LocalizedError, Equatable {
-    /// 服务器列表本地存储损坏,无法解码。已按空列表降级启动;
-    /// 之前添加的服务器需要重新添加。
+    /// 服务器列表无法解码,已按空列表启动
     case serverListCorrupted
-    /// 读取本地保存的登录令牌失败(无法判断是否需要重新登录)
     case credentialReadFailed
-    /// 升级后首次启动,从旧版钥匙串迁移登录信息失败(多半是授权窗里点了「拒绝」)。
-    /// 下次启动会重试
+    /// 从钥匙串迁移登录信息失败(多半是授权窗点了「拒绝」),下次启动重试
     case credentialMigrationFailed
 
     var errorDescription: String? {
@@ -25,7 +20,7 @@ enum AppError: LocalizedError, Equatable {
     }
 }
 
-/// 表单校验错误的用户可见文案(添加/编辑表单共用)。
+/// 添加 / 编辑表单共用。
 extension ServerURLError {
     var userMessage: String {
         switch self {
@@ -39,9 +34,7 @@ extension ServerURLError {
     }
 }
 
-/// Emby 接口错误的用户可见文案(API_CONTRACT.md 第 7 节的「UI 行为」列)。
-///
-/// 允许出现 host 与状态码,⛔ 不得出现完整带认证参数的 URL(同节末尾)。
+/// API_CONTRACT.md 第 7 节「UI 行为」列。可含 host 与状态码,⛔ 不含带认证参数的 URL。
 extension EmbyAPIError {
     var userMessage: String {
         switch self {
@@ -62,14 +55,13 @@ extension EmbyAPIError {
         case .transport:
             return "网络连接失败,请检查网络与服务器地址。"
         case .cancelled:
-            // 取消是正常流程,UI 不应把它显示为错误(API_CONTRACT.md 第 7 节)
+            // 取消是正常流程,UI 不应显示为错误
             return "请求已取消。"
         }
     }
 }
 
-/// 登录流程失败的用户可见文案。
-/// 登录体 `Pw` 的拼写已在 4.7.11.0 实测(docs/PITFALLS.md Q10),401 就是用户名或密码错。
+/// 登录体 `Pw` 拼写已核实(PITFALLS.md Q10),401 就是用户名或密码错。
 extension ServerLoginError {
     var userMessage: String {
         switch self {

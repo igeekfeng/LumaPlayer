@@ -1,11 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `EmbyItem` → 统一条目 `SourceItem` 的映射。
-///
-/// ⚠️ 它现在**还没有消费者**(Emby 的浏览链路仍直接用 `EmbyItem`)。
-/// 写它的理由:等首页「继续观看」要聚合两个来源时,
-/// 「Emby 的元数据怎么映射」只能有一个答案,不然就会有人就地写一份 `if isEmby`。
+/// `EmbyItem` → `SourceItem` 的映射。暂无消费者(Emby 浏览仍直接用 `EmbyItem`);
+/// 先固定下来,免得将来聚合两个来源时有人就地写一份 `if isEmby`。
 final class EmbySourceItemMappingTests: XCTestCase {
 
     private let sourceID = UUID()
@@ -30,12 +27,12 @@ final class EmbySourceItemMappingTests: XCTestCase {
         XCTAssertEqual(source.kind, .movie)
         XCTAssertEqual(source.overview, "A hacker learns the truth.")
         XCTAssertEqual(source.year, 1999)
-        // ticks → 秒:1 秒 = 10,000,000 ticks(`TickConverter`)
+        // 1 秒 = 10,000,000 ticks(`TickConverter`)
         XCTAssertEqual(source.durationSeconds, 8160)
         XCTAssertEqual(source.metadataOrigin, .server, "Emby 的元数据全部来自服务端")
     }
 
-    /// 剧集(`Series`)与季(`Season`)在 Emby 里不可直接播 → 映射成「能进去的容器」
+    /// Emby 里不可直接播 → 映射成「能进去的容器」。
     func testSeriesAndSeasonBecomeContainers() throws {
         let series = try decode(#"{"Id":"S1","Name":"Show","Type":"Series"}"#)
         let season = try decode(#"{"Id":"S1E0","Name":"Season 1","Type":"Season"}"#)
@@ -53,15 +50,14 @@ final class EmbySourceItemMappingTests: XCTestCase {
         XCTAssertTrue(source.kind.isPlayable, "单集是可播的(剧/季才是容器)")
     }
 
-    /// 认不出的 `Type` → `.unknown`,⛔ 不猜成电影。
+    /// ⛔ 不猜成电影。
     func testUnknownTypeStaysUnknown() throws {
         let item = try decode(#"{"Id":"X1","Name":"?","Type":"SomethingNew"}"#)
 
         XCTAssertEqual(item.asSourceItem(sourceID: sourceID).kind, .unknown)
     }
 
-    /// 没有图片 tag 就不给 poster —— ⛔ 不留一个「有图」的假象
-    /// (`API_CONTRACT.md` 3.3:没 tag 去请求只会 404)。
+    /// ⛔ 不留「有图」的假象:没 tag 去请求只会 404(`API_CONTRACT.md` 3.3)。
     func testNoImageTagMeansNoPoster() throws {
         let item = try decode(#"{"Id":"M1","Name":"No Art","Type":"Movie"}"#)
 

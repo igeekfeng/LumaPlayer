@@ -1,54 +1,29 @@
 import Foundation
 
-/// TMDB 用到的端点(`docs/TMDB_API.md` §1 - §2)。
+/// TMDB 端点,路径与参数名以 `docs/TMDB_API.md` 为准,⛔ 不发明。
 ///
-/// ⛔ 与 `EmbyEndpoint` / `BaiduPanEndpoint` 是三个东西,不得混用
-/// (CLAUDE.md 硬规则 1:端点、参数名以文档为准,不得发明)。
-/// 路径与参数名逐个对着 `docs/TMDB_API.md` 抄,响应字段在官方 OpenAPI 规格核实过。
-///
-/// ## 认证不放这里
-///
-/// TMDB 的 v4 token 走 `Authorization: Bearer` **请求头**(§1),
-/// 所以端点**不携带** token —— 它只负责「路径 + 查询参数」,
-/// 请求头由 `TMDBClient` 组装。好处是端点的诊断名(`name`)天然不含凭据。
-///
-/// ## 查询串手拼
-///
-/// 与 `BaiduPanEndpoint` 同一手法:只保留 unreserved 字符(`A-Za-z0-9-._~`),
-/// 空格编成 `%20`(官方 cURL 示例用的是 `+`,TMDB 两种都收,`%20` 无歧义)。
-/// 不走 `URLComponents.queryItems`:它对 `/` 一类字符的处置与我们的口径不一致,
-/// 中文标题这类非 ASCII 也要保证按 UTF-8 逐字节编码。
+/// 不携带 token:v4 token 走 `Authorization: Bearer` 头(§1),由 `TMDBClient` 组装,`name` 因此天然不含凭据。
+/// 查询串手拼,只保留 unreserved 字符、空格编 `%20`;⛔ 不走 `URLComponents.queryItems`
+/// (它对 `/` 等字符的编码口径不同)。
 enum TMDBEndpoint: Sendable, Equatable {
 
     /// `GET /3/search/movie?query=&year=&language=`
     case searchMovie(query: String, year: Int?, language: String)
     /// `GET /3/search/tv?query=&first_air_date_year=&language=`
     case searchTV(query: String, year: Int?, language: String)
-    /// `GET /3/tv/{series_id}/season/{season_number}?language=`
-    ///
-    /// 取一季的**分集**(剧照 / 集名 / 单集简介),`docs/TMDB_API.md` §7。
-    /// ⚠️ 剧级海报 / 简介 / 首播年**不**走它 —— 那些 `/3/search/tv` 已经给过(§3),
-    /// 这里只补分集。
+    /// `GET /3/tv/{series_id}/season/{season_number}?language=`(§7)
+    /// 只补分集(剧照 / 集名 / 简介);剧级信息 `/3/search/tv` 已给。
     case tvSeason(seriesID: Int, seasonNumber: Int, language: String)
     /// `GET /3/tv/{series_id}?language=`
-    ///
-    /// 按**显式 id** 直取剧集(跳过搜索)—— 标准命名里的 `{tmdbid-63926}`
-    /// 已经给了 id,再按标题搜一遍既慢又可能搜错(`docs/TMDB_API.md` §9)。
+    /// 文件名带 `{tmdbid-…}` 时按 id 直取,跳过搜索(§9)。
     case tvDetails(id: Int, language: String)
     /// `GET /3/movie/{movie_id}?language=`
-    ///
-    /// 按**显式 id** 直取电影。与 `tvDetails` 成对 —— 标签只给 id,
-    /// 是电影还是剧由调用方按上下文决定(见 `TMDBClient.details`)。
+    /// 标签只给 id,电影还是剧由调用方按上下文定(`TMDBClient.details`)。
     case movieDetails(id: Int, language: String)
-    /// `GET /3/tv/{series_id}/credits?language=`
-    ///
-    /// 取**整部剧**的演职员(演员表 + 剧组),`docs/TMDB_API.md` §10。
-    /// ⚠️ 不用 `aggregate_credits`:那个端点把同一演员的多季角色放进 `roles[]`
-    /// 数组(形状不同),展示上要多一层拆解。
+    /// `GET /3/tv/{series_id}/credits?language=`(§10)
+    /// 不用 `aggregate_credits`:它把多季角色放进 `roles[]`,形状不同。
     case tvCredits(id: Int, language: String)
-    /// `GET /3/movie/{movie_id}/credits?language=`
-    ///
-    /// 取**整部电影**的演职员。与 `tvCredits` 响应同形(§10)。
+    /// `GET /3/movie/{movie_id}/credits?language=`,与 `tvCredits` 同形
     case movieCredits(id: Int, language: String)
 
     // MARK: - 形状
@@ -56,7 +31,6 @@ enum TMDBEndpoint: Sendable, Equatable {
     /// 元数据接口主机(图片主机是另一个,见 `TMDBImage`)
     var host: String { "api.themoviedb.org" }
 
-    /// 不含 host 的路径
     var path: String {
         switch self {
         case .searchMovie: return "/3/search/movie"
@@ -72,7 +46,7 @@ enum TMDBEndpoint: Sendable, Equatable {
 
     var method: String { "GET" }
 
-    /// 诊断用端点名。**不含任何凭据**,可安全进日志(CLAUDE.md「安全与隐私」)。
+    /// 诊断名,不含凭据,可进日志。
     var name: String {
         switch self {
         case .searchMovie: return "search/movie"
@@ -85,13 +59,12 @@ enum TMDBEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 查询参数。顺序固定(便于断言与排障),值一律整体 URL 编码。
+    /// 顺序固定(便于断言与排障)。
     var queryItems: [(name: String, value: String)] {
         switch self {
         case .searchMovie(let query, let year, let language):
             var items: [(name: String, value: String)] = [("query", query)]
-            // 年份解析不出来时**不传**这个参数,⛔ 不填 0 / 空串这类假默认值
-            // (`docs/TMDB_API.md` §2)
+            // 没年份就不传,⛔ 不填 0 / 空串(§2)
             if let year { items.append(("year", String(year))) }
             items.append(("language", language))
             // `include_adult` 用官方默认值 false,不显式传
@@ -102,16 +75,13 @@ enum TMDBEndpoint: Sendable, Equatable {
             items.append(("language", language))
             return items
         case .tvSeason(_, _, let language):
-            // 季详情的 series_id / season_number 走 **path**(§7),不进查询串
             return [("language", language)]
         case .tvDetails(_, let language), .movieDetails(_, let language),
              .tvCredits(_, let language), .movieCredits(_, let language):
-            // 按 id 取东西:id 走 path,只有语言进查询串
             return [("language", language)]
         }
     }
 
-    /// 拼好的绝对地址。
     var url: URL? {
         var components = URLComponents()
         components.scheme = "https"
@@ -121,7 +91,6 @@ enum TMDBEndpoint: Sendable, Equatable {
         return components.url
     }
 
-    /// 手拼的查询串(POSIX 编码:空格 → `%20`)
     var encodedQuery: String {
         queryItems.compactMap { item -> String? in
             guard let name = Self.encode(item.name), let value = Self.encode(item.value) else {
@@ -132,7 +101,7 @@ enum TMDBEndpoint: Sendable, Equatable {
         .joined(separator: "&")
     }
 
-    /// 只保留 unreserved 字符(`A-Za-z0-9-._~`)。
+    /// 只保留 unreserved 字符(`A-Za-z0-9-._~`)
     static func encode(_ value: String) -> String? {
         value.addingPercentEncoding(withAllowedCharacters: unreserved)
     }

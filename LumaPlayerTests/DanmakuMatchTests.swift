@@ -2,16 +2,7 @@ import CryptoKit
 import XCTest
 @testable import LumaPlayer
 
-/// 弹幕匹配精度的三块新能力(`docs/DANMAKU.md` §3):
-///
-/// 1. **媒体指纹**(`DanmakuFingerprint`):前 16 MiB 的 MD5,只在直连流上算,
-///    严格校验 `Content-Range`,拿不到就返回 nil;
-/// 2. **TMDB 降级层**(`DanmakuService.searchByTMDB`):`/match` 落空后按
-///    `search/episodes?tmdbId=` 再查一次;
-/// 3. **唯一候选采用**(`DanmakuCandidateMatcher` + `DanmakuEpisodeToken`):
-///    模糊候选里只有一集确定对得上时才自动采用,否则仍然交给用户。
-///
-/// ⛔ **零真实网络**:全走 `MockEmbyURLProtocol`。
+/// 弹幕匹配精度(`docs/DANMAKU.md` §3):媒体指纹、TMDB 降级层、唯一候选采用。⛔ 零真实网络:全走 `MockEmbyURLProtocol`。
 final class DanmakuMatchTests: XCTestCase {
 
     private let host = DandanplayEndpoint.host
@@ -85,7 +76,7 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertEqual(DanmakuEpisodeToken.parse("O3"), .special(kind: .other, index: 3))
     }
 
-    /// 认不出就返回 nil —— ⛔ 不给默认值,更不「标题里出现过这个数字就算」。
+    /// ⛔ 不给默认值,更不「标题里出现过这个数字就算」。
     func testEpisodeTokenRefusesToGuess() {
         XCTAssertNil(DanmakuEpisodeToken.parse(nil))
         XCTAssertNil(DanmakuEpisodeToken.parse(""))
@@ -112,7 +103,7 @@ final class DanmakuMatchTests: XCTestCase {
             DanmakuCandidateMatcher.uniqueMatch(in: candidates, target: target)?.episodeID, 5)
     }
 
-    /// 两个候选都对得上 = 不猜,交回用户(与「⛔ 不自动取第一个模糊结果」同一立场)。
+    /// 两个候选都对得上 = 不猜,交回用户。
     func testUniqueMatchRefusesAmbiguity() {
         let candidates = [
             candidate(5, animeID: 100, episodeTitle: "第5话"),
@@ -122,21 +113,20 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertNil(DanmakuCandidateMatcher.uniqueMatch(in: candidates, target: target))
     }
 
-    /// 集号冲突是硬门槛:第 3 话不能顶替第 5 话,哪怕标题完全一致。
+    /// 哪怕标题完全一致。
     func testEpisodeMismatchIsRejected() {
         let candidates = [candidate(3, episodeTitle: "第3话")]
         let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
         XCTAssertNil(DanmakuCandidateMatcher.uniqueMatch(in: candidates, target: target))
     }
 
-    /// 特典候选不得顶替正片(`S5` 里的 5 不是第 5 话)。
+    /// `S5` 里的 5 不是第 5 话。
     func testSpecialCandidateDoesNotFillPlainEpisode() {
         let candidates = [candidate(9, episodeTitle: "S5 圣地巡礼")]
         let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
         XCTAssertNil(DanmakuCandidateMatcher.uniqueMatch(in: candidates, target: target))
     }
 
-    /// 季号冲突:目标第二季第 5 话,候选是第一季第 5 话 → 出局。
     func testSeasonMismatchIsRejected() {
         let firstSeason = [candidate(5, animeTitle: "某番", episodeTitle: "第5话")]
         let target = DanmakuCandidateMatcher.Target(
@@ -148,7 +138,7 @@ final class DanmakuMatchTests: XCTestCase {
             DanmakuCandidateMatcher.uniqueMatch(in: secondSeason, target: target)?.episodeID, 55)
     }
 
-    /// 剧场版与剧集是不同作品:类型不匹配直接出局,集号对上也救不回来。
+    /// 集号对上也救不回来。
     func testMovieAndEpisodeAreMutuallyExclusive() {
         let movie = [candidate(7, episodeTitle: "第5话", type: "movie")]
         let episodeTarget = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
@@ -159,7 +149,7 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertNil(DanmakuCandidateMatcher.uniqueMatch(in: episode, target: movieTarget))
     }
 
-    /// 标题完全对不上(归一后互不包含)时不能靠集号撞上就采用。
+    /// 归一后互不包含时不能靠集号撞上就采用。
     func testTitleMismatchIsRejected() {
         let candidates = [candidate(5, animeTitle: "完全无关的日剧", episodeTitle: "第5话")]
         let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
@@ -190,7 +180,7 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertEqual(binding?.episodeID, 105)
     }
 
-    /// 仍然模糊时交回用户 —— 新逻辑不能把「不猜」改成「猜一个」。
+    /// ⛔ 不能把「不猜」改成「猜一个」。
     func testResolveStillAsksUserWhenCandidatesRemainAmbiguous() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"""
@@ -211,7 +201,6 @@ final class DanmakuMatchTests: XCTestCase {
 
     // MARK: - ① 指纹接进 /match
 
-    /// 有指纹 → `hashAndFileName` + 真 Hash;没有 → `fileNameOnly` + 占位串。
     func testMatchRequestUsesRealFingerprintWhenAvailable() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"""
@@ -235,7 +224,6 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertEqual(json["fileSize"] as? Int, 12_345)
     }
 
-    /// 没有指纹时行为与改动前完全一致(占位串 + fileNameOnly)。
     func testMatchRequestFallsBackToPlaceholderWithoutFingerprint() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"""
@@ -257,7 +245,6 @@ final class DanmakuMatchTests: XCTestCase {
 
     // MARK: - ② TMDB 降级层
 
-    /// `/match` 落空 + 有 TMDB ID → 按 `tmdbId` 查一次,按集号挑唯一命中。
     func testTMDBFallbackResolvesEpisodeWhenMatchFails() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"""
@@ -291,7 +278,6 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertNil(items.first { $0.name == "anime" }, "按 TMDB 查时不传作品名")
     }
 
-    /// 电影用 `tmdbIdType=1`;剧集那套查不到时会再试电影那套。
     func testTMDBFallbackTriesBothIDSpacesForMovies() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"{"success":true,"isMatched":false,"matches":[]}"#),
@@ -327,7 +313,7 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertEqual(types, ["1", "0"], "先按电影 ID 查,再试电视剧 ID")
     }
 
-    /// 没有 TMDB ID 时不发 `/search/episodes`(不多打一次服务器)。
+    /// 不多打一次服务器。
     func testNoTMDBRequestWithoutID() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"{"success":true,"isMatched":false,"matches":[]}"#),

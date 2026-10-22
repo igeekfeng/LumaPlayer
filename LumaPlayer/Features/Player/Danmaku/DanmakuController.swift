@@ -2,13 +2,10 @@ import CoreText
 import Foundation
 import Observation
 
-/// 播放页里**这一集**的弹幕状态(每个 `PlayerViewModel` 一份,换集即换新)。
+/// 这一集的弹幕状态(每个 `PlayerViewModel` 一份)。⛔ 不碰网络细节与凭据(在 `DanmakuService`)。
 ///
-/// 职责:按 `DanmakuMediaQuery` 向 `DanmakuService` 要弹幕、测量文字宽度、按画面参数缓存排版、
-/// 给菜单与手动选择面板提供状态。⛔ 不碰网络细节与凭据(那些在 `DanmakuService`)。
-///
-/// 时间轴约定:弹幕时间 = 视频时间 − `shift`。`shift` = 弹弹play 给的偏移 + 用户手调的偏移,
-/// 正数表示弹幕**延后**出现(与 `/match` 的 `shift` 语义一致,`docs/DANDANPLAY_API.md` §2)。
+/// 弹幕时间 = 视频时间 − `shift`;`shift` = 弹弹play 偏移 + 用户偏移,正数表示弹幕延后
+/// (同 `/match` 的 `shift`,`docs/DANDANPLAY_API.md` §2)。
 @MainActor
 @Observable
 final class DanmakuController {
@@ -24,23 +21,22 @@ final class DanmakuController {
     }
 
     private(set) var status: Status = .off
-    /// 本集是否显示弹幕(会话级开关,初值取设置里的「自动加载」)
+    /// 会话级开关,初值取设置里的「自动加载」
     private(set) var isVisible: Bool
-    /// 用户手调的偏移(秒),本集有效
+    /// 秒,本集有效
     var userOffset: Double = 0
 
     let query: DanmakuMediaQuery
     @ObservationIgnored private let service: DanmakuService
     @ObservationIgnored private var loadTask: Task<Void, Never>?
-    /// 视频时长(秒)来源,给 `/match` 的 `videoDuration`。由 `PlayerViewModel` 接上
+    // 以下三个 provider 由 `PlayerViewModel` 接上
+    /// 秒,给 `/match` 的 `videoDuration`
     @ObservationIgnored var durationProvider: () -> Double? = { nil }
-    /// 媒体指纹来源(`DanmakuMatchContext.fileHash`)。由 `PlayerViewModel` 接上 ——
-    /// 它才知道播放计划与认证头;`nil` = 算不出来,退回文件名匹配。
+    /// `DanmakuMatchContext.fileHash`;nil = 算不出来,退回文件名匹配
     @ObservationIgnored var fingerprintProvider: () async -> String? = { nil }
-    /// TMDB ID / 电影标记来源。由 `PlayerViewModel` 接上(读 `ProviderIds`)。
     @ObservationIgnored var matchHintsProvider: () -> DanmakuMatchHints = { .none }
 
-    /// 已加载的弹幕与每条在 1pt 字号下的宽度(一一对应)
+    /// 与 `widthPerPoint`(1pt 字号下的宽度)一一对应
     private(set) var loaded: LoadedDanmaku?
     private(set) var widthPerPoint: [CGFloat] = []
 
@@ -54,7 +50,7 @@ final class DanmakuController {
 
     // MARK: - 生命周期
 
-    /// 起播时调用。开着且还没请求过才发起;转码重新起流 / 重试也会走 `start()`,这里只认第一次。
+    /// 开着且还没请求过才发起(转码重新起流 / 重试也会调到这里)。
     func startIfNeeded() {
         guard isVisible, status == .off else { return }
         reload()
@@ -65,11 +61,7 @@ final class DanmakuController {
         if visible { startIfNeeded() }
     }
 
-    /// 重新走一遍自动匹配(凭据刚填好 / 网络恢复后)。
-    ///
-    /// 指纹(`fingerprintProvider`)在**这里**取:它是唯一需要等播放源就绪的一步
-    /// (`DanmakuFingerprint` 要拿直连流地址与认证头)。取不到就当没有,退回文件名匹配 ——
-    /// 指纹只是提高命中率,⛔ 不是匹配的前提。
+    /// 重新自动匹配。指纹在这里取(要等播放源就绪);取不到就退回文件名匹配,⛔ 指纹不是匹配前提。
     func reload() {
         loadTask?.cancel()
         status = .loading
@@ -99,7 +91,6 @@ final class DanmakuController {
         }
     }
 
-    /// 用户从候选 / 搜索结果里选定一个弹幕库。
     func select(_ candidate: DanmakuCandidate) {
         loadTask?.cancel()
         status = .loading
@@ -117,12 +108,11 @@ final class DanmakuController {
         }
     }
 
-    /// 手动搜索(面板用)。错误原样抛给面板显示。
     func search(keyword: String, episode: Int?) async throws -> (groups: [DanmakuSearchGroup], hasMore: Bool) {
         try await service.search(keyword: keyword, episode: episode)
     }
 
-    /// 「匹配错了」:忘掉绑定、清空当前弹幕,回到等用户挑的状态。
+    /// 「匹配错了」:忘掉绑定、清空弹幕,回到等用户挑。
     func unbind() async throws {
         loadTask?.cancel()
         try await service.unbind(query)
@@ -141,10 +131,10 @@ final class DanmakuController {
 
     @ObservationIgnored private var layoutMemo: (parameters: DanmakuLayout.Parameters, placed: [PlacedDanmaku], maxLifetime: Double)?
 
-    /// 排版结果每重算一次 +1。渲染层按「下标 → 图层」缓存预渲染位图,代号变了下标就不再对应,须整批丢弃。
+    /// 每重排一次 +1。渲染层按下标缓存位图,代号变了须整批丢弃。
     @ObservationIgnored private(set) var layoutGeneration = 0
 
-    /// 按画面参数排版;参数不变时直接返回上一次的结果(渲染层每帧都会问)。
+    /// 参数不变时返回缓存(渲染层每帧都会问)。
     func placement(for parameters: DanmakuLayout.Parameters) -> (placed: [PlacedDanmaku], maxLifetime: Double) {
         if let memo = layoutMemo, memo.parameters == parameters {
             return (memo.placed, memo.maxLifetime)
@@ -187,10 +177,10 @@ final class DanmakuController {
         }
     }
 
-    /// 测量用的字号:在 100pt 下测再除以 100,比直接测 1pt 精确。
+    /// 在 100pt 下测再除以 100,比直接测 1pt 精确。
     private nonisolated static let measureFontSize: CGFloat = 100
 
-    /// 每条文字在 1pt 字号下的宽度。字体与渲染层一致(系统字体粗体,见 `DanmakuRenderer`)。
+    /// 每条文字在 1pt 字号下的宽度。⛔ 字体须与 `DanmakuSprite.font` 一致。
     nonisolated static func measure(_ texts: [String]) -> [CGFloat] {
         let font = CTFontCreateUIFontForLanguage(.emphasizedSystem, measureFontSize, nil)
             ?? CTFontCreateWithName("Helvetica-Bold" as CFString, measureFontSize, nil)

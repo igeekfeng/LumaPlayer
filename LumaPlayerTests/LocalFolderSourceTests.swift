@@ -1,11 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 本地文件夹来源在组合根与浏览页上的生命周期:添加 / 浏览 / 进剧集 / 起播 / 只读 /
-/// 换文件夹 / 删除时清本地数据。
-///
-/// 访问权走 `FakeBookmarks`(理由见 `LocalFolderTests`)。⚠️ 真实的打开面板、
-/// 安全作用域书签跨启动、外接盘拔插**未验证**,只能在真机上点。
+/// 本地文件夹来源的生命周期:添加 / 浏览 / 进剧集 / 起播 / 只读 / 换文件夹 / 删除时清本地数据。
+/// 访问权走 `FakeBookmarks`;真实打开面板、书签跨启动、外接盘拔插未验证。
 @MainActor
 final class LocalFolderSourceTests: XCTestCase {
     private var storage: CredentialFileStore!
@@ -122,7 +119,7 @@ final class LocalFolderSourceTests: XCTestCase {
         XCTAssertEqual(session.externalSubtitles.count, 1)
     }
 
-    /// 本地读盘不缓存目录:往文件夹里拷了新片子,回到这一层(刷新)就该看到。
+    /// 本地读盘不缓存目录:刷新就能看到新拷进来的片子。
     func testNewFilesShowUpOnRefreshWithoutCaching() async throws {
         let container = try makeContainer()
         let source = try await container.addLocalFolderSource(folderURL: root)

@@ -3,51 +3,29 @@ import AppKit
 
 // MARK: - 主窗口浮动顶栏
 //
-// ## 为什么不用系统工具栏
+// 不让系统建工具栏:原生全屏时它被搬进 `NSToolbarFullScreenWindow`,各种 toolbar / scrollEdge 修饰都不生效
+// (PITFALLS.md Q37)。所以窗口 `.hiddenTitleBar`、不声明 `.toolbar` 项、`.toolbar(removing: .title)`、
+// push 页 `.navigationBarBackButtonHidden(true)`(系统返回按钮会建出 NSToolbar),按钮画到内容上。
+// ⛔ 不用 `.toolbar(.hidden, for: .windowToolbar)`:红绿灯会跟着消失(PITFALLS.md)。
 //
-// 系统工具栏是一条「栏」:有底色、有标题、有分隔,主窗口看起来像个文件管理器;
-// 原生全屏时系统还会把它整条搬进独立的 `NSToolbarFullScreenWindow`,
-// `.toolbarBackgroundVisibility` / `.scrollEdgeEffect*` / `.windowToolbarFullScreenVisibility`
-// 全都不生效(PITFALLS.md Q37)。所以主窗口**不让系统建工具栏**:窗口 `.hiddenTitleBar`,
-// 不声明任何 `.toolbar` 项、`.toolbar(removing: .title)`、push 页 `.navigationBarBackButtonHidden(true)`
-// (系统返回按钮会让 SwiftUI 建出一条 NSToolbar)。返回 / 搜索 / 来源这些按钮画到内容上:
-// 没有「栏底」,只有浮在内容上的玻璃圆形按钮,下面垫一层渐变压暗。
+// 栏挂在导航栈外层(`BrowseView`),经 `safeAreaInset(edge: .top)` 占位;hero 页自己
+// `ignoresSafeArea(edges: .top)`,栏压在图上。
 //
-// ⛔ 不要用 `.toolbar(.hidden, for: .windowToolbar)`:在 `.hiddenTitleBar` 窗口上它会把整个
-// 标题栏容器设成 hidden,红绿灯跟着消失(2026-10-15 实测,PITFALLS.md)。
-//
-// ## 布局
-//
-// 栏挂在导航栈**外层**(`BrowseView`),所有页共用一条;它经 `safeAreaInset(edge: .top)` 占位,
-// 普通页面的内容从栏下沿开始,滚上去时从渐变底下穿过;有 hero 的页(详情页、首页)自己
-// `ignoresSafeArea(edges: .top)`,图铺到窗口最上沿,栏压在图上。
-//
-// ## 可见性规则
-//
-// - **窗口化:常驻**。左上角是系统红绿灯,栏内按钮让出红绿灯那一列(`Metrics.chromeBarLeading`);
-//   右侧按钮在栏高里垂直居中(上方留边距,不贴窗口上沿);返回是无底 chevron,中心与红绿灯
-//   同高(从窗口里量,`trafficLightCenterY`),紧挨在红绿灯右边(2026-10-15 用户要求)。
-// - **全屏:自动隐藏**,与播放控制栏同一套双规则(DesignTokens.swift「界面规则」):
-//   指针静止 `autoHideDelay` 藏、移出窗口 `autoHidePointerExitDelay` 藏,一动鼠标就回来;
-//   指针停在栏上 / 搜索框聚焦时钉住。
+// - 窗口化常驻:按钮让出红绿灯那一列;返回 chevron 中心与红绿灯同高(`trafficLightCenterY`),紧挨其右。
+// - 全屏自动隐藏,同播放控制栏双规则(DesignTokens.swift「界面规则」);指针停在栏上 / 搜索框聚焦时钉住。
 
-/// 栏底下垫的那层压暗。
 enum BrowseChromeScrim {
-    /// 普通页面:窗口底色 → 透明。滚上去的内容在按钮下面被盖住,不和按钮叠字
+    /// 窗口底色 → 透明,滚上去的内容不和按钮叠字
     case page
-    /// 栏压在 hero 图上:很轻的黑色 → 透明,只为让红绿灯与玻璃按钮读得出来
+    /// 很轻的黑色 → 透明,让红绿灯与玻璃按钮读得出来
     case hero
 }
 
 extension View {
-    /// 给主窗口导航栈挂上浮动顶栏(系统窗口工具栏不建,见文件头)。
-    ///
     /// - Parameters:
-    ///   - chrome: 全屏状态与自动隐藏(每个主窗口一份)
-    ///   - scrim: 栏底的压暗方式(见 `BrowseChromeScrim`)
-    ///   - isLoading: 有内容页在加载 / 刷新 → 栏下沿走一条加载线(`ChromeLoadingLine`)
-    ///   - back: 返回动作;nil = 不画返回(它单独定位,与红绿灯同高,见 `ChromeBackButton`)
-    ///   - bar: 栏右侧的内容(搜索 / 来源…),由调用方按当前页决定
+    ///   - chrome: 每个主窗口一份
+    ///   - back: nil = 不画返回
+    ///   - bar: 栏右侧内容(搜索 / 来源…)
     func browseChrome<Bar: View>(
         _ chrome: BrowseChromeController,
         scrim: BrowseChromeScrim,
@@ -100,13 +78,12 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // 右侧(搜索 / 来源)在栏高里垂直居中:上方留出边距,不贴窗口上沿
         GlassEffectContainer(spacing: Metrics.spacingM) {
             bar
         }
         .padding(.trailing, Metrics.spacingXL)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-        // 返回单独定位:中心与红绿灯同高(窗口化),紧挨在红绿灯右边;全屏没有红绿灯,在栏里居中靠左
+        // 返回单独定位:窗口化与红绿灯同高;全屏在栏里居中靠左
         .overlay(alignment: .topLeading) {
             if let back {
                 ChromeBackButton(action: back, onHero: scrim == .hero)
@@ -117,7 +94,7 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
         .frame(height: Metrics.chromeBarHeight)
         .background {
             scrimView
-                // 隐藏标题栏后窗口只能靠这一条拖动(按钮之间的空白处)
+                // 隐藏标题栏后窗口只能靠这一条拖动
                 .contentShape(Rectangle())
                 .gesture(WindowDragGesture())
                 .allowsWindowActivationEvents(true)
@@ -131,7 +108,7 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: Metrics.animationFast), value: isLoading)
         .onHover { chrome.setHovering($0) }
         .opacity(chrome.isVisible ? 1 : 0)
-        // 栏藏起来时顶部整条不挡页面操作(滚动 / 点卡片)
+        // 藏起来时不挡页面操作
         .allowsHitTesting(chrome.isVisible)
         .animation(
             reduceMotion ? nil : .easeInOut(duration: Metrics.animationStandard),
@@ -139,7 +116,7 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
         )
     }
 
-    /// 返回按钮那一行的高度:它在这一行里居中,所以行高 = 2 × 红绿灯中心距上沿
+    /// 返回按钮在这一行里居中,所以行高 = 2 × 红绿灯中心距上沿
     private var backRowHeight: CGFloat {
         chrome.isFullScreen ? Metrics.chromeBarHeight : chrome.trafficLightCenterY * 2
     }
@@ -169,11 +146,7 @@ private struct BrowseChromeBarContainer<Bar: View>: View {
 
 // MARK: - 栏里的部件
 
-/// 返回按钮(⌘[)。
-///
-/// 只有一个 chevron,⛔ 不加玻璃圆底:它紧挨着红绿灯,和红绿灯同一高度,
-/// 是标题栏控件的延续(Finder / 系统设置的返回同样是无底图标),套个圆底会比红绿灯还抢眼。
-/// 压在 hero 图上时用白色(栏底有黑色压暗),普通页面用主文字色。
+/// 返回按钮(⌘[)。⛔ 不加玻璃圆底:它是标题栏控件的延续(同 Finder),套圆底比红绿灯还抢眼。
 struct ChromeBackButton: View {
     let action: @MainActor () -> Void
     let onHero: Bool
@@ -198,8 +171,7 @@ struct ChromeBackButton: View {
     }
 }
 
-/// 紧凑搜索胶囊(⌘F 聚焦)。提交式:回车才搜,不随输入逐字请求(服务器低频纪律,见 SearchViewModel)。
-/// 聚焦期间栏钉住,否则字没输完栏先淡出了。
+/// 搜索胶囊(⌘F 聚焦)。回车才搜,⛔ 不逐字请求(服务器低频纪律)。聚焦期间栏钉住。
 struct ChromeSearchField: View {
     @Binding var text: String
     let chrome: BrowseChromeController
@@ -239,11 +211,8 @@ struct ChromeSearchField: View {
     }
 }
 
-/// 栏下沿的加载线:有内容页在加载 / 刷新时出现(DesignTokens.swift「界面规则」加载态)。
-///
-/// 一小段强调色在整条宽度上来回扫。用 `TimelineView` 按时间算位置(与旧的刷新图标同一做法):
-/// `isLoading` 一变假整条视图就移除,不会有停不干净的 `repeatForever` 动画。
-/// 「减少动态效果」下不扫,显示一条静止的半透明线。
+/// 栏下沿的加载线(DesignTokens.swift「界面规则」加载态)。用 `TimelineView` 按时间算位置,
+/// ⛔ 不用 `repeatForever`(移除时停不干净)。「减少动态效果」下显示静止线。
 struct ChromeLoadingLine: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -268,7 +237,7 @@ struct ChromeLoadingLine: View {
         .accessibilityLabel("正在加载")
     }
 
-    /// 一个周期内从左外侧扫到右外侧(进出都不露头)
+    /// 从左外侧扫到右外侧
     private func offset(at date: Date, total: CGFloat, segment: CGFloat) -> CGFloat {
         let period = Metrics.chromeLoadingLinePeriod
         let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
@@ -279,29 +248,21 @@ struct ChromeLoadingLine: View {
 // MARK: - 状态
 
 extension EnvironmentValues {
-    /// 当前主窗口的顶栏状态。页面经它登记**自己的返回动作**(百度目录的「上一层」),
     /// 不在主窗口里时为 nil。
     @Entry var browseChrome: BrowseChromeController?
 }
 
-/// 顶栏的「环境状态」:当前窗口是否全屏、栏是否可见,以及页面登记的返回动作。
-///
-/// 全屏通知按窗口实例过滤(主窗口),不拿 `NSApp.keyWindow`
-/// (播放器窗口进 / 退全屏时主窗口会误判,与 PITFALLS.md Q19 同类)。
+/// 全屏通知按窗口实例过滤,⛔ 不用 `NSApp.keyWindow`(播放器窗口进退全屏会误判,同 PITFALLS.md Q19)。
 @MainActor
 @Observable
 final class BrowseChromeController: NSObject {
     private(set) var isFullScreen = false
     private(set) var isVisible = true
 
-    /// 页面自己的「返回」(导航栈之外的层级,目前只有百度目录的上一层)。
-    /// nil = 页面没有自己的返回;导航栈不空时栈优先(见 `BrowseView.backAction`)。
+    /// 导航栈之外的返回(百度目录的上一层);栈不空时栈优先(`BrowseView.backAction`)。
     var pageBackAction: (@MainActor () -> Void)?
-    /// 根页顶部有 hero 的来源(Emby 首页 `HomeHeroSlot`、百度剧集详情 `FileSourceBrowserView` 上报)。
-    /// 有就把栏底换成 hero 的压暗;`BrowseView` 只在栈空时读。
-    ///
-    /// 按**来源 id** 登记而不是一个布尔:换来源时新根页「有 hero」与旧根页「没了」的上报
-    /// 先后不定,布尔会被后到的那个覆盖;按 id 各记各的,读的时候只看当前来源。
+    /// 根页顶部有 hero 的来源,有就把栏底换成 hero 压暗;`BrowseView` 只在栈空时读。
+    /// 按来源 id 记,⛔ 不改成布尔:换来源时新旧根页的上报先后不定,布尔会被后到的覆盖。
     private(set) var heroRootSources: Set<UUID> = []
 
     func setRootHasHero(_ hasHero: Bool, source: UUID) {
@@ -313,7 +274,7 @@ final class BrowseChromeController: NSObject {
     }
 
     @ObservationIgnored private weak var window: NSWindow?
-    /// 指针停在栏上 / 搜索框聚焦:到点也不藏(两样分开记,任一为真就钉住)
+    /// 任一为真就钉住
     @ObservationIgnored private var isHovering = false
     @ObservationIgnored private var isSearchFocused = false
     @ObservationIgnored private var hideTask: Task<Void, Never>?
@@ -343,13 +304,11 @@ final class BrowseChromeController: NSObject {
             name: NSWindow.didExitFullScreenNotification, object: newWindow)
     }
 
-    /// 指针在页面上移动:窗口化无所谓(常驻),全屏下显示并重新计时。
     func pointerMoved() {
         guard isFullScreen else { return }
         reveal()
     }
 
-    /// 指针移出窗口:窗口化无所谓,全屏下按更短的延迟藏。
     func pointerExited() {
         guard isFullScreen else { return }
         reveal(delay: Metrics.autoHidePointerExitDelay)
@@ -365,7 +324,7 @@ final class BrowseChromeController: NSObject {
         pinChanged()
     }
 
-    /// 显示栏;全屏下 `delay` 后自动藏(钉住时不藏)。
+    /// 全屏下 `delay` 后自动藏(钉住时不藏)。
     func reveal(delay: TimeInterval = Metrics.autoHideDelay) {
         if !isVisible { isVisible = true }
         hideTask?.cancel()
@@ -383,8 +342,7 @@ final class BrowseChromeController: NSObject {
         }
     }
 
-    /// 红绿灯中心距窗口上沿的距离(窗口化时返回按钮按它对齐)。
-    /// 读不到(还没布局 / 没有关闭按钮)就留默认值:栏高的一半。
+    /// 红绿灯中心距窗口上沿;读不到时为栏高的一半。
     private(set) var trafficLightCenterY: CGFloat = Metrics.chromeBarHeight / 2
 
     private func measureTrafficLights(in window: NSWindow) {

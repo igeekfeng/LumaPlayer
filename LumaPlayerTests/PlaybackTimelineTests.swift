@@ -43,7 +43,7 @@ final class PlaybackTimelineTests: XCTestCase {
         XCTAssertTrue(line.contains("未出画面"))
     }
 
-    /// 只有第一次记下 firstFrame 才算「结束」,之后的 time-pos 事件不能再触发日志(曾重复写 4 行)
+    /// 之后的 time-pos 事件不能再触发日志
     func testMarkReturnsTrueOnlyOnceWhenFinished() {
         var timeline = PlaybackTimeline()
         XCTAssertFalse(timeline.mark(.playing, elapsed: .seconds(1)))

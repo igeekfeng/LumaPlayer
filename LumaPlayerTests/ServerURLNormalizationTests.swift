@@ -75,8 +75,7 @@ final class ServerURLNormalizationTests: XCTestCase {
     }
 
     func testRejectsEmptyHost() {
-        // ⚠️ 实现陷阱(API_CONTRACT.md 1.3):URLComponents(string: "https://")
-        // 的 host 是空字符串 "" 而不是 nil,guard let host 会放过它
+        // URLComponents(string: "https://") 的 host 是 "" 而不是 nil,guard let host 会放过它(API_CONTRACT.md 1.3)
         XCTAssertThrowsError(try normalizeServerURL("https://")) { error in
             XCTAssertEqual(error as? ServerURLError, .missingHost)
         }
@@ -97,21 +96,20 @@ final class ServerURLNormalizationTests: XCTestCase {
     }
 
     func testRejectsEmptyInputAsMissingHost() throws {
-        // 空串 → 补 scheme 后为 "https://" → 与必测用例最后一条同因
+        // 空串补 scheme 后为 "https://",与 `testRejectsEmptyHost` 同因
         XCTAssertThrowsError(try normalizeServerURL("   ")) { error in
             XCTAssertEqual(error as? ServerURLError, .missingHost)
         }
     }
 
     func testStripsUserInfo() throws {
-        // CLAUDE.md「安全与隐私」:密码不做本地持久化 → 剥 userinfo
+        // 密码不做本地持久化,剥掉 userinfo(CLAUDE.md「安全与隐私」)
         let result = try normalizeServerURL("https://user:pass@example.com")
         XCTAssertEqual(result.url.absoluteString, "https://example.com")
         XCTAssertFalse(result.schemeWasInferred)
     }
 
     func testNonDefaultPortIsKept() throws {
-        // https + 8096 不是默认端口 → 保留
         let result = try normalizeServerURL("https://example.com:8096")
         XCTAssertEqual(result.url.absoluteString, "https://example.com:8096")
     }

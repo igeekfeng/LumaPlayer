@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 本地隐藏列表(「不想看见但网盘上还在」的条目)。
-///
-/// 隔离方式与 `WatchProgressStoreTests` 一致:每个用例一个临时 JSON 文件,
-/// tearDown 删掉 —— 测试跑在宿主 App 进程里,不能碰真实沙盒容器里的那份。
+/// 每个用例一个临时 JSON 文件:测试跑在宿主 App 进程里,不能碰沙盒里真实的那份。
 final class HiddenItemsStoreTests: XCTestCase {
 
     private var fileURL: URL!
@@ -38,7 +35,7 @@ final class HiddenItemsStoreTests: XCTestCase {
 
         let refs = await store.hiddenRefs(sourceID: sourceID)
         XCTAssertTrue(refs.contains(SourceItemRef(sourceID: sourceID, itemID: "42")))
-        // ⛔ 不串来源:另一个 sourceID 不该看到它
+        // ⛔ 不串来源
         let other = await store.hiddenRefs(sourceID: UUID())
         XCTAssertTrue(other.isEmpty)
     }
@@ -70,8 +67,7 @@ final class HiddenItemsStoreTests: XCTestCase {
 
     // MARK: - 隐藏路径(续播卡片过滤)
 
-    /// 隐藏一个**目录**时要把它的路径记下来:目录里各集的续播卡片靠它过滤掉
-    /// (那些记录记的是集文件的 `fs_id`,按 `ref` 挡不住)。
+    /// 目录里各集的续播卡片记的是集文件的 `fs_id`,按 `ref` 挡不住,要靠目录路径过滤。
     func testHiddenPathsReportPathAndDirectoryFlag() async throws {
         let store = makeStore()
         try await store.hide(HiddenItemsStore.Item(
@@ -90,7 +86,7 @@ final class HiddenItemsStoreTests: XCTestCase {
         XCTAssertTrue(other.isEmpty)
     }
 
-    /// 没记路径的(老记录 / 没给 path)不进 `hiddenPaths` —— 没有路径就没有目录语义可判。
+    /// 没有路径就没有目录语义可判。
     func testHiddenPathsSkipItemsWithoutPath() async throws {
         let store = makeStore()
         try await store.hide(makeItem())
@@ -100,7 +96,6 @@ final class HiddenItemsStoreTests: XCTestCase {
         XCTAssertTrue(paths.isEmpty)
     }
 
-    /// ⚠️ 老文件没有 `path` / `isDirectory` 两个键,必须照常解码 ——
     /// 升级不该把用户的隐藏列表判成损坏。
     func testLegacyFileWithoutPathDecodes() async throws {
         let ref = SourceItemRef(sourceID: sourceID, itemID: "42")
@@ -121,7 +116,6 @@ final class HiddenItemsStoreTests: XCTestCase {
 
     // MARK: - 持久化
 
-    /// 换一个实例(模拟重启)还在 —— 隐藏是**持久化**的,不是内存态。
     func testSnapshotSurvivesANewStoreInstance() async throws {
         try await makeStore().hide(makeItem())
 
@@ -136,7 +130,7 @@ final class HiddenItemsStoreTests: XCTestCase {
         XCTAssertEqual(permissions.intValue & 0o777, 0o600, "「谁不想看什么」属于隐私")
     }
 
-    /// 文件坏了要**如实报出来**,⛔ 不静默当成「没有隐藏条目」继续跑。
+    /// ⛔ 不静默当成「没有隐藏条目」继续跑。
     func testCorruptedFileIsReportedNotSwallowed() async throws {
         try Data("not json".utf8).write(to: fileURL)
         let store = makeStore()

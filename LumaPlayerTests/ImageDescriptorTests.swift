@@ -1,7 +1,6 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 图片描述符:缓存 key 的稳定性与「能不能进磁盘缓存」。
 final class ImageDescriptorTests: XCTestCase {
 
     func testEmbyDescriptorReusesSpecKeyAndOwner() {
@@ -16,8 +15,7 @@ final class ImageDescriptorTests: XCTestCase {
         XCTAssertTrue(descriptor.isDiskCacheable)
     }
 
-    /// 没有 tag 的 Emby 图不进磁盘缓存(`API_CONTRACT.md` 3.3:
-    /// key 不含版本就可能把旧图当新图端出来)。
+    /// key 不含版本就可能把旧图当新图端出来(`API_CONTRACT.md` 3.3)。
     func testEmbyDescriptorWithoutTagIsNotDiskCacheable() {
         let spec = ImageSpec(
             serverID: UUID(), itemID: "IT", type: .primary, tag: nil, maxWidth: 300)
@@ -25,7 +23,7 @@ final class ImageDescriptorTests: XCTestCase {
         XCTAssertFalse(ImageDescriptor.emby(spec).isDiskCacheable)
     }
 
-    /// 远端图(百度封面)自带版本 —— 版本由 `baiduCoverKey` 编进去,所以可以缓存。
+    /// 版本由 `baiduCoverKey` 编进 key。
     func testRemoteDescriptorIsDiskCacheable() throws {
         let descriptor = ImageDescriptor.remote(
             ownerID: UUID(),
@@ -39,7 +37,6 @@ final class ImageDescriptorTests: XCTestCase {
 
     // MARK: - 百度封面 key
 
-    /// ★ 换了封面 → `server_mtime` 变 → key 变 → 不会再端出旧图。
     func testBaiduCoverKeyChangesWithModifiedTime() {
         let sourceID = UUID()
         let before = ImageDescriptor.baiduCoverKey(
@@ -52,7 +49,7 @@ final class ImageDescriptorTests: XCTestCase {
         XCTAssertNotEqual(before, after)
     }
 
-    /// 拿不到 mtime 时 key 仍要**稳定** —— 否则每次都是新 key,缓存等于没有。
+    /// 否则每次都是新 key,缓存等于没有。
     func testBaiduCoverKeyIsStableWithoutModifiedTime() {
         let sourceID = UUID()
         let first = ImageDescriptor.baiduCoverKey(
@@ -63,9 +60,7 @@ final class ImageDescriptorTests: XCTestCase {
         XCTAssertEqual(first, second)
     }
 
-    /// ⛔ 缓存 key 里**不能**出现临时地址:百度 `dlink` 8 小时就过期,
-    /// 一旦编进 key,同一张图每 8 小时就会被当成新图重新下载
-    /// (`docs/BAIDU_PAN_API.md` §2.2)。
+    /// ⛔ key 里不能有临时地址:`dlink` 8 小时过期,编进 key 就会被当成新图重下(`docs/BAIDU_PAN_API.md` §2.2)。
     func testBaiduCoverKeyDoesNotContainAnythingTemporary() {
         let sourceID = UUID()
         let key = ImageDescriptor.baiduCoverKey(
@@ -77,7 +72,7 @@ final class ImageDescriptorTests: XCTestCase {
         XCTAssertTrue(key.contains(sourceID.uuidString), "来源 id 要在 key 里,否则两个来源会串图")
     }
 
-    /// 不同尺寸是不同条目(`ImageSpec.cacheKey` 同一条规则)
+    /// 与 `ImageSpec.cacheKey` 同一条规则
     func testBaiduCoverKeyVariesWithMaxWidth() {
         let sourceID = UUID()
         let small = ImageDescriptor.baiduCoverKey(

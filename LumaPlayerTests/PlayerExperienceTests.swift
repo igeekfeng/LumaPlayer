@@ -1,12 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 播放体验:下一集查找、连续倍速、事件落地、独立窗口的播放请求。
-///
-/// 与 `PlayerViewModelTests` 同一原则:只验**不需要 mpv、不需要网络**的部分
-/// (`player` 为 nil 时控制方法都是空操作,`handle` 不碰 libmpv)。
-/// ⛔ 窗口、自动隐藏、菜单与媒体键是 UI 行为,本机无屏幕录制权限,
-/// 不在这里假装覆盖。
+/// 只验不需要 mpv、不需要网络的部分(`player` 为 nil 时控制方法是空操作);窗口、自动隐藏、菜单与媒体键等 UI 行为不在这里覆盖。
 @MainActor
 final class PlayerExperienceTests: XCTestCase {
 
@@ -51,15 +46,14 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerViewModel.speedText(1.1), "1.1×")
     }
 
-    /// 连续调节:值必须夹在 mpv 的可用区间内,且不带浮点尾数
-    /// (滑块拖出来的 `1.1500000000000001` 会让屏显与上报抖动)。
+    /// 滑块拖出来的 `1.1500000000000001` 会让屏显与上报抖动。
     func testClampedSpeedStaysInMpvsRange() {
         XCTAssertEqual(PlayerViewModel.clampedSpeed(0.1), 0.25)
         XCTAssertEqual(PlayerViewModel.clampedSpeed(9), 4)
         XCTAssertEqual(PlayerViewModel.clampedSpeed(1.1500000000000001), 1.15)
     }
 
-    /// 不再是「跳到下一档」:从任意值出发都只走一个固定步长,端点处不动。
+    /// 从任意值出发都只走固定步长,不跳预设档;端点处不动。
     func testStepSpeedMovesByFixedStepNotPreset() {
         XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 1, up: true, step: 0.1), 1.1)
         XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 1.35, up: true, step: 0.05), 1.4)
@@ -68,8 +62,7 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerViewModel.steppedSpeed(from: 0.25, up: false, step: 0.1), 0.25)
     }
 
-    /// 连续拖滑块(0.05 一跳)不能每跳都发一次 `PlaybackRateChange` ——
-    /// 一次拖动十几个请求,违反真实服务器「低频」纪律。合并后只发最后一次的值。
+    /// 一次拖动十几个请求会违反真实服务器「低频」纪律,只发最后一次的值。
     func testContinuousSpeedChangeReportsOnce() async throws {
         let recorder = RateChangeRecorder()
         let reporter = PlaybackProgressReporter { endpoint in
@@ -108,7 +101,7 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertTrue(viewModel.isEnded)
     }
 
-    /// 播完后重试 / 重播:「已播完」必须复位,否则播完卡片会盖在新一轮播放上。
+    /// 否则播完卡片会盖在新一轮播放上。
     func testRetryClearsEndedState() throws {
         let viewModel = try makeViewModel()
         viewModel.handle(.endFile(.eof), generation: 0)
@@ -136,12 +129,9 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerTime.text(3725), "1:02:05")
     }
 
-    /// 剩余时长带负号前缀;剩余为 0 时给 `-00:00`。
-    /// ⛔ 曾经在这里输出 `---:--`:`text(0)` 返回 `--:--`,被拼上负号
-    /// (2026-10-03 修复,拖到进度条最右端 / 播完必现)。
+    /// `text(0)` 返回 `--:--`,⛔ 不能直接拼负号成 `---:--`。
     func testRemainingTextRendersZeroWithMinusPrefix() {
         XCTAssertEqual(PlayerTime.remainingText(0, durationKnown: true), "-00:00")
-        // 不足 1 秒也落到 -00:00,不能闪出 ---:--
         XCTAssertEqual(PlayerTime.remainingText(0.4, durationKnown: true), "-00:00")
         XCTAssertEqual(PlayerTime.remainingText(300, durationKnown: true), "-05:00")
         XCTAssertEqual(PlayerTime.remainingText(3300, durationKnown: true), "-55:00")
@@ -150,8 +140,7 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(PlayerTime.remainingText(-10, durationKnown: true), "-00:00")
     }
 
-    /// 时长未知时**不加负号**:`--:--` 的语义是「不知道」,
-    /// 负号的语义是「相对总量的差值」,没有总量就没有差值。
+    /// `--:--` 表示「不知道」,没有总量就没有差值,不加负号。
     func testRemainingTextOmitsMinusWhenDurationUnknown() {
         XCTAssertEqual(PlayerTime.remainingText(0, durationKnown: false), "--:--")
         XCTAssertEqual(PlayerTime.remainingText(120, durationKnown: false), "--:--")
@@ -159,7 +148,6 @@ final class PlayerExperienceTests: XCTestCase {
 
     // MARK: - 连点累加跳转
 
-    /// 首次点击是 1 倍,`seekRepeatResetDelay` 内连点逐级加。
     func testSkipRepeatCountsUpWithinWindow() {
         var state = PlayerSkipRepeat()
         let start = Date(timeIntervalSince1970: 1_000_000)
@@ -168,19 +156,19 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(state.advance(now: start.addingTimeInterval(0.6)), 3)
     }
 
-    /// 超过归零间隔后重新从 1 倍开始 —— 否则停一阵再点会突然跳很远。
+    /// 否则停一阵再点会突然跳很远。
     func testSkipRepeatResetsAfterIdle() {
         var state = PlayerSkipRepeat()
         let first = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertEqual(state.advance(now: first), 1)
         let second = first.addingTimeInterval(0.3)
         XCTAssertEqual(state.advance(now: second), 2)
-        // 从**最后一次**点击起算超过归零间隔
+        // 从最后一次点击起算
         let later = second.addingTimeInterval(Metrics.seekRepeatResetDelay + 0.1)
         XCTAssertEqual(state.advance(now: later), 1)
     }
 
-    /// 必须封顶:不封顶的话连点几十次会一次跳走几小时。
+    /// 不封顶的话连点几十次会一次跳走几小时。
     func testSkipRepeatStopsAtMaxMultiple() {
         var state = PlayerSkipRepeat()
         let start = Date(timeIntervalSince1970: 1_000_000)
@@ -188,8 +176,7 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(state.advance(now: start), Metrics.seekRepeatMaxMultiple)
     }
 
-    /// tooltip 预告的是**下一次**会跳多少,不是已经用掉的那一档;
-    /// 没点过时预告 1 倍,点满上限后不再往上加。
+    /// tooltip 预告的是下一次会跳多少,不是已用掉的那一档。
     func testSkipRepeatUpcomingPreviewsNextClick() {
         var state = PlayerSkipRepeat()
         let start = Date(timeIntervalSince1970: 1_000_000)
@@ -198,14 +185,12 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(state.upcoming(now: start), 2)
         for _ in 0..<20 { _ = state.advance(now: start) }
         XCTAssertEqual(state.upcoming(now: start), Metrics.seekRepeatMaxMultiple)
-        // 归零后预告也回到 1 倍
         let later = start.addingTimeInterval(Metrics.seekRepeatResetDelay + 0.1)
         XCTAssertEqual(state.upcoming(now: later), 1)
     }
 
     // MARK: - 预计结束时刻
 
-    /// 倍速必须参与换算:1.25× 下剩 1200 秒,实际只过 960 秒。
     func testEndTimeAccountsForPlaybackSpeed() throws {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let endsAt = try XCTUnwrap(PlayerTime.endsAt(
@@ -214,7 +199,6 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(endsAt.timeIntervalSince(now), 960, accuracy: 0.001)
     }
 
-    /// 正常速度就是「现在 + 剩余」。
     func testEndTimeAtNormalSpeedIsNowPlusRemaining() throws {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let endsAt = try XCTUnwrap(PlayerTime.endsAt(
@@ -223,26 +207,20 @@ final class PlayerExperienceTests: XCTestCase {
         XCTAssertEqual(endsAt.timeIntervalSince(now), 3300, accuracy: 0.001)
     }
 
-    /// 四种「宁可不显示」的情况都不能给出时刻 —— 编一个假的结束时间比不显示更糟。
+    /// 编一个假的结束时间比不显示更糟。
     func testEndTimeIsNilWhenUnknownOrFinished() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        // 时长未知
         XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 0, speed: 1, isEnded: false, now: now))
-        // 已播完
         XCTAssertNil(PlayerTime.endsAt(position: 3600, duration: 3600, speed: 1, isEnded: true, now: now))
-        // 剩余非正(拖过了头)
         XCTAssertNil(PlayerTime.endsAt(position: 3700, duration: 3600, speed: 1, isEnded: false, now: now))
-        // 倍速非法
         XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 3600, speed: 0, isEnded: false, now: now))
         XCTAssertNil(PlayerTime.endsAt(position: 0, duration: 3600, speed: .nan, isEnded: false, now: now))
-        // 位置非有限
         XCTAssertNil(PlayerTime.endsAt(position: .nan, duration: 3600, speed: 1, isEnded: false, now: now))
     }
 
     // MARK: - 播放请求(独立窗口)
 
-    /// 同一项再点一次播放必须是新请求:播放窗口按 pageID 重建播放页,
-    /// id 相同就会被当成「没变」,旧会话继续、不会重新起播。
+    /// 播放窗口按 pageID 重建播放页,id 相同会被当成没变,不会重新起播。
     func testPlayingSameItemTwiceMakesDistinctRequests() throws {
         let container = try makeContainer()
         let server = makeProfile()
@@ -253,13 +231,12 @@ final class PlayerExperienceTests: XCTestCase {
         let second = try XCTUnwrap(container.state.nowPlaying)
         XCTAssertNotEqual(first.id, second.id)
         XCTAssertEqual(second.embyItem?.id, "M1")
-        // 从别处起播一律是新播放页;只有播放页内换集才沿用(PlayerViewModelTests)
+        // 从别处起播一律新播放页;只有播放页内换集才沿用(见 PlayerViewModelTests)
         XCTAssertEqual(second.pageID, second.id)
         XCTAssertNotEqual(first.pageID, second.pageID)
     }
 
-    /// DesignTokens.swift「界面规则」:切到另一台服务器时结束旧播放,不能让播放器
-    /// 继续放上一台的内容、继续往上一台上报。
+    /// 切到另一台服务器时不能继续放、继续往上一台上报(DesignTokens.swift「界面规则」)。
     func testSwitchingToAnotherServerStopsPlayback() async throws {
         let registry = try makeRegistry()
         let container = AppContainer(registry: registry, credentials: credentials)
@@ -328,8 +305,7 @@ final class PlayerExperienceTests: XCTestCase {
         )
     }
 
-    /// 只记 Progress 上报里的 `eventName` 与倍速。用 actor 而不是
-    /// `@unchecked Sendable` 的盒子(CLAUDE.md「并发分层」,测试代码也不例外)。
+    /// 用 actor 而不是 `@unchecked Sendable` 的盒子(测试代码也守「并发分层」)。
     private actor RateChangeRecorder {
         struct Entry: Sendable {
             let eventName: String?

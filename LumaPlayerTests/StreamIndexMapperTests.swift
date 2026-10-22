@@ -1,11 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// mpv 轨道 → Emby `MediaStream.Index` 的换算(docs/PITFALLS.md Q21)。
-///
-/// 用例数据取自本地 Emby 4.9.5.0 实例上 `02-multi-track.mkv` 的实测:
-/// mpv 的 `src-id` 从 1 起,Emby 的 `Index` 从 0 起,早先直接透传 `src-id`
-/// 导致上报整体偏一位。这里断言的是**换算后的 Emby 索引**,不是 mpv 编号。
+/// mpv 轨道 → Emby `MediaStream.Index`(PITFALLS.md Q21):mpv `src-id` 从 1 起、Emby `Index` 从 0 起,不能透传。
+/// 数据取自本地 4.9.5.0 实例上的 `02-multi-track.mkv`;断言的是换算后的 Emby 索引。
 final class StreamIndexMapperTests: XCTestCase {
 
     /// mpv 的轨道号按类型各自从 1 编号
@@ -27,20 +24,19 @@ final class StreamIndexMapperTests: XCTestCase {
 
     // MARK: - 对应规则
 
-    /// 实测场景:mpv 播 English(aid=1)时,服务端必须收到 1(不是 src-id 的 2)。
+    /// mpv 播 English(aid=1)时服务端必须收到 1(不是 src-id 的 2)。
     func testAudioTracksMapByOrderWithinType() {
         XCTAssertEqual(map(1, .audio), 1)
         XCTAssertEqual(map(2, .audio), 2)
     }
 
-    /// 字幕同理:切到 Chinese(sid=2)对应 Emby 的 4,而不是某条音轨或越界
+    /// 切到 Chinese(sid=2)对应 Emby 的 4。
     func testSubtitleTracksMapByOrderWithinType() {
         XCTAssertEqual(map(1, .sub), 3)
         XCTAssertEqual(map(2, .sub), 4)
     }
 
-    /// Emby 的 `Index` 不连续(中间夹着别的类型、或服务端给的顺序打乱)时,
-    /// 仍按同类型内的 Index 升序对应。
+    /// Emby `Index` 不连续(夹着别的类型)或乱序时,仍按同类型内的 Index 升序对应。
     func testNonContiguousAndUnsortedEmbyIndices() {
         let streams = [
             Self.stream(5, "Audio"),
@@ -97,7 +93,6 @@ final class StreamIndexMapperTests: XCTestCase {
         XCTAssertNil(map(1, .video))
     }
 
-    /// 不存在的轨道号
     func testUnknownTrackIDReturnsNil() {
         XCTAssertNil(map(9, .audio))
     }

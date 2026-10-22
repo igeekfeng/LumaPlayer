@@ -4,81 +4,70 @@ import Foundation
 enum CredentialFileError: Error, Equatable {
     /// 文件存在但读不出来(权限、IO)
     case readFailed
-    /// 文件存在但不是本类型写出的格式(被外部改坏)。
     /// ⛔ 不得就地重置成空文件:里面有全 App 唯一的 DeviceId(API_CONTRACT.md 2.4)
     case corrupted
-    /// 落盘失败(建目录 / 写临时文件 / 原子替换 / 设置备份排除)
     case writeFailed
 }
 
-/// 服务器凭据(token、DeviceId)的本地文件存储。
-/// actor 串行化访问(CLAUDE.md「并发分层」:Core/Security 有状态类型是 actor)。
+/// 凭据(token、DeviceId 等)的本地文件存储,只做原始键值存取,语义在 `CredentialStore`。
 ///
-/// 为什么不用 Keychain:App 用 ad-hoc 签名,钥匙串 ACL 认 cdhash,每次重新构建都会弹授权窗;
-/// 给 ad-hoc 加显式 DR 实测也没用(仍只认 cdhash),data protection keychain 又要 provisioning profile。
-/// 文件放在沙盒容器里,值 base64 编码(不是加密),权限 0600(先写 0600 临时文件再 `rename`,
+/// 不用 Keychain:ad-hoc 签名的钥匙串 ACL 认 cdhash,每次构建都弹授权窗;加显式 DR 也没用,
+/// data protection keychain 又要 provisioning profile。
+/// 文件在沙盒容器里,值 base64(不是加密),权限 0600(先写 0600 临时文件再 `rename`,
 /// 不用 `.atomic` —— 它按 umask 建 0644),每次写完重打 `isExcludedFromBackup`(rename 换了 inode)。
 ///
-/// 安全取舍:防不住以同一用户身份运行、能读这个容器的进程;ad-hoc 没有稳定代码身份,
-/// 任何不弹窗的加密都防不住它,所以不加密。密码泄露代价最大,只在用户勾了「记住密码」时才存。
+/// 安全取舍:防不住同一用户身份、能读容器的进程;ad-hoc 没有稳定代码身份,不弹窗的加密都防不住,
+/// 所以不加密。密码只在用户勾了「记住密码」时才存。
 ///
-/// 升级迁移:首次访问时若没有「已导入」标记,从旧钥匙串(service `com.local.LumaPlayer`)导入
+/// 迁移:首次访问且没有「已导入」标记时,从旧钥匙串(service `com.local.LumaPlayer`)导入
 /// `deviceId` 与 `server-token:*`(每条弹一次授权窗);全有或全无,失败本进程不重试;
-/// 文件里已有的同名值优先。旧条目不自动删(ad-hoc 删不了别的签名建的条目,且 `deviceId` 那条是兜底)。
-///
-/// 只做原始键值存取,不含业务语义;token / DeviceId 的语义在 CredentialStore。
-/// 路径可注入:测试用临时目录隔离,不碰真实容器。
+/// 文件里已有的同名值优先。⛔ 不删旧条目(见 `LegacyKeychainImport`)。
 actor CredentialFileStore {
-    /// 旧版钥匙串导入。返回 account → 值;抛错 = 这次没导成(下次启动再试)。
+    /// 返回 account → 值;抛错 = 没导成,下次启动再试。
     typealias LegacyImport = @Sendable () throws -> [String: Data]
 
     private let fileURL: URL
     private let legacyImport: LegacyImport?
-    /// 已加载的文件内容。nil = 还没读过盘
+    /// nil = 还没读过盘
     private var loaded: CredentialFile?
-    /// 本次进程内导入失败的原因。记下来是为了不在每次存取时重试 ——
-    /// 每次重试都会再弹一轮钥匙串授权窗。下次启动(新实例)才重试。
+    /// 本进程不重试导入(每次重试都弹一轮授权窗),下次启动才重试。
     private var legacyImportFailure: (any Error)?
 
-    /// - Parameter legacyImport: 非 nil 时,文件里还没有「已导入」标记就先跑一次导入,
-    ///   导入值不覆盖文件里已有的同名条目。
     init(fileURL: URL, legacyImport: LegacyImport? = nil) {
         self.fileURL = fileURL
         self.legacyImport = legacyImport
     }
 
-    /// 生产路径:沙盒容器 `Library/Application Support/LumaPlayer/credentials.json`。
     static var defaultFileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "LumaPlayer", directoryHint: .isDirectory)
             .appending(path: "credentials.json", directoryHint: .notDirectory)
     }
 
-    /// 写入(已存在则覆盖,upsert 语义)。
     func setValue(_ value: Data, forAccount account: String) throws {
         var updated = try current()
         updated.entries[account] = value
         try commit(updated)
     }
 
-    /// 读取;不存在返回 nil(不是错误)。
+    /// 不存在返回 nil(不是错误)。
     func value(forAccount account: String) throws -> Data? {
         try current().entries[account]
     }
 
-    /// 删除;不存在视为成功(幂等),且不落盘。
+    /// 幂等;不存在时不落盘。
     func removeValue(forAccount account: String) throws {
         var updated = try current()
         guard updated.entries.removeValue(forKey: account) != nil else { return }
         try commit(updated)
     }
 
-    /// 删除整个凭据文件(测试清理用)。
+    /// 测试清理用。
     func removeAll() throws {
         do {
             try FileManager.default.removeItem(at: fileURL)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            // 本来就没有:幂等
+            // 幂等
         } catch {
             throw CredentialFileError.writeFailed
         }
@@ -86,9 +75,8 @@ actor CredentialFileStore {
         legacyImportFailure = nil
     }
 
-    /// 原子 get-or-set:存在则返回现值;不存在则写入 `generator()` 的值并返回。
-    /// 整段逻辑在 actor 隔离内同步完成(无 await),并发调用只生成一次
-    /// —— DeviceId 的「全 App 唯一」依赖这一点(API_CONTRACT.md 2.4)。
+    /// 原子 get-or-set。整段同步完成(⛔ 不得引入 await),并发调用只生成一次 ——
+    /// DeviceId 全 App 唯一依赖这点(API_CONTRACT.md 2.4)。
     func value(forAccount account: String, defaultingTo generator: @Sendable () -> Data) throws -> Data {
         var updated = try current()
         if let existing = updated.entries[account] {
@@ -102,7 +90,6 @@ actor CredentialFileStore {
 
     // MARK: - 内部实现(actor 隔离内同步调用,不产生 await)
 
-    /// 当前内容:首次访问时读盘,需要时先做旧版导入。
     private func current() throws -> CredentialFile {
         if let loaded {
             return loaded
@@ -119,7 +106,7 @@ actor CredentialFileStore {
                 legacyImportFailure = error
                 throw error
             }
-            // 文件里已有的值优先:它们比钥匙串里的旧值新
+            // 文件里的值比钥匙串的新,优先
             file.entries.merge(imported) { existing, _ in existing }
             file.legacyKeychainImported = true
             try writeFile(file)
@@ -128,7 +115,7 @@ actor CredentialFileStore {
         return file
     }
 
-    /// 先落盘再更新内存:写失败时内存与磁盘保持一致。
+    /// 先落盘再更新内存,写失败时两者一致。
     private func commit(_ file: CredentialFile) throws {
         try writeFile(file)
         loaded = file
@@ -150,8 +137,6 @@ actor CredentialFileStore {
         }
     }
 
-    /// 原子写:同目录下先写 0600 的临时文件,再 rename 覆盖。
-    /// 不用 `Data.write(options: .atomic)`:它新建的文件按 umask 是 0644。
     private func writeFile(_ file: CredentialFile) throws {
         let fileManager = FileManager.default
         let directory = fileURL.deletingLastPathComponent()
@@ -171,11 +156,11 @@ actor CredentialFileStore {
             throw CredentialFileError.writeFailed
         }
         guard rename(temporary.path(percentEncoded: false), fileURL.path(percentEncoded: false)) == 0 else {
-            // 已经在抛错路径上:临时文件删不掉只是留个垃圾文件,下次写入会覆盖它
+            // 已在抛错路径上,删不掉的临时文件下次写入会覆盖
             try? fileManager.removeItem(at: temporary)
             throw CredentialFileError.writeFailed
         }
-        // rename 换了新 inode,备份排除标记每次都要重新打
+        // rename 换了 inode,每次重打
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var target = fileURL
@@ -187,9 +172,9 @@ actor CredentialFileStore {
     }
 }
 
-/// 凭据文件的磁盘格式。值是 `Data`,JSON 里编码为 base64。
+/// 磁盘格式。`Data` 在 JSON 里是 base64。
 private struct CredentialFile: Codable {
-    /// 旧版钥匙串条目是否已导入过。只标记「做过」,不代表导入了什么
+    /// 只标记「做过」,不代表导入了什么
     var legacyKeychainImported = false
     var entries: [String: Data] = [:]
 }

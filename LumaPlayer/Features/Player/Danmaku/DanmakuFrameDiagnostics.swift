@@ -1,41 +1,29 @@
 import Foundation
 import os
 
-/// 弹幕逐帧诊断:回答「滚动看着累,是时钟在跳还是在掉帧」。**默认关闭**,零开销(只多一次判空)。
+/// 弹幕逐帧诊断:区分时钟跳动与掉帧。默认关闭(只多一次判空)。
 ///
-/// ## 打开方式
-///
-/// 启动参数 `-danmakuDiagnostics YES`(进 `UserDefaults` 的参数域,不落盘):
+/// 打开:启动参数 `-danmakuDiagnostics YES`(`UserDefaults` 参数域,不落盘):
 ///
 /// ```
 /// open -a LumaPlayer --args -danmakuDiagnostics YES
 /// log stream --style compact --predicate 'subsystem == "com.local.LumaPlayer" AND category == "danmaku.frames"'
 /// ```
 ///
-/// 播放中每 `reportInterval` 秒打一行汇总(`.notice` 级别,`log stream` 默认可见)。
+/// 每 `reportInterval` 秒打一行 `.notice` 汇总。判定以屏幕刷新间隔(`targetTimestamp − timestamp`)
+/// 为基准,⛔ 不用实测中位数(整体掉帧时会把掉帧当正常)。
 ///
-/// ## 每一项说明什么
-///
-/// 样本来自 `DanmakuLayerView` 的 displayLink 回调;判定以**屏幕刷新间隔**
-/// (`targetTimestamp − timestamp`)为基准,不以实测中位数为基准 —— 后者在整体掉到 40 帧时
-/// 会把 32 ms 当成「正常」,真掉帧反而数不出来。
-///
-/// - **刷新**:屏幕刷新率(Hz,刷新间隔中位数换算)。
-/// - **可见**:窗口可见(`occlusionState` 含 `.visible`)的帧数 / 总帧数。窗口被挡住或在别的桌面时
-///   系统会给 displayLink 降频(实测约 24 Hz、每次晚 30–40 ms),这些窗口的帧率不代表观看时的表现。
-/// - **间隔**:相邻两次更新的 `targetTimestamp` 之差,即画面上弹幕实际隔多久动一次。
-/// - **掉帧**:间隔里跳过的刷新数之和(`round(间隔 / 刷新间隔) − 1`),0 = 每次刷新都跟上了。
-/// - **长停顿**:连续运行中间隔 ≥ 250ms 的次数,仍计入间隔与掉帧;只有明确暂停 / 恢复 / 拆卸
-///   displayLink 或窗口可见性切换才断开比较,避免把真正的严重卡顿误判为暂停。
-/// - **重画**:间隔不到半个刷新间隔(同一次刷新更新了两次)。
-/// - **回调抖动**:实际回调间隔与 `targetTimestamp` 步长之差的最大值。
-/// - **余量**:回调做完时距这一帧上屏还剩多久的最小值;负数 = 做完时这一帧已经上屏了。
-/// - **时钟跳**:每帧实际位移减去「`targetTimestamp` 步长 × 倍速 × 速度」的残差 ≥ `jumpEpsilon` 的次数与大小(pt)。
-///   `DanmakuClock` 靠微调速度吸收误差,正常每帧残差远小于阈值;出现跳动说明位置被直接挪了。
-///   一帧内跳 ≥ `DanmakuClock.snapThreshold` 秒的算 seek / 恢复对齐,单独计数。
-/// - **速度偏差**:每帧实际速度相对「倍速 × 速度」偏离的最大比例,即时钟吸收误差时的变速幅度。
-/// - **耗时**:回调本身(取可见 + 新弹幕预渲染 + 改图层位置)的耗时;
-///   ⚠️ 不含 Core Animation 之后的提交与 GPU 合成,那部分只能从「掉帧」间接看出。
+/// - 刷新:屏幕刷新率(刷新间隔中位数换算)。
+/// - 可见:窗口可见帧数 / 总帧数。被遮挡时系统给 displayLink 降频,那些帧不代表观看表现。
+/// - 间隔:相邻两次 `targetTimestamp` 之差。
+/// - 掉帧:Σ(`round(间隔 / 刷新间隔) − 1`)。
+/// - 长停顿:间隔 ≥ 250ms 的次数(仍计入间隔与掉帧);只有显式 `breakContinuity` 或窗口可见性切换才断开比较。
+/// - 重画:间隔不到半个刷新间隔。
+/// - 回调抖动:实际回调间隔与 `targetTimestamp` 步长之差的最大值。
+/// - 余量:回调做完距上屏的最小剩余;负数 = 已经晚了。
+/// - 时钟跳:每帧位移残差 ≥ `jumpEpsilon` 的次数与大小(pt);≥ `DanmakuClock.snapThreshold` 秒的算 seek,单独计数。
+/// - 速度偏差:实际速度相对「倍速 × 速度」的最大偏离比例。
+/// - 耗时:回调本身耗时,不含 Core Animation 提交与 GPU 合成(只能从掉帧间接看)。
 @MainActor
 final class DanmakuFrameDiagnostics {
 
@@ -47,7 +35,7 @@ final class DanmakuFrameDiagnostics {
     private var stats = DanmakuFrameStats()
     private var windowStart: Double?
 
-    /// 生命周期变化不能跨段比较;不要用「间隔 ≥ 250ms」猜暂停而漏记长停顿。
+    /// 生命周期变化时显式断开;⛔ 不靠「间隔 ≥ 250ms」猜暂停(会漏记长停顿)。
     func breakContinuity() {
         stats.breakContinuity()
     }
@@ -67,27 +55,21 @@ final class DanmakuFrameDiagnostics {
     }
 }
 
-/// 逐帧样本的累积与汇总(纯值类型,单测覆盖)。
+/// 逐帧样本的累积与汇总(纯值类型)。时间单位均为秒。
 struct DanmakuFrameStats: Sendable {
 
     struct Frame: Sendable {
-        /// 回调开始时的宿主时钟(秒,`CACurrentMediaTime`)
+        /// 回调开始时的 `CACurrentMediaTime`
         var hostTime: Double
-        /// displayLink 的 `targetTimestamp`:这一帧上屏的时刻(秒,同一时间基)
+        /// 这一帧上屏时刻(同一时间基)
         var targetTime: Double
-        /// 屏幕刷新间隔(秒,`targetTimestamp − timestamp`)
         var refreshInterval: Double
-        /// 本帧用的弹幕时间轴时间(秒)
         var danmakuTime: Double
-        /// 滚动速度(pt/s)
+        /// pt/s
         var velocity: Double
-        /// 播放倍速
         var rate: Double
-        /// 回调耗时(秒)
         var workDuration: Double
-        /// 本帧在场几条
         var visibleCount: Int
-        /// 窗口是否可见(未被遮挡、在当前桌面)
         var windowVisible: Bool
     }
 
@@ -131,10 +113,8 @@ struct DanmakuFrameStats: Sendable {
         }
     }
 
-    /// 连续运行时达到它记为长停顿;不能仅凭间隔大就当成暂停,否则最严重的掉帧会被漏掉。
     static let longStallThreshold = 0.25
-    /// 单帧位移残差到这么大才算一次跳动(pt)。时钟微调速度时每帧残差 ≤ 速度偏差 × 每帧位移
-    /// (120 Hz、216 pt/s、偏差 10% 时约 0.18 pt),阈值高于它;旧的直接挪位置每次约 0.5–1 pt,能被数到
+    /// pt。须高于时钟微调速度的正常每帧残差(120 Hz、216 pt/s、偏差 10% 时约 0.18 pt)
     static let jumpEpsilon = 0.25
 
     private var last: Frame?
@@ -162,8 +142,7 @@ struct DanmakuFrameStats: Sendable {
         velocity = frame.velocity
         defer { last = frame }
         guard let last else { return }
-        // 切回被遮挡的窗口不把离开期间计成观看时的掉帧;真正暂停 / 拆掉 displayLink
-        // 由调用方显式 breakContinuity。两帧都可见时,再长的间隔也必须保留。
+        // 可见性切换时不比较;两帧可见性相同时,再长的间隔也保留
         guard frame.windowVisible == last.windowVisible else { return }
         let interval = frame.targetTime - last.targetTime
         guard interval >= 0 else { return }
@@ -191,7 +170,7 @@ struct DanmakuFrameStats: Sendable {
         }
     }
 
-    /// 本窗口没有任何帧间隔(只来了一帧或全在暂停)时返回 nil。
+    /// 本窗口没有帧间隔时返回 nil。
     func summary(window: Double) -> Summary? {
         guard !intervals.isEmpty else { return nil }
         let sortedIntervals = intervals.sorted()
@@ -222,12 +201,12 @@ struct DanmakuFrameStats: Sendable {
             visibleMax: visibleCounts.max() ?? 0)
     }
 
-    /// 明确的暂停 / 恢复 / displayLink 重建:丢弃间隔起点,保留本统计窗口已有样本。
+    /// 丢弃间隔起点,保留已有样本。
     mutating func breakContinuity() {
         last = nil
     }
 
-    /// 清空本窗口的样本,保留最后一帧作为下一窗口第一个间隔的起点。
+    /// 保留最后一帧作为下一窗口的间隔起点。
     mutating func resetWindow() {
         intervals.removeAll(keepingCapacity: true)
         refreshIntervals.removeAll(keepingCapacity: true)

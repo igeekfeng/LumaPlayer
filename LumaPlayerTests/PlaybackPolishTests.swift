@@ -1,13 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 播放打磨(2026-09-24 追加):片头 / 片尾标记、续播回退、触控板横滑预览、
-/// 统计信息格式化、播放偏好持久化、上一集查找。
-/// 2026-10-06 追加:同一部剧沿用的倍速记忆(`PlaybackSpeedStore`)。
-///
-/// 与 `PlayerExperienceTests` 同一原则:只验不需要 mpv、不需要网络的部分。
-/// ⛔ 按钮位置、倒计时的实际观感、触控板手感、置顶窗口是 UI 行为,
-/// 本机无屏幕录制权限,不在这里假装覆盖。
+/// 只验不需要 mpv、不需要网络的部分;按钮位置、倒计时观感、触控板手感、置顶窗口等 UI 行为不在这里覆盖。
 @MainActor
 final class PlaybackPolishTests: XCTestCase {
 
@@ -41,11 +35,11 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(chapters.count, 5)
         XCTAssertEqual(chapters[1].markerType, "IntroStart")
         XCTAssertEqual(chapters[1].startPositionTicks, 300_000_000)
-        // 枚举外的值照样解出来(只是不认识),不能让整个 PlaybackInfo 解码失败
+        // 枚举外的值照样解出来,不能让整个 PlaybackInfo 解码失败
         XCTAssertEqual(chapters[4].markerType, "SomeFutureMarker")
     }
 
-    /// 官方 OpenAPI 4.1.1.0 的 ChapterInfo 没有 `MarkerType`:旧服务器的章节照样能解。
+    /// 官方 OpenAPI 4.1.1.0 的 ChapterInfo 没有 `MarkerType`。
     func testChapterWithoutMarkerTypeStillDecodes() throws {
         let json = #"{"Id":"MS","Chapters":[{"StartPositionTicks":0,"Name":"开头"}]}"#
         let source = try JSONDecoder().decode(EmbyMediaSource.self, from: Data(json.utf8))
@@ -86,7 +80,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertFalse(markers.isInIntro(29.9, tailTolerance: 1))
         XCTAssertTrue(markers.isInIntro(30, tailTolerance: 1))
         XCTAssertTrue(markers.isInIntro(118.9, tailTolerance: 1))
-        // 最后 1 秒不再显示:跳过省不了什么,还会在终点附近闪
+        // 最后 1 秒不显示:跳过省不了什么,还会在终点附近闪
         XCTAssertFalse(markers.isInIntro(119.5, tailTolerance: 1))
         XCTAssertFalse(markers.isInIntro(120, tailTolerance: 1))
         XCTAssertFalse(PlaybackMarkers.none.isInIntro(60, tailTolerance: 1))
@@ -102,7 +96,6 @@ final class PlaybackPolishTests: XCTestCase {
         let bogus = PlaybackMarkers(intro: nil, creditsStart: 2000)
         XCTAssertEqual(bogus.upNextTrigger(duration: 1440, fallbackLead: 10), 1430)
 
-        // 时长未知时不猜
         XCTAssertNil(withCredits.upNextTrigger(duration: 0, fallbackLead: 10))
         // 比兜底提前量还短的片子:从 0 起就提示,不出现负数
         XCTAssertEqual(PlaybackMarkers.none.upNextTrigger(duration: 5, fallbackLead: 10), 0)
@@ -177,7 +170,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertTrue(second.floatsOnTop)
     }
 
-    /// 播放窗口菜单里的开关与设置页是同一份状态(都在 `container.preferences` 上)
+    /// 播放窗口菜单与设置页是同一份状态(`container.preferences`)
     func testPreferenceTogglesAreSharedWithContainer() throws {
         let container = try makeContainer()
         let viewModel = try makeViewModel(container: container)
@@ -187,7 +180,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertFalse(viewModel.autoPlayNext)
     }
 
-    /// 起播倍速:这部剧本次运行调过就用调过的(P0-3),没调过用设置页的默认倍速
+    /// 这部剧本次运行调过的倍速优先于设置页默认倍速
     func testStartupSpeedPrefersRememberedOverDefault() throws {
         let container = try makeContainer()
         let server = makeServer()
@@ -202,7 +195,7 @@ final class PlaybackPolishTests: XCTestCase {
             "同一部剧沿用调过的倍速,优先于默认倍速")
     }
 
-    /// 跳转步长跟着设置页走(同一个偏好驱动方向键、控制栏按钮与菜单栏)
+    /// 同一个偏好驱动方向键、控制栏按钮与菜单栏
     func testSeekStepComesFromPreferences() throws {
         let container = try makeContainer()
         container.preferences.seekStep = 30
@@ -239,7 +232,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(PlayerStatistics.fpsText("23.976"), "23.976 fps")
     }
 
-    /// 实测值取自本机 mpv 0.41 播放一段 640×360 H.264 测试片的读数。
+    /// 读数取自 mpv 0.41 播放 640×360 H.264 测试片的真实值。
     func testStatisticsLinesSkipMissingProperties() {
         let stats = PlayerStatistics(properties: [
             "video-codec": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
@@ -281,9 +274,7 @@ final class PlaybackPolishTests: XCTestCase {
 
     // MARK: - 倍速记忆(同一部剧沿用同一个倍速)
 
-    /// 决策(2026-10-06):同一部**剧集**沿用同一个倍速,不同剧集 / 电影各算各的,
-    /// 重启 App 回到 1×。这里只验「记在哪、给谁用」;真正写回 mpv 的那一步要 mpv,
-    /// 不在这里假覆盖(`player` 为 nil 时控制方法本来就是空操作)。
+    /// 同一部剧集沿用倍速,不同剧集 / 电影各算各的,重启回到 1×。只验「记在哪、给谁用」,写回 mpv 不在这里覆盖。
     func testSpeedIsRememberedPerSeries() throws {
         let container = try makeContainer()
         let server = makeServer()
@@ -306,7 +297,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(otherMovie.startupSpeed, 1, "电影之间互不影响")
     }
 
-    /// 电影没有 `SeriesId`,判定键退化成「这一项自己的 `Id`」:同一个 Id 重开仍沿用。
+    /// 电影没有 `SeriesId`,键退化成自己的 `Id`。
     func testSpeedScopeFallsBackToItemIDWithoutSeries() throws {
         let container = try makeContainer()
         let server = makeServer()
@@ -319,14 +310,14 @@ final class PlaybackPolishTests: XCTestCase {
             2)
     }
 
-    /// 记的是夹取之后的值:滑块越界 / 浮点尾数不该原样带给后面几集。
+    /// 滑块越界 / 浮点尾数不该原样带给后面几集。
     func testRememberedSpeedIsTheClampedValue() throws {
         let viewModel = try makeViewModel(item: try episode("E1", series: "S1"))
         viewModel.setSpeed(9)
         XCTAssertEqual(viewModel.startupSpeed, 4)
     }
 
-    /// 手动调回 1× = 撤销记忆:后面的集数不该再自己弹回之前设过的高倍速。
+    /// 手动调回 1× = 撤销记忆。
     func testBackToNormalSpeedForgetsTheSeries() throws {
         let container = try makeContainer()
         let server = makeServer()
@@ -340,7 +331,7 @@ final class PlaybackPolishTests: XCTestCase {
             1)
     }
 
-    /// 每台服务器完全隔离:不同服务器上的 Item Id 可能撞车,不隔离会串台。
+    /// 不同服务器上的 Item Id 可能撞车,不隔离会串台。
     func testRememberedSpeedIsScopedPerServer() throws {
         let container = try makeContainer()
         let series = try episode("E1", series: "S1")
@@ -352,10 +343,7 @@ final class PlaybackPolishTests: XCTestCase {
 
     // MARK: - 倍速记忆(百度来源)
 
-    /// 百度来源同样沿用:点「下一集」进下一集时,倍速不能被打回 1×。
-    ///
-    /// 换集 = 新建 `MPVPlayer`(一律 1×),所以关键在**记的是同一格** ——
-    /// 百度没有 Emby 的 `SeriesId`,这一格取的是剧目录。
+    /// 换集 = 新建 `MPVPlayer`(一律 1×),关键在记在同一格:百度没有 `SeriesId`,这一格取剧目录。
     func testBaiduSpeedIsRememberedAcrossEpisodes() throws {
         let container = try makeContainer()
         let directory = "/apps/LumaPlayer/琅琊榜"
@@ -367,8 +355,7 @@ final class PlaybackPolishTests: XCTestCase {
             1.5, "同一部剧的下一集沿用")
     }
 
-    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下,「同一部剧」是**剧目录**而不是季目录 ——
-    /// 从第 1 季换到第 2 季,倍速照样跟得过去。
+    /// 季文件夹存法(`琅琊榜/第1季/01.mp4`)下键是剧目录而不是季目录。
     func testBaiduSpeedFollowsAcrossSeasonFolders() throws {
         let container = try makeContainer()
         let series = "/apps/LumaPlayer/琅琊榜"
@@ -382,7 +369,6 @@ final class PlaybackPolishTests: XCTestCase {
             2)
     }
 
-    /// 换一部剧不带过去。
     func testBaiduSpeedIsScopedPerSeriesDirectory() throws {
         let container = try makeContainer()
 
@@ -395,10 +381,7 @@ final class PlaybackPolishTests: XCTestCase {
             1)
     }
 
-    /// 不是剧集(没有可切的兄弟集)时按 `fs_id` 各算各的。
-    ///
-    /// ⛔ 这条是「为什么不能一律用目录当键」:同一个目录下摆着几部电影,
-    /// 用目录就会互相串台 —— 设过 1.5× 的那部会让隔壁那部也用 1.5× 起播。
+    /// ⛔ 不能一律用目录当键:同一目录下摆着几部电影时会互相串倍速。
     func testBaiduSpeedScopeFallsBackToFileIDWithoutASeries() {
         func file(_ fsID: UInt64, _ name: String) -> BaiduPanFile {
             BaiduPanFile(
@@ -440,10 +423,7 @@ final class PlaybackPolishTests: XCTestCase {
         try decodeItem(#"{"Id":"\#(id)","Name":"\#(id)","Type":"Movie"}"#)
     }
 
-    /// 每次都是新容器 = 新的一次「App 运行」;要验跨集沿用就自己传同一个进来。
-    ///
-    /// `preferences` 用一次性 suite:播放偏好存在 UserDefaults 里,给它 `.standard`
-    /// 会让「偏好默认值」这类用例互相污染(别的用例先跑一步就把默认改掉了)。
+    /// 每次新容器 = 新的一次 App 运行。`preferences` 用一次性 suite,用 `.standard` 会让用例互相污染默认值。
     private func makeContainer() throws -> AppContainer {
         let registry = try ServerRegistry(
             defaults: UserDefaults(suiteName: "test.LumaPlayer.polish.registry.\(UUID().uuidString)")!,
@@ -464,10 +444,7 @@ final class PlaybackPolishTests: XCTestCase {
         )
     }
 
-    /// 一部百度来源的剧:`directory` 下摆着 `episodeCount` 集,当前播第 `playing` 集。
-    ///
-    /// 队列由浏览页装配后随请求带进播放页(与 `FileSourceViewModel.play(_ item:)`
-    /// 同一条路)—— 播放页据此才知道「这是一部剧的一集」。
+    /// 队列随请求带进播放页(与 `FileSourceViewModel.play(_ item:)` 同一条路),播放页据此知道这是剧的一集。
     private func makeBaiduViewModel(
         container: AppContainer, directory: String, episodeCount: Int = 3, playing: Int = 0
     ) throws -> PlayerViewModel {

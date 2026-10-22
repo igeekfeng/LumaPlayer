@@ -1,18 +1,11 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `PlaybackProgressReporter` 的串行化、代次门与失败策略
-/// (API_CONTRACT.md 5.3、5.4)。
-///
-/// 全部用注入的 `send` / `sleeper`,**零网络、零真实 10 秒等待** ——
-/// 间隔是断言出来的,不是等出来的(注入的 sleeper 立即返回,只记录时长)。
-///
-/// ⚠️ 所有 actor 读取都要先取到局部常量再断言:`await` 不能出现在
-/// `XCTAssert` 的 autoclosure 里(与 `PlaybackSessionCoordinatorTests` 同因)。
+/// `PlaybackProgressReporter`(API_CONTRACT.md 5.3、5.4)。注入 `send` / `sleeper`:零网络、零真实 10 秒等待。
+/// actor 读取先取到局部常量再断言:`await` 不能出现在 `XCTAssert` 的 autoclosure 里。
 final class PlaybackProgressReporterTests: XCTestCase {
 
-    /// 记录「发了什么」与「睡了多久」。用 actor 而不是 `@unchecked Sendable`
-    /// 的盒子:后者是 CLAUDE.md「并发分层」禁止的手段,测试代码也不例外。
+    /// 用 actor 而不是 `@unchecked Sendable` 的盒子:后者被 CLAUDE.md「并发分层」禁止,测试也不例外。
     private actor Recorder {
         private(set) var entered: [EmbyEndpoint] = []
         private(set) var sent: [EmbyEndpoint] = []
@@ -75,7 +68,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - 字段(5.1)
 
-    /// 开始播放:`POST /Sessions/Playing`,字段与 5.1 的表逐项对齐。
+    /// 字段与 5.1 的表逐项对齐。
     func testBeginSendsPlayingWithFullBody() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -92,7 +85,6 @@ final class PlaybackProgressReporterTests: XCTestCase {
         XCTAssertEqual(body?.mediaSourceID, "SOURCE-A")
         XCTAssertEqual(body?.playSessionID, "SESSION-A")
         XCTAssertEqual(body?.playMethod, "DirectStream")
-        // 60s × 10_000_000(8.3 的换算,唯一出处是 TickConverter)
         XCTAssertEqual(body?.positionTicks, 600_000_000)
         XCTAssertEqual(body?.isPaused, false)
         XCTAssertEqual(body?.isMuted, false)
@@ -109,7 +101,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await reporter.finish(finalState: Self.state, sendFinalProgress: false)
     }
 
-    /// 转码会话的 `CanSeek` 必须是 false(4.5:转码流不能客户端 seek)。
+    /// 4.5:转码流不能客户端 seek。
     func testTranscodeSessionReportsCanSeekFalse() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -124,7 +116,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await reporter.finish(finalState: Self.state, sendFinalProgress: false)
     }
 
-    /// 暂停 / 切轨的即时上报走 Progress,并带 5.2 的 EventName。
+    /// 带 5.2 的 EventName。
     func testInteractiveReportUsesProgressWithEventName() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -146,7 +138,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await reporter.finish(finalState: Self.state, sendFinalProgress: false)
     }
 
-    /// 改倍速:立即 Progress,带 `PlaybackRateChange` 与新的 `PlaybackRate`(5.1、5.2)。
+    /// 立即 Progress,带 `PlaybackRateChange`(5.1、5.2)。
     func testRateChangeReportCarriesNewRate() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -168,9 +160,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - 频率(5.3)
 
-    /// 定时上报固定 10 秒。⛔ 不得为「更精确」改成 1–2 秒 —— 官方原文
-    /// 「not necessary to automatically report more often than at 10 second
-    /// intervals」。这条用例就是那条约束的守门员。
+    /// ⛔ 不得为「更精确」改成 1–2 秒:官方说不必比 10 秒更频繁地自动上报。
     func testTimerIntervalIsAlwaysTenSeconds() async {
         XCTAssertEqual(PlaybackProgressReporter.reportInterval, 10)
 
@@ -191,19 +181,15 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - 串行化与代次(5.4)
 
-    /// 快速切媒体:旧会话**排队中**的条目必须丢弃。
-    ///
-    /// 已经在飞的那一条(第一个 Playing)拦不住,也不必拦 —— 5.4 要求的是
-    /// 「丢弃旧 generation 的未完成请求**结果**」,而上报结果不改变任何状态。
-    /// 关键是 A 的两次 Progress 一次都不能发出去,否则上一部片的进度会盖到
-    /// 这一部上(多服务器场景下就是串台)。
+    /// 已在飞的那一条拦不住也不必拦(上报结果不改变状态);关键是 A 排队中的 Progress 一条都不能发出去,
+    /// 否则上一部片的进度会盖到这一部上(多服务器下就是串台)。
     func testQueuedEntriesFromOldGenerationAreDiscarded() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
         await recorder.block()
 
         await reporter.begin(context: Self.contextA, state: Self.state)
-        // 等第一条真正在飞(否则「切媒体」可能发生在它出队之前,用例就不确定了)
+        // 等第一条真正在飞,否则「切媒体」可能发生在它出队之前,用例就不确定了
         await waitUntilEntered(count: 1, recorder: recorder)
         await reporter.reportNow(eventName: .pause)
         await reporter.reportNow(eventName: .unpause)
@@ -223,7 +209,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await reporter.finish(finalState: Self.state, sendFinalProgress: false)
     }
 
-    /// 结束会话(关窗 / 切媒体):最终 Progress + Stopped,Stopped 用最终位置。
+    /// 关窗 / 切媒体:Stopped 用最终位置(5.4)。
     func testFinishSendsFinalProgressThenStopped() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -242,13 +228,12 @@ final class PlaybackProgressReporterTests: XCTestCase {
                        ["/Sessions/Playing",
                         "/Sessions/Playing/Progress",
                         "/Sessions/Playing/Stopped"])
-        // API_CONTRACT.md 5.4:Stopped 用最终位置
         let stopped = sent.last.flatMap(reportBody)
         XCTAssertEqual(stopped?.positionTicks, 1_200_000_000)
         XCTAssertEqual(stopped?.isPaused, true)
     }
 
-    /// 自然播完:直接 Stopped,不再补一次 Progress(6.6)。
+    /// 不再补一次 Progress(6.6)。
     func testNaturalEndSendsStoppedOnly() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -263,7 +248,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
                        ["/Sessions/Playing", "/Sessions/Playing/Stopped"])
     }
 
-    /// 结束后定时器必须停:否则关窗之后还会继续往上报。
+    /// 否则关窗之后还会继续上报。
     func testFinishStopsTimer() async throws {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -274,7 +259,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await waitUntil(count: 2, recorder: recorder)
 
         let before = await recorder.snapshot().sleeps.count
-        // 注入的 sleeper 立即返回,所以定时器若还活着,这一段会跑出很多次等待
+        // 注入的 sleeper 立即返回,定时器若还活着,这一段会跑出很多次等待
         try? await Task.sleep(for: .milliseconds(150))
         let after = await recorder.snapshot().sleeps.count
         XCTAssertEqual(after, before, "定时器未随会话结束停止")
@@ -282,9 +267,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - drain(docs/PITFALLS.md Q22)
 
-    /// 关窗后详情页要等 Stopped 真正发完再向服务端重读续播位置。
-    /// `drain()` 必须等到**正卡在网络上**的 Stopped 结束才返回 ——
-    /// 只等到「已入队」是不够的,那正是 Q22 里读回旧进度的时序。
+    /// 关窗后详情页要等 Stopped 发完再重读续播位置:只等到「已入队」不够,那正是 Q22 里读回旧进度的时序。
     func testDrainWaitsUntilStoppedIsActuallySent() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -304,7 +287,6 @@ final class PlaybackProgressReporterTests: XCTestCase {
         await recorder.unblock()
         await drained.value
 
-        // drain 返回时 Stopped 必须已经发出,不能靠再等一会儿
         let sent = await recorder.snapshot().sent
         XCTAssertEqual(sent.map { $0.path },
                        ["/Sessions/Playing",
@@ -312,7 +294,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
                         "/Sessions/Playing/Stopped"])
     }
 
-    /// 没有待发条目时立即返回,不能挂住关窗后的回调。
+    /// 不能挂住关窗后的回调。
     func testDrainReturnsImmediatelyWhenIdle() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -323,8 +305,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         XCTAssertTrue(sent.isEmpty)
     }
 
-    /// Stopped 失败也算「处理完」:drain 不能因为上报失败而永远不返回
-    /// (5.4:失败不阻塞 —— 关窗后的详情刷新同样不该被它卡住)。
+    /// 5.4:失败不阻塞,关窗后的详情刷新同样不该被它卡住。
     func testDrainReturnsEvenWhenStoppedFails() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -343,7 +324,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - 失败策略(5.4)
 
-    /// 上报失败:入口都不抛(不阻塞播放、不弹窗),记下失败后下次照常尝试。
+    /// 入口都不抛(不阻塞播放、不弹窗),下次照常尝试(5.4)。
     func testFailureIsRecordedAndDoesNotStopLaterReports() async {
         let recorder = Recorder()
         let reporter = makeReporter(recorder: recorder)
@@ -357,7 +338,6 @@ final class PlaybackProgressReporterTests: XCTestCase {
         let failure = await reporter.lastFailureDescription
         XCTAssertNotNil(failure)
 
-        // 下一次机会照常补报(5.4:记录最后一次失败,下次机会补报)
         await recorder.failNext(false)
         await reporter.reportNow(eventName: .timeUpdate)
         await waitUntil(count: 1, recorder: recorder)
@@ -371,17 +351,14 @@ final class PlaybackProgressReporterTests: XCTestCase {
 
     // MARK: - 辅助
 
-    /// - Parameter realSleep: 注入的 sleeper 额外真实等待的时长。
-    ///   定时器在注入 sleeper 下会**立即**返回(否则每条用例都要等 10 秒),
-    ///   结果就是它以最快速度循环上报,把用例的期望搅乱。给一个远长于
-    ///   单条用例耗时的真实等待,定时器在断言期间就至多走一轮。
+    /// - Parameter realSleep: 注入 sleeper 额外的真实等待。否则定时器以最快速度循环上报、搅乱期望;
+    ///   给一个远长于单条用例耗时的值,断言期间定时器至多走一轮。
     private func makeReporter(recorder: Recorder, realSleep: TimeInterval = 0.5) -> PlaybackProgressReporter {
         PlaybackProgressReporter(
             send: { endpoint in try await recorder.record(endpoint) },
             sleeper: { interval in
                 await recorder.recordSleep(interval)
-                // ⛔ 不要写 `try?`:吞掉取消会让定时器在会话结束后
-                // 继续跑一轮(真实 `Task.sleep` 会把取消抛出来)
+                // ⛔ 不要写 `try?`:吞掉取消会让定时器在会话结束后继续跑一轮
                 try await Task.sleep(for: .seconds(realSleep))
             }
         )
@@ -392,7 +369,7 @@ final class PlaybackProgressReporterTests: XCTestCase {
         return body
     }
 
-    /// 等到已成功发出 `count` 条(轮询,不用固定 sleep 赌时序)。
+    /// 轮询,不用固定 sleep 赌时序。
     private func waitUntil(count: Int, recorder: Recorder, timeout: TimeInterval = 2) async {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

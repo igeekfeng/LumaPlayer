@@ -1,14 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 播放决策引擎(API_CONTRACT.md 4.4 全分支)。
-///
-/// **全部用 fixture,零网络**:引擎是纯函数,输入一份 `PlaybackInfo`
-/// 响应、输出一个 `PlaybackSession`,所以「仅转码可用」「无可播路径」
-/// 这些真机上难构造的分支在这里全部覆盖住。
-///
-/// ⚠️ fixture 全部带 `_synthetic` 后缀 = 构造数据,未经真实服务器验证
-/// (API_CONTRACT.md 9.4)。
+/// 播放决策引擎(API_CONTRACT.md 4.4 全分支)。纯函数,全用 fixture,真机难构造的分支在这里覆盖。
+/// `_synthetic` 后缀的 fixture 是构造数据,未经真实服务器验证(API_CONTRACT.md 9.4)。
 final class PlaybackDecisionEngineTests: XCTestCase {
 
     private var urlBuilder: PlaybackURLBuilder {
@@ -40,13 +34,11 @@ final class PlaybackDecisionEngineTests: XCTestCase {
             + "?static=true&MediaSourceId=MEDIASOURCE-DIRECT-1"
             + "&PlaySessionId=PLAYSESSION-DIRECT-1"
         )
-        // 轨道要解出来(1 视频 / 1 音轨 / 1 字幕)
         XCTAssertEqual(session.mediaSource.streamCount(of: "Video"), 1)
         XCTAssertEqual(session.mediaSource.streamCount(of: "Audio"), 1)
         XCTAssertEqual(session.mediaSource.streamCount(of: "Subtitle"), 1)
     }
 
-    /// issue #2:MediaSource 带 DirectStreamUrl 时以它为准,而不是自拼 /Videos/{id}/stream
     func testDirectStreamPrefersServerProvidedURL() throws {
         let response = EmbyPlaybackInfoResponse(
             mediaSources: [
@@ -88,9 +80,7 @@ final class PlaybackDecisionEngineTests: XCTestCase {
 
     // MARK: - 决策与地址分离(非 Emby 来源靠它复用同一张表)
 
-    /// `decision(for:)` 只管「走哪条路、播哪条源」,**不碰地址** ——
-    /// 百度源就是拿它的结论、用自己的地址规则拼会话
-    /// (`BaiduPanPlaybackPlanner`,百度 `dlink` 不能过 `PlaybackURLBuilder`)。
+    /// 百度源拿 `decision(for:)` 的结论、用自己的地址规则拼会话(`dlink` 不能过 `PlaybackURLBuilder`)。
     func testDecisionIsAddressFreeAndMatchesSession() throws {
         let response = try decode("playback_direct_stream_synthetic.json")
 
@@ -100,15 +90,13 @@ final class PlaybackDecisionEngineTests: XCTestCase {
         XCTAssertEqual(decision.playSessionID, "PLAYSESSION-DIRECT-1")
         XCTAssertEqual(decision.source.id, "MEDIASOURCE-DIRECT-1")
 
-        // 同一份响应,`session(...)` 的媒体源与决策必须一致 ——
-        // 「播的是 A、判的是 B」这类错都出在这里
+        // 媒体源与决策必须一致:「播的是 A、判的是 B」这类错都出在这里
         let session = try PlaybackDecisionEngine.session(
             for: response, itemID: "ITEM-1", urlBuilder: urlBuilder, headers: headers)
         XCTAssertEqual(session.mediaSource.id, decision.source.id)
     }
 
-    /// 空字符串的 `TranscodingUrl` 与缺失同义:都报「没有可播路径」,
-    /// ⛔ 不让它往后走到拼地址那一步再报成另一种错(8.1)。
+    /// 空串与缺失同义。⛔ 不让它走到拼地址那一步再报成另一种错(8.1)。
     func testEmptyTranscodingURLIsNoPlayablePathNotURLError() throws {
         let response = EmbyPlaybackInfoResponse(
             mediaSources: [
@@ -220,15 +208,13 @@ final class PlaybackDecisionEngineTests: XCTestCase {
         )
     }
 
-    /// 8.1:`MediaSource.Id` 必填 —— 缺失即响应损坏,解码阶段就失败,
-    /// 而不是解出一个 id 为空的源继续走下去。
+    /// 8.1:`MediaSource.Id` 必填,缺失即在解码阶段失败,不解出 id 为空的源继续走。
     func testMissingMediaSourceIDFailsDecodingNotCrash() throws {
         let data = try FixtureLoader.data("playback_missing_source_id_synthetic.json")
         XCTAssertThrowsError(try JSONDecoder().decode(EmbyPlaybackInfoResponse.self, from: data))
     }
 
-    /// 可选字段缺失不崩溃:`MediaStreams` / `TranscodingUrl` / `Container`
-    /// 都没给时仍能选出播放路径(API_CONTRACT.md 8.1)。
+    /// `MediaStreams` / `TranscodingUrl` / `Container` 都没给(8.1)。
     func testOptionalFieldsMissingStillDecides() throws {
         let response = EmbyPlaybackInfoResponse(
             mediaSources: [

@@ -1,35 +1,22 @@
 import Foundation
 
-/// 弹弹play 开放平台用到的端点(`docs/DANDANPLAY_API.md` §2 - §5)。
-///
-/// ⛔ 只用文档里列出的端点 / 参数(CLAUDE.md 硬规则 1 的同一口径)。
-/// 路径与参数名逐个对着官方 OpenAPI 规格(`api.dandanplay.net/swagger/v2/swagger.json`)抄。
-///
-/// ## 认证不放这里
-///
-/// 签名三件套(`X-AppId` / `X-Timestamp` / `X-Signature`)是**请求头**,由 `DandanplayClient`
-/// 组装;端点只管「方法 + 路径 + 查询参数 + 请求体」,诊断名(`name`)天然不含凭据。
-///
-/// ## 路径一律小写
-///
-/// 签名串里要带路径(§1),官方建议「路径全部使用小写字母,不需要经过 URL 编码」。
-/// 本文件的路径本来就只有小写字母、数字与 `/`,`signaturePath` 再显式 `lowercased()` 一次兜底。
+/// 弹弹play 端点(`docs/DANDANPLAY_API.md` §2 - §5)。⛔ 只用文档里列出的端点 / 参数
+/// (对照官方 OpenAPI 规格 `api.dandanplay.net/swagger/v2/swagger.json`)。
+/// 签名头由 `DandanplayClient` 组装,这里只管方法、路径、查询参数、请求体。
 enum DandanplayEndpoint: Sendable, Equatable {
 
-    /// `POST /api/v2/match`:按文件名(及可选的 Hash / 大小 / 时长)找可能的节目(§2)
+    /// `POST /api/v2/match`(§2)
     case match(DandanplayMatchRequest)
-    /// `GET /api/v2/search/episodes?anime=&episode=&tmdbId=&tmdbIdType=`:搜剧集(§3)
-    ///
-    /// `anime` 与 `tmdbId` **至少给一个**(官方约束)。`tmdbIdType` 只在给了
-    /// `tmdbId` 时才有意义:0 = 电视剧 ID,1 = 电影 ID。
+    /// `GET /api/v2/search/episodes`(§3)。`anime` 与 `tmdbId` 至少给一个;
+    /// `tmdbIdType` 只配合 `tmdbId`:0 = 电视剧,1 = 电影。
     case searchEpisodes(
         anime: String?, episode: String?, tmdbID: Int? = nil, tmdbIDType: Int? = nil)
-    /// `GET /api/v2/bangumi/{animeId}`:作品详情,只读其中的剧集列表(§4)
+    /// `GET /api/v2/bangumi/{animeId}`,只读其中的剧集列表(§4)
     case bangumi(animeID: Int64)
-    /// `GET /api/v2/comment/{episodeId}?withRelated=&chConvert=`:一个弹幕库的全部弹幕(§5)
+    /// `GET /api/v2/comment/{episodeId}`(§5)
     case comments(episodeID: Int64, withRelated: Bool, chineseConversion: ChineseConversion)
 
-    /// `chConvert` 参数(§5):中文简繁转换。
+    /// `chConvert`:简繁转换(§5)
     enum ChineseConversion: Int, Sendable, Equatable {
         case none = 0
         case simplified = 1
@@ -47,7 +34,7 @@ enum DandanplayEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 参与签名的路径:不含协议、域名与查询串,小写(§1)。
+    /// 参与签名的路径:不含协议、域名与查询串,小写、不 URL 编码(§1)。
     var signaturePath: String { path.lowercased() }
 
     var method: String {
@@ -57,7 +44,7 @@ enum DandanplayEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 诊断用端点名。**不含凭据,也不含搜索词 / 文件名**(那是用户的观看内容)。
+    /// 诊断用端点名。⛔ 不含凭据、搜索词、文件名(用户观看内容)。
     var name: String {
         switch self {
         case .match: return "match"
@@ -67,20 +54,20 @@ enum DandanplayEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 查询参数。顺序固定(便于断言与排障)。
+    /// 顺序固定(便于断言与排障)。
     var queryItems: [(name: String, value: String)] {
         switch self {
         case .match, .bangumi:
             return []
         case .searchEpisodes(let anime, let episode, let tmdbID, let tmdbIDType):
             var items: [(name: String, value: String)] = []
-            // 空串不算「给了」:官方要求 anime 至少 2 个字符,给空串等于一次注定失败的请求
+            // 空串不算给了(anime 至少 2 个字符)
             if let anime, !anime.isEmpty { items.append(("anime", anime)) }
-            // 不知道集数时**不传**(⛔ 不填 0 / 空串:服务端会按「指定集数」过滤)
+            // 不知道集数时不传(⛔ 不填 0 / 空串:服务端会按指定集数过滤)
             if let episode, !episode.isEmpty { items.append(("episode", episode)) }
             if let tmdbID {
                 items.append(("tmdbId", String(tmdbID)))
-                // tmdbIdType 只在给了 tmdbId 时才带(不给时服务端按 0 处理)
+                // 不给时服务端按 0 处理
                 if let tmdbIDType { items.append(("tmdbIdType", String(tmdbIDType))) }
             }
             return items
@@ -92,7 +79,7 @@ enum DandanplayEndpoint: Sendable, Equatable {
         }
     }
 
-    /// JSON 请求体(只有 `match` 有)。
+    /// 只有 `match` 有。
     func body() throws -> Data? {
         switch self {
         case .match(let request): return try JSONEncoder().encode(request)
@@ -110,7 +97,7 @@ enum DandanplayEndpoint: Sendable, Equatable {
         return components.url
     }
 
-    /// 手拼查询串:只保留 unreserved 字符(与 `TMDBEndpoint` 同一手法,中文按 UTF-8 逐字节编码)。
+    /// 手拼查询串,只保留 unreserved 字符(同 `TMDBEndpoint`)。
     var encodedQuery: String {
         queryItems.compactMap { item -> String? in
             guard let name = TMDBEndpoint.encode(item.name),

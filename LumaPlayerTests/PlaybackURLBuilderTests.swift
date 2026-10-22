@@ -4,7 +4,7 @@ import XCTest
 /// 串流 URL 的构造(API_CONTRACT.md 4.5)。
 final class PlaybackURLBuilderTests: XCTestCase {
 
-    /// issue #2:采用服务端给的 DirectStreamUrl(Emby Web 4.9.5.0 抓包形态),相对 API 根,剥掉 api_key
+    /// 服务端给的 DirectStreamUrl(Emby Web 4.9.5.0 抓包形态)相对 API 根,要剥掉 api_key
     func testServerProvidedDirectStreamURLAddsPrefixAndStripsAPIKey() throws {
         let builder = PlaybackURLBuilder(
             baseURL: testURL("https://emby.test"), apiPathPrefix: "/emby")
@@ -67,7 +67,7 @@ final class PlaybackURLBuilderTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.hasPrefix("https://emby.test/Videos/ITEM-2/stream.mp4?"))
     }
 
-    /// 容器未知 → 不带扩展名的 `/stream`(官方两种写法都列了,不猜扩展名)
+    /// 官方两种写法都列了,不猜扩展名
     func testDirectStreamURLWithoutContainer() throws {
         let builder = PlaybackURLBuilder(
             baseURL: testURL("https://emby.test"), apiPathPrefix: "/emby")
@@ -79,7 +79,7 @@ final class PlaybackURLBuilderTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.contains("/Videos/ITEM-3/stream?"))
     }
 
-    /// 查询参数值需要编码(PlaySessionId / ItemId 由服务端给,不做假设)
+    /// PlaySessionId / ItemId 由服务端给,不做假设
     func testDirectStreamURLEncodesQueryValues() throws {
         let builder = PlaybackURLBuilder(
             baseURL: testURL("https://emby.test"), apiPathPrefix: "/emby")
@@ -104,7 +104,7 @@ final class PlaybackURLBuilderTests: XCTestCase {
             "https://emby.test/emby/videos/ITEM-5/master.m3u8?VideoCodec=h264")
     }
 
-    /// 少数服务器给绝对地址:原样采用,不再拼一次站点根
+    /// 少数服务器给绝对地址:原样采用,不再拼站点根
     func testTranscodeURLKeepsAbsoluteURL() throws {
         let builder = PlaybackURLBuilder(
             baseURL: testURL("https://emby.test"), apiPathPrefix: "/emby")

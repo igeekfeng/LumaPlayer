@@ -3,7 +3,7 @@
 > 本文件是**弹弹play 接口的唯一事实来源**,与 `API_CONTRACT.md`(Emby)、`BAIDU_PAN_API.md`、
 > `TMDB_API.md` 平行。硬规则同 CLAUDE.md 1:**禁止发明接口**,只用本文件列出的端点 / 参数 / 字段。
 >
-> 核实来源(2026-10-15):
+> 核实来源:
 > - 官方 OpenAPI 3.0 规格 `https://api.dandanplay.net/swagger/v2/swagger.json`(`info.version = v2`),
 >   端点、参数、请求体 / 响应 schema 由 `paths` 与 `components.schemas` 直接读出;
 > - 官方文档站 `https://doc.dandanplay.com/open/`:认证方式、状态码、缓存与使用约定。
@@ -58,7 +58,7 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 | `videoDuration` | int32 | [可选] 时长(秒),默认 0 | 播放器已知时传 |
 | `matchMode` | enum | `hashAndFileName` / `fileNameOnly` / `hashOnly` | 有真实 Hash 时 `hashAndFileName`,否则 `fileNameOnly` |
 
-⚠️ **`fileHash` 实际上是必填,规格没写。** 2026-10 的线上行为:即使 `matchMode` 是 `fileNameOnly`,
+⚠️ **`fileHash` 实际上是必填,规格没写。** 线上行为:即使 `matchMode` 是 `fileNameOnly`,
 `fileHash` 缺失、空串或不足 32 位都会让接口返回 `errorCode 2`「一个或多个参数不符合规则」+ `matches: null`,
 播放页表现成「弹弹play 返回失败(错误码 2 …)」。带任意 32 位串则正常返回候选。
 来源:第三方客户端按线上接口核对后的记录(`open-ani/animeko#3506`);本项目**未用自有凭据复验**
@@ -99,7 +99,7 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 `type` 用来区分剧场版与剧集 —— 两者是**不同作品**,不是同一部剧的不同集。`AnimeType` 的
 12 个取值(`tvseries` / `tvspecial` / `ova` / `movie` / `musicvideo` / `web` / `other` /
 `jpmovie` / `jpdrama` / `unknown` / `tmdbtv` / `tmdbmovie` 中属于电影的:后三个含 `movie` 的)
-见规格 `components.schemas.AnimeType`(2026-10-19 核对)。
+见规格 `components.schemas.AnimeType`。
 
 ## 4. 作品详情 `GET /api/v2/bangumi/{bangumiId}`
 

@@ -1,30 +1,23 @@
 import Foundation
 
-/// 本地文件夹来源的错误。
-///
-/// 分两类处置(`needsFolderReselection`):
-/// - **访问权没了**(书签解析不出 / 系统不给读 / 文件夹不在了):重试没用,
-///   要让用户重新选一次文件夹(浏览页给「重新选择文件夹…」按钮);
-/// - 其余(某一层读不出、某个文件被挪走):如实报原因,重试可能就好了。
+/// 本地文件夹来源的错误。访问权没了的那类重试没用,要用户重新选文件夹(`needsFolderReselection`);
+/// 其余如实报原因,重试可能就好。
 enum LocalFolderError: Error, Equatable, Sendable {
     /// 书签解析失败:文件夹被删了、外接盘没插、网络卷没挂上
     case folderUnavailable(path: String)
-    /// 书签解析出来了,但系统不给读(`startAccessingSecurityScopedResource` 返回 false)
+    /// `startAccessingSecurityScopedResource` 返回 false
     case accessDenied(path: String)
     /// 新选的文件夹做不出书签(多半是选了不允许的位置)
     case bookmarkCreationFailed(String)
-    /// 某一层目录读不出来
     case directoryUnreadable(path: String, reason: String)
-    /// 路径不在这个来源的目录树里(含 `..` 越界)。正常流程走不到,走到就是 bug
+    /// 路径越出来源目录树(含 `..`)。走到就是 bug
     case outsideRoot(path: String)
-    /// 要播的文件不在了(列表之后被删 / 挪走)
+    /// 列表之后被删 / 挪走
     case fileMissing(name: String)
-    /// 本地文件是直接交给内核按字节读的,没有「从某个位置起流」这件事
     case playbackUnsupported(String)
-    /// 本地文件夹来源只读:不删、不改名(`FileSource.supportsDeletingFiles`)
+    /// 不删、不改名(`FileSource.supportsDeletingFiles`)
     case readOnly
 
-    /// 要不要让用户重新选文件夹(重试没用的那一类)。
     var needsFolderReselection: Bool {
         switch self {
         case .folderUnavailable, .accessDenied: return true
@@ -34,7 +27,7 @@ enum LocalFolderError: Error, Equatable, Sendable {
         }
     }
 
-    /// 给用户看的一句话。可以含本机路径(就是用户自己选的文件夹),⛔ 不含书签字节。
+    /// 可以含本机路径(用户自己选的文件夹),⛔ 不含书签字节。
     var userMessage: String {
         switch self {
         case .folderUnavailable(let path):

@@ -1,8 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// ServerRegistry 的增删改查、持久化「重启」与凭据联动。
-/// UserDefaults 用独立 suite、凭据用临时文件,测试后清理。
+/// UserDefaults 用独立 suite、凭据用临时文件。
 final class ServerRegistryTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
@@ -20,8 +19,7 @@ final class ServerRegistryTests: XCTestCase {
         storage = CredentialFileStore(fileURL: credentialsFile)
         credentials = CredentialStore(storage: storage)
         do {
-            // UserDefaults(non-Sendable)不能从存储读取后跨隔离发送,
-            // 这里按 suite 名重新构造(同名单例,实例相同),作为新构造值传递
+            // UserDefaults(non-Sendable)不能跨隔离发送,按 suite 名重新构造(同名同实例)
             registry = try ServerRegistry(defaults: UserDefaults(suiteName: suiteName)!, credentials: credentials)
         } catch {
             XCTFail("全新临时 suite 不应损坏:\(error)")
@@ -41,7 +39,6 @@ final class ServerRegistryTests: XCTestCase {
         try await super.tearDown()
     }
 
-    /// 测试辅助:构造合法 profile
     private func makeProfile(name: String, deviceID: String = "shared-device") -> ServerProfile {
         ServerProfile(
             displayName: name,
@@ -99,7 +96,7 @@ final class ServerRegistryTests: XCTestCase {
     }
 
     func testRemoveIsIdempotentForRetry() async throws {
-        // 场景:persist 成功但清 token 失败 → 直接重试 remove
+        // persist 成功但清 token 失败后直接重试
         let a = makeProfile(name: "alpha")
         try await registry.add(a)
         try await credentials.saveToken("TOKEN-A", forServer: a.id)
@@ -121,8 +118,7 @@ final class ServerRegistryTests: XCTestCase {
     }
 
     func testDeviceIDSharedAcrossStoreInstances() async throws {
-        // 「全 App 唯一」:新的 CredentialStore 实例(同一凭据文件)
-        // 读到的仍是同一个 DeviceId
+        // 「全 App 唯一」:同一凭据文件的新实例读到同一个 DeviceId
         let first = try await credentials.deviceID()
         let secondCredentials = CredentialStore(storage: CredentialFileStore(fileURL: credentialsFile))
         let second = try await secondCredentials.deviceID()
@@ -139,7 +135,7 @@ final class ServerRegistryTests: XCTestCase {
         let dump = defaults.dictionaryRepresentation()
             .map { "\($0.key) = \($0.value)" }
             .joined(separator: "\n")
-        // dump 确实包含 profiles 键(证明断言的不是空 dump)
+        // 证明断言的不是空 dump
         XCTAssertTrue(dump.contains(ServerRegistry.storageKey))
         XCTAssertFalse(dump.contains("SECRET-TOKEN-DO-NOT-LEAK"))
     }
@@ -186,7 +182,7 @@ final class ServerRegistryTests: XCTestCase {
     }
 
     func testUpdateKeepsRegistryOwnedLastUsed() async throws {
-        // 回归:update 是合并式的,旧快照不得把 lastUsedAt 写回去
+        // update 是合并式的,旧快照不得把 lastUsedAt 写回去
         let a = makeProfile(name: "alpha")
         try await registry.add(a)
         try await registry.markUsed(id: a.id, at: Date(timeIntervalSince1970: 500))
@@ -211,7 +207,6 @@ final class ServerRegistryTests: XCTestCase {
     }
 
     func testCompatibilitySurvivesRestart() async throws {
-        // 探测到的兼容信息随档案一起持久化,供诊断使用
         let a = makeProfile(name: "alpha")
         try await registry.add(a)
 
@@ -232,7 +227,7 @@ final class ServerRegistryTests: XCTestCase {
     }
 
     func testOldProfileWithoutCompatibilityStillDecodes() async throws {
-        // 早期版本存下的档案没有 compatibility 字段:Optional 解码必须放过
+        // 没有 compatibility 字段的档案必须能解码
         let a = makeProfile(name: "alpha")
         try await registry.add(a)
         let restarted = try ServerRegistry(defaults: UserDefaults(suiteName: suiteName)!, credentials: credentials)

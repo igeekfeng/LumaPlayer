@@ -2,39 +2,33 @@ import Foundation
 
 // MARK: - 归一形态(UI 与业务层只认这些,不认 JSON 字段名)
 
-/// 一条搜索结果。
 struct AssrtSearchResult: Sendable, Equatable, Identifiable {
-    /// assrt 的字幕 id(6 位数字)
     let id: Int
-    /// 作品名 / 原生标题
+    /// 原生标题
     let title: String
-    /// 字幕对应的视频文件名(有就显示,能帮用户判断是不是这一版)
     let videoName: String?
-    /// 字幕格式(`Subrip(srt)` / `ASS` / `VobSub` …)
+    /// `Subrip(srt)` / `ASS` / `VobSub` …
     let format: String?
-    /// 语言描述(assrt 的 `lang.desc`,如「简 双语」)
+    /// `lang.desc`,如「简 双语」
     let language: String?
     let uploadTime: String?
     let releaseSite: String?
     let voteScore: Int
 }
 
-/// 详情里的一个文件(通常是压缩包内的一条,或整包)。
 struct AssrtSubtitleFile: Sendable, Equatable {
     let fileName: String
     let url: URL
 }
 
-/// 一条字幕的详情。
 struct AssrtSubtitleDetail: Sendable, Equatable {
     let id: Int
-    /// `filelist` 里的**单文件直链**。assrt 常常直接给 `.srt`,能省掉解压。
+    /// `filelist` 里的单文件直链(服务端临时解压)
     let files: [AssrtSubtitleFile]
-    /// 整包(压缩包)地址 —— 只有 `filelist` 为空时才有意义。
+    /// 整包地址:`filelist` 为空或单文件下载失败时用
     let archiveFileName: String?
     let archiveURL: URL?
 
-    /// 有没有任何可下载的地址。
     var hasAnyDownload: Bool {
         !files.isEmpty || archiveURL != nil
     }
@@ -42,9 +36,7 @@ struct AssrtSubtitleDetail: Sendable, Equatable {
 
 // MARK: - DTO
 
-/// `GET /v1/sub/search` 的响应。
-///
-/// `status != 0` 是业务错误(HTTP 仍是 200),⛔ 别只看 HTTP 状态。
+/// `GET /v1/sub/search`。`status != 0` 是业务错误(HTTP 仍是 200)。
 struct AssrtSearchEnvelope: Decodable {
     let status: Int
     let message: String?
@@ -78,11 +70,11 @@ struct AssrtSubtitleDTO: Decodable {
 }
 
 struct AssrtLanguageDTO: Decodable {
-    /// 语言描述(`"简 双语"` / `"韩 双语"`),可能为空
+    /// `"简 双语"` / `"韩 双语"`,可能为空
     let desc: String?
 }
 
-/// `GET /v1/sub/detail` 的响应。
+/// `GET /v1/sub/detail`
 struct AssrtDetailEnvelope: Decodable {
     let status: Int
     let message: String?
@@ -99,7 +91,7 @@ struct AssrtDetailDTO: Decodable {
     let title: String?
     let filename: String?
     let subtype: String?
-    /// 整包地址(压缩包)。⚠️ **一次性链接**,文档明确要求不要保存。
+    /// 整包地址。⚠️ 一次性链接,文档要求不要保存
     let url: String?
     let filelist: [AssrtFileDTO]?
 
@@ -115,11 +107,9 @@ struct AssrtDetailDTO: Decodable {
 }
 
 struct AssrtFileDTO: Decodable {
-    /// 文件名(`f`)
     let fileName: String?
-    /// 文件大小(`s`,如 `"52KB"`)
+    /// 如 `"52KB"`
     let size: String?
-    /// 单文件下载地址
     let url: String?
 
     enum CodingKeys: String, CodingKey {
@@ -146,7 +136,7 @@ extension AssrtSubtitleDTO {
 }
 
 extension AssrtDetailDTO {
-    /// 归一成详情。地址解析不出来就丢掉 —— 半个 URL 交给播放器只会失败得更晚。
+    /// 地址解析不出来的条目丢掉。
     var detail: AssrtSubtitleDetail {
         let files = (filelist ?? []).compactMap { entry -> AssrtSubtitleFile? in
             guard let name = entry.fileName?.nilIfEmpty,
@@ -161,12 +151,8 @@ extension AssrtDetailDTO {
             archiveURL: url.flatMap(Self.downloadURL))
     }
 
-    /// 下载地址:assrt 自家主机(`assrt.net` 及子域)的 `http` 一律升成 `https`。
-    ///
-    /// 详情返回的下载地址是明文 `http://file0.assrt.net/…`(文档示例如此,实测也是),
-    /// ATS 只放行局域网明文(`CLAUDE.md`「工程的非常规点」),直接请求必被拒。
-    /// 该主机有 `*.assrt.net` 的有效证书(2026-10-21 核对),所以升级而不是给 ATS 开例外。
-    /// 别的主机原样保留:明文的话让 ATS 报错,⛔ 不替不认识的主机猜 https。
+    /// assrt 自家主机(`assrt.net` 及子域)的 `http` 升成 `https`:详情给的是明文地址,ATS 会拒,
+    /// 而该主机有有效证书,所以升级而不是给 ATS 开例外。⛔ 别的主机原样保留,不替它猜 https。
     static func downloadURL(_ raw: String) -> URL? {
         guard var components = URLComponents(string: raw) else { return nil }
         if components.scheme?.lowercased() == "http",

@@ -1,25 +1,12 @@
 import Foundation
 
-/// TMDB 的 HTTP 客户端(纯传输 + 解码,⛔ 不含 token 存储、不碰凭据)。
+/// TMDB 的 HTTP 客户端:纯传输 + 解码,无状态,token 由调用方逐次传入,⛔ 不碰凭据存储。
 ///
-/// 与 `BaiduPanAPIClient` 的分工一致:查询串拼装与错误映射在这里,
-/// 「token 从哪来」「token 没有怎么办」在上层(`CredentialStore` + 调用方)。
-/// token 由**调用方逐次传入** —— 客户端本身无状态(`Sendable` struct),
-/// 与 `BaiduPanAPIClient` 一样按调用点拿 `access_token`。
-///
-/// ## 认证(`docs/TMDB_API.md` §1)
-///
-/// v4 Read Access Token 走 `Authorization: Bearer <token>` 请求头。
-/// ⛔ token **不进查询串**:那会被 URLSession 的缓存 / 日志写进磁盘。
-///
-/// ## 错误映射(`docs/TMDB_API.md` §5)
-///
-/// HTTP 401 → `.unauthorized`(token 无效);429 → `.rateLimited`;404 → `.notFound`;
-/// 其余非 2xx → `.server`。响应体里的 `status_message` 取来一起展示(它不含凭据)。
+/// token 走 `Authorization: Bearer` 头(`docs/TMDB_API.md` §1),⛔ 不进查询串(会被缓存 / 日志落盘)。
+/// 错误映射见 `failure(statusCode:data:)`(§5);`status_message` 不含凭据,可展示。
 struct TMDBClient: Sendable {
 
-    /// ⚠️ 用独立的会话:关掉缓存与 cookie —— 刮削结果要「刚改过就能看到」,
-    /// 且不把任何东西落盘(与 `BaiduPanAPIClient` 同一处置)。
+    /// 默认用独立会话,关缓存与 cookie:刮削结果要即改即见,且不落盘。
     init(session: URLSession? = nil) {
         if let session {
             self.session = session
@@ -35,13 +22,11 @@ struct TMDBClient: Sendable {
 
     private let session: URLSession
 
-    /// 默认搜索语言。`zh-CN`(ISO 639-1 + ISO 3166-1,§1)让 `overview` 回来是中文 ——
-    /// 本 App 面向中文用户。解析不出更合适的语言就固定用它。
+    /// 让 `overview` 回中文(§1)。
     static let defaultLanguage = "zh-CN"
 
     // MARK: - 搜索
 
-    /// 搜电影。
     func searchMovie(
         title: String,
         year: Int? = nil,
@@ -55,7 +40,6 @@ struct TMDBClient: Sendable {
         )
     }
 
-    /// 搜剧集。
     func searchTV(
         title: String,
         year: Int? = nil,
@@ -69,10 +53,7 @@ struct TMDBClient: Sendable {
         )
     }
 
-    /// 按「是不是剧集」自动选端点。
-    ///
-    /// 判据由调用方给 —— 刮削链路上是 `BaiduPanMetadataSynthesizer.parse` 解析出的
-    /// 季集(解析到 `episode` 就算剧集)。⛔ 客户端自己不猜。
+    /// 是不是剧集由调用方判断(刮削链路上看 `BaiduPanMetadataSynthesizer.parse` 有没有解析到集号),⛔ 客户端不猜。
     func search(
         title: String,
         year: Int? = nil,
@@ -97,13 +78,8 @@ struct TMDBClient: Sendable {
 
     // MARK: - 季详情
 
-    /// 取一季的分集(剧照 / 集名 / 单集简介),`docs/TMDB_API.md` §7。
-    ///
-    /// `seriesID` 来自 `searchTV` 命中的 `tmdbID`(⛔ 不要拿文件名当 id)。
-    /// 返回**整季** `episodes[]`;调用方按 `episodeNumber` 自己匹配 ——
-    /// 客户端不猜哪一集对应哪个文件。
-    ///
-    /// 季不存在时服务端回 404 → `TMDBError.notFound`(§7)。
+    /// 返回整季 `episodes[]`(§7),调用方按 `episodeNumber` 匹配文件。`seriesID` 是 TMDB id。
+    /// 季不存在 → `TMDBError.notFound`。
     func seasonDetails(
         seriesID: Int,
         seasonNumber: Int,
@@ -119,14 +95,8 @@ struct TMDBClient: Sendable {
 
     // MARK: - 按 id 直取
 
-    /// 按**显式 id** 直接取条目,跳过搜索与标题匹配(标准命名里的 `{tmdbid-63926}`)。
-    ///
-    /// `isSeries` 由调用方按上下文给:标签本身只给 id,**不区分影 / 剧**
-    /// (TMDB 两个 id 空间各自编号)。`/3/tv/{id}` 与 `/3/movie/{id}` 的响应体
-    /// 字段名不同(`name` / `first_air_date` vs `title` / `release_date`),
-    /// 但都能解进同一个 `TMDBResult` —— 由 `TMDBMatch(result:kind:)` 归一。
-    ///
-    /// id 在该端点不存在时服务端回 404 → `TMDBError.notFound`(§5)。
+    /// 按 `{tmdbid-…}` 直取,跳过搜索。影 / 剧是两个 id 空间,`isSeries` 由调用方按上下文给。
+    /// 两种响应字段名不同,都解进 `TMDBResult`,由 `TMDBMatch(result:kind:)` 归一。不存在 → `.notFound`。
     func details(
         id: Int,
         isSeries: Bool,
@@ -143,16 +113,8 @@ struct TMDBClient: Sendable {
 
     // MARK: - 演职员
 
-    /// 取**整部剧 / 整部电影**的演职员(演员表 + 剧组),`docs/TMDB_API.md` §10。
-    ///
-    /// `id` 是 TMDB 条目 id(⛔ 不要拿文件名当 id)。`isSeries` 由调用方给 ——
-    /// 标签与搜索结果都**不区分影 / 剧**(见 `details`)。
-    ///
-    /// ⚠️ 返回的是**整部作品**的演职员,不是某一季 / 某一集的。
-    ///
-    /// 名字为空的条目一律滤掉:`TMDBPerson.name` 缺字段时是空串,端出去就是一张
-    /// 没有名字的头像卡(⛔ 不伪造一个名字补上)。`cast` 按 TMDB 的 `order` 排一次
-    /// —— 那是它给的主要程度,⛔ 不按别的字段重排。
+    /// 整部作品(非单季 / 单集)的演职员(§10)。`isSeries` 同 `details`。
+    /// 滤掉没名字的人(⛔ 不伪造名字);`cast` 按 TMDB 给的 `order` 排,⛔ 不按别的字段重排。
     func credits(
         id: Int,
         isSeries: Bool,
@@ -173,11 +135,10 @@ struct TMDBClient: Sendable {
 
     // MARK: - 传输与解码
 
-    /// 发一次请求,返回响应体。只做传输层校验(HTTP 状态、是否 HTTP 响应)。
+    /// 只做传输层校验。
     func send(_ endpoint: TMDBEndpoint, token: String) async throws -> Data {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        // ⛔ 空 token 不假装去请求:TMDB 会回 401,而那条错误对用户毫无指引
-        // (「去填 token」是这一档该说的话,不是「token 无效」)
+        // 空 token 不去请求:TMDB 会回 401,用户该看到的是「去填 token」而不是「token 无效」
         guard !trimmed.isEmpty else { throw TMDBError.tokenMissing }
         guard let url = endpoint.url else {
             throw TMDBError.transport("接口地址构造失败(\(endpoint.name))")
@@ -200,16 +161,13 @@ struct TMDBClient: Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            // ⛔ 绝不 `String(describing: error)`:`URLError` 的 userInfo 里带
-            // `NSURLErrorFailingURLStringErrorKey`(CLAUDE.md「安全与隐私」)。
-            // 取域 + 码 + 描述再过脱敏。
+            // ⛔ 不用 `String(describing: error)`:`URLError` 的 userInfo 带完整 URL
             let nsError = error as NSError
             throw TMDBError.transport(
                 SecretRedactor.redacted("\(nsError.domain) \(nsError.code):\(nsError.localizedDescription)"))
         }
     }
 
-    /// 把非 2xx 折成 `TMDBError`(官方错误表 §5)。
     static func failure(statusCode: Int, data: Data) -> TMDBError {
         let envelope = try? JSONDecoder().decode(TMDBFailureEnvelope.self, from: data)
         switch statusCode {
@@ -224,7 +182,7 @@ struct TMDBClient: Sendable {
         }
     }
 
-    /// 解码。解码失败只带端点名与解码器描述,⛔ **不带响应体**。
+    /// 失败只带端点名与解码器描述,⛔ 不带响应体。
     func decode<T: Decodable & Sendable>(_ data: Data, endpoint: TMDBEndpoint) throws -> T {
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -233,8 +191,7 @@ struct TMDBClient: Sendable {
         }
     }
 
-    /// `DecodingError` 的可读描述。`keyNotFound` / `typeMismatch` 都点名到字段,
-    /// 排障时能直接看出是哪个字段对不上(这正是「核实字段名」的反馈回路)。
+    /// 点名到字段,排障时能直接看出哪个字段对不上。
     private static func describe(_ error: any Error) -> String {
         switch error {
         case let decoding as DecodingError:
@@ -256,9 +213,7 @@ struct TMDBClient: Sendable {
     }
 }
 
-/// 失败响应体(`docs/TMDB_API.md` §5):
-/// `{"status_code":7,"status_message":"...","success":false}`。
-/// 全部可选:形状不对时 `failure(statusCode:data:)` 仍能按状态码给出结论。
+/// `{"status_code":7,"status_message":"...","success":false}`(§5)。全可选:形状不对仍能按状态码下结论。
 private struct TMDBFailureEnvelope: Decodable {
     let statusCode: Int?
     let statusMessage: String?

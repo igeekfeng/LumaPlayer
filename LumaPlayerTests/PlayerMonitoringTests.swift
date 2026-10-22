@@ -104,7 +104,7 @@ final class PlayerMonitoringTests: XCTestCase {
         viewModel.stop()
         gate.onRead = nil
         gate.complete(["video-codec": "OLD", "demuxer-cache-time": "99"])
-        // 已取消worker返回之后没有第二轮;即使替身交付成功值也必须命中代次/identity门。
+        // 已取消的 worker 返回后没有第二轮;即使替身交付成功值也必须被代次 / identity 门挡住。
         for _ in 0..<20 { await Task.yield() }
         XCTAssertNil(viewModel.statistics)
         XCTAssertNil(viewModel.bufferedUntilSeconds)

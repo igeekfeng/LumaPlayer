@@ -4,7 +4,7 @@
 #
 # 把 LumaPlayer.app 依赖的 libmpv 及其全部传递依赖拷进
 # Contents/Frameworks/，引用改成 @rpath，再逐个重签名。
-# 处理后的 App 不再需要目标机安装 Homebrew / mpv（方案 B）。
+# 处理后的 App 不需要目标机安装 Homebrew / mpv。
 #
 # ⚠️ 有两个依赖根：
 #   1. /opt/homebrew —— libmpv 的全部传递依赖（ffmpeg / libplacebo / …）；

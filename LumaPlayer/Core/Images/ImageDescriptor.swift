@@ -1,33 +1,21 @@
 import Foundation
 
-/// 图片从哪来。
+/// 图片从哪来。`PosterImage` 只认这个,⛔ 不直接拼 Emby 端点。
 ///
-/// ⛔ `PosterImage` 只认这个,不再直接拼 Emby 端点 —— 否则百度来源的图取不到
-/// (`docs/SOURCE_ABSTRACTION_PLAN.md` §4.5)。
-///
-/// ## `cacheKey` 必须与 `origin` 分开
-///
-/// 百度的 `dlink` 是**临时地址**(8 小时有效,见 `docs/BAIDU_PAN_API.md` §2.2)。
-/// 若把它写进缓存 key,同一个文件过 8 小时就会被当成一张新图重新下载。
-/// 所以 key 由调用方按「来源 + 内容 id + **内容版本**」给,`origin` 只负责
-/// 「怎么取字节」。
+/// `cacheKey` 与 `origin` 分开:百度 `dlink` 8 小时过期(`docs/BAIDU_PAN_API.md` §2.2),
+/// 进了 key 就会被当成新图重下。key 由调用方按「来源 + 内容 id + 内容版本」给,`origin` 只管怎么取字节。
 struct ImageDescriptor: Sendable, Equatable, Hashable {
 
     enum Origin: Sendable, Equatable, Hashable {
         /// Emby 图片端点(要带 `X-Emby-Token`,`API_CONTRACT.md` 3.3)
         case emby(ImageSpec)
-        /// 一个自带凭据的远端地址(百度 `dlink`)。
-        /// ⛔ 不要为它套自定义 scheme / 资源加载器:它就是普通 https 地址。
+        /// 自带凭据的普通 https 地址(百度 `dlink`)
         case remote(url: URL, headers: [String: String])
-        /// 本机文件:本地文件夹来源里同目录的封面图(`LocalFolderSourceProvider`)。
-        /// 读它要那个来源的访问权已打开(`LocalFolderAccess`)
+        /// 本地文件夹来源里的封面图;读之前要先打开该来源的访问权(`LocalFolderAccess`)
         case localFile(URL)
     }
 
-    /// 这张图属于哪个来源。
-    ///
-    /// 用途:磁盘缓存按它分目录,删来源时按它整片清掉
-    /// (`PosterDiskCache.purge(ownerID:)`)。
+    /// 所属来源。磁盘缓存按它分目录,删来源时整片清掉(`PosterDiskCache.purge(ownerID:)`)
     let ownerID: UUID
     let origin: Origin
     /// 稳定的缓存 key。⛔ 不得含会过期的临时地址,但**必须含内容版本**。
@@ -54,12 +42,8 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         ImageDescriptor(ownerID: ownerID, origin: .localFile(url), cacheKey: cacheKey)
     }
 
-    /// 能不能进磁盘缓存。
-    ///
-    /// ⚠️ 沿用 `API_CONTRACT.md` 3.3 那条硬规则:**没有版本标识的图不进磁盘缓存**
-    /// —— key 不含版本就可能把旧图当新图端出来。
-    /// Emby 的版本标识是 `ImageSpec.tag`;百度那边由 `baiduCoverKey` 把
-    /// 封面文件的修改时间编进 key,所以它自带版本。
+    /// 没有版本标识的图不进磁盘缓存(`API_CONTRACT.md` 3.3)。Emby 看 `ImageSpec.tag`;
+    /// 其余来源的 key 已含修改时间 / 路径版本。
     var isDiskCacheable: Bool {
         switch origin {
         case .emby(let spec): return spec.tag != nil
@@ -67,22 +51,10 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         }
     }
 
-    /// 可持久化的封面快照。
+    /// 本地续播库(`WatchProgressStore`)里存的封面(`ImageDescriptor` 本身不是 `Codable`)。
     ///
-    /// ## 为什么需要它
-    ///
-    /// 本地续播库(`WatchProgressStore`)要记住「这条续播卡片的封面长什么样」,
-    /// 而 `ImageDescriptor` 本身不是 `Codable`(它带 `ImageSpec` 这类 Emby 模型)。
-    /// 这里把**远端封面**要的东西单拎出来存:`ownerID`(磁盘缓存分区)+
-    /// `cacheKey`(版本标识)+ 取字节用的地址与请求头。
-    ///
-    /// ## ⚠️ `url` 是**临时**地址
-    ///
-    /// 百度的 `dlink` 8 小时过期(`docs/BAIDU_PAN_API.md` §2.2)。所以这张快照
-    /// 恢复出来的图**只在两种情况下出得来**:磁盘缓存还留着这张图(`cacheKey`
-    /// 含封面文件的 `server_mtime`,内容变了 key 就变),或者地址还没过期。
-    /// 都不满足时按 `PosterImage` 的既定处置降级成占位图 —— ⛔ 不假装有封面。
-    /// 它落在 0600、不进备份的续播库文件里,与凭据文件同一敏感级。
+    /// `url` 可能已过期(`dlink`)或失效(本机路径挪了):只能靠磁盘缓存兜,兜不住就降级成占位图。
+    /// 含请求头,所在文件与凭据文件同一敏感级(0600、不进备份)。
     struct Snapshot: Codable, Sendable, Equatable {
         let ownerID: UUID
         let url: URL
@@ -90,11 +62,7 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         let cacheKey: String
     }
 
-    /// 这张图能不能折成快照。远端图与本机文件可以 ——
-    /// Emby 图要带服务端认证头、语义绑在 `ImageSpec` 上,不进本地续播库。
-    ///
-    /// 本机文件的快照里存的是**绝对路径**:文件夹挪了 / 外接盘换了挂载点就读不到,
-    /// 与 `dlink` 过期是同一种处置 —— 靠磁盘缓存兜,兜不住就降级成占位图。
+    /// Emby 图要带服务端认证头,不进本地续播库,返回 nil。
     var snapshot: Snapshot? {
         switch origin {
         case .remote(let url, let headers):
@@ -106,19 +74,11 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         }
     }
 
-    /// 这张图的**地址会过期**(百度的 `dlink` 8 小时,见 `docs/BAIDU_PAN_API.md` §2.2)。
-    ///
-    /// 用途:跨天的缓存⛔ 不能存它 —— `BaiduPanScrapeCache` 记 30 天,存下来的地址
-    /// 第二天就打不开了。判据是 `cacheKey` 的命名空间前缀(`baidu|` / `tmdb|`),
-    /// 与两个 `…Key(…)` 工厂一一对应。
+    /// 地址会过期(百度 `dlink`),⛔ 不能进跨天的缓存(如 `BaiduPanScrapeCache`)。
+    /// 按 `cacheKey` 命名空间前缀判断,与下面的 `…Key(…)` 工厂对应。
     var hasExpiringURL: Bool { cacheKey.hasPrefix("baidu|") }
 
-    /// 百度网盘里一张封面的缓存 key:来源 + `fs_id` + **文件修改时间**。
-    ///
-    /// ⚠️ 带 `modifiedAt`:它就是百度侧的「版本标识」。用户在网盘里换了封面图,
-    /// `server_mtime` 会变 → key 变 → 拉到新图而不是端出旧缓存。
-    /// ⛔ 不带时间戳的话,换了封面永远看不到新的 —— 与 `ImageSpec` 不缓存无 Tag
-    /// 图片是同一个理由。
+    /// 来源 + `fs_id` + 修改时间。修改时间就是版本:换了封面 key 就变。
     static func baiduCoverKey(
         sourceID: UUID,
         fsID: UInt64,
@@ -129,22 +89,13 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
         return "baidu|\(sourceID.uuidString)|\(fsID)|\(stamp)|cover|\(maxWidth)"
     }
 
-    /// TMDB 一张海报的缓存 key:来源 + `poster_path` + 档位。
-    ///
-    /// ⚠️ `poster_path` **自带版本语义**:换了海报 TMDB 会换路径
-    /// (`docs/TMDB_API.md` §4),所以它直接当版本段 —— 与 `baiduCoverKey`
-    /// 拿 `server_mtime` 当版本段是同一个角色。
-    /// ⛔ 不要拿 TMDB 条目 id 当版本:`id` 不变而海报会变,那样换了海报仍端旧图。
-    ///
-    /// ⚠️ 分集剧照(`episodes[].still_path`,§8)也走它:拼法与版本语义**完全一致**
-    /// (`path` 是版本段),⛔ 不另立一个只有名字不同的 key。
+    /// 来源 + `poster_path` + 档位。换海报 TMDB 会换路径(`docs/TMDB_API.md` §4),路径就是版本;
+    /// ⛔ 不用条目 id(id 不变海报会变)。分集剧照 `still_path` 也用它。
     static func tmdbPosterKey(sourceID: UUID, posterPath: String, size: String) -> String {
         "tmdb|\(sourceID.uuidString)|\(posterPath)|\(size)"
     }
 
-    /// 本地文件夹里一张封面的缓存 key:来源 + 文件 id + **文件修改时间**。
-    /// 版本语义与 `baiduCoverKey` 相同(换了图 → 修改时间变 → key 变)。
-    /// 命名空间与百度分开(`local|`):本机路径不会过期,`hasExpiringURL` 据此放行。
+    /// 同 `baiduCoverKey`;命名空间单独用 `local|`,因为本机路径不过期(见 `hasExpiringURL`)。
     static func localCoverKey(
         sourceID: UUID,
         fileID: UInt64,
@@ -157,13 +108,8 @@ struct ImageDescriptor: Sendable, Equatable, Hashable {
 }
 
 extension ImageDescriptor {
-    /// 从持久化的快照恢复。
-    ///
-    /// ⚠️ 放在 extension 里而不是类型体内:类型体内定义任何 `init` 都会**抑制**
-    /// 合成的逐成员构造器,而 `emby(_:)` / `remote(...)` / `localFile(...)`
-    /// 三个工厂都靠那个构造器。
-    ///
-    /// 快照不单独记「是哪种图」(老记录里只有远端图),按地址分:`file://` 就是本机文件。
+    /// 放在 extension 里,以保留合成的逐成员构造器(上面三个工厂要用)。
+    /// 快照不记图的种类,`file://` 即本机文件。
     init(snapshot: Snapshot) {
         self.init(
             ownerID: snapshot.ownerID,

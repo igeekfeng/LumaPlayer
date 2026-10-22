@@ -1,12 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// TMDB 刮削链路:`TMDBEndpoint`(URL 构造)+ `TMDBClient`(传输 / 解码 / 错误映射)
-/// + 「文件名 → `parse` → 查询」的端到端拼接。
-///
-/// ⛔ **零真实网络**:全部走 `MockEmbyURLProtocol`(它按 scheme + host + path 打桩,
-/// 与具体来源无关,所以 TMDB 也能用它的会话)。真实 TMDB 调用要等用户在设置里
-/// 填入自己的 token 后才能跑,在此之前按 `CLAUDE.md` 硬规则 2 标注「未在真实服务器验证」。
+/// TMDB 刮削链路:端点构造、`TMDBClient` 传输 / 解码 / 错误映射,以及「文件名 → `parse` → 查询」的拼接。
+/// ⛔ 零真实网络:全部走 `MockEmbyURLProtocol`(按 scheme + host + path 打桩,与来源无关)。
 final class TMDBTests: XCTestCase {
 
     private let host = "api.themoviedb.org"
@@ -27,8 +23,7 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 端点(URL 构造,纯函数)
 
-    /// `docs/TMDB_API.md` §2:参数名 `query` / `year` / `language`,
-    /// 空格与中文标题都要整体编码。
+    /// 空格与中文标题都要整体编码(`docs/TMDB_API.md` §2)。
     func testMovieSearchEndpointEncodesQueryAndLanguage() throws {
         let endpoint = TMDBEndpoint.searchMovie(query: "Jack Reacher", year: 2016, language: "zh-CN")
         let url = try XCTUnwrap(endpoint.url)
@@ -41,17 +36,16 @@ final class TMDBTests: XCTestCase {
         XCTAssertTrue(query.contains("language=zh-CN"), "实际:\(query)")
     }
 
-    /// 剧集端点的年份参数**名字不同**:`first_air_date_year`(`docs/TMDB_API.md` §2)。
+    /// 剧集的年份参数名不同:`first_air_date_year`(§2)。
     func testTVSearchEndpointUsesFirstAirDateYear() throws {
         let endpoint = TMDBEndpoint.searchTV(query: "权力的游戏", year: 2011, language: "zh-CN")
         let query = try XCTUnwrap(endpoint.url?.query)
         XCTAssertTrue(query.contains("first_air_date_year=2011"), "实际:\(query)")
         XCTAssertEqual(endpoint.path, "/3/search/tv")
-        // 中文必须按 UTF-8 逐字节编码,不能原样留在查询串里
         XCTAssertFalse(query.contains("权力的游戏"), "中文未编码:\(query)")
     }
 
-    /// 年份解析不出来时**不传**这个参数,⛔ 不填 0 / 空串这类假默认值。
+    /// 年份缺失时不传参数,⛔ 不填 0 / 空串。
     func testYearIsOmittedWhenNil() throws {
         let endpoint = TMDBEndpoint.searchMovie(query: "Dune", year: nil, language: "zh-CN")
         let query = try XCTUnwrap(endpoint.url?.query)
@@ -59,13 +53,12 @@ final class TMDBTests: XCTestCase {
         XCTAssertTrue(query.contains("query=Dune"))
     }
 
-    /// 端点诊断名不含凭据(CLAUDE.md「安全与隐私」)。
     func testEndpointNamesExcludeSecrets() {
         let endpoint = TMDBEndpoint.searchMovie(query: "SECRET", year: nil, language: "zh-CN")
         XCTAssertEqual(endpoint.method, "GET")
         XCTAssertEqual(endpoint.name, "search/movie")
         XCTAssertFalse(endpoint.name.contains("SECRET"))
-        // token 走请求头,绝不进查询串(§1)
+        // token 走请求头,不进查询串(§1)
         XCTAssertFalse((endpoint.url?.query ?? "").lowercased().contains("token"))
     }
 
@@ -79,14 +72,12 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(
             TMDBImage.posterURL(path: "pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg")?.absoluteString,
             "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg")
-        // 没有海报 → nil(UI 降级成图标卡)
         XCTAssertNil(TMDBImage.posterURL(path: nil))
         XCTAssertNil(TMDBImage.posterURL(path: ""))
     }
 
     // MARK: - 传输:认证头
 
-    /// v4 token 走 `Authorization: Bearer`,且**不进 URL**(§1)。
     func testBearerTokenGoesInAuthorizationHeader() async throws {
         MockEmbyURLProtocol.stub(
             .json(#"{"results":[]}"#), host: host, path: "/3/search/movie")
@@ -101,7 +92,7 @@ final class TMDBTests: XCTestCase {
                        "token 不得出现在查询串:\(request.url)")
     }
 
-    /// 空 token 直接抛 `.tokenMissing`,⛔ **不发请求**(发了只会拿到无语义的 401)。
+    /// 空 token 不发请求(发了只会拿到无语义的 401)。
     func testEmptyTokenThrowsWithoutSendingRequest() async throws {
         MockEmbyURLProtocol.stub(
             .json(#"{"results":[]}"#), host: host, path: "/3/search/movie")
@@ -118,7 +109,6 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 解码
 
-    /// 电影:取 `title` / `release_date` / `overview` / `poster_path` / `vote_average`。
     func testMovieSearchDecodesIntoMatch() async throws {
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
 
@@ -137,7 +127,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(match.voteAverage, 8.433)
     }
 
-    /// 剧集:字段名是 `name` / `first_air_date`(§3),不是 `title` / `release_date`。
+    /// 剧集字段名是 `name` / `first_air_date`(§3)。
     func testTVSearchDecodesNameAndFirstAirDate() async throws {
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
 
@@ -150,7 +140,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(match.year, 2011)
     }
 
-    /// `search(isSeries:)` 按季集标志选端点 —— 这是刮削链路的「选路」。
     func testSeriesFlagChoosesTVEndpoint() async throws {
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
@@ -163,8 +152,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertNotNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/3/search/movie"))
     }
 
-    /// TMDB 对缺海报 / 缺上映日的条目会给 `null` 或 `""` —— 一律解成 nil,
-    /// ⛔ 不让整条解失败(§3 的解码立场)。
+    /// TMDB 缺字段时给 `null` 或 `""`,一律解成 nil,⛔ 不让整条解失败。
     func testNullFieldsDecodeAsNil() async throws {
         MockEmbyURLProtocol.stub(
             .json(#"""
@@ -184,7 +172,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(match.voteAverage)
     }
 
-    /// 搜索没有命中不是错误:返回空数组(§5 的立场)。
     func testNoResultsIsNotAnError() async throws {
         MockEmbyURLProtocol.stub(.json(#"{"results":[]}"#), host: host, path: "/3/search/movie")
 
@@ -192,7 +179,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertTrue(matches.isEmpty)
     }
 
-    /// 响应形状不对(没有 `results`)→ 抛解码错误,⛔ 不静默成空数组。
     func testMalformedBodyThrowsDecodingError() async throws {
         MockEmbyURLProtocol.stub(.json(#"{"unexpected":true}"#), host: host, path: "/3/search/movie")
 
@@ -241,7 +227,6 @@ final class TMDBTests: XCTestCase {
         }
     }
 
-    /// 非 2xx、非上述状态码 → 通用 `.server`,状态码与描述都带出来。
     func testOtherStatusCodesMapToServerError() {
         let error = TMDBClient.failure(
             statusCode: 503,
@@ -249,7 +234,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(error, .server(statusCode: 503, message: "Service offline"))
     }
 
-    /// 连不上(传输层)→ `.transport`,且描述经过脱敏。
     func testTransportFailureIsRedacted() async throws {
         MockEmbyURLProtocol.stub(.failure(.cannotConnectToHost), host: host, path: "/3/search/movie")
 
@@ -265,9 +249,7 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 端到端:文件名 → parse → 查询
 
-    /// 刮削链路的**形状**:`BaiduPanMetadataSynthesizer.parse` 从文件名解析出
-    /// 标题 / 年份 / 季集,直接喂给 `TMDBClient`(⛔ 不另写一个文件名解析器)。
-    /// 电影文件走 `/3/search/movie`,并带上解析出的年份。
+    /// 文件名解析复用 `BaiduPanMetadataSynthesizer.parse`,⛔ 不另写解析器。
     func testFilenameParsesIntoMovieQuery() async throws {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "Fight.Club.1999.1080p.BluRay.x264.mkv")
         XCTAssertEqual(parsed.title, "Fight Club")
@@ -286,7 +268,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertTrue(query.contains("year=1999"), "实际:\(query)")
     }
 
-    /// 带季集的文件名 → 走 `/3/search/tv`。
     func testEpisodeFilenameParsesIntoTVQuery() async throws {
         let parsed = BaiduPanMetadataSynthesizer.parse(name: "Game.of.Thrones.S01E01.1080p.mkv")
         XCTAssertNil(parsed.year)
@@ -301,7 +282,6 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 季详情端到端(`/3/tv/{id}/season/{n}`,§7)
 
-    /// 剧 id 与季号走 **path**,只有 `language` 进查询串;token 不进 URL(§7)。
     func testSeasonEndpointUsesSeriesAndSeasonInPath() throws {
         let endpoint = TMDBEndpoint.tvSeason(seriesID: 1399, seasonNumber: 13, language: "zh-CN")
         XCTAssertEqual(endpoint.path, "/3/tv/1399/season/13")
@@ -313,7 +293,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertFalse((endpoint.url?.query ?? "").lowercased().contains("token"))
     }
 
-    /// 分集解码:`episode_number` 是匹配键(必填),`name` / `overview` / `still_path` 都可选。
+    /// `episode_number` 是匹配键(必填),其余字段可选。
     func testSeasonDetailsDecodeEpisodes() async throws {
         MockEmbyURLProtocol.stub(
             .json(Self.seasonJSON), host: host, path: "/3/tv/1399/season/1")
@@ -327,17 +307,16 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(first.name, "凛冬将至")
         XCTAssertEqual(first.overview, "第一集简介。")
         XCTAssertEqual(first.stillPath, "/still1.jpg")
-        // 分集剧照是 16:9 横图,用 w300 档位(§8),不是海报的 w500
         XCTAssertEqual(first.stillURL?.absoluteString,
                        "https://image.tmdb.org/t/p/w300/still1.jpg")
 
-        // 第 2 集 `name` 是空串、`overview` 是 null → 解成原样,由上层决定怎么降级
+        // 第 2 集空 `name` / null `overview` 原样解出,降级由上层决定
         let second = episodes[1]
         XCTAssertEqual(second.name, "")
         XCTAssertNil(second.overview)
     }
 
-    /// 季不存在 → 404 → `.notFound`(刮削层据此把这一季记成「空表」不再重问)。
+    /// 刮削层据 `.notFound` 把这一季记成空表、不再重问。
     func testSeasonNotFoundMapsToNotFound() async throws {
         MockEmbyURLProtocol.stub(
             .json(#"{"status_code":34,"status_message":"The resource you requested could not be found."}"#,
@@ -355,7 +334,6 @@ final class TMDBTests: XCTestCase {
         }
     }
 
-    /// 分集剧照地址拼法(§8):与海报同一拼法,只有档位不同;没有剧照 → nil。
     func testStillURLIsBuiltWithStillSize() {
         XCTAssertEqual(
             TMDBImage.stillURL(path: "/still1.jpg")?.absoluteString,
@@ -366,7 +344,6 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 按 id 直取 + 详情端点字段(§9)
 
-    /// id 走 **path**,只有 `language` 进查询串;token 不进 URL(§9)。
     func testDetailsEndpointUsesIDInPath() throws {
         let series = TMDBEndpoint.tvDetails(id: 1399, language: "zh-CN")
         XCTAssertEqual(series.path, "/3/tv/1399")
@@ -378,8 +355,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(movie.name, "movie/details")
     }
 
-    /// 详情端点才给的字段(`genres` / `tagline` / `status` / `production_companies` / `networks`)
-    /// 要能解出来 —— 搜索响应里没有它们,所以这是详情页「类型」那一行唯一的来源。
+    /// 这些字段只有详情端点给,是详情页「类型」那一行的唯一来源。
     func testDetailsDecodeExtendedFields() async throws {
         MockEmbyURLProtocol.stub(.json(Self.detailsJSON), host: host, path: "/3/tv/1399")
 
@@ -394,7 +370,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(match.networks, ["HBO"])
     }
 
-    /// 搜索响应里**没有**详情字段 → 一律为空(⛔ 不能拿 `genre_ids` 编一个名字出来)。
+    /// 搜索响应没有详情字段 → 一律为空,⛔ 不拿 `genre_ids` 编名字。
     func testSearchMatchHasNoExtendedFields() async throws {
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
 
@@ -409,8 +385,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(match.statusText)
     }
 
-    /// 状态文案只映射**官方示例里出现过**的两个值,其余**原样显示英文**
-    /// —— 规格里 `status` 没有枚举定义,⛔ 不猜一个中文词盖上去。
+    /// `status` 没有枚举定义:只映射官方示例里的两个值,其余原样显示英文。
     func testStatusTextOnlyMapsKnownValues() {
         XCTAssertEqual(Self.match(status: "Ended").statusText, "已完结")
         XCTAssertEqual(Self.match(status: "Released").statusText, "已上映")
@@ -421,7 +396,6 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 演职员(§10)
 
-    /// 两个 id 都走 path,诊断名不含凭据(§10)。
     func testCreditsEndpointPaths() throws {
         XCTAssertEqual(
             TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path, "/3/tv/1399/credits")
@@ -431,21 +405,18 @@ final class TMDBTests: XCTestCase {
             TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").path, "/3/movie/550/credits")
         XCTAssertEqual(
             TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").name, "movie/credits")
-        // credits 是**整部作品**的演职员,不是某一季的 → 路径里不该出现 season
+        // credits 是整部作品的,路径里不该有 season
         XCTAssertFalse(TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path.contains("season"))
     }
 
-    /// 演员给 `character`、剧组给 `job` + `department` —— 同一个类型两种填法(§10)。
     func testCreditsDecodeCastAndCrew() async throws {
         MockEmbyURLProtocol.stub(
             .json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
 
         let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
 
-        // 名字为空的条目一律滤掉(端出去就是一张没有名字的头像卡)
         XCTAssertEqual(credits.cast.count, 2)
         XCTAssertEqual(credits.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
-        // cast 按 TMDB 的 order 升序
         XCTAssertEqual(credits.cast.map(\.order), [0, 1])
         XCTAssertEqual(credits.cast.first?.role, "Daenerys Targaryen")
         XCTAssertEqual(credits.cast.first?.department, nil, "演员没有 department")
@@ -455,7 +426,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(credits.crew.first?.department, "Directing")
     }
 
-    /// cast 按 `order` 排 —— 响应里的顺序不保证,客户端只排序、⛔ 不自己重排主要程度。
+    /// 响应里的顺序不保证,只按 `order` 排,⛔ 不自己判断主次。
     func testCastIsSortedByOrder() async throws {
         MockEmbyURLProtocol.stub(
             .json(#"""
@@ -470,7 +441,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(credits.cast.map(\.name), ["A", "B", "C"])
     }
 
-    /// 缺 `cast` / `crew` 不该让整条解失败(§3 的解码立场),⛔ 不抛错。
     func testCreditsMissingArraysDecodeAsEmpty() async throws {
         MockEmbyURLProtocol.stub(.json(#"{"id":1}"#), host: host, path: "/3/movie/1/credits")
 
@@ -479,7 +449,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertTrue(credits.crew.isEmpty)
     }
 
-    /// `profile_path` 为 `null` 时没有头像 —— UI 退成 `person.fill`,⛔ 不拿别人的照片顶上。
     func testPersonWithoutProfilePathHasNoAvatar() async throws {
         MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
 
@@ -494,7 +463,6 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(director.profileURL)
     }
 
-    /// 头像档位是 `w185`(§11),与海报 `w500` / 剧照 `w300` 分开。
     func testProfileURLUsesProfileSize() {
         XCTAssertEqual(
             TMDBImage.profileURL(path: "/daenerys.jpg")?.absoluteString,
@@ -504,7 +472,7 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(TMDBImage.profileURL(path: ""))
     }
 
-    /// 「导演 / 编剧」按职务取;没有就是空数组(详情页那一行整块不显示)。
+    /// 没有对应职务就是空数组,详情页整行不显示。
     func testCrewNamesFilterByJob() throws {
         let credits = TMDBCredits(
             cast: [],
@@ -526,8 +494,7 @@ final class TMDBTests: XCTestCase {
     // MARK: - 辅助构造
 
     private static func person(id: Int, name: String, job: String) throws -> TMDBPerson {
-        // `TMDBPerson` 只有解码构造器(逐成员构造器被自定义 `init(from:)` 抑制),
-        // 所以这里就走解码 —— ⛔ 不为测试另开一个生产代码里用不到的开入口。
+        // `TMDBPerson` 只有解码构造器(自定义 `init(from:)` 抑制了逐成员构造器),⛔ 不为测试另开入口。
         let json = #"{"id":\#(id),"name":"\#(name)","job":"\#(job)","order":0}"#
         return try JSONDecoder().decode(TMDBPerson.self, from: Data(json.utf8))
     }
@@ -544,7 +511,7 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - fixture
 
-    /// 取自官方规格 `/3/search/movie` 的 200 示例(`docs/TMDB_API.md` §3)。
+    /// 官方规格 `/3/search/movie` 的 200 示例(§3)。
     private static let movieJSON = #"""
     {"page":1,"results":[{"adult":false,"backdrop_path":"/hZkgoQYus5vegHoetLkCJzb17zJ.jpg",
     "genre_ids":[18,53,35],"id":550,"original_language":"en","original_title":"Fight Club",
@@ -554,7 +521,7 @@ final class TMDBTests: XCTestCase {
     "vote_average":8.433,"vote_count":26279}],"total_pages":1,"total_results":1}
     """#
 
-    /// 剧集响应形状(`name` / `first_air_date`,官方 `/3/search/tv`)。
+    /// 官方 `/3/search/tv` 响应形状。
     private static let tvJSON = #"""
     {"page":1,"results":[{"adult":false,"backdrop_path":"/suopoADq0k8YZr4dQXcU6pToj6s.jpg",
     "genre_ids":[10765,18],"id":1399,"origin_country":["US"],"original_language":"en",
@@ -564,8 +531,7 @@ final class TMDBTests: XCTestCase {
     "total_pages":1,"total_results":1}
     """#
 
-    /// 季详情响应形状(`/3/tv/{id}/season/{n}`,官方规格,`docs/TMDB_API.md` §7)。
-    /// `episodes[]` 里第 2 集的 `name` 是空串、`overview` 是 null —— 覆盖降级路径。
+    /// 季详情(§7)。第 2 集 `name` 空串、`overview` null,覆盖降级路径。
     private static let seasonJSON = #"""
     {"_id":"5256c8b219c2956ff6047cd8","air_date":"2011-04-17","id":3624,
     "name":"Season 1","overview":"第一季。","poster_path":"/zwaj4egrhnXOBIit1tyb4Sbt3KP.jpg",
@@ -577,10 +543,7 @@ final class TMDBTests: XCTestCase {
     "vote_average":7.9,"vote_count":210}]}
     """#
 
-    /// 详情端点响应形状(`/3/tv/{id}`,官方规格,`docs/TMDB_API.md` §9)。
-    /// ⚠️ 顶层就是条目本身(没有 `results` 包装),字段名与搜索结果同形 + 那几个扩展字段。
-    /// ⛔ 只留本项目**真正读**的字段 —— 规格示例里那些 `homepage` / `popularity` /
-    /// `production_countries` 一律不放(不读的字段进 fixture 只会误导)。
+    /// 详情(§9):顶层就是条目,没有 `results` 包装。只放本项目读的字段。
     private static let detailsJSON = #"""
     {"adult":false,"backdrop_path":"/suopoADq0k8YZr4dQXcU6pToj6s.jpg","created_by":[],
     "episode_run_time":[60],"first_air_date":"2011-04-17","genres":[{"id":18,"name":"剧情"},
@@ -595,9 +558,7 @@ final class TMDBTests: XCTestCase {
     "status":"Ended","tagline":"凛冬将至。","vote_average":8.4,"vote_count":21000}
     """#
 
-    /// 演职员响应形状(`/3/tv/{id}/credits`,官方规格,`docs/TMDB_API.md` §10)。
-    /// ⚠️ 第 3 位演员 `name` 是空串 —— 覆盖「名字为空的条目一律滤掉」那条路径;
-    /// 导演的 `profile_path` 是 `null` —— 覆盖「没有头像就退成图标」。
+    /// 演职员(§10)。第 3 位演员名为空串(覆盖过滤),导演 `profile_path` 为 null(覆盖无头像)。
     private static let creditsJSON = #"""
     {"id":1399,"cast":[{"adult":false,"gender":1,"id":1223786,
     "known_for_department":"Acting","name":"Emilia Clarke","original_name":"Emilia Clarke",

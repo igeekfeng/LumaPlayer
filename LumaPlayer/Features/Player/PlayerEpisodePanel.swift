@@ -1,25 +1,13 @@
 import SwiftUI
 
-/// 播放页右侧滑出的「选集」抽屉(B2):本季 / 本目录的有序剧集,一行一集,
-/// 带 16:9 剧照、集号与集名,当前集高亮并滚到可见,点任意一集直接切。
+/// 播放页右侧滑出的选集抽屉:与画面并存,宽度刻意留出左侧画面(⛔ 不铺满)。
 ///
-/// **为什么是右侧抽屉,而不是第一版的 popover 小浮层:**
-/// popover 装不下「剧集页」那种一眼扫过去的封面墙 —— 它要贴着按钮、要小。
-/// Plex / Netflix 的分集是**从右滑出、和画面并存**的:一边看一边挑下一集,
-/// 图能开大,当前集在几十集里也定位得住。宽度 `Metrics.episodePanelWidth`
-/// 是刻意留出左侧画面的(⛔ 不铺满)。
+/// 数据就是 `PlayerViewModel.episodes`,⛔ 这里不发任何请求(百度配额见 `docs/BAIDU_PAN_API.md` §7)。
 ///
-/// 数据就是 `PlayerViewModel.episodes`(剧集队列),⛔ 这里不发任何请求 ——
-/// 百度的兄弟集是**起播那一刻**装进请求的(`FileSourceViewModel.episodeQueue`),
-/// 回头再列一次网盘是白烧请求(配额见 `docs/BAIDU_PAN_API.md` §7)。
-/// 封面走 `PosterImage`(唯一允许发图请求的地方),缓存与海报墙共用。
-///
-/// 收起入口有两个:表头右端的 ✕,以及**左缘竖直居中的把手**(`collapseHandle`)。
-/// 后者的必要性来自控制栏的改版:选集按钮已挪到控制栏最右端,而抽屉一打开就盖住
-/// 那一段 —— 只留 ✕ 的话,收起得先跨过半屏去找表头(2026-10-14)。
+/// 收起入口两个:表头 ✕ 与左缘把手。把手必须有:选集按钮在控制栏最右端,抽屉一开就被盖住。
 struct PlayerEpisodePanel: View {
     let episodes: [PlaybackEpisode]
-    /// 当前这一集的来源内 id(高亮 + 打开时滚到它)
+    /// 高亮并在打开时滚到它
     let currentID: String?
     let store: PosterImageStore
     let onSelect: (PlaybackEpisode) -> Void
@@ -29,10 +17,9 @@ struct PlayerEpisodePanel: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // 左侧留白让画面露出来:抽屉是「并存」不是「覆盖」。
-            // Spacer 不参与命中测试,点左侧照样落到下面的画面交互层(单击暂停)。
+            // Spacer 不参与命中测试,点左侧照样落到画面交互层(单击暂停)
             Spacer(minLength: 0)
-            // 把手与抽屉**并排**(不是叠在抽屉上):压不到剧照,也不占列表宽度。
+            // 把手与抽屉并排,不压剧照、不占列表宽度
             collapseHandle
             drawer
         }
@@ -46,8 +33,7 @@ struct PlayerEpisodePanel: View {
         }
         .frame(width: Metrics.episodePanelWidth)
         .frame(maxHeight: .infinity)
-        // 深色材质压一层:视频亮度不可控,靠玻璃的自适应保证文字始终可读
-        // (与 `PlayerControlsView` 的压暗衬底同一考量)。
+        // 视频亮度不可控,材质 + 压暗保证文字可读
         .background(.ultraThinMaterial)
         .background(Color.black.opacity(Metrics.episodePanelDimOpacity))
         .overlay(alignment: .leading) { Divider() }
@@ -55,10 +41,7 @@ struct PlayerEpisodePanel: View {
         .accessibilityLabel("选集面板")
     }
 
-    /// 左缘竖直居中的收起把手:指向右的箭头(「推回右边」)。
-    ///
-    /// 背景用与抽屉同一档材质,而不是黑底或白底 —— 它浮在**亮度不可控的画面**上
-    /// (把手在抽屉左缘外侧,底下是视频),只有材质 + 深色外观能保证箭头一直读得出来。
+    /// 浮在视频上,用材质而非纯色底才能保证箭头始终读得出来。
     private var collapseHandle: some View {
         Button(action: onClose) {
             Image(systemName: "chevron.right")
@@ -124,7 +107,6 @@ struct PlayerEpisodePanel: View {
             }
             .scrollIndicators(.automatic)
             .onAppear {
-                // 打开时把当前集摆到中间:几十集往后翻时,不滚过去就看不到自己在哪
                 guard let currentID else { return }
                 proxy.scrollTo(currentID, anchor: .center)
             }
@@ -132,9 +114,7 @@ struct PlayerEpisodePanel: View {
     }
 }
 
-/// 抽屉里的一行:16:9 剧照 + 集号 / 集名 + 当前集的对勾。
-///
-/// 整行是一个按钮 —— 与详情页 `EpisodeCard` 的「整卡可点」一致,不用只点缩略图。
+/// 整行可点,与详情页 `EpisodeCard` 一致。
 private struct EpisodePanelRow: View {
     let episode: PlaybackEpisode
     let isCurrent: Bool
@@ -178,7 +158,6 @@ private struct EpisodePanelRow: View {
         .accessibilityAddTraits(isCurrent ? .isSelected : AccessibilityTraits())
     }
 
-    /// 16:9 剧照。没有可用图时 `PosterImage` 自己降级成占位图(⛔ 不假装有封面)。
     private var thumbnail: some View {
         PosterImage(
             descriptor: episode.poster,
@@ -189,7 +168,6 @@ private struct EpisodePanelRow: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
     }
 
-    /// 当前集整行高亮;其余悬停时给一层淡底 —— 与详情页分集卡同一套。
     private var background: some View {
         RoundedRectangle(cornerRadius: Radius.card)
             .fill(isCurrent
@@ -197,7 +175,6 @@ private struct EpisodePanelRow: View {
                   : Color.primary.opacity(isHovering ? 0.08 : 0))
     }
 
-    /// 缩略图高度由宽度与 16:9 宽高比推得(与 `PosterImage` 的 fill 裁切配合)。
     private static var thumbnailHeight: CGFloat {
         Metrics.episodeThumbnailWidth / Metrics.landscapeAspectRatio
     }

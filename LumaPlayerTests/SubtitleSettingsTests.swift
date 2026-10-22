@@ -1,17 +1,9 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 字幕延迟与字幕外观(2026-10-06)。
-///
-/// 三层分开验:
-/// - `SubtitleStyle` → mpv 属性的映射、夹取、持久化:纯值,直接验;
-/// - 真实 libmpv 是否接受这些属性名与取值:建一个空闲的 `MPVPlayer` 设进去再读回
-///   (不播放媒体,和 `MPVPlayerLifecycleTests` 一样只走 idle → shutdown);
-/// - `PlayerViewModel` 的字幕延迟:夹取 / 文案 / 读回事件 / 没有会话时不响应。
-///   有会话时的步进要真实播放(会话来自网络),不在这里假覆盖。
-///
-/// ⛔ 字幕在画面上实际长什么样(字号、底框、位置)是渲染结果,这里验不到,
-/// 见 `KNOWN_ISSUES.md` Q40。
+/// 字幕延迟与外观,分三层验:`SubtitleStyle` → mpv 属性的映射 / 夹取 / 持久化;真实 libmpv 是否接受这些属性
+/// (空闲 `MPVPlayer` 设进去再读回,不播放);`PlayerViewModel` 的字幕延迟(有会话时的步进要真实播放,不在这里覆盖)。
+/// 字幕实际渲染效果这里验不到(KNOWN_ISSUES.md Q40)。
 @MainActor
 final class SubtitleSettingsTests: XCTestCase {
 
@@ -37,8 +29,7 @@ final class SubtitleSettingsTests: XCTestCase {
 
     // MARK: - 外观 → mpv 属性
 
-    /// 默认外观必须等于 mpv 自己的默认值(`mpv --list-options`,0.41.0):
-    /// 没改过设置的用户,套用之后画面不该有任何变化。
+    /// mpv 默认值来自 `mpv --list-options`(0.41.0):没改过设置的用户套用后画面不该变。
     func testDefaultStyleMatchesMPVDefaults() {
         XCTAssertEqual(properties(SubtitleStyle.default), [
             "sub-ass-override": "scale",
@@ -142,7 +133,7 @@ final class SubtitleSettingsTests: XCTestCase {
         XCTAssertEqual(SubtitleStyleStore(defaults: defaults).style, .default)
     }
 
-    /// 以后加字段:老 JSON 缺键只让缺的那一项取默认,不是整份偏好作废。
+    /// 老 JSON 缺键只让缺的那项取默认,不是整份偏好作废。
     func testMissingKeysFallBackIndividually() throws {
         let style = try JSONDecoder().decode(
             SubtitleStyle.self, from: Data(#"{"scale":1.5,"edge":"shadow"}"#.utf8))
@@ -166,8 +157,7 @@ final class SubtitleSettingsTests: XCTestCase {
 
     // MARK: - 真实 libmpv 读回
 
-    /// 属性名与取值写法要真被 libmpv 接受:设进去再读回,三种效果各走一遍。
-    /// 名字拼错 / 颜色写法不对时 `setSubtitleProperties` 会抛错。
+    /// 名字拼错 / 颜色写法不对时 `setSubtitleProperties` 会抛错;三种效果各走一遍。
     func testLibmpvAcceptsEveryStyleProperty() throws {
         let player = MPVPlayer()
         defer { player.shutdown() }

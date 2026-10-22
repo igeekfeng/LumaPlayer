@@ -1,16 +1,12 @@
 import Foundation
 import os
 
-/// 用户选定的弹幕库(**本地**记录,不动任何服务端)。
+/// 用户选定的弹幕库(仅本地记录)。两层:
+/// - 集(键 `DanmakuMediaQuery.itemKey`):手选 / 精确匹配后写入,下次同一集直接用,不再请求 `/match`。
+/// - 剧(键 `DanmakuMediaQuery.seriesKey`):对应的弹弹play 作品,其余集按集号在作品剧集列表里对上
+///   (`DanmakuService.resolve`)。
 ///
-/// 两层:
-/// - **集**(`episodes`,键 `DanmakuMediaQuery.itemKey`):这一集用哪个弹幕库。手选 / 精确匹配后写入,
-///   下次播同一集直接用,不再请求 `/match`。
-/// - **剧**(`series`,键 `DanmakuMediaQuery.seriesKey`):这一部剧对应弹弹play 的哪个作品。
-///   某一集选定后顺手记下,其余集按集号在作品剧集列表里对上(`DanmakuService.resolve`)。
-///
-/// ⚠️ 落点与凭据文件同级(`Library/Application Support/LumaPlayer/danmaku-bindings.json`),
-/// 写法与 `ManualMarkersStore` 相同(0600、原子替换、不进备份)。
+/// 文件与凭据文件同目录,写法同 `ManualMarkersStore`(0600、原子替换、不进备份)。
 actor DanmakuBindingStore {
 
     struct EpisodeBinding: Codable, Sendable, Equatable {
@@ -18,7 +14,7 @@ actor DanmakuBindingStore {
         let animeID: Int64
         let animeTitle: String?
         let episodeTitle: String?
-        /// 弹弹play 给的偏移(秒,正数 = 弹幕延后),来自 `/match` 的 `shift`;手选的为 nil
+        /// 秒,正数 = 弹幕延后,来自 `/match` 的 `shift`;手选的为 nil
         let shift: Double?
     }
 
@@ -36,7 +32,7 @@ actor DanmakuBindingStore {
 
     private let fileURL: URL
     private var loaded: Contents?
-    /// 读盘失败的原因。⛔ 不假装「没有记录」:损坏时留下原因,且**不覆盖**原文件(见 `persist`)。
+    /// 读盘失败的原因;非 nil 时 `persist` 拒绝覆盖原文件。
     private(set) var lastLoadFailureDescription: String?
 
     init(fileURL: URL) {
@@ -71,7 +67,7 @@ actor DanmakuBindingStore {
         try persist(current)
     }
 
-    /// 解除这一集(及其所在剧)的绑定:用户认为匹配错了时用。
+    /// 解除这一集及其所在剧的绑定。
     func unbind(itemKey: String, seriesKey: String?) throws {
         var current = contents()
         var changed = current.episodes.removeValue(forKey: itemKey) != nil
@@ -80,7 +76,7 @@ actor DanmakuBindingStore {
         try persist(current)
     }
 
-    /// 删掉键以 `keyPrefix` 开头的集绑定与剧绑定(删除服务器时用)。返回共删了几条。
+    /// 删除服务器时用。返回删了几条。
     @discardableResult
     func purge(keyPrefix: String) throws -> Int {
         var current = contents()
@@ -155,7 +151,7 @@ actor DanmakuBindingStore {
 
 enum DanmakuBindingStoreError: LocalizedError, Sendable, Equatable {
     case writeFailed
-    /// 文件读不出来 / 已损坏,为保护原文件拒绝覆盖
+    /// 为保护读不出 / 已损坏的原文件拒绝覆盖
     case unreadable(String)
 
     var errorDescription: String? {

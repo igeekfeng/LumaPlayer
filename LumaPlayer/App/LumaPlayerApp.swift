@@ -9,8 +9,7 @@ struct LumaPlayerApp: App {
         WindowGroup {
             RootView(container: container)
         }
-        // 主窗口没有标题栏与系统工具栏:内容铺到最上沿,返回 / 搜索等画在浮动顶栏上
-        // (`BrowseChromeBar.swift`,DesignTokens.swift「界面规则」)
+        // 无标题栏:返回 / 搜索画在浮动顶栏上(`BrowseChromeBar.swift`)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: Metrics.mainWindowWidth, height: Metrics.mainWindowHeight)
         .commands {
@@ -18,16 +17,14 @@ struct LumaPlayerApp: App {
             PlayerCommands()
         }
 
-        // 播放器:单实例独立窗口(CLAUDE.md「架构主线」)。内容由
-        // `AppState.nowPlaying` 决定;不参与窗口恢复 —— 重启后没有播放请求,
-        // 恢复出来也只会是一个空窗口。
+        // 播放器单实例窗口,内容由 `AppState.nowPlaying` 决定;不恢复(重启后没有播放请求,只会是空窗)
         Window("播放", id: PlayerSceneRoot.windowID) {
             PlayerSceneRoot(container: container)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 720)
         .restorationBehavior(.disabled)
-        // 不在「窗口」菜单里放一个「播放」入口:没有播放请求时打开它毫无意义
+        // 不进「窗口」菜单:没有播放请求时打开它没意义
         .commandsRemoved()
 
         Settings {

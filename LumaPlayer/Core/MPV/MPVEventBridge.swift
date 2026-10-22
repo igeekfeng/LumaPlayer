@@ -1,37 +1,32 @@
 import Foundation
 import os
 
-/// mpv 事件(属性变化 / 文件生命周期 / 状态机迁移)的 Swift 侧表示。
-/// 由 `MPVPlayer` 的事件线程构造,经 `MPVEventBridge` 投递到 MainActor。
+/// mpv 事件的 Swift 侧表示,由 `MPVPlayer` 构造,经 `MPVEventBridge` 投递到 MainActor。
 enum MPVPlayerEvent: Sendable, Equatable {
-    /// 状态机迁移(loading / playing / paused / failed / destroyed …)
     case phaseChanged(MPVPlayerPhase)
-    /// 当前播放秒数(已按 §6.3 节流,≤ 5 次/秒)
+    /// 已节流,≤ 5 次/秒(§6.3)
     case timePos(Double)
     case duration(Double)
     case paused(Bool)
     case seeking(Bool)
-    /// `paused-for-cache`:缓冲中(UI 显示加载状态)
+    /// `paused-for-cache`
     case buffering(Bool)
     case eofReached(Bool)
-    /// `hwdec-current` 属性:"no" 表示软解(§3.1,S2 用来验证 hwdec=auto 实际生效情况)
+    /// `hwdec-current`:"no" 表示软解(§3.1)
     case hwdecChanged(String)
     case volume(Double)
-    /// 静音状态(PlayerCommands.swift 的 M 键)
     case muted(Bool)
     case speed(Double)
-    /// `sub-delay` 读回值(秒,正 = 字幕延后显示;MPV_INTEGRATION.md 7.1)
+    /// `sub-delay`,秒,正 = 字幕延后(7.1)
     case subtitleDelay(Double)
-    /// `track-list` 的完整快照(音轨/字幕菜单与 5.1 的轨道索引)
+    /// `track-list` 完整快照
     case trackList([MPVTrack])
-    /// 文件播放结束(eof=自然播完;stop=外部停止;error=加载/播放失败)
     case endFile(MPVEndFileReason)
-    /// 第一帧真实视频帧已画进 layer(每个实例只发一次;纯音频文件永远不发)。
-    /// 渲染线程发出,经桥投递到主线程。
+    /// 第一帧真实视频帧已画进 layer。每实例只发一次,纯音频永不发;渲染线程发出
     case firstVideoFrameRendered
 }
 
-/// `MPV_EVENT_END_FILE` 的 reason 映射(client.h `mpv_end_file_reason`,§6.2)。
+/// client.h `mpv_end_file_reason`(§6.2)。
 enum MPVEndFileReason: Sendable, Equatable {
     case eof
     case stop
@@ -52,24 +47,16 @@ enum MPVEndFileReason: Sendable, Equatable {
     }
 }
 
-/// 事件桥:mpv 事件(任意线程)→ `@MainActor` 回调的唯一通道
-/// (MPV_INTEGRATION.md §6.3 线程模型,强制要求)。
+/// mpv 事件(任意线程)→ `@MainActor` 回调的唯一通道(MPV_INTEGRATION.md §6.3)。
 ///
-/// ## 节流规则(§6.3)
-/// `time-pos` 更新频率高,合并到每秒最多 5 次再进入 MainActor,
-/// 避免整个 SwiftUI 树每帧重绘。节流在**进入 MainActor 之前**完成
-/// (发生在调用方线程上),因此被丢弃的事件不会产生任何 Task 分配。
-///
-/// ## 线程安全
-/// 本类自身用 `OSAllocatedUnfairLock` 保护节流状态,全部存储属性为
-/// `let` + Sendable,天然满足 `Sendable`,无需 `@unchecked`。
-/// 回调统一 hop 到 MainActor 执行(闭包只捕获 Sendable 值)。
+/// `time-pos` 在调用方线程上节流到 ≤ 5 次/秒再进 MainActor,避免 SwiftUI 每帧重绘,
+/// 被丢弃的事件不分配 Task。节流状态由 `OSAllocatedUnfairLock` 保护,存储属性全为 `let` + Sendable,
+/// 无需 `@unchecked`。
 final class MPVEventBridge: Sendable {
 
     private let handler: @MainActor (MPVPlayerEvent) -> Void
 
-    /// 节流窗口:两次 time-pos 转发之间的最小间隔(0.2s ≈ 5 次/秒)。
-    /// 其他事件不节流。
+    /// 只对 time-pos 节流
     private static let timePosMinimumInterval: TimeInterval = 0.2
 
     private struct ThrottleState {
@@ -83,7 +70,6 @@ final class MPVEventBridge: Sendable {
         self.handler = handler
     }
 
-    /// 从任意线程提交事件。time-pos 之外的类型直通。
     func submit(_ event: MPVPlayerEvent) {
         if case .timePos = event {
             let shouldForward = throttle.withLock { state -> Bool in

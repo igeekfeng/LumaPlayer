@@ -1,8 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 来源注册表的**来源泛化**部分:旧 Emby 数据迁移、多来源共存、非 Emby 来源的增删改查。
-/// (Emby 侧的既有行为仍由 `ServerRegistryTests` 覆盖,那里一个字没改。)
+/// 来源注册表的来源泛化部分:旧 Emby 数据迁移、多来源共存、非 Emby 来源的增删改查。Emby 侧行为见 `ServerRegistryTests`。
 final class SourceRegistryTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
@@ -45,8 +44,7 @@ final class SourceRegistryTests: XCTestCase {
 
     // MARK: - 迁移
 
-    /// 改造前存下的是 `[ServerProfile]`,在新注册表里必须被读成 `.emby(_)`,
-    /// ⛔ 不能因为换了 key / 换了类型就静默丢服务器。
+    /// 旧格式存的是 `[ServerProfile]`,必须读成 `.emby(_)`;⛔ 不能因为换了 key / 类型就静默丢服务器。
     func testLegacyEmbyStorageMigratesToEmbySources() async throws {
         let a = makeEmby(name: "alpha")
         let b = makeEmby(name: "beta")
@@ -65,13 +63,12 @@ final class SourceRegistryTests: XCTestCase {
         })
     }
 
-    /// 新键存在时以新键为准,旧键被忽略(迁移只发生一次)。
+    /// 迁移只发生一次。
     func testNewFormatTakesPrecedenceOverLegacy() async throws {
         let legacyOnly = makeEmby(name: "old")
         let newOnly = makeEmby(name: "new")
         defaults.set(try JSONEncoder().encode([legacyOnly]), forKey: SourceRegistry.legacyEmbyStorageKey)
-        // UserDefaults 非 Sendable:按 suite 名重新构造(同名单例,实例相同)再传,
-        // 与 ServerRegistryTests 同一手法
+        // UserDefaults 非 Sendable:按 suite 名重新构造(同名单例,实例相同)再传
         let seeded = SourceRegistry(
             profiles: [newOnly],
             defaults: UserDefaults(suiteName: suiteName)!,

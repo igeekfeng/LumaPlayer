@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 凭据脱敏(CLAUDE.md「安全与隐私」;docs/PITFALLS.md Q9)。
-///
-/// 播放地址可能带 `api_key` 退路(API_CONTRACT.md 6.2),
-/// 任何进日志的文本都必须先过 `SecretRedactor`。
+/// 凭据脱敏(PITFALLS.md Q9)。播放地址可能带 `api_key` 退路(API_CONTRACT.md 6.2),进日志的文本都要先过 `SecretRedactor`。
 final class SecretRedactorTests: XCTestCase {
 
     func testRedactsAPIKeyInQueryString() {
@@ -25,8 +22,7 @@ final class SecretRedactorTests: XCTestCase {
         XCTAssertTrue(output.contains("Host: emby.test"))
     }
 
-    /// Emby 的 Authorization 值自带空格与逗号,必须整行替换,
-    /// 不能只替换到第一个分隔符。
+    /// Emby 的 Authorization 值自带空格与逗号,必须整行替换,不能只替换到第一个分隔符。
     func testRedactsAuthorizationHeaderEntireLine() {
         let value = #"Emby UserId="0123", Client="LumaPlayer", Device="Mac", Version="0.1""#
         let output = SecretRedactor.redacted("Authorization: \(value)\nAccept: application/json")
@@ -54,8 +50,7 @@ final class SecretRedactorTests: XCTestCase {
         XCTAssertFalse(description.contains("SECRET123"))
         XCTAssertTrue(description.contains("/emby/Videos/ITEM/stream.mkv"))
         XCTAssertTrue(description.contains("PlaySessionId=PS-1"))
-        // 占位串带尖括号,URLComponents 会把它百分号编码,所以只断言
-        // 「这个参数的值已被替换」,不写死编码后的字面量。
+        // 占位串带尖括号会被 URLComponents 百分号编码,只断言值已被替换,不写死编码后的字面量。
         XCTAssertTrue(description.contains("api_key="))
         XCTAssertTrue(description.contains("redacted"))
     }

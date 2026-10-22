@@ -1,45 +1,31 @@
 import CryptoKit
 import Foundation
 
-/// 弹弹play 开放平台的应用凭据(开发者中心审核通过后发放,`docs/DANDANPLAY_API.md` §1)。
-///
-/// 由用户在设置页自填,存凭据文件(`CredentialStore`),⛔ 不进仓库、不进 UserDefaults。
+/// 弹弹play 应用凭据(`docs/DANDANPLAY_API.md` §1)。用户在设置页自填,存凭据文件,⛔ 不进仓库、不进 UserDefaults。
 struct DandanplayCredentials: Codable, Sendable, Equatable {
     var appID: String
     var appSecret: String
 
-    /// 两项都填了才算可用(去掉首尾空白后判断)。
     var isComplete: Bool {
         !appID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !appSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
-/// 弹弹play 的 HTTP 客户端(纯传输 + 签名 + 解码;⛔ 不碰凭据存储)。
+/// 弹弹play HTTP 客户端:传输 + 签名 + 解码,无状态,凭据由调用方逐次传入(⛔ 不碰凭据存储)。
 ///
-/// 与 `TMDBClient` 同一分工:凭据由调用方逐次传入,客户端无状态(`Sendable` struct)。
-///
-/// ## 认证:签名模式(§1)
-///
-/// ```
-/// X-AppId:     {AppId}
-/// X-Timestamp: {Unix 秒}
-/// X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
-/// ```
-///
-/// 官方给客户端应用推荐签名模式 —— AppSecret 本身不上网。⛔ 不用「凭证模式」
-/// (`X-AppSecret` 头直接带密钥):那是给能保护密钥的服务端用的。
+/// 认证用签名模式(§1):`X-AppId` / `X-Timestamp`(Unix 秒)/ `X-Signature`,AppSecret 不上网。
+/// ⛔ 不用凭证模式(`X-AppSecret` 头直接带密钥),那是给服务端用的。
 struct DandanplayClient: Sendable {
 
-    /// 当前时间(秒)。可注入:签名测试要固定时间戳。
+    /// 可注入:签名测试要固定时间戳。
     typealias Clock = @Sendable () -> Date
 
     init(session: URLSession? = nil, now: @escaping Clock = { Date() }) {
         if let session {
             self.session = session
         } else {
-            // 与 TMDB 同一处置:不落 URLSession 缓存、不收 cookie。
-            // 弹幕的缓存由 `DanmakuCommentCache` 按官方建议的时长自己管(§6)。
+            // 不落 URLSession 缓存、不收 cookie;弹幕缓存由 `DanmakuCommentCache` 自己管(§6)
             let configuration = URLSessionConfiguration.ephemeral
             configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
             configuration.urlCache = nil
@@ -55,18 +41,14 @@ struct DandanplayClient: Sendable {
 
     // MARK: - 接口
 
-    /// 按文件名匹配节目(§2)。
+    /// §2
     func match(_ request: DandanplayMatchRequest, credentials: DandanplayCredentials) async throws
         -> DandanplayMatchResponse
     {
         try await fetch(.match(request), credentials: credentials)
     }
 
-    /// 搜剧集(§3)。按作品名与 / 或 TMDB ID。
-    ///
-    /// - `anime`:作品名(至少 2 个字符),不知道就传 nil
-    /// - `episode`:集号字符串(正整数或 `C1` / `S1` / `O1`),不知道就传 nil
-    /// - `tmdbID` + `tmdbIDType`:语言无关的作品身份;`tmdbIDType` 0 = 电视剧,1 = 电影
+    /// §3。`anime` 至少 2 个字符;`episode` 是正整数或 `C1` / `S1` / `O1`;`tmdbIDType` 0 = 电视剧,1 = 电影。
     func searchEpisodes(
         anime: String?,
         episode: String?,
@@ -74,7 +56,7 @@ struct DandanplayClient: Sendable {
         tmdbIDType: Int? = nil,
         credentials: DandanplayCredentials
     ) async throws -> DandanplaySearchEpisodesResponse {
-        // `anime` 与 `tmdbId` 至少给一个(§3):都不给是调用方的错,⛔ 不发注定失败的请求
+        // `anime` 与 `tmdbId` 至少给一个(§3),⛔ 不发注定失败的请求
         guard anime?.isEmpty == false || tmdbID != nil else {
             throw DandanplayError.transport("search/episodes 需要 anime 或 tmdbId")
         }
@@ -83,7 +65,7 @@ struct DandanplayClient: Sendable {
             credentials: credentials)
     }
 
-    /// 作品详情里的剧集列表(§4)。
+    /// §4
     func bangumi(animeID: Int64, credentials: DandanplayCredentials) async throws -> DandanplayBangumi {
         let response: DandanplayBangumiResponse =
             try await fetch(.bangumi(animeID: animeID), credentials: credentials)
@@ -95,7 +77,7 @@ struct DandanplayClient: Sendable {
         return bangumi
     }
 
-    /// 一个弹幕库的全部弹幕(§5)。`withRelated` 恒为 true(官方推荐,含第三方关联弹幕)。
+    /// §5。`withRelated` 恒为 true(官方推荐,含第三方关联弹幕)。
     func comments(
         episodeID: Int64,
         conversion: DandanplayEndpoint.ChineseConversion,
@@ -104,7 +86,7 @@ struct DandanplayClient: Sendable {
         let response: DandanplayCommentResponse = try await fetch(
             .comments(episodeID: episodeID, withRelated: true, chineseConversion: conversion),
             credentials: credentials)
-        // `comments` 缺失 ≠ 0 条:规格里它可空,但「空库」服务端会给 `[]`。缺字段说明响应形状不对
+        // 空库服务端给 `[]`;缺字段说明响应形状不对,不当 0 条
         guard let comments = response.comments else {
             throw DandanplayError.decoding(detail: "comment:缺少字段 comments")
         }
@@ -113,7 +95,7 @@ struct DandanplayClient: Sendable {
 
     // MARK: - 签名
 
-    /// `base64(sha256(AppId + Timestamp + Path + AppSecret))`(§1,区分大小写、无分隔符)。
+    /// `base64(sha256(AppId + Timestamp + Path + AppSecret))`,区分大小写、无分隔符(§1)。
     static func signature(appID: String, timestamp: Int64, path: String, appSecret: String) -> String {
         let digest = SHA256.hash(data: Data("\(appID)\(timestamp)\(path)\(appSecret)".utf8))
         return Data(digest).base64EncodedString()

@@ -1,16 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// 在线搜索字幕(播放页「字幕 › 搜索在线字幕…」打开)。
+/// 在线搜索字幕。骨架同 `DanmakuPickerSheet`。
 ///
-/// 骨架与 `DanmakuPickerSheet` 一致:header / 搜索栏 / 结果列表 / footer。
-/// 差别在两处:
-/// - **打开就搜一次**:用户点「搜索在线字幕…」的意图已经很明确,再让他按一次搜索
-///   是多余的一步(assrt 配额 20 次/分钟,一次搜索 + 一次详情也够用)。
-/// - 点结果直接**下载并挂上**,不做二级文件列表:一条字幕的多个文件是同一份内容的
-///   不同格式,挑哪个由 `SubtitleService` 按格式优先级决定,让用户再选一次只是多一步。
-///
-/// ⛔ 不做「边输边搜」:配额虽然宽,但没有理由为每个字符发一次请求。
+/// - 打开就搜一次(assrt 配额 20 次/分钟)。⛔ 不做边输边搜。
+/// - 点结果直接下载并挂上,不做二级文件列表:同一条字幕的多个文件由 `SubtitleService` 按格式优先级挑。
 struct SubtitlePickerSheet: View {
     let viewModel: PlayerViewModel
     var onClose: () -> Void
@@ -20,9 +14,9 @@ struct SubtitlePickerSheet: View {
     @State private var isSearching = false
     @State private var didSearch = false
     @State private var errorText: String?
-    /// 缺密钥:给一个直接去设置的入口,而不是只报错
+    /// 缺密钥时给去设置的入口
     @State private var needsToken = false
-    /// 正在下载哪一条(下载期间把那一行换成转圈,其它行禁用)
+    /// 下载期间其它行禁用
     @State private var downloadingID: Int?
 
     @Environment(\.openSettings) private var openSettings
@@ -47,7 +41,7 @@ struct SubtitlePickerSheet: View {
         }
         .frame(width: 600)
         .background(Self.background)
-        // 理由同 `PlayerMarkersEditor`:sheet 窗口要显式设深色
+        // 见 `PlayerMarkersEditor`
         .preferredColorScheme(.dark)
         .task { searchIfPossible() }
     }

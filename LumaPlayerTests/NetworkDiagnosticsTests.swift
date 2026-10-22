@@ -1,11 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 网络诊断出口(docs/PITFALLS.md Q31)。
-///
-/// 这里只测纯函数部分(`describe` / `describeRequestBody` / `line(for:)`)——
-/// 日志本身写进系统日志,不在这里断言。边界要覆盖:截断、非 UTF-8、敏感字段,
-/// 以及三类失败各自的行格式。
+/// 网络诊断出口(docs/PITFALLS.md Q31)的纯函数部分;日志本身写进系统日志,不在这里断言。
 final class NetworkDiagnosticsTests: XCTestCase {
     func testShortBodyIsReturnedAsIs() {
         let body = Data(#"{"Error":"Item not found"}"#.utf8)
@@ -16,7 +12,7 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertEqual(NetworkDiagnostics.describe(Data()), "<empty>")
     }
 
-    /// 超过上限时截断,并在尾部说明总长度 —— 只看前半段容易误判「响应就这么多」。
+    /// 只看前半段容易误判「响应就这么多」。
     func testLongBodyIsTruncatedWithTotalLength() {
         let body = Data(repeating: UInt8(ascii: "a"), count: NetworkDiagnostics.bodyLimit + 500)
         let described = NetworkDiagnostics.describe(body)
@@ -26,15 +22,13 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertEqual(described.count, NetworkDiagnostics.bodyLimit + "…(共 \(body.count) 字节)".count)
     }
 
-    /// 服务端 400/500 时可能回 HTML 错误页或二进制,不能假定是 UTF-8。
-    /// 此时退化成字节数说明,**不能抛错** —— 诊断代码自己失败会让排查断线。
+    /// 400/500 可能回 HTML 或二进制;退化成字节数说明,⛔ 不能抛错(诊断自己失败会让排查断线)。
     func testNonUTF8BodyFallsBackToByteCount() {
         let body = Data([0xFF, 0xFE, 0x00])
         XCTAssertEqual(NetworkDiagnostics.describe(body), "<3 bytes, non-UTF8>")
     }
 
-    /// 错误响应有时会回显请求内容,凭据脱敏必须在诊断出口再做一次;
-    /// 换行同时要压平,否则一条日志会被拆成多行、难以 grep。
+    /// 错误响应会回显请求内容,脱敏在诊断出口要再做一次;换行压平,否则一条日志被拆成多行难以 grep。
     func testBodyIsRedactedAndFlattened() {
         let body = Data("{\"AccessToken\":\"SECRET_LEAK\"}\nsecond line".utf8)
         let described = NetworkDiagnostics.describe(body)
@@ -46,7 +40,7 @@ final class NetworkDiagnosticsTests: XCTestCase {
 
     // MARK: - JSON 按结构脱敏
 
-    /// 正则取值遇到空格 / 逗号 / 转义引号就停,这类密码必须整值替换,一个字符都不能漏。
+    /// 正则取值遇到空格 / 逗号 / 转义引号就停,这类密码必须整值替换。
     func testLoginRequestBodyPasswordIsRedactedWhole() throws {
         let body = try JSONSerialization.data(withJSONObject: [
             "Username": "alice",
@@ -57,13 +51,12 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertEqual(described, #"{"Pw":"<redacted>","Username":"alice"}"#)
     }
 
-    /// 本 App 的请求体全是 JSON;出现别的形态不记内容,只记字节数。
+    /// 请求体全是 JSON;别的形态不记内容,只记字节数。
     func testNonJSONRequestBodyIsNotPrinted() {
         let body = Data("Pw=my pass,word".utf8)
         XCTAssertEqual(NetworkDiagnostics.describeRequestBody(body), "<15 bytes, non-JSON>")
     }
 
-    /// 嵌套键、数组里的键、字符串值里嵌的 `api_key=` 都要脱敏;非敏感字段原样保留。
     func testJSONResponseBodyIsRedactedStructurally() {
         let body = Data(#"""
         {"AccessToken":"abc, def","User":{"Name":"alice"},
@@ -109,7 +102,7 @@ final class NetworkDiagnosticsTests: XCTestCase {
             + #"req={"EnableDirectPlay":false} body=Value cannot be null."#)
     }
 
-    /// 解码失败的行要带上 `DecodingError` 描述(含 codingPath)与响应体 —— 版本差异靠它定位。
+    /// 版本差异靠 `DecodingError` 描述(含 codingPath)与响应体定位。
     func testDecodingFailureLineCarriesDetailAndBody() throws {
         let url = try XCTUnwrap(URL(string: "https://emby.test/emby/Shows/NextUp"))
         let line = NetworkDiagnostics.line(
@@ -148,9 +141,7 @@ final class NetworkDiagnosticsTests: XCTestCase {
 
     // MARK: - 落盘
 
-    /// 测试进程必须**不落盘**。单元测试成批构造 4xx/5xx,而测试跑在宿主 App
-    /// 进程里、共享同一个沙盒容器 —— 不挡的话跑几轮测试就能把 `fileSizeLimit`
-    /// 顶满,冲掉真实排障记录(实测一次全集写入 37 行 mock 记录)。
+    /// 测试跑在宿主 App 进程、共享同一个沙盒容器,成批构造的 4xx/5xx 落盘会顶满 `fileSizeLimit`、冲掉真实排障记录。
     func testRecordDoesNotTouchTheLogFileUnderTests() throws {
         let fileURL = try XCTUnwrap(NetworkDiagnostics.logFileURL)
         let before = (try? String(contentsOf: fileURL, encoding: .utf8))?.count ?? 0
@@ -167,7 +158,6 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertEqual(before, after, "测试进程不应改动诊断日志文件")
     }
 
-    /// 播放失败行:URL 的 api_key 与 mpv 日志里的凭据都不能原样出现,且保留排障线索。
     func testPlaybackFailureLineRedactsSecretsAndKeepsClues() throws {
         let url = try XCTUnwrap(URL(string: "https://emby.example.com/Videos/1/stream?static=true&api_key=SECRET123"))
         let line = NetworkDiagnostics.playbackFailureLine(
@@ -188,7 +178,6 @@ final class NetworkDiagnosticsTests: XCTestCase {
         XCTAssertFalse(line.contains("\n"))
     }
 
-    /// 没有 mpv 日志时不出现空的 mpvlog 段。
     func testPlaybackFailureLineOmitsEmptyLog() throws {
         let url = try XCTUnwrap(URL(string: "https://emby.example.com/a"))
         let line = NetworkDiagnostics.playbackFailureLine(

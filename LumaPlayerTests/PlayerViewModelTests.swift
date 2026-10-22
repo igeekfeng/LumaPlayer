@@ -1,20 +1,14 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `PlayerViewModel` 的事件代次门。
-///
-/// 只覆盖**不需要 mpv、不需要网络**的那一段:`init` / `stop()` / `handle`
-/// 三者都不碰 libmpv(player 为 nil 时 `stop()` 里的 `shutdown()` 是空操作),
-/// 所以这条门可以在 CI 上确定性地验。
-/// ⛔ 起真实播放那条路径要 GL layer 与真实服务器,不在这里假装覆盖
-/// (见 docs/KNOWN_ISSUES.md Q16)。
+/// `PlayerViewModel` 不需要 mpv / 网络的部分(player 为 nil 时 `stop()` 里的 `shutdown()` 是空操作)。
+/// 起真实播放要 GL layer 与真实服务器,不在这里覆盖(KNOWN_ISSUES.md Q16)。
 @MainActor
 final class PlayerViewModelTests: XCTestCase {
 
     private var storage: CredentialFileStore!
     private var credentials: CredentialStore!
-    /// 显示器休眠断言用替身:这些用例验的是接线,不该真去占住显示器
-    /// (真断言的行为在 `DisplaySleepAssertionTests` 里验)。
+    /// 替身:这里只验接线,不真去占住显示器。
     private var displaySleep = RecordingDisplaySleepInhibitor()
 
     override func setUp() async throws {
@@ -29,21 +23,18 @@ final class PlayerViewModelTests: XCTestCase {
         credentials = nil
     }
 
-    /// `MPVEventBridge` 经 `Task { @MainActor }` 投递,旧播放器在 shutdown
-    /// 前后发出的事件必然晚于同步执行的 `retry()` 到达。没有代次门时它们会
-    /// 把上一轮的错误写到刚起来的新会话上。
+    /// 旧播放器的事件经 `Task { @MainActor }` 投递,必然晚于同步的 `retry()` 到达;没有代次门会把上一轮的错误写到新会话上。
     func testStaleEventFromPreviousPlayerIsDropped() throws {
         let viewModel = try makeViewModel()
 
-        // 第 0 代:事件正常落地
         viewModel.handle(.endFile(.error("拉流 401")), generation: 0)
         XCTAssertEqual(viewModel.failure?.message, "播放失败:拉流 401")
 
-        // 用户点「重试」:stop() 递增代次,状态被重置
+        // 用户点「重试」
         viewModel.stop()
         XCTAssertEqual(viewModel.failure?.message, "播放失败:拉流 401")
 
-        // 旧播放器排队中的事件此时才到 —— 必须丢弃,不能污染新一轮
+        // 旧播放器排队中的事件此时才到
         viewModel.handle(.endFile(.error("拉流 401")), generation: 0)
         viewModel.handle(.phaseChanged(.destroyed), generation: 0)
         viewModel.handle(.paused(true), generation: 0)
@@ -52,7 +43,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isPaused)
     }
 
-    /// 递增后的代次(= 新播放器实例)照常生效,门不能把正常事件也挡掉。
+    /// 门不能把新代次的正常事件也挡掉。
     func testCurrentGenerationEventsStillApply() throws {
         let viewModel = try makeViewModel()
         viewModel.stop()
@@ -64,29 +55,23 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isPaused)
     }
 
-    /// `retry()` 走的是 `stop()`,所以它同样把代次推进一格。
     func testRetryAdvancesGenerationSoOldEventsCannotReviveFailure() throws {
         let viewModel = try makeViewModel()
         viewModel.handle(.endFile(.error("解码失败")), generation: 0)
         XCTAssertNotNil(viewModel.failure)
 
-        // retry() 全程同步:stop() 推进代次并清态,start() 只是排一个 Task,
-        // 在本用例挂起之前不会运行,所以下面的断言是确定性的。
+        // retry() 全程同步:start() 只排一个 Task,本用例挂起前不会运行,下面的断言是确定性的。
         viewModel.retry()
         XCTAssertNil(viewModel.failure)
 
-        // 旧实例排队中的事件此时才到 —— 不得让它复活失败态
         viewModel.handle(.endFile(.error("解码失败")), generation: 0)
         XCTAssertNil(viewModel.failure)
 
-        // 收尾:取消 retry() 排下的任务,不让它活过本用例。
-        // (即便它跑起来也不发网络:凭据文件里没有 token,
-        //  `ensureCredentials()` 在任何请求之前就抛 .unauthorized。)
+        // 取消 retry() 排下的任务。即便它跑起来也不发网络:没有 token,`ensureCredentials()` 先抛 .unauthorized。
         viewModel.stop()
     }
 
-    /// 起播后按「简体 → 繁体 → 保持 mpv 默认」自动挑一次中文字幕轨。
-    /// mpv 自己会选带 `default` 标记的那条,常是英文 —— 这是这次改动的动机。
+    /// 起播后按「简体 → 繁体 → 保持 mpv 默认」挑一次中文字幕轨:mpv 自己选带 `default` 标记的那条,常是英文。
     func testPreferredChineseSubtitleIsAppliedOnFirstTrackList() throws {
         let viewModel = try makeViewModel()
 
@@ -99,8 +84,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedSubtitleTrackID, 2)
     }
 
-    /// 用户手动选过之后,后续 track-list 回传不得再把它顶掉
-    /// (切轨后 mpv 会重推 track-list)。
+    /// 切轨后 mpv 会重推 track-list,不得再把用户的选择顶掉。
     func testUserSubtitleChoiceIsNotOverridden() throws {
         let viewModel = try makeViewModel()
 
@@ -110,11 +94,9 @@ final class PlayerViewModelTests: XCTestCase {
         ]), generation: 0)
         XCTAssertEqual(viewModel.selectedSubtitleTrackID, 2)
 
-        // 用户改主意要看英文字幕
         viewModel.selectSubtitleTrack(1)
         XCTAssertEqual(viewModel.selectedSubtitleTrackID, 1)
 
-        // mpv 回推的 track-list 里仍带着中文字幕 —— 偏好不得再介入
         viewModel.handle(.trackList([
             track(1, .sub, lang: "eng", selected: true),
             track(2, .sub, lang: "chi", title: "简体中文"),
@@ -124,8 +106,7 @@ final class PlayerViewModelTests: XCTestCase {
         viewModel.stop()
     }
 
-    /// 没播起来就关窗(会话从未开始):等待收尾必须立即返回,
-    /// 否则详情页的关窗回调(docs/PITFALLS.md Q22)会永远不触发。
+    /// 必须立即返回,否则详情页的关窗回调(PITFALLS.md Q22)永远不触发。
     func testWaitUntilReportingFinishedReturnsWhenSessionNeverBegan() async throws {
         let viewModel = try makeViewModel()
         viewModel.stop()
@@ -134,10 +115,7 @@ final class PlayerViewModelTests: XCTestCase {
 
     // MARK: - 剧集队列(播放页换集)
 
-    /// 请求自带队列(百度来源的形态):上一集 / 下一集当场就定,⛔ 一次网络都不发。
-    ///
-    /// 百度没有 Emby 的 `seriesID` / `seasonID`,这条路上以前恒为 nil ——
-    /// 播放页因此一个换集入口都不显示(队列由浏览页用已列条目装配后带进请求)。
+    /// 百度来源没有 `seriesID` / `seasonID`,队列由浏览页装配后带进请求。
     func testRequestCarriedQueueResolvesNeighboursWithoutNetwork() throws {
         let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 1)
 
@@ -149,7 +127,6 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.playingItem, "百度来源没有 Emby 项")
     }
 
-    /// 首集没有上一集、末集没有下一集 —— ⛔ 不绕回。
     func testQueueBoundariesHaveNoWrapAround() throws {
         let first = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
         XCTAssertNil(first.previousEpisode)
@@ -160,7 +137,6 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertNil(last.nextEpisode)
     }
 
-    /// 没有队列(电影 / 单条视频)时三个换集入口都不出现。
     func testMovieHasNoEpisodeQueue() throws {
         let viewModel = try makeViewModel()
         XCTAssertTrue(viewModel.episodes.isEmpty)
@@ -169,7 +145,6 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.currentEpisodeID)
     }
 
-    /// Emby 分集的封面折成**来源无关**的 `.emby` 描述符(选集面板按它请求剧照)。
     /// 分集自己的 `Primary` 优先,尺寸档位取 `episodeThumbnailWidth` 的两倍(视网膜屏)。
     func testPlayableEpisodeCarriesLandscapePosterDescriptor() throws {
         let profile = ServerProfile(
@@ -193,8 +168,7 @@ final class PlayerViewModelTests: XCTestCase {
 
     // MARK: - 换集不重建播放页
 
-    /// 换集写出的新请求沿用本页的 `pageID`(播放窗口据此不重建播放页),
-    /// 但 `id` 是新的 —— 新一集仍是一次独立的播放会话(新 ViewModel、新 mpv、新上报)。
+    /// 沿用 `pageID`(播放窗口据此不重建播放页),但 `id` 是新的:新一集是独立的播放会话。
     func testEpisodeSwitchKeepsPageButStartsNewSession() throws {
         let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
         let current = viewModel.playbackRequest
@@ -208,8 +182,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertEqual(next.episodeQueue?.current?.id, "20", "百度的队列要原样带过去")
     }
 
-    /// 播放器从没建起来时音量是占位值,⛔ 不能当成用户调过的音量带给下一集;
-    /// 统计面板是页面级开关,照样带。
+    /// 播放器没建起来时音量是占位值,⛔ 不能当成用户调过的音量带给下一集;统计面板是页面级开关,照样带。
     func testCarryOverWithoutPlayerKeepsOnlyStatistics() throws {
         let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
         XCTAssertNil(viewModel.pageCarryOver, "什么都没动过就没有要带的")
@@ -227,8 +200,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertTrue(next.showsStatistics)
     }
 
-    /// 换集时上一集的定格画面撤不撤,看 `isAwaitingFirstVideoFrame`:
-    /// 出了真实视频帧 → 撤;⛔ 出错 / 纯音频(永远等不到画面)也必须撤。
+    /// 换集时上一集的定格画面靠它撤:⛔ 出错 / 纯音频(永远等不到画面)也必须撤。
     func testAwaitingFirstVideoFrameEndsOnFrameFailureOrAudioOnly() throws {
         let rendered = try makeViewModel()
         XCTAssertTrue(rendered.isAwaitingFirstVideoFrame)
@@ -246,17 +218,14 @@ final class PlayerViewModelTests: XCTestCase {
         ]), generation: 0)
         XCTAssertFalse(audioOnly.isAwaitingFirstVideoFrame)
 
-        // 上一个播放器(旧代次)的首帧不算数
+        // 旧代次的首帧不算数
         let stale = try makeViewModel()
         stale.stop()
         stale.handle(.firstVideoFrameRendered, generation: 0)
         XCTAssertTrue(stale.isAwaitingFirstVideoFrame)
     }
 
-    /// 交接进来的定格画面(换集时上一集的最后一帧)只在「等第一帧」期间盖着:
-    /// 出画面就撤并放掉引用;出错时也不能再盖(错误页之下压着上一集没有意义)。
-    /// 转码 seek / 重试走的是 `stop()` 里同一个字段,但那条要真出过画面的 mpv,见
-    /// `MPVFrameHandoffTests`。
+    /// 出错时也不能再盖。转码 seek / 重试那条要真出过画面的 mpv,见 `MPVFrameHandoffTests`。
     func testLingeringFrameShowsOnlyWhileAwaitingFirstFrame() throws {
         let frozen = MPVPlayer()
         defer { frozen.shutdown() }
@@ -271,16 +240,14 @@ final class PlayerViewModelTests: XCTestCase {
         failed.handle(.endFile(.error("拉流 401")), generation: 0)
         XCTAssertNil(failed.lingeringPlayer)
 
-        // 还没出过画面就 stop(起播中又重试):沿用更早那一帧,不能丢
+        // 还没出过画面就 stop(起播中又重试):沿用更早那一帧
         let restarted = try makeViewModel(lastFramePlayer: frozen)
         restarted.stop()
         XCTAssertTrue(restarted.lingeringPlayer === frozen)
     }
 
-    /// `makeBaiduViewModel` 最近一次装配的容器(换集用例要读它的 `nowPlaying`)
     private var baiduContainer: AppContainer?
 
-    /// 一部百度来源的剧集:`episodeCount` 集,当前播第 `playingIndex` 集,
     /// 队列由浏览页装配后带进请求(与 `FileSourceViewModel.play(_ item:)` 同一条路)。
     private func makeBaiduViewModel(episodeCount: Int, playingIndex: Int) throws -> PlayerViewModel {
         let registry = try ServerRegistry(
@@ -332,32 +299,26 @@ final class PlayerViewModelTests: XCTestCase {
 
     // MARK: - 转码 seek 的合并起流
 
-    /// 关窗 / 切媒体后,待起流的合并 seek 必须被作废。
-    ///
-    /// ⛔ 这条防的是「已经过了 sleep 的任务」:`stop()` 里 `cancel()` 对它无效,
-    /// 只靠 `restartEpoch` 代次门拦住 —— 没有它,关窗后 0.25 秒会自己起流。
-    /// `isRestarting` 同时被复位,UI 不会一直挂在「正在从新位置起流…」。
+    /// 防的是「已经过了 sleep 的任务」:`cancel()` 对它无效,只靠 `restartEpoch` 拦住,否则关窗后会自己起流。
     func testStopCancelsPendingTranscodeSeekMerge() async throws {
         let viewModel = try makeViewModel()
         XCTAssertFalse(viewModel.isRestarting)
 
         viewModel.stop()
-        // stop() 之后再等一拍:若合并没有被作废,这里会看到 isRestarting 转回 true
+        // 若合并没被作废,这里会看到 isRestarting 转回 true
         try await Task.sleep(for: .milliseconds(
             Int(Metrics.seekRestartMergeDelay * 1000) + 120))
         XCTAssertFalse(viewModel.isRestarting, "关窗后不该还有待起流的 seek")
     }
 
-    /// 合并窗口必须短到感觉不到,又长到足以吃掉连点 —— 0.25 秒是这个取舍的落点。
-    /// 太短则连点仍会各起一次流(等于没合并),太长则单次 seek 会明显延迟。
+    /// 太短连点仍各起一次流,太长单次 seek 明显延迟。
     func testSeekMergeDelayStaysInSensibleRange() {
         XCTAssertGreaterThan(Metrics.seekRestartMergeDelay, 0.1)
         XCTAssertLessThanOrEqual(Metrics.seekRestartMergeDelay, 0.4)
     }
 
-    // MARK: - 显示器休眠断言(GitHub issue #1)
+    // MARK: - 显示器休眠断言
 
-    /// 断言跟着播放状态走:起播持、暂停放、恢复再持、播完放。
     func testDisplaySleepAssertionFollowsPlaybackState() throws {
         let viewModel = try makeViewModel()
         XCTAssertFalse(displaySleep.isHeld, "还没起播就不该持有")
@@ -375,7 +336,7 @@ final class PlayerViewModelTests: XCTestCase {
         viewModel.handle(.paused(false), generation: 0)
         XCTAssertTrue(displaySleep.isHeld)
 
-        // 播完(EOF):mpv 不把 phase 挪走,只能靠 isEnded
+        // EOF:mpv 不把 phase 挪走,只能靠 isEnded
         viewModel.handle(.endFile(.eof), generation: 0)
         XCTAssertEqual(viewModel.phase, .playing)
         XCTAssertFalse(displaySleep.isHeld, "播完的卡片不该占着断言")
@@ -384,8 +345,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertFalse(displaySleep.isHeld)
     }
 
-    /// 关窗 / 切媒体 / 转码重新起流都走 `stop()`:即使还停在 playing 也必须释放,
-    /// 不能指望后面还有事件来收这个尾。
+    /// 关窗 / 切媒体 / 转码重新起流都走 `stop()`,不能指望后面还有事件来收尾。
     func testStopReleasesDisplaySleepAssertionEvenWhilePlaying() throws {
         let viewModel = try makeViewModel()
         viewModel.handle(.phaseChanged(.playing), generation: 0)
@@ -399,18 +359,17 @@ final class PlayerViewModelTests: XCTestCase {
 
     // MARK: - 拖动门禁
 
-    /// 内核没加载好文件、以及已播完这两段时间,拖动必然失败:mpv 对 seek 命令
-    /// 一律返回 `-12`(PITFALLS)。门禁判据是 `isReadyToSeek`,⛔ 不是 `duration > 0`
-    /// —— 百度源的总时长在会话准备阶段就填好了,那时文件还没开始加载。
+    /// 文件没加载好与已播完时 mpv 对 seek 一律返回 `-12`。⛔ 判据不是 `duration > 0`:
+    /// 百度源的总时长在会话准备阶段就填好了,那时文件还没开始加载。
     func testSeekGateFollowsKernelReadiness() throws {
         let viewModel = try makeViewModel()
 
-        // 起播准备中:会话与播放器都已就位,但内核里还没有文件
+        // 会话与播放器已就位,内核里还没有文件
         viewModel.handle(.phaseChanged(.loading), generation: 0)
         XCTAssertFalse(viewModel.isReadyToSeek)
         XCTAssertFalse(viewModel.allowsSeeking, "加载中放行就等于让用户去踩一个必然失败的动作")
 
-        // FILE_LOADED:mpv 正是从这里开始接受 seek
+        // FILE_LOADED 起 mpv 才接受 seek
         viewModel.handle(.phaseChanged(.playing), generation: 0)
         XCTAssertTrue(viewModel.isReadyToSeek)
         XCTAssertTrue(viewModel.allowsSeeking)
@@ -418,7 +377,7 @@ final class PlayerViewModelTests: XCTestCase {
         viewModel.handle(.phaseChanged(.paused), generation: 0)
         XCTAssertTrue(viewModel.isReadyToSeek, "暂停时同样能拖")
 
-        // 播完:mpv 已卸载文件,phase 却仍停在 .playing(§8 缺「已结束」态,Q7)
+        // 播完:mpv 已卸载文件,phase 却仍是 .playing(Q7)
         viewModel.handle(.phaseChanged(.playing), generation: 0)
         viewModel.handle(.endFile(.eof), generation: 0)
         XCTAssertEqual(viewModel.phase, .playing)

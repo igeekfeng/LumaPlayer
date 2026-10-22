@@ -1,11 +1,9 @@
 import Foundation
 
-/// 播放统计信息 overlay 的内容(按 I 键开关)。
+/// 播放统计信息 overlay 的内容(纯格式化)。
 ///
-/// 数据来自 mpv 属性的异步字符串读数(`MPVPlayer.stringPropertiesAsync`)、
-/// 我们自己记的渲染后端(`MPVPlayerStatistics.renderBackend`,mpv 没有对应属性),
-/// 再加上 Emby 侧的播放方式与容器。本类型只做格式化,是纯函数,便于测试。
-/// 某个属性读不到(mpv 返回 NULL)时对应的行直接不显示,不填「未知」凑数。
+/// 数据:mpv 属性字符串读数、自记的渲染后端(mpv 无对应属性)、会话的播放方式与容器。
+/// 属性读不到时整行不显示,⛔ 不填「未知」。
 struct PlayerStatistics: Equatable {
     struct Line: Equatable, Identifiable {
         let label: String
@@ -15,7 +13,7 @@ struct PlayerStatistics: Equatable {
 
     let lines: [Line]
 
-    /// 需要轮询的 mpv 属性。名字均已对照本机 mpv 0.41 的 `--list-properties` 核实。
+    /// 名字已对照 mpv 0.41 的 `--list-properties` 核实。
     static let propertyNames = [
         "video-codec", "video-params/w", "video-params/h", "video-params/pixelformat",
         "video-params/primaries", "video-params/gamma", "container-fps", "estimated-vf-fps",
@@ -105,7 +103,7 @@ struct PlayerStatistics: Equatable {
         return "\(fps.formatted(.number.precision(.fractionLength(0...3)))) fps"
     }
 
-    /// 字节/秒 → `3.2 MB/s` / `850 KB/s`(十进制单位,与系统「活动监视器」一致)。
+    /// 字节/秒 → `3.2 MB/s`(十进制单位,与活动监视器一致)。
     static func speedText(_ bytesPerSecond: Double) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(max(0, bytesPerSecond)), countStyle: .decimal) + "/s"
     }

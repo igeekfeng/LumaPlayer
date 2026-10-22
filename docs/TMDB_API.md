@@ -4,7 +4,7 @@
 > `BAIDU_PAN_API.md`(百度网盘)平行。
 > 硬规则同 CLAUDE.md 1:**禁止发明接口**,只用本文件列出的端点 / 参数 / 字段。
 >
-> 字段与端点**逐条对着 TMDB 官方 OpenAPI 规格核实**(2026-10-12):
+> 字段与端点**逐条对着 TMDB 官方 OpenAPI 规格核实**:
 > 文档站 `developer.themoviedb.org` 的响应字段在页面上是 JS 渲染的,抓不到,
 > 所以取它同一站点公开的规格文件
 > `https://developer.themoviedb.org/openapi/tmdb-api.json`(OpenAPI 3.1.0),
@@ -219,7 +219,7 @@ https://image.tmdb.org/t/p/{file_size}/{still_path}
 id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.notFound`,
 是**确定性**答案,可以记住不再重问。
 
-**响应字段(2026-10-14 对着同一份官方 OpenAPI 规格补核)**:
+**响应字段(对着同一份官方 OpenAPI 规格核实)**:
 
 | 字段 | 类型 | tv | movie | 说明 |
 |---|---|---|---|---|
@@ -240,7 +240,7 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 
 `GET /3/tv/{series_id}/credits` 与 `GET /3/movie/{movie_id}/credits`
 
-同一份官方 OpenAPI 规格读出(2026-10-14 核实):
+同一份官方 OpenAPI 规格读出:
 
 | 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|---|

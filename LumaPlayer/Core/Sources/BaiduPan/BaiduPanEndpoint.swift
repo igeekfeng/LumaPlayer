@@ -1,21 +1,9 @@
 import Foundation
 
-/// 百度网盘用到的端点(`docs/BAIDU_PAN_API.md` §1 - §2)。
+/// 百度网盘用到的端点(`docs/BAIDU_PAN_API.md` §1 - §2)。⛔ 路径与参数名以该文档为准,不得发明。
 ///
-/// ⛔ 与 `EmbyEndpoint` 是两个东西,不得混用(CLAUDE.md 硬规则 1 的同一条:
-/// 端点、参数名一律以文档为准,不得发明)。路径与参数名逐个对着
-/// `docs/BAIDU_PAN_API.md` 抄,响应字段在官方页 / 实测核实过。
-///
-/// ## 两个主机
-///
-/// - `openapi.baidu.com` —— OAuth(设备码 / 换 token / 刷新);
-/// - `pan.baidu.com` —— 网盘业务接口(用户信息 / 列表 / 元信息 / 播放流)。
-///
-/// ## 认证放哪
-///
-/// 与 Emby**相反**:百度把 `access_token` 放在查询串上,不放请求头。
-/// 唯一要自己挂的头是 `User-Agent`(列表/下载要 `pan.baidu.com`,
-/// 播放流要 `xpanvideo;...`,见 §1)。
+/// 两个主机:`openapi.baidu.com`(OAuth)、`pan.baidu.com`(网盘业务)。
+/// 与 Emby 相反,`access_token` 放查询串;唯一要自己挂的头是 `User-Agent`(见 `headers`)。
 enum BaiduPanEndpoint: Sendable, Equatable {
 
     // MARK: - OAuth(openapi.baidu.com)
@@ -35,22 +23,16 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     case fileList(accessToken: String, directory: String, start: Int, limit: Int)
     /// `GET /rest/2.0/xpan/multimedia?method=filemetas&fsids=[fs_id,...]&dlink=1&needmedia=1&thumb=1`
     ///
-    /// ⚠️ **不是** `/xpan/file?method=meta` —— 那是文档 §2.2 写的路,但 2026-10-10
-    /// 用真实应用实测:`method=meta&dlink=1` 的响应**既没有 `errno`、也没有 `dlink`**,
-    /// 条目里只有路径/大小/`md5` 一类的静态属性。
-    /// 给 `dlink` 的是 `multimedia` 这条(响应带 `errno`,条目带 `dlink` 与 `duration`)。
-    /// ⇒ 播放入口一律走这里;`method=meta` 本项目不再使用。
+    /// ⛔ 不用 `/xpan/file?method=meta`(文档 §2.2):实测它既不给 `errno` 也不给 `dlink`。
+    /// 这条带 `errno`,条目带 `dlink` 与 `duration`。
     ///
-    /// `fsids` 本来就是**数组**(单文件是 `N = 1` 的特例)。批量不是为了好看:
-    /// 配额见 §7,逐个文件取封面会瞬间把配额烧光 ——
-    /// 一个目录一次请求是这个功能能不能用的前提。
+    /// 一个目录一次批量请求是配额要求(§7)。
     case fileMeta(accessToken: String, fsIDs: [UInt64])
     /// `GET /rest/2.0/xpan/file?method=streaming&path=&type=[&nom3u8=1][&adToken=]`。
     ///
-    /// - Parameter probeOnly: `nom3u8=1` —— 只要 JSON 状态,不要 m3u8 文本。
-    ///   起播前用它探一次,把 `133`(要看广告)/ `-6`(token 失效)/
-    ///   `31347`(片子太长)在**建流之前**问出来(`BAIDU_PAN_API.md` §2.3)。
-    /// - Parameter adToken: `errno=133` 时把响应里的 `adToken` **整体编码**后带回重试(§5)。
+    /// - Parameter probeOnly: `nom3u8=1`,只要 JSON 状态。起播前探一次,在建流前问出
+    ///   `133` / `-6` / `31347` 等错误(§2.3)。
+    /// - Parameter adToken: `errno=133` 时把响应里的 `adToken` 整体编码后带回重试(§5)。
     case streaming(
         accessToken: String,
         path: String,
@@ -59,27 +41,15 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         adToken: String?
     )
 
-    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=delete`
-    /// —— 删一条文件或目录(`docs/BAIDU_PAN_API.md` §2.4)。
+    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=delete`(§2.4)
     ///
-    /// ⚠️ 这是本项目**唯一**的写接口,也是唯一走 POST + form body 的端点:
-    /// `opera=delete` 的 `filelist` 是**路径字符串的 JSON 数组**(不是对象),
-    /// 一次只删一条时仍是单元素数组。
-    ///
-    /// `async` 一律 `0`(同步):异步只回 `taskid`、`info` 为空,拿不到逐条结果,
-    /// 而删除必须当场知道成没成。
+    /// `filelist` 是路径字符串的 JSON 数组(单条也是数组)。`async=0`:异步拿不到逐条结果。
     case deleteFile(accessToken: String, path: String)
 
-    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=rename`
-    /// —— 给一条文件或目录改名(`docs/BAIDU_PAN_API.md` §2.5)。
+    /// `POST /rest/2.0/xpan/file?method=filemanager&access_token=&opera=rename`(§2.5)
     ///
-    /// 与 delete 的两处形状差异:
-    /// - `filelist` 是**对象数组** `{path, newname}`(delete 是路径字符串数组);
-    /// - rename 只改**最后一段名字**,不改父目录。
-    ///
-    /// ⚠️ **一次送多条是配额要求,不是优化**:配额见 §7,
-    /// 逐个文件改名会瞬间烧光。⛔ 但批次之间必须**自底向上**(§2.6)——
-    /// `path` 定位在父目录改名后立刻失效。
+    /// `filelist` 是对象数组 `{path, newname}`,只改最后一段名字。
+    /// 一次送多条是配额要求(§7);⛔ 批次之间必须自底向上(§2.6),父目录改名后子项 `path` 立刻失效。
     case renameFiles(accessToken: String, operations: [BaiduPanRenameOperation])
 
     // MARK: - 形状
@@ -93,7 +63,6 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 不含 host 的路径
     var path: String {
         switch self {
         case .deviceCode: return "/oauth/2.0/device/code"
@@ -113,7 +82,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 诊断用端点名。**不含任何凭据**,可安全进日志(CLAUDE.md「安全与隐私」)。
+    /// 诊断用端点名,不含凭据,可进日志。
     var name: String {
         switch self {
         case .deviceCode: return "oauth/device/code"
@@ -128,7 +97,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 查询参数。顺序固定(便于断言与排障),值一律整体 URL 编码。
+    /// 顺序固定(便于断言与排障)。
     var queryItems: [(name: String, value: String)] {
         switch self {
         case .deviceCode(let clientID, let scope):
@@ -159,9 +128,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
                 ("vip_version", "v2"),
             ]
         case .fileList(let accessToken, let directory, let start, let limit):
-            // `order=name`:文档明确「排序按字符串处理,有剧集排序需求需自行开发」
-            // —— 那就别指望它,列表在客户端自己按名字排。
-            // 不传 `web`(就不给缩略图与 `dir_empty`)—— 本项目不接缩略图。
+            // 服务端按字符串排序,剧集顺序在客户端自己排。不传 `web`(不接缩略图)
             return [
                 ("method", "list"),
                 ("access_token", accessToken),
@@ -171,16 +138,13 @@ enum BaiduPanEndpoint: Sendable, Equatable {
                 ("limit", String(limit)),
             ]
         case .fileMeta(let accessToken, let fsIDs):
-            // `fsids` 是 **JSON 数组的字面量**(`[123]`),整段编码后送 ——
-            // 实测 `fsids=%5B1106099239747639%5D` 可用(2026-10-10)。
-            // ⚠️ 用 `fs_id` 而不是 `path`:同一份文件改过名 / 挪过位置后 path 会变,
-            // 而 `fs_id` 不变,列表里本来就带着它。
+            // `fsids` 是 JSON 数组字面量(`[123]`),整段编码。用 `fs_id` 不用 path:改名 / 挪动后 fs_id 不变
             return [
                 ("method", "filemetas"),
                 ("access_token", accessToken),
                 ("fsids", "[\(fsIDs.map(String.init).joined(separator: ","))]"),
                 ("dlink", "1"),
-                // `needmedia=1` 时条目里才有 `duration`(实测有,秒)
+                // `needmedia=1` 时条目里才有 `duration`(秒)
                 ("needmedia", "1"),
                 ("thumb", "1"),
             ]
@@ -209,17 +173,12 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// POST 的表单字段(body)。nil = 这个端点只有查询串,没有 body。
-    ///
-    /// ⚠️ 值用**同一个** `Self.encode`(只留 unreserved):`/` → `%2F`、
-    /// `"` → `%22`。服务端按 `application/x-www-form-urlencoded` 解码后
-    /// 拿回的就是原始字符,与查询串同口径。
+    /// POST 的表单字段;nil = 没有 body。编码与查询串同口径(`Self.encode`)。
     /// ⛔ `access_token` 留在查询串上(§1),不挪进 body。
     var formFields: [(name: String, value: String)]? {
         switch self {
         case .deleteFile(_, let path):
             return [
-                // 同步:要当场拿到 `info[]` 的逐条结果(§2.4)
                 ("async", "0"),
                 ("filelist", "[\"\(path)\"]"),
             ]
@@ -239,12 +198,8 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// JSON 字符串字面量(含两侧引号)。
-    ///
-    /// ⚠️ 手写而不是 `JSONEncoder`:这里要的是**不会失败**的转义
-    /// (`formFields` 是计算属性,不能 `throw`),而路径 / 新名里完全可能出现
-    /// `"` 与 `\`(电影名带引号很常见)。⛔ 不做转义的话整个 `filelist` 会变成非法 JSON,
-    /// 服务端回一个含糊的错误,排障时根本看不出是转义问题。
+    /// JSON 字符串字面量(含两侧引号)。手写而非 `JSONEncoder`:`formFields` 不能 `throw`,
+    /// 而路径 / 新名里常有 `"` 与 `\`,⛔ 不转义会让 `filelist` 变成非法 JSON。
     static func jsonString(_ text: String) -> String {
         var out = "\""
         for scalar in text.unicodeScalars {
@@ -265,7 +220,6 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         return out + "\""
     }
 
-    /// 编码好的 body;`nil` 表示不设 `httpBody`。
     var httpBody: Data? {
         guard let fields = formFields else { return nil }
         let encoded = fields.compactMap { item -> String? in
@@ -278,7 +232,6 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         return encoded.data(using: .utf8)
     }
 
-    /// body 的 `Content-Type`。只有带 body 的端点才有(§2.4)。
     var contentType: String? {
         switch self {
         case .deleteFile, .renameFiles: return "application/x-www-form-urlencoded"
@@ -288,12 +241,8 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 要自己挂的请求头。
-    ///
-    /// ⚠️ **全部**请求都要 `User-Agent: pan.baidu.com` —— 这是 2026-10-10 在
-    /// 官方「设备码模式授权」页逐个 curl 示例上核实的(OAuth 三个请求的示例
-    /// 都带这个头)。§1 另外说明:下载侧不给它会撞 `31326 防盗链`。
-    /// 唯一例外是**播放流**,它要的是 `xpanvideo;…`,⛔ 两者不能互换。
+    /// 包括 OAuth 在内全部请求都要 `User-Agent: pan.baidu.com`(下载侧不给会撞 `31326` 防盗链);
+    /// 唯一例外是播放流要 `xpanvideo;…`,⛔ 两者不能互换(§1)。
     var headers: [String: String] {
         switch self {
         case .deviceCode, .deviceToken, .refreshToken, .userInfo, .fileList, .fileMeta,
@@ -304,13 +253,8 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         }
     }
 
-    /// 拼好的绝对地址。
-    ///
-    /// ⚠️ 查询串是**手拼**的,不走 `URLComponents.queryItems`:
-    /// 后者按 RFC 3986 只编码非法字符,`/` 是查询串里的合法字符会被原样留下,
-    /// 而百度要求 `path` / `dir` **整体**编码(`/apps/x` → `%2Fapps%2Fx`)。
-    /// 这里用只保留 unreserved 字符的允许集,与官方 cURL 示例的
-    /// `--data-urlencode` 同一口径。
+    /// ⚠️ 查询串手拼,不走 `URLComponents.queryItems`:后者不编码 `/`,
+    /// 而百度要求 `path` / `dir` 整体编码(`/apps/x` → `%2Fapps%2Fx`)。
     var url: URL? {
         var components = URLComponents()
         components.scheme = "https"
@@ -320,7 +264,6 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         return components.url
     }
 
-    /// 手拼的查询串(POSIX 编码:`/` → `%2F`)
     var encodedQuery: String {
         queryItems.compactMap { item -> String? in
             guard let name = Self.encode(item.name), let value = Self.encode(item.value) else {
@@ -331,8 +274,7 @@ enum BaiduPanEndpoint: Sendable, Equatable {
         .joined(separator: "&")
     }
 
-    /// 只保留 unreserved 字符(`A-Za-z0-9-._~`)。
-    /// 空格按 `%20` 而不是 `+` —— 百度那边两种都收,但 `%20` 是无歧义的那个。
+    /// 只保留 unreserved 字符(`A-Za-z0-9-._~`),空格编成 `%20`。
     static func encode(_ value: String) -> String? {
         value.addingPercentEncoding(withAllowedCharacters: unreserved)
     }
@@ -344,11 +286,9 @@ enum BaiduPanEndpoint: Sendable, Equatable {
     }()
 }
 
-/// 播放流要的 `type`(`BAIDU_PAN_API.md` §2.3 的取值表)。
+/// 播放流的 `type`(`BAIDU_PAN_API.md` §2.3)。
 ///
-/// ⛔ 只用**通用 HLS**那一档。`M3U8_FLV_264_*` 与 `M3U8_MP3_128` 是私有协议,
-/// 需要网盘自家播放器才放得动 —— 列在这里只为把「为什么不给那些选项」
-/// 写清楚,不是备用方案。
+/// ⛔ 只用通用 HLS。`M3U8_FLV_264_*` 与 `M3U8_MP3_128` 是私有协议,只有网盘自家播放器放得动。
 enum BaiduPanStreamType: String, Sendable, Equatable {
     /// `ts` 分片,480p
     case auto480 = "M3U8_AUTO_480"
@@ -359,20 +299,18 @@ enum BaiduPanStreamType: String, Sendable, Equatable {
     /// 音频 HLS
     case audioHLSPM3 = "M3U8_HLS_MP3_128"
 
-    /// 视频按 1080p 请求:百度会按原片自动封顶,不会把 720p 顶上 1080p(§2.3)。
+    /// 按 1080p 请求,百度按原片自动封顶(§2.3)。
     static let video = BaiduPanStreamType.auto1080
     /// 音频:只有 `M3U8_HLS_MP3_128` 是通用 HLS
     static let audio = BaiduPanStreamType.audioHLSPM3
 }
 
-/// 一次改名:`opera=rename` 的 `filelist[]` 里的一项(`BAIDU_PAN_API.md` §2.5)。
+/// `opera=rename` 的 `filelist[]` 里的一项(`BAIDU_PAN_API.md` §2.5)。
 ///
-/// ⚠️ **`path` 是「当前」路径**。提交批次的顺序因此被钉死在**自底向上**
-/// (集文件 → 季目录 → 剧根,§2.6):父目录一改,子文件的这个 `path` 就不再是它的了。
+/// ⚠️ `path` 是当前路径,所以批次必须自底向上提交(集文件 → 季目录 → 剧根,§2.6)。
 struct BaiduPanRenameOperation: Sendable, Equatable {
-    /// 文件或目录的当前绝对路径
     let path: String
-    /// 新的**名字**(只是最后一段,不含路径)
+    /// 只是最后一段,不含路径
     let newName: String
 
     init(path: String, newName: String) {
@@ -380,26 +318,20 @@ struct BaiduPanRenameOperation: Sendable, Equatable {
         self.newName = newName
     }
 
-    /// 改完之后它应该在哪。⛔ 只是**推算**,不是服务端回的 ——
-    /// 用来更新本地缓存与进度快照,不用来当请求参数。
+    /// 推算出的新路径(不是服务端回的),只用来更新本地缓存与进度快照,⛔ 不当请求参数。
     var renamedPath: String {
         (path as NSString).deletingLastPathComponent + "/" + newName
     }
 }
 
-/// 百度要的 `User-Agent` 字面量。
-///
-/// §1 给的形式:`xpanvideo;<appName>;<appVersion>;<sysName>;<sysVersion>;ts`。
-/// ⚠️ 官方「播单下音频播放」页的 cURL 示例给的是简写 `xpanvideo;netdisk;client`,
-/// 两处都出自官方站点。这里按 §1 的分段形式给全,并且**集中在一处** ——
-/// 真机联调若发现要换形式,只改这里。
+/// 百度要的 `User-Agent`。播放流按 §1 的分段形式(官方另一页示例用简写 `xpanvideo;netdisk;client`);
+/// 要换形式只改这里。
 enum BaiduPanUserAgent {
-    /// 播放流(§1)
     static var streaming: String {
         "xpanvideo;\(appName);\(appVersion);\(systemName);\(systemVersion);ts"
     }
 
-    /// 列表 / 元信息 / 下载(§1:不给这个 UA 会撞 `31326` 防盗链)
+    /// 列表 / 元信息 / 下载 / OAuth
     static let download = "pan.baidu.com"
 
     private static var appName: String { "LumaPlayer" }

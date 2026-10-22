@@ -1,71 +1,29 @@
 import SwiftUI
 
-/// 文件树来源(百度网盘 / 本地文件夹)的目录浏览(**海报墙**)。
+/// 文件树来源(百度网盘 / 本地文件夹)的目录海报墙。
 ///
-/// ## 封面从哪来
-///
-/// 两个来源都不给视频封面,所以封面是**本地合成**的:同目录的
-/// `<同名>.jpg` / `poster.jpg` / `folder.jpg`(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
-/// 本地配不到时,再由后台第二趟问 TMDB 补(设置里填了 token 才走,
-/// 见 `BaiduPanMetadataScraper`;用户自己放的图优先,⛔ 不被盖掉)。
-/// 两样都没有就不伪造 —— 卡片降级成图标卡,⛔ 绝不留一片空白占位图假装有封面。
-///
-/// ## 为什么点一下就是播放
-///
-/// 这里的条目是**媒体文件本身**,不是 Emby 那种「进详情页再选集」的结构。
-/// 点目录就进目录,点文件就播 —— 与文件管理器一致,不需要中间那一层。
-///
-/// ⚠️ 顶部的「继续观看」区是**例外**:它与 Emby 首页那一行是同一套交互 ——
-/// 悬停出播放按钮,点它直接续播;点卡片其余位置进详情页(见 `FileSourceResumeCardView`)。
-///
-/// ## 顺序
-///
-/// 目录顺序**由客户端排**(`BaiduPanSortOrder`),不用百度返回的顺序:
-/// 那个是纯字符串序,`10.mp4` 会排在 `2.mp4` 前面。**固定按剧集顺序**排
-/// (`BaiduPanSortOrder.episode`),不再暴露排序菜单。
-///
-/// ## 导航
-///
-/// 与 Emby 那边对齐:页顶大标题是当前目录名(`PageHeader`,剧目录走详情页时不画,
-/// 详情页自己有剧名),返回上一层走主窗口浮动顶栏的返回按钮(经
-/// `BrowseChromeController.pageBackAction` 登记)。⛔ 不再自绘路径栏 —— 账号名 / 面包屑 /
-/// 设为片库根 / 排序 / 刷新 / 解除授权那一条整个去掉了:刷新用顶栏的按钮
-/// (`refreshToken` 驱动),其余移进设置里的来源页(`BaiduPanSourceSettingsView`)。
-///
-/// ⚠️ 返回只退到**片库根为止**(`FileSourceViewModel.canGoUp`)—— 它就是这一页
-/// 的最外层。设 `apps/LumaPlayer/Videos` 为片库根时,根目录就是 `Videos`,
-/// 再往上是应用目录(那里只看得见「有个叫 Videos 的文件夹」),退上去没有意义。
-/// 没配片库根时最外层是应用目录。
+/// - 封面本地合成(同目录 `<同名>.jpg` / `poster.jpg` / `folder.jpg`),配不到再由后台问 TMDB
+///   (`BaiduPanMetadataScraper`,用户自己放的图优先)。都没有就降级成图标卡,⛔ 不伪造封面。
+/// - 条目是媒体文件本身:点目录进目录,点文件就播。续播区例外,交互同 Emby 首页
+///   (悬停播放按钮续播,点其余位置进详情页,见 `FileSourceResumeCardView`)。
+/// - 顺序由客户端排(`BaiduPanSortOrder`),百度返回的是纯字符串序。
+/// - 页顶标题是当前目录名(`PageHeader`;剧目录走详情页时不画)。返回上一层登记到主窗口顶栏
+///   (`BrowseChromeController.pageBackAction`),只退到最外层(`canGoUp`);刷新用顶栏按钮
+///   (`refreshToken`),其余配置在设置里(`BaiduPanSourceSettingsView`)。⛔ 不自绘路径栏。
 struct FileSourceBrowserView: View {
     @Bindable var viewModel: FileSourceViewModel
     let store: PosterImageStore
 
-    /// ⛔ 唤起播放窗口。**写请求与开窗必须成对出现**:`AppState.nowPlaying`
-    /// 只是「请播放器播这一项」的请求,窗口不会因为写了请求自己出现 ——
-    /// 少了 `openWindow` 就是点了播放毫无动静(Emby 那 4 个调用点同理)。
+    /// ⛔ 写 `AppState.nowPlaying` 与 `openWindow` 必须成对,窗口不会因请求自己出现
     @Environment(\.openWindow) private var openWindow
-    /// 主窗口顶栏:把「返回上一层」登记上去
     @Environment(\.browseChrome) private var chrome
 
-    /// 待确认删除的条目(右键菜单里点了「删除…」)。
-    /// 弹窗状态放 View 的 `@State` —— 与 `ServerListView` 同一惯例。
     @State private var pendingDeletion: SourceItem?
 
-    /// 一次「按 TMDB 命名重命名」请求:要改的目录 + 这条流程自己的 ViewModel。
-    ///
-    /// ⚠️ 两样东西必须装在**同一个** `Identifiable` 载荷里交给 `.sheet(item:)`。
-    /// 早先拆成两个 `@State`(目录一个、ViewModel 一个)、再在 sheet 内容里
-    /// `if let` 取第二个,后果是**第一次右键弹出的是个空白面板**:sheet 的内容闭包
-    /// 在状态提交落地之前就被求值,那次读到的还是上一次的值(nil),面板便建成了空的;
-    /// 第二次点之所以看着"正常",只是因为上一轮写进去的那个 ViewModel 还在 ——
-    /// 显示出来的是**上一部剧的进度**,不是这次点的目录。
-    ///
-    /// ⚠️ `id` 用 `UUID` 而不是目录的 `fsID`:同一个目录连着改两次时若 id 相同,
-    /// `BaiduPanRenameSeriesView` 的 `@State didStart` 会被复用,第二次不会重新走
-    /// `start` —— 面板就卡在上一轮的结果上。
-    ///
-    /// ⛔ ViewModel 仍然**不放进 `sheet` 的内容闭包**里新建:那个闭包会重算,
-    /// 每重算一次就丢一次已经走到的进度。存成请求的一部分,闭包只读它。
+    /// 重命名请求。目录与 ViewModel ⛔ 必须装在同一个载荷里交给 `.sheet(item:)`:分成两个 `@State`
+    /// 时 sheet 内容闭包可能读到上一次的值(首次空白面板,之后显示上一部剧)。
+    /// `id` 用 `UUID` 而非 `fsID`:同一目录连改两次时 `@State didStart` 不能被复用。
+    /// ⛔ 不在 sheet 闭包里新建 ViewModel:闭包会重算,进度会丢。
     private struct RenameRequest: Identifiable {
         let id = UUID()
         let directory: BaiduPanFile
@@ -73,9 +31,8 @@ struct FileSourceBrowserView: View {
     }
 
     @State private var renameRequest: RenameRequest?
-    /// 删除失败的原因(面板关掉后由 alert 报出,见类型注释里的范式)。
+    /// 删除失败的原因,确认面板关掉后由 alert 报出
     @State private var actionErrorMessage: String?
-    /// 本地文件夹访问权没了:失败页里点了「重新选择文件夹…」
     @State private var showsFolderPicker = false
 
     private var columns: [GridItem] {
@@ -84,7 +41,7 @@ struct FileSourceBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 剧目录走详情页(`FileSourceSeriesDetailView`),它自己有剧名,不再叠一行目录名
+            // 剧目录走详情页,它自己有剧名
             if viewModel.directoryShape.seriesStructure == nil {
                 PageHeader(title: viewModel.currentDirectoryName) {
                     HStack(spacing: Metrics.spacingS) {
@@ -100,8 +57,7 @@ struct FileSourceBrowserView: View {
                 Divider()
             }
             if let scrapeFailure = viewModel.scrapeFailure {
-                // 刮削失败只影响封面:目录照常能看,所以是提示而不是错误页
-                // (CLAUDE.md 硬规则 4「不静默吞错」:失败原因如实说出来)。
+                // 刮削失败只影响封面,给提示而非错误页
                 OnboardingNotice(text: scrapeFailure, style: .warning)
                     .padding(.horizontal, Metrics.spacingL)
                     .padding(.vertical, Metrics.spacingS)
@@ -111,8 +67,7 @@ struct FileSourceBrowserView: View {
         }
         // 「窗口」菜单与调度中心里的窗口名(页上的目录名在 `PageHeader`)
         .navigationTitle(viewModel.currentDirectoryName)
-        // 返回上一层登记到主窗口顶栏。⚠️ 只退到**片库根为止**(`canGoUp`):片库根就是
-        // 这一页的最外层,到了就不登记,顶栏上也就没有返回按钮。
+        // 到了最外层就不登记,顶栏没有返回按钮
         .onChange(of: viewModel.canGoUp, initial: true) { _, canGoUp in
             registerBackAction(canGoUp: canGoUp)
         }
@@ -134,7 +89,7 @@ struct FileSourceBrowserView: View {
                 viewModel: request.viewModel,
                 directory: request.directory
             ) {
-                // 名字全变了,缓存里的旧目录已经不对了
+                // 改名后缓存里的旧目录已失效
                 Task { await viewModel.refreshFiles() }
             }
         }
@@ -149,7 +104,7 @@ struct FileSourceBrowserView: View {
                 actionErrorMessage = "选择文件夹失败:\(error.localizedDescription)"
             }
         }
-        // 与 `ServerListView` 破坏性操作同一范式:确认面板关掉后再报失败
+        // 同 `ServerListView`:确认面板关掉后再报失败
         .alert("操作失败", isPresented: Binding(
             get: { actionErrorMessage != nil },
             set: { if !$0 { actionErrorMessage = nil } })) {
@@ -185,16 +140,13 @@ struct FileSourceBrowserView: View {
         } else if let failure = viewModel.directoryFailure {
             failurePane(failure)
         } else if let structure = viewModel.directoryShape.seriesStructure {
-            // 这一层是一部剧(剧目录下直接是集文件,或下面是一层层的季文件夹)
-            // → 走详情页,而不是再铺一层文件网格。判定见 `BaiduPanSeriesLayout`。
             FileSourceSeriesDetailView(
                 viewModel: viewModel,
                 structure: structure,
                 store: store
             )
         } else if viewModel.sortedItems.isEmpty, viewModel.resumeCards.isEmpty {
-            // ⚠️ 判的是 `sortedItems` 不是 `items`:整目录都被隐藏时 `items` 非空,
-            // 用它会既不画网格、也不给空状态,只剩一片白。
+            // 判 `sortedItems` 而非 `items`:整层被隐藏时 `items` 非空,会既无网格也无空状态
             if isFilterHidingEverything {
                 ContentUnavailableView {
                     Label("当前筛选下没有条目", systemImage: "line.3.horizontal.decrease.circle")
@@ -218,8 +170,6 @@ struct FileSourceBrowserView: View {
                     if !viewModel.resumeCards.isEmpty {
                         resumeShelf
                     }
-                    // 片库根才给「最近添加」(Emby 首页那一行的对位物):
-                    // 子目录里再摆一行与下面的网格高度重叠,反而乱。
                     if !viewModel.recentItems.isEmpty {
                         recentShelf
                     }
@@ -236,10 +186,7 @@ struct FileSourceBrowserView: View {
         }
     }
 
-    /// 一张卡片 + 右键菜单。
-    ///
-    /// 抽出来是因为它有两个用武之地:主网格与「最近添加」那一行。⛔ 不各写一份 ——
-    /// 两处的右键菜单必须完全一致(删除 / 改名 / 标记已看都在这里)。
+    /// 主网格与「最近添加」共用,保证两处右键菜单一致
     private func card(for item: SourceItem) -> some View {
         FileSourceCard(
             item: item,
@@ -252,9 +199,7 @@ struct FileSourceBrowserView: View {
             open(item)
         }
         .contextMenu {
-            // 观看状态只对**能播的**文件给。目录要标「整部已看」
-            // 得先知道里面有哪些集 —— 那是列目录(2 请求 / 层,
-            // 配额见 `docs/BAIDU_PAN_API.md` §7),不在右键里悄悄做。
+            // 只对能播的文件给:标目录要先列目录(配额),不在右键里悄悄做
             if item.kind.isPlayable {
                 if viewModel.isWatched(item) {
                     Button("标记为未看", systemImage: "arrow.counterclockwise") {
@@ -266,9 +211,7 @@ struct FileSourceBrowserView: View {
                     }
                 }
             }
-            // 只对**目录**给:这个功能的对象是「一整个剧集目录」,
-            // 单集文件没有季 / 剧的上下文,改不出标准命名。
-            // 改名是写操作:只读的本地文件夹来源不给(`FileSource.supportsRenamingSeries`)。
+            // 只对剧集目录给(单集文件没有剧 / 季上下文);只读来源不给
             if item.kind.isContainer, viewModel.source.supportsRenamingSeries,
                let file = viewModel.file(for: item) {
                 Button("按 TMDB 命名重命名…", systemImage: "arrow.triangle.2.circlepath") {
@@ -283,10 +226,7 @@ struct FileSourceBrowserView: View {
         }
     }
 
-    /// 片库根上的「最近添加」:按网盘 `server_mtime` 倒序的前几条。
-    ///
-    /// ⚠️ 卡片宽度要**自己钉住**:`MediaShelf` 里是横向 `LazyHStack`,
-    /// 没有网格的列宽可借,不钉就会按图片比例乱撑。
+    /// 卡片宽度要自己钉住:`MediaShelf` 是横向 `LazyHStack`,没有列宽可借
     private var recentShelf: some View {
         MediaShelf(title: "最近添加") {
             ForEach(viewModel.recentItems) { item in
@@ -298,11 +238,7 @@ struct FileSourceBrowserView: View {
 
     // MARK: - 排序 / 筛选
 
-    /// 排序菜单(页头右侧)。
-    ///
-    /// ⚠️ 放在页头而不是主窗口工具栏:工具栏只有「返回上一层」一个控件
-    /// (用户明确要的简法)。排序与筛选都是**这一页**的事,放这里才对得上。
-    /// ⛔ 换档不重新请求目录 —— 排的是已经在手上的条目(配额见 `docs/BAIDU_PAN_API.md` §7)。
+    /// 放页头而非主窗口工具栏(工具栏只留返回)。⛔ 换档不重新请求目录。
     private var sortMenu: some View {
         Menu {
             Picker("排序", selection: Binding(
@@ -330,10 +266,7 @@ struct FileSourceBrowserView: View {
         .accessibilityLabel("排序:\(viewModel.sortOrder.title)")
     }
 
-    /// 观看状态筛选(全部 / 未看 / 已看)。数据全来自本地续播库,零请求。
-    ///
-    /// 图标的选中态用 ✓ 而不是只换文字:菜单收起后按钮上只剩一个词,
-    /// 「已看」与「未看」两个词太像,带上图标一眼能分清。
+    /// 按钮带图标:收起后只剩一个词,「已看」「未看」太像
     private var filterMenu: some View {
         Menu {
             Picker("筛选", selection: Binding(
@@ -354,20 +287,14 @@ struct FileSourceBrowserView: View {
         .accessibilityLabel("筛选:\(viewModel.watchFilter.title)")
     }
 
-    /// 筛选把这一屏筛空了(目录本身有内容)。
-    ///
-    /// ⚠️ 必须与「这个目录是空的」分开说:前者是用户自己设的条件,
-    /// 端一句「这里还没有可播的文件」会让人以为片库坏了。
+    /// 被筛空要与目录真空分开提示,否则像片库坏了
     private var isFilterHidingEverything: Bool {
         viewModel.watchFilter != .all && !viewModel.items.isEmpty
     }
 
     // MARK: - 继续观看
 
-    /// 顶部「继续观看」区:跨目录把看过的东西捞出来(Emby 首页那一行的对位物)。
-    /// 数据来自本地续播库(百度没有服务端进度),见 `FileSourceViewModel.resumeCards`。
-    ///
-    /// ⚠️ 交互也与 Emby 那一行对齐(用户要求):点播放按钮直接续播,点卡片其余位置进详情页。
+    /// 跨目录续播区,数据来自本地续播库(`FileSourceViewModel.resumeCards`)
     private var resumeShelf: some View {
         MediaShelf(title: "继续观看") {
             ForEach(viewModel.resumeCards) { card in
@@ -395,7 +322,7 @@ struct FileSourceBrowserView: View {
 
     // MARK: - 动作
 
-    /// 目录 → 进去;可播文件 → 播;其余(图片等)不在这里出现(合成器已滤掉)。
+    /// 图片等非媒体文件已被合成器滤掉
     private func open(_ item: SourceItem) {
         if item.kind.isContainer {
             Task { await viewModel.enter(item) }
@@ -405,11 +332,7 @@ struct FileSourceBrowserView: View {
         }
     }
 
-    /// 续播卡片的播放按钮 → 直接续播(起播位置由本地续播库给)。
-    ///
-    /// ⚠️ 起播前要先补列它所在的目录(换集入口要兄弟集,见
-    /// `FileSourceViewModel.play(_ card:)`),所以这里等它一次再开窗 ——
-    /// 顺序反了会先弹一个黑窗口。
+    /// 等 `viewModel.play(card)` 补列完目录再开窗,否则会先弹一个黑窗口
     private func play(_ card: FileSourceResumeCard) {
         Task {
             if await viewModel.play(card) {
@@ -418,20 +341,13 @@ struct FileSourceBrowserView: View {
         }
     }
 
-    /// 续播卡片其余位置 → 进它的详情页(与 Emby 首页那一行同一套交互)。
-    /// ⛔ 这里不 `openWindow`:详情页是主窗口里的一屏,不是播放窗口。
+    /// 详情页在主窗口里,不 `openWindow`
     private func openDetail(_ card: FileSourceResumeCard) {
         Task { await viewModel.openDetail(for: card) }
     }
 
-    /// 目录读失败。分两种处置:
-    ///
-    /// - **应用目录本身读不出来** → 给「核对应用目录名」(改那个名字),
-    ///   而不是「重试」。因为这种失败九成是目录名与控制台里的应用名不一致,
-    ///   重试多少次都是同一个结果(可访问范围完全由那一个值决定)。
-    /// - **本地文件夹的访问权没了**(挪走了 / 盘没插 / 书签失效)→ 给「重新选择文件夹…」:
-    ///   外接盘插回去之后「重试」就能好,所以重试也留着。
-    /// - 其余(子目录、网络、token)→ 老实的错误 + 重试。
+    /// 应用目录读不出 → 「核对应用目录名」(多半与控制台应用名不一致,重试无用);
+    /// 本地访问权没了 → 「重新选择文件夹…」(外接盘插回后重试也能好);其余 → 错误 + 重试。
     private func failurePane(_ failure: FileSourceDirectoryFailure) -> some View {
         VStack(spacing: Metrics.spacingM) {
             if failure.needsFolderReselection {
@@ -461,19 +377,11 @@ struct FileSourceBrowserView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 空目录的引导。
-    ///
-    /// ⚠️ 刻意把「空的」与「还不存在」合在一段里说:对一个**不存在**的目录,
-    /// 百度未必返回错误码 —— 也可能就是一个空 `list`。
-    /// ⛔ 不猜它属于哪一种,把两种成因和各自的做法都摆出来。
-    ///
-    /// 另一件必须讲清的事:**`/apps` 这一层用户建不了**(百度把 `apps` 当保留
-    /// 关键字,自建会报「apps 为关键字,无法创建」)。用户能碰的只有
-    /// 「我的应用数据」**里面** —— 在那里新建一个与控制台应用名**完全一致**
-    /// (含大小写)的文件夹。⛔ 绝不能写成「去网盘里建一个 apps 文件夹」。
-    /// ⚠️ 整层都在、只是被隐藏了,与「本来就没有」是两件事:前者要告诉人
-    /// 东西还在哪里能找回来,⛔ 不能混成一句「这里没有可播的文件」——
-    /// 那会让人以为片子丢了。
+    /// 空目录引导。
+    /// - 不存在的目录百度可能只返回空 `list`,所以「空的」与「还不存在」合在一段说,⛔ 不猜。
+    /// - `/apps` 用户建不了(保留关键字),只能在「我的应用数据」里建与控制台应用名完全一致的文件夹;
+    ///   ⛔ 不能引导去建 apps 文件夹。
+    /// - 整层被隐藏要说明去哪恢复,⛔ 不能混成「没有可播的文件」。
     private var emptyTitle: String {
         viewModel.items.isEmpty ? "这里还没有可播的文件" : "这一层都被隐藏了"
     }
@@ -491,8 +399,7 @@ struct FileSourceBrowserView: View {
             return "这一层没有可播的文件。把视频放进这个文件夹,再回来刷新。"
         }
         let name = viewModel.folderName ?? "应用目录"
-        // 当前是应用目录根时,「空的」更可能是**整个应用目录还没建出来** ——
-        // 给一段「去网盘里建同名文件夹」的引导;子目录里空的就只是空的。
+        // 应用目录根是空的,多半是应用目录还没建出来
         guard viewModel.currentDirectory == viewModel.rootDirectory else {
             return "这一层没有可播的文件。往上一级看看,或者把视频放进这个目录再回来刷新。"
         }
@@ -510,22 +417,17 @@ struct FileSourceBrowserView: View {
     }
 }
 
-/// 文件树来源的一张卡片。
-///
-/// 视觉与 `MediaCard`(Emby 那边)保持一致:非玻璃卡片、`.fill` 的图只当 overlay
-/// 绘制(否则会按自己的比例报告溢出尺寸、把网格撑乱)、续播用文字而不是只靠颜色
+/// 视觉同 `MediaCard`:非玻璃、`.fill` 的图只当 overlay(否则撑乱网格)、续播用文字不只靠颜色
 /// (DesignTokens.swift「界面规则」)。
 private struct FileSourceCard: View {
     let item: SourceItem
     let store: PosterImageStore
-    /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
+    /// nil = 未看或已看完
     let resumeSeconds: Double?
-    /// 已看完(本地续播库的显式标记,或自动判定过了 90%)
     let isWatched: Bool
-    /// 目录卡:这一层之下本地已记录看过的集数(0 = 不显示)
+    /// 目录卡用,0 = 不显示
     let watchedEpisodeCount: Int
-    /// 目录卡:这一部剧**一共几集**。nil = 还没进过详情页,不知道总数
-    /// (见 `FileSourceViewModel.episodeTotal(for:)`)
+    /// 目录卡用,nil = 不知道(见 `FileSourceViewModel.episodeTotal(for:)`)
     let episodeTotal: Int?
     let onOpen: () -> Void
 
@@ -534,7 +436,7 @@ private struct FileSourceCard: View {
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: Metrics.spacingS) {
-                // 尺寸由 Color.clear 钉死,图片只当 overlay(与 `MediaCard` 同一个理由)
+                // 尺寸由 Color.clear 钉死,图片只当 overlay
                 Color.clear
                     .aspectRatio(imageAspectRatio, contentMode: .fit)
                     .overlay {
@@ -567,19 +469,12 @@ private struct FileSourceCard: View {
 
     private static var hoverScale: CGFloat { 1.03 }
 
-    /// 分集用 16:9 横版,其余用海报比例(2:3)。
-    ///
-    /// ⚠️ 为什么分集要换:分集拿的是**分集剧照**(16:9 横图,`docs/TMDB_API.md` §8),
-    /// 塞进竖版框会被裁掉一大半画面。一屏全是分集的剧集目录因此长成 Emby 的分集视图。
+    /// 分集用 16:9(TMDB 分集剧照是横图,`docs/TMDB_API.md` §8),其余 2:3 海报
     private var imageAspectRatio: Double {
         item.kind == .episode ? Metrics.landscapeAspectRatio : Metrics.posterAspectRatio
     }
 
-    /// 标题 + 副标题。**高度固定**:文件名有的 1 行有的 2 行、有的条目又压根没有副标题,
-    /// 高度跟着内容走就会让网格里的卡片高高低低。
-    ///
-    /// 钉高度的办法是叠一份**等行数的隐藏文本**当尺子(两行标题 + 一行副标题),
-    /// 行高由系统按字体算 —— 写死像素值会在字体/缩放变化时对不上。
+    /// 高度固定(否则网格高低不齐):叠一份等行数的隐藏文本当尺子,⛔ 不写死像素(字体 / 缩放会变)。
     @ViewBuilder
     private var textBlock: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingXS) {
@@ -588,7 +483,6 @@ private struct FileSourceCard: View {
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .hidden()
-                    // 只是把高度撑起来的尺子,别让 VoiceOver 把它读出来
                     .accessibilityHidden(true)
                 Text(displayTitle)
                     .font(.body)
@@ -613,29 +507,17 @@ private struct FileSourceCard: View {
         }
     }
 
-    /// 撑两行标题用的隐藏文本。`\n` 让 `Text` 真的排两行,ASCII 是为了不落到中文回退字体
-    /// (回退字体行高和 SF 不一致,尺子就量歪了)。
+    /// 用 ASCII:中文回退字体行高与 SF 不同,尺子会量歪
     private static let placeholderTwoLines = "X\nX"
     private static let placeholderOneLine = "X"
 
-    /// 主标题:分集优先显示**集名** —— 集名才是这一集的标识,
-    /// 而剧名(`琅琊榜`)整目录每一张都一样、看了等于没看。
-    /// 没有集名(TMDB 未命中 / 未配置 token)时退回 `title`。
+    /// 分集优先集名(剧名整目录都一样),没有时退回 `title`
     private var displayTitle: String {
         item.episodeTitle ?? item.title
     }
 
-    /// 副标题:进度类信息优先,其次是集号 / 时长 / 年份 / 文件夹。
-    ///
-    /// 顺序:续播位置 > 「第 n 集 · 已看」> 「已看」> 「第 n 集 · 时长」>
-    /// 时长 > 年份 > 目录的「已看 N 集」/「文件夹」。⛔ 都没有就不显示,不填占位符。
-    ///
-    /// ⚠️ 时长来自 `filemetas` 那一趟(2026-10-21 起列表里就有);拿不到时
-    /// 整段不出现,⛔ 不写「未知时长」。
-    ///
-    /// ⚠️ 目录卡的集数分三种形态:知道总数就是「已看 3 / 共 12 集」,只知道已看
-    /// 就还是「已看 3 集」,两样都没有就是「文件夹」。总数来自**本地记录**
-    /// (进过一次详情页才知道),⛔ 不为网格上的一个数字去列子目录(配额)。
+    /// 进度类信息优先,其次集号 / 时长 / 年份 / 目录集数。都没有就 nil,⛔ 不填占位符;
+    /// 拿不到时长整段不出现,⛔ 不写「未知时长」。
     private var subtitle: String? {
         if let resumeSeconds, resumeSeconds > 0 {
             return "已看到 \(PlayerTime.text(resumeSeconds))"
@@ -695,30 +577,21 @@ private struct FileSourceCard: View {
     }
 }
 
-/// 「继续观看」区的一张横版卡片。
-///
-/// 交互与 Emby 首页那一行的 `LandscapeCard` **完全对齐**(用户要求):悬停时画面上
-/// 出现玻璃播放按钮,**点它直接续播**;**点卡片其余位置进详情页**。
-/// ⚠️ 点空白处不再直接播 —— 那是这一版之前的行为,与 Emby 不一致。
-///
-/// 视觉与 `FileSourceCard` 的差别:横版(续播用剧照比例,与 Emby 侧 `LandscapeCard` 一致)、
-/// 副标题报「已看到 mm:ss」(「下一集」占位则报「下一集」)、有总时长时在图上画进度条。
+/// 续播区横版卡片,交互同 Emby 的 `LandscapeCard`:悬停出播放按钮直接续播,点其余位置进详情页。
+/// 有总时长时画进度条。
 private struct FileSourceResumeCardView: View {
     let card: FileSourceResumeCard
     let store: PosterImageStore
-    /// 正在为这张卡片补列目录(换集入口要兄弟集)。转圈 + 禁止重复点击
+    /// 正在补列目录:转圈 + 禁止重复点击
     var isPreparing = false
-    /// 点播放按钮:直接续播
     let onPlay: () -> Void
-    /// 点卡片其余位置:进详情页
     let onOpenDetail: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
-            // 尺寸由 Color.clear 钉死,图片 / 播放按钮 / 进度条只当 overlay
-            // (与 `FileSourceCard` 同理)
+            // 尺寸由 Color.clear 钉死,其余只当 overlay
             Color.clear
                 .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
                 .frame(width: Metrics.landscapeCardWidth)
@@ -730,8 +603,6 @@ private struct FileSourceResumeCardView: View {
                     )
                 }
                 .overlay {
-                    // 补列目录期间给一个明确的「正在准备」—— 那一步要发两次请求,
-                    // 没有它点了就像没反应
                     if isPreparing {
                         ZStack {
                             Color.black.opacity(0.45)
@@ -740,8 +611,7 @@ private struct FileSourceResumeCardView: View {
                     }
                 }
                 .overlay {
-                    // 悬停才出现的播放按钮(与 `LandscapeCard` 同一画法):
-                    // 它是这张卡上**唯一**「点了就播」的地方,点别处去详情页
+                    // 卡上唯一「点了就播」的地方
                     if isHovering, !isPreparing {
                         Button(action: onPlay) {
                             Image(systemName: "play.fill")
@@ -778,13 +648,10 @@ private struct FileSourceResumeCardView: View {
             }
             .frame(width: Metrics.landscapeCardWidth, alignment: .leading)
         }
-        // 卡片整体可点(进详情),播放按钮盖在上面并先吃掉点击 ——
-        // 与 `LandscapeCard` 同一个做法:Button 的命中优先于外层的手势。
+        // 播放按钮的命中优先于外层手势
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpenDetail)
-        // 补列目录期间整张卡不可点:此刻起播与跳转都还没准备好。
-        // ⚠️ 两个都要:`.disabled` 是给辅助功能/控件的那一层,而这张卡的主体是
-        // `onTapGesture`(不是 Button)—— 靠 `allowsHitTesting` 把命中一并关掉。
+        // 两个都要:`.disabled` 管控件与辅助功能,主体是 `onTapGesture` 得靠 `allowsHitTesting`
         .disabled(isPreparing)
         .allowsHitTesting(!isPreparing)
         .onHover { isHovering = $0 }
@@ -798,10 +665,7 @@ private struct FileSourceResumeCardView: View {
 
     private static var hoverScale: CGFloat { 1.03 }
 
-    /// 进度条比例。百度侧**可能没有总时长**(续播库里 `durationSeconds` 为 nil),
-    /// 那就**不画**进度条 —— ⛔ 不猜一个比例。
-    ///
-    /// 「下一集」占位(上一集刚看完)也不画:它一秒都还没看,画一条空条只是噪音。
+    /// 没有总时长或是「下一集」占位时不画,⛔ 不猜比例
     private var progressFraction: Double? {
         guard !card.isUpNext else { return nil }
         guard let duration = card.durationSeconds, duration > 0 else { return nil }

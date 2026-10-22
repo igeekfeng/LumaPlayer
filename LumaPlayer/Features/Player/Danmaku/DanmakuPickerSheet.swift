@@ -1,13 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// 手动选择弹幕库(播放页「弹幕 › 选择弹幕…」打开)。
+/// 手动选择弹幕库:上半是 `/match` 的模糊候选,下半是关键词搜索(`/search/episodes`)。
+/// 选定后记住这一集与这一部剧(`DanmakuBindingStore`),同剧其它集按集号自动对上。
 ///
-/// 上半是自动匹配给出的候选(`/match` 的模糊结果),下半是关键词搜索(`/search/episodes`)。
-/// 选定后记住这一集与这一部剧(`DanmakuBindingStore`),之后同剧其它集按集号自动对上。
-///
-/// ⚠️ 搜索**只在点按钮 / 回车时**发一次请求,⛔ 不做「边输边搜」:
-/// 弹弹play 对搜索接口有滥用检测(`docs/DANDANPLAY_API.md` §6)。
+/// ⛔ 不做边输边搜:弹弹play 搜索接口有滥用检测(`docs/DANDANPLAY_API.md` §6)。
 struct DanmakuPickerSheet: View {
     let controller: DanmakuController
     var onClose: () -> Void
@@ -45,7 +42,7 @@ struct DanmakuPickerSheet: View {
         }
         .frame(width: 560)
         .background(Self.background)
-        // 理由同 `PlayerMarkersEditor`:sheet 窗口要显式设深色
+        // 见 `PlayerMarkersEditor`
         .preferredColorScheme(.dark)
     }
 

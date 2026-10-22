@@ -1,31 +1,16 @@
 import Foundation
 import os
 
-/// 百度网盘条目的**刮削结果落盘缓存**:`fs_id` → TMDB 补回来的那几个字段。
+/// 百度网盘条目的刮削结果落盘缓存:`fs_id` → TMDB 补回来的字段(`BaiduPanMetadataScraper` 的查询缓存只在内存)。
+/// 只存条目级补丁,不存剧级 `seriesProfile`(只在详情页用,进程内缓存够)。
 ///
-/// ## 为什么需要它
-///
-/// `BaiduPanMetadataScraper` 内部有四张查询缓存,但**全在内存**:重启 App 之后
-/// 同一个目录会重新问一遍 TMDB(搜索 + 季详情 + 详情 + 演职员)。结果是
-/// 冷启动第一屏的封面总要慢一拍,断网时整片片库退回图标卡。
-///
-/// 这一层只存**条目级**的补丁(封面 / 简介 / 年份 / 集名 / TMDB id),不存
-/// 剧级扩展信息(`seriesProfile`):后者只在详情页发、且随季不变,进程内缓存够用。
-///
-/// ## 为什么可以按 `fs_id` 认
-///
-/// `fs_id` 是网盘里这条文件的稳定身份 —— 改名 / 挪目录都不变
-/// (`docs/BAIDU_PAN_API.md` §2.2)。文件被替换 = 新上传 = 新 `fs_id`,
-/// 所以「同 id 就是同一份内容」成立,不需要再拿 `mtime` 做版本段。
-///
-/// ⚠️ 失效只有两档:时间(30 天,兜住 TMDB 那边改名 / 改简介的情况)与
-/// 显式清(删除来源)。⛔ 不做「每天重刮一遍」—— 那是拿 TMDB 请求换不到的东西。
+/// 按 `fs_id` 认即可:改名 / 挪目录不变,替换文件就是新 `fs_id`(`docs/BAIDU_PAN_API.md` §2.2)。
+/// 失效只有 `maxAge` 与删除来源两档。
 actor BaiduPanScrapeCache {
 
-    /// 一条刮削补丁。全部可选:哪一项当时没拿到就不存,下次还会再问。
+    /// 全部可选:当时没拿到的不存,下次再问。
     struct Entry: Codable, Sendable, Equatable {
-        /// 封面快照。⚠️ 只可能是**远端图**(TMDB 图床),它的地址不会过期;
-        /// 百度同目录封面的 `dlink` 8 小时过期,**不进这里**(那是 `PosterDiskCache` 的事)。
+        /// 只可能是 TMDB 图床的远端图。⛔ 百度 `dlink` 封面会过期,不进这里。
         var poster: ImageDescriptor.Snapshot?
         var overview: String?
         var year: Int?
@@ -33,7 +18,7 @@ actor BaiduPanScrapeCache {
         var tmdbID: Int?
         var savedAt: Date
 
-        /// 什么都没补到 = 不值得存(存了也只是让下次跳过网络再空一次)
+        /// 什么都没补到就不存
         var isEmpty: Bool {
             poster == nil && overview == nil && year == nil
                 && episodeTitle == nil && tmdbID == nil
@@ -47,7 +32,7 @@ actor BaiduPanScrapeCache {
     private static let logger = Logger(
         subsystem: NetworkDiagnostics.subsystem, category: "baidu-scrape-cache")
 
-    /// 30 天。TMDB 的简介 / 海报极少变,而「重刮一遍」的代价是一串网络请求。
+    /// TMDB 的简介 / 海报极少变,重刮代价是一串网络请求。
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
 
     private let fileURL: URL
@@ -59,7 +44,7 @@ actor BaiduPanScrapeCache {
         self.fileURL = fileURL
     }
 
-    /// 生产路径:与凭据文件、续播库同在应用支持目录下(测试宿主另用文件名)。
+    /// 与凭据文件同目录(测试宿主另用文件名)。
     static var defaultFileURL: URL {
         let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let filename = isTestHost
@@ -80,7 +65,7 @@ actor BaiduPanScrapeCache {
 
     // MARK: - 写
 
-    /// 批量写入(一次落盘)。失败只记原因 —— 刮削缓存坏了不该影响浏览。
+    /// 一次落盘。失败只记原因,不影响浏览。
     func store(sourceID: UUID, entries: [String: Entry]) {
         guard !entries.isEmpty else { return }
         var all = state()
@@ -90,7 +75,6 @@ actor BaiduPanScrapeCache {
         persist(all)
     }
 
-    /// 删除来源时整片清掉。
     func purge(sourceID: UUID) {
         var all = state()
         let prefix = "\(sourceID.uuidString)|"

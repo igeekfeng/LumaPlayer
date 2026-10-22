@@ -1,97 +1,53 @@
 import Foundation
 
-/// 百度来源的**在线刮削**层:把本地合成出来的条目拿去问 TMDB,补封面 / 简介 / 年份 / 集名。
+/// 百度来源的在线刮削:拿合成器(`BaiduPanMetadataSynthesizer`)的条目问 TMDB,
+/// 补封面 / 简介 / 年份 / 集名(`docs/TMDB_API.md`)。只读,不下载图片(交给 `PosterImage`)。
 ///
-/// ## 它在链路里的位置
-///
-/// `BaiduPanMetadataSynthesizer`(纯函数、只认文件名)→ **这里**(要网络)→
-/// 回填 `SourceItem.poster` 等字段。合成器本身不认识网络,这一层是它之后的独立一步
-/// (`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3,事实来源 `docs/TMDB_API.md`)。
-///
-/// ## 三种条目、三种问法
-///
-/// | 条目 | 怎么问 | 回填什么 |
+/// | 条目 | 怎么问 | 回填 |
 /// |---|---|---|
-/// | 剧集(`.episode`) | 一次 `/3/search/tv` 拿**剧**(海报 / 简介 / 首播年)+ 一次 `/3/tv/{id}/season/{n}` 拿**分集** | 分集:**分集剧照** / 集名 / 单集简介;剧级字段兜底 |
-/// | 电影 / 单条视频 | 一次 `/3/search/movie` | 海报 / 简介 / 年份 |
-/// | 目录卡片(`.folder`) | 一次 `/3/search/tv`(**严格**标题一致) | 剧级海报 / 简介 / 首播年 |
+/// | 剧集 | `/3/search/tv` + `/3/tv/{id}/season/{n}` | 分集剧照 / 集名 / 单集简介;剧级字段兜底 |
+/// | 电影 / 单条视频 | `/3/search/movie` | 海报 / 简介 / 年份 |
+/// | 目录卡片 | `/3/search/tv`,标题严格一致 | 剧级海报 / 简介 / 首播年 |
 ///
-/// ⚠️ **名称里写了 `{tmdbid-N}` 的条目跳过搜索**,直接 `GET /3/tv/{N}` 或 `/3/movie/{N}`
-/// (`SourceItem.tmdbID`)—— 标准命名库已经给了权威 id,再按标题搜既慢又可能搜错。
-/// 标签不区分影 / 剧,所以:剧集条目按剧查;目录卡片先按剧、404 再按电影;单条视频反之。
+/// 名称带 `{tmdbid-N}` 的跳过搜索直接按 id 取;标签不分影 / 剧:剧集按剧查,
+/// 目录卡片先剧后电影,单条视频先电影后剧(前一个 404 才查后一个)。
+/// 剧集必须钻到季:搜索只给剧级海报,分集剧照 / 集名只有季详情给(§7)。
 ///
-/// ⚠️ **剧集为什么必须钻到季**:`/3/search/tv` 只给剧级海报。拿它去配每一集,
-/// 结果就是「每一集的封面都长一样、还都没有集名」—— 分集剧照 / 集名 / 单集简介
-/// 只有季详情端点给(`docs/TMDB_API.md` §7)。
-///
-/// ## 三条硬纪律
-///
-/// 1. **不伪造**。年份对不上、标题不敢认、季对不上,**都不填那一格** ——
-///    宁可没有封面 / 没有集名,也不能端出别的片子的海报(`CLAUDE.md` 硬规则 4)。
-/// 2. **不打断浏览**。没 token / token 无效 / 连不上,都只记在
-///    `lastFailureDescription` 里给 UI 提一句,目录照常能看。
-/// 3. **不重复问**。搜索按「标题 + 年份 + 是不是剧」记一份(含「查过但没命中」),
-///    季详情按「剧 id + 季」记一份,重进同一个目录不再发请求。
-///
-/// ⚠️ 它**不发任何写请求**,也不下载图片 —— 图片由 `PosterImage` 按 `ImageDescriptor.remote`
-/// 走既有通路(`image.tmdb.org` 是公开 CDN,不带认证头)。
+/// - 不伪造:年份 / 标题 / 季对不上就不填,⛔ 不端出别的片子的海报(`CLAUDE.md` 硬规则 4)。
+/// - 不打断浏览:失败只记 `lastFailureDescription`,目录照常。
+/// - 不重复问:内存缓存连「查过没命中」与 404 一起记;取消、传输、认证类失败不记,下次能重试。
 actor BaiduPanMetadataScraper {
 
-    /// 一次最多同时发几个请求。
-    ///
-    /// TMDB 的上限约 40 次/秒(`docs/TMDB_API.md` §6),这里压到 4:刮削是浏览的
-    /// **附加**动作,⛔ 不与用户正在等的目录请求抢带宽,也避免一屏三十个文件打出一串并发。
+    /// TMDB 上限约 40 次/秒(`docs/TMDB_API.md` §6);压到 4,不与目录请求抢带宽。
     static let maxConcurrentRequests = 4
 
-    /// 季号解析不出来时,拿哪一季去问。
-    ///
-    /// ⚠️ 这是一个**明说的取舍**:`琅琊榜/01.mp4` 这种平铺存法里文件名没写季号,
-    /// 而 `01.mp4` 是「这一季第 1 集」在绝大多数情况下就是第 1 季(Emby 的文件名解析器
-    /// 也是这个口径)。认得出季号时(文件名 `SxxExx` / 季文件夹 `第13季/`)一律以**认出来的**
-    /// 为准 —— 有 13 季的剧一旦判错季,就会拿第 1 季的剧照去配第 13 季的文件。
-    /// 这一档的局限记在 `docs/KNOWN_ISSUES.md`。
+    /// 季号解析不出时按第 1 季问(同 Emby 口径;局限见 `docs/KNOWN_ISSUES.md`)。认得出季号时一律以认出的为准。
     static let seasonWhenUnknown = 1
 
     private let credentials: CredentialStore
     private let client: TMDBClient
-    /// 条目级刮削结果的**落盘**缓存(`fs_id` → 补丁)。
-    ///
-    /// ⚠️ 与下面那四张内存缓存分工不同:内存缓存按「一次搜索 / 一季 / 一个 id」去重,
-    /// 活到进程结束;这一张按**条目**记最终补丁,跨重启有效 —— 否则每次冷启动
-    /// 第一屏都要重新问一遍 TMDB(封面慢一拍、断网就退图标卡)。
-    /// nil = 不落盘(单测 / 纯函数式调用)。
+    /// 按条目记最终补丁、跨重启有效的落盘缓存;下面的内存缓存按请求去重、活到进程结束。nil = 不落盘。
     private let cache: BaiduPanScrapeCache?
 
-    /// 一次搜索的键。同一个键问出来的结果不随会话变化,所以内存缓存足够;
-    /// 进程重启后重新问一遍是可接受的代价(刮削是低频动作)。
-    ///
-    /// ⚠️ 剧集条目与**同名目录卡片**共用同一个键(都是「剧名 + 无年份 + 是剧」),
-    /// 所以「进剧集目录」与「看外层目录」不会把同一次搜索问两遍。
+    /// 剧集条目与同名目录卡片共用同一个键,同一次搜索不问两遍。
     struct QueryKey: Hashable, Sendable {
         let title: String
         let year: Int?
         let isSeries: Bool
     }
 
-    /// 一季分集的键:剧 id + 季号。
     struct SeasonKey: Hashable, Sendable {
         let seriesID: Int
         let season: Int
     }
 
-    /// 按**显式 id** 直取条目的键:id + 查哪个端点(影 / 剧)。
-    ///
-    /// ⚠️ 影与剧分开缓存:同一个数字 id 在两个端点下可能是**两部不同的作品**,
-    /// 拿一份结果糊弄另一边就是配错片(硬规则 4)。
+    /// 影与剧分开:同一个数字 id 在两个端点下是不同作品。
     struct DetailsKey: Hashable, Sendable {
         let id: Int
         let isSeries: Bool
     }
 
-    /// 一组剧集条目:同一个「剧名 + 年份 + 季」共用一次搜索 + 一次季详情。
-    ///
-    /// `tmdbID` 非空时(名称里写了 `{tmdbid-N}`)不走搜索,直接按 id 取剧
-    /// —— 这时 `title` / `year` 只用于分组与展示。
+    /// 同一组共用一次搜索 + 一次季详情。`tmdbID` 非空时直接按 id 取,`title` / `year` 只用于分组。
     struct SeriesKey: Hashable, Sendable {
         let title: String
         let year: Int?
@@ -106,31 +62,19 @@ actor BaiduPanMetadataScraper {
         }
     }
 
-    /// 查过的**搜索**结果。`nil` = 查过但**没有可用的命中**。
-    ///
-    /// ⚠️ 之所以要连「没命中」一起缓存:认不出来的文件(发布组命名法等)如果每次都重查,
-    /// 每进一次目录就白烧一轮请求。
-    /// 值类型是 `TMDBMatch?`,写的时候用 `updateValue(_:forKey:)` 而不是下标赋值 ——
-    /// 下标赋 `nil` 是**删键**,那样「查过没命中」这件事就丢了(见 `searchMatch`)。
+    /// 值 nil = 查过没命中。⛔ 写入用 `updateValue(_:forKey:)`:下标赋 nil 是删键。
     private var searchCache: [QueryKey: TMDBMatch?] = [:]
 
-    /// 查过的**按 id 直取**结果。与 `searchCache` 同口径:`nil` = 查过但**这个端点没有这个 id**
-    /// (404 这种确定性失败),传输 / 认证类失败不写(下次进目录要能重试)。
+    /// 值 nil = 这个端点 404
     private var detailsCache: [DetailsKey: TMDBMatch?] = [:]
 
-    /// 查过的**季详情报表**(集号 → 分集)。只在**成功**时写(以及 404 这种确定性失败写成空表),
-    /// 传输类失败不写 —— 下次进目录要能重试。
+    /// 集号 → 分集;404 记成空表
     private var seasonCache: [SeasonKey: [Int: TMDBEpisode]] = [:]
 
-    /// 查过的**演职员**(详情页专用,`seriesProfile`)。与 `detailsCache` 同口径:
-    /// `nil` = 查过但这个端点没有这个 id(404 这种确定性失败),传输 / 认证类失败不写。
-    ///
-    /// ⚠️ 键复用 `DetailsKey`(id + 影 / 剧)—— 演职员与详情走的是**同一个 id 空间**,
-    /// 分开两套键只会多一处要同步的地方。
+    /// 详情页专用(`seriesProfile`);值 nil = 404
     private var creditsCache: [DetailsKey: TMDBCredits?] = [:]
 
-    /// 最后一次刮削失败的可读原因(nil = 没失败)。
-    /// ⛔ 不上模型层:它只用来给界面提一句,不改变任何条目(`LocalResumeReporting` 同一处置)。
+    /// 只给界面提一句,⛔ 不进模型层
     private(set) var lastFailureDescription: String?
 
     init(
@@ -145,13 +89,9 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 入口
 
-    /// 给整个目录的条目补 TMDB 的封面 / 简介 / 年份 / 集名。
-    ///
-    /// ⛔ 不抛错:调用方是「目录已经列出来之后」的第二趟,刮削失败不该让浏览变错。
-    /// 失败原因留在 `lastFailureDescription`。
+    /// 不抛错(目录已列出后的第二趟)。返回顺序与入参一致。
     func enrich(_ items: [SourceItem]) async -> [SourceItem] {
-        // 先吃掉落盘缓存:命中条目的封面 / 简介 / 年份 / 集名**立刻**回来,
-        // 不必等网络,也不必在断网时退回图标卡。命中的条目**不再发请求**。
+        // 落盘缓存命中的条目不再发请求
         let (cached, cachedIDs) = await applyCached(items)
         let pending = cached.filter {
             !cachedIDs.contains($0.ref.itemID) && Self.isCacheable($0)
@@ -161,25 +101,23 @@ actor BaiduPanMetadataScraper {
         do {
             guard let stored = try await credentials.tmdbReadAccessToken(),
                   !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                // 没填 token = 用户没开刮削,不是失败(设置页的文案就是这么承诺的)
+                // 没填 token = 没开刮削,不是失败
                 return cached
             }
             token = stored
         } catch {
-            // ⛔ 读凭据失败不假装「没配置」:如实记下来
+            // 读凭据失败不当作「没配置」
             lastFailureDescription = "读取 TMDB 凭据失败"
             return cached
         }
         guard !pending.isEmpty else { return cached }
         lastFailureDescription = nil
-        // 分三步:**先剧集**(要钻季详情),再单条电影 / 视频,最后目录卡片。
-        // 三步各只碰自己那几种 `kind`,互不重叠。
+        // 三步各只碰自己的 `kind`,互不重叠
         let episodes = await enrichEpisodes(items: pending, token: token)
         let singles = await enrichSingles(items: episodes, token: token)
         let enriched = await enrichFolders(items: singles, token: token)
         await storeCache(enriched)
-        // 把补好的条目按身份并回原数组:缓存命中的那些原样保留,
-        // 顺序与入参完全一致(调用方按位置对应 `filesByID` / 目录结构)。
+        // 按身份并回,保持入参顺序
         let byID = Dictionary(
             enriched.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { first, _ in first })
         return cached.map { byID[$0.ref.itemID] ?? $0 }
@@ -187,16 +125,12 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 落盘缓存
 
-    /// 这条条目值不值得进刮削缓存(文件与目录各有一套判据)。
     private static func isCacheable(_ item: SourceItem) -> Bool {
         isScrapable(item) || isScrapableFolder(item)
     }
 
-    /// 把缓存命中的补丁贴回条目。
-    ///
-    /// - Returns: 贴好的条目 + 命中集合(调用方据此跳过网络)。
-    /// ⚠️ 只用 `withScrapedMetadata` 贴 —— 它**只补空位**,不会盖掉
-    /// 用户放在网盘目录里的封面(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.3)。
+    /// - Returns: 贴好的条目 + 命中的 id 集合。
+    /// 只用 `withScrapedMetadata` 贴:它只补空位,不盖掉网盘里用户放的封面。
     private func applyCached(_ items: [SourceItem]) async -> ([SourceItem], Set<String>) {
         guard let cache else { return (items, []) }
         var result = items
@@ -216,15 +150,12 @@ actor BaiduPanMetadataScraper {
         return (result, hits)
     }
 
-    /// 把这一趟刮到的字段落盘。
     private func storeCache(_ items: [SourceItem]) async {
         guard let cache else { return }
         var perSource: [UUID: [String: BaiduPanScrapeCache.Entry]] = [:]
         for item in items where Self.isCacheable(item) {
             let entry = BaiduPanScrapeCache.Entry(
-                // ⛔ 百度封面不进这里:那是 `dlink`,8 小时就过期,而这份缓存记 30 天。
-                // 存下来只会让冷启动端出一批打不开的图,还不如没有(界面会降级成图标卡,
-                // 紧接着的后台刷新再把新地址补上)。
+                // ⛔ 百度封面(`dlink` 8 小时过期)不进这份 30 天的缓存
                 poster: item.poster?.hasExpiringURL == false ? item.poster?.snapshot : nil,
                 overview: item.overview,
                 year: item.year,
@@ -242,7 +173,6 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 剧集(剧 + 季详情)
 
-    /// 剧集条目:按「剧名 + 年份 + 季」分组,每组一次搜索 + 一次季详情。
     private func enrichEpisodes(items: [SourceItem], token: String) async -> [SourceItem] {
         var offsetsByKey: [SeriesKey: [Int]] = [:]
         for (offset, item) in items.enumerated()
@@ -258,7 +188,7 @@ actor BaiduPanMetadataScraper {
         }
         var bundleByKey: [SeriesKey: SeriesBundle] = [:]
         for (key, bundle) in bundles {
-            // 没命中剧 → 这一组什么都不补(不伪造,硬规则 1)
+            // 没命中剧 → 这一组什么都不补
             if let bundle { bundleByKey[key] = bundle }
         }
 
@@ -272,16 +202,13 @@ actor BaiduPanMetadataScraper {
         return result
     }
 
-    /// 一次「剧的刮削结果」:剧级命中 + 该季的分集表。
     private struct SeriesBundle: Sendable {
         let series: TMDBMatch
-        /// 集号 → 分集。空 = 剧命中了但季详情取不到(剧级信息照补)
+        /// 空 = 季详情取不到,剧级信息照补
         let episodes: [Int: TMDBEpisode]
     }
 
-    /// 查一组的剧 + 该季分集。任一步拿不到就返回 nil(⛔ 不拿别的剧来凑)。
     private func seriesBundle(for key: SeriesKey, token: String) async -> SeriesBundle? {
-        // 名称里写了显式 id 就直接按 id 取剧;否则按标题 + 年份搜
         let series: TMDBMatch?
         if let id = key.tmdbID {
             series = await detailsMatch(id: id, isSeries: true, token: token)
@@ -295,11 +222,7 @@ actor BaiduPanMetadataScraper {
         return SeriesBundle(series: series, episodes: episodes)
     }
 
-    /// 按**显式 id** 直取条目(跳过搜索)。`isSeries` 决定查影还是剧端点。
-    ///
-    /// ⛔ 不抛错(与 `searchMatch` 同处置):失败折成 `nil` + `lastFailureDescription`。
-    /// 404 = 这个 id 在这个端点不存在,是**确定性**答案 → 写进缓存不再重问;
-    /// 传输 / 认证类失败不写缓存(下次进目录要能重试)。
+    /// 按显式 id 直取。失败折成 nil + `lastFailureDescription`。
     private func detailsMatch(id: Int, isSeries: Bool, token: String) async -> TMDBMatch? {
         let key = DetailsKey(id: id, isSeries: isSeries)
         if let cached = detailsCache[key] { return cached }
@@ -308,10 +231,9 @@ actor BaiduPanMetadataScraper {
         do {
             match = try await client.details(id: id, isSeries: isSeries, token: token)
         } catch is CancellationError {
-            // 用户换了目录 / 关页面:这次不算失败,也不写缓存(下次还要问)
+            // 换目录 / 关页面:不算失败,不写缓存
             return nil
         } catch let error as TMDBError {
-            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响目录**
             lastFailureDescription = error.userMessage
             if case .notFound = error { detailsCache.updateValue(nil, forKey: key) }
             return nil
@@ -323,10 +245,7 @@ actor BaiduPanMetadataScraper {
         return match
     }
 
-    /// 拉一季的分集,折成「集号 → 分集」表。
-    ///
-    /// ⛔ **不按数组下标猜集号**:分集表里 `episode_number` 才是集号
-    /// (`docs/TMDB_API.md` §7),下标与集号可能因特别篇 / 缺失而不一致。
+    /// ⛔ 按 `episode_number` 建表,不按数组下标(`docs/TMDB_API.md` §7)
     private func seasonEpisodes(seriesID: Int, season: Int, token: String) async -> [Int: TMDBEpisode] {
         let key = SeasonKey(seriesID: seriesID, season: season)
         if let cached = seasonCache[key] { return cached }
@@ -336,13 +255,9 @@ actor BaiduPanMetadataScraper {
             episodes = try await client.seasonDetails(
                 seriesID: seriesID, seasonNumber: season, token: token)
         } catch is CancellationError {
-            // 用户换了目录 / 关页面:这次不算失败,也不写缓存(下次还要问)
             return [:]
         } catch let error as TMDBError {
-            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响目录**
             lastFailureDescription = error.userMessage
-            // 404 = 这一季就是不存在,是**确定性**答案 → 记住不再重问;
-            // 其余(401 / 429 / 传输)不写缓存,下次进目录要能重试。
             if case .notFound = error { seasonCache[key] = [:] }
             return [:]
         } catch {
@@ -355,10 +270,8 @@ actor BaiduPanMetadataScraper {
         return table
     }
 
-    /// 一集的回填:分集剧照 → 封面;集名 → `episodeTitle`;单集简介(退剧级) → `overview`。
-    ///
-    /// ⚠️ 剧级海报**不**往分集上套 —— 那正是「每集的封面都是剧海报」的成因。
-    /// 分集没有剧照时**留空**(UI 降级成图标卡),由 `PosterImage` 去显示占位图。
+    /// 分集剧照 → 封面,集名 → `episodeTitle`,单集简介(退剧级)→ `overview`。
+    /// ⛔ 剧级海报不往分集上套;没有剧照就留空。
     private static func applyEpisode(_ bundle: SeriesBundle, to item: SourceItem) -> SourceItem {
         let episode = item.episodeNumber.flatMap { bundle.episodes[$0] }
         var poster: ImageDescriptor?
@@ -366,7 +279,7 @@ actor BaiduPanMetadataScraper {
             poster = .remote(
                 ownerID: item.ref.sourceID,
                 url: url,
-                // TMDB 图床是公开 CDN,不带认证头(`docs/TMDB_API.md` §8)
+                // 公开 CDN,不带认证头(`docs/TMDB_API.md` §8)
                 headers: [:],
                 cacheKey: ImageDescriptor.tmdbPosterKey(
                     sourceID: item.ref.sourceID,
@@ -377,7 +290,6 @@ actor BaiduPanMetadataScraper {
         }
         return item.withScrapedMetadata(
             poster: poster,
-            // 单集简介优先;这一集没有简介就退剧级简介(剧的简介对这一集也成立)
             overview: nonEmpty(episode?.overview) ?? bundle.series.overview,
             year: bundle.series.year,
             episodeTitle: nonEmpty(episode?.name)
@@ -386,10 +298,6 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 单条电影 / 视频
 
-    /// 电影 / 单条视频:各查一次 `/3/search/movie`。
-    ///
-    /// 名称里写了 `{tmdbid-N}` 的直接按 id 取:先当电影查,404 再当剧查
-    /// (剧集条目不会走到这里 —— 它们在 `enrichEpisodes` 就按剧处理了)。
     private func enrichSingles(items: [SourceItem], token: String) async -> [SourceItem] {
         let offsets = items.indices.filter {
             Self.isScrapable(items[$0]) && items[$0].kind != .episode
@@ -417,7 +325,6 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 目录卡片(按剧查)
 
-    /// 目录卡片:按**剧**查一次,只认标题完全一致的命中(见 `folderMatch`)。
     private func enrichFolders(items: [SourceItem], token: String) async -> [SourceItem] {
         let offsets = items.indices.filter { Self.isScrapableFolder(items[$0]) }
         guard !offsets.isEmpty else { return items }
@@ -429,27 +336,15 @@ actor BaiduPanMetadataScraper {
         var result = items
         for (offset, match) in matches {
             guard let match else { continue }
-            // ⚠️ 只有**目录卡片**回填命中的 id:详情页要按它取剧级信息与演职员。
-            // 分集 / 单条视频不填 —— 填了会让下次刮削从「搜索」改走「按 id 直取」,
-            // 多一次请求而结果一样(见 `apply` 的注释)。
             result[offset] = Self.apply(match, to: items[offset], fillTMDBID: true)
         }
         return result
     }
 
-    /// 目录卡片按剧查,且**只认标题归一化后完全一致**的命中。
-    ///
-    /// ⚠️ 为什么比单条文件更严:目录名没有年份、也没有文件名那种发布标记帮特指,
-    /// 一旦放宽(比如「唯一结果就认」),一个叫《Movies》的目录就可能套上某部同名剧的海报
-    /// —— 那正是硬规则 4 要避免的假数据。对齐不上时**宁可不给封面**。
-    ///
-    /// ⛔ 只查剧端点:电影目录(片名做目录名的存法)这次**不刮** —— 一个目录查两次
-    /// (剧 + 电影)会让 50 个目录的片库多烧一倍请求。这是**已知限制**,见 `docs/KNOWN_ISSUES.md`。
-    ///
-    /// ⚠️ **例外:目录名写了 `{tmdbid-N}`。** 这时不再靠标题对齐(目录名里那串标签
-    /// 归一化后根本对不上任何 TMDB 标题),直接按 id 取:先当剧查,404 再当电影查。
-    /// 多出的那一次请求只在「这个 id 不是剧」时才发生,而它换来的是**确定**的命中,
-    /// 不是猜出来的封面。
+    /// 只认标题归一化后完全一致的命中:目录名没有年份等特指信息,放宽(如「唯一结果就认」)
+    /// 会让《Movies》目录套上同名剧的海报。
+    /// 只查剧端点,电影目录不刮(查两次会让请求翻倍,已知限制见 `docs/KNOWN_ISSUES.md`)。
+    /// 例外:带 `{tmdbid-N}` 时按 id 取,先剧后电影。
     private func folderMatch(item: SourceItem, token: String) async -> TMDBMatch? {
         if let id = item.tmdbID {
             if let series = await detailsMatch(id: id, isSeries: true, token: token) {
@@ -457,7 +352,7 @@ actor BaiduPanMetadataScraper {
             }
             return await detailsMatch(id: id, isSeries: false, token: token)
         }
-        // 复用剧集搜索的缓存与「选命中项」规则(键与剧集组相同)
+        // 与剧集组同一个搜索键,共用缓存
         guard let match = await searchMatch(
             title: item.title, year: nil, isSeries: true, token: token) else {
             return nil
@@ -471,7 +366,7 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 一次搜索
 
-    /// 查一次「标题 + 年份 + 是不是剧」(带缓存)。不抛错 —— 失败折成 nil + `lastFailureDescription`。
+    /// 带缓存;失败折成 nil + `lastFailureDescription`
     private func searchMatch(
         title: String,
         year: Int?,
@@ -479,9 +374,7 @@ actor BaiduPanMetadataScraper {
         token: String
     ) async -> TMDBMatch? {
         let key = QueryKey(title: title, year: year, isSeries: isSeries)
-        // 注意:这里命中缓存时返回的可能是 nil(查过、没命中),那也要直接返回 ——
-        // 所以判据是「键在不在」,不是「值是不是 nil」。用 `updateValue` 写、用下标读
-        // 得到的 `TMDBMatch??` 恰好能区分这两件事。
+        // 下标读出 `TMDBMatch??`:键在即返回,哪怕值是 nil(查过没命中)
         if let cached = searchCache[key] { return cached }
 
         let matches: [TMDBMatch]
@@ -489,12 +382,9 @@ actor BaiduPanMetadataScraper {
             matches = try await client.search(
                 title: title, year: year, isSeries: isSeries, token: token)
         } catch is CancellationError {
-            // 用户换了目录 / 关页面:这次不算失败,也不写缓存(下次还要问)
             return nil
         } catch let error as TMDBError {
-            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响目录**
             lastFailureDescription = error.userMessage
-            // 网络 / token 类失败不写缓存:下次进目录要能重试
             return nil
         } catch {
             lastFailureDescription = "刮削失败:\(error)"
@@ -508,10 +398,7 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 并发调度
 
-    /// 分批并发跑(每批最多 `maxConcurrentRequests` 个),等这一批全回来再开下一批。
-    ///
-    /// ⚠️ 为什么要限:TMDB 上限约 40 次/秒,而一屏可能有三十个文件;
-    /// 无节制地一次打出全屏请求既容易触顶,也会跟用户正在等的目录请求抢带宽。
+    /// 每批最多 `maxConcurrentRequests` 个,一批全回来再开下一批
     private func inBatches<Element: Sendable, Result: Sendable>(
         _ elements: [Element],
         _ body: @Sendable @escaping (Element) async -> Result
@@ -534,14 +421,11 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 命中判定(纯函数,可单测)
 
-    /// 从搜索结果里挑一个**敢用**的命中项。
-    ///
     /// 顺序即优先级(⛔ 不猜):
-    /// 1. 年份解析出来了 → 只认**年份完全一致**的;一个都没有就不认 ——
-    ///    同名翻拍片(`The Thing` / `沙丘`)靠年份区分,让步一步就会配错片;
-    /// 2. 没有年份 → 标题归一化后完全一致的;
-    /// 3. 再否则,**只有唯一一个结果**时才认(搜索能收敛到一条,说明够特指);
-    /// 4. 都不满足 → `nil`(UI 保持图标卡)。
+    /// 1. 有年份 → 只认年份一致的,没有就不认(同名翻拍靠年份区分);
+    /// 2. 无年份 → 标题归一化后一致的;
+    /// 3. 否则只有唯一结果时才认;
+    /// 4. 都不满足 → nil。
     static func selectMatch(_ matches: [TMDBMatch], title: String, year: Int?) -> TMDBMatch? {
         if let year {
             return matches.first { $0.year == year }
@@ -553,24 +437,19 @@ actor BaiduPanMetadataScraper {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    /// 标题归一化:大小写、空格、标点都不算差别(`Fight Club` = `fightclub`)。
-    /// 中文字符按 `isLetter` 保留。
+    /// 忽略大小写、空格、标点(`Fight Club` = `fightclub`);中文按 `isLetter` 保留
     static func normalizedTitle(_ text: String) -> String {
         text.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    /// 空串与 `nil` 一样看待 —— TMDB 偶尔给 `""` 而不是 `null`(`docs/TMDB_API.md` §7)。
+    /// TMDB 偶尔给 `""` 而不是 `null`(`docs/TMDB_API.md` §7)
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
     }
 
-    /// 这一条值不值得问 TMDB(**单条文件**:电影 / 剧集 / 视频)。
-    ///
-    /// - 只刮**可播的视频条目**:目录 / 图片 / 音频不发(音频走 TMDB 只会拿回一部同名的电影);
-    /// - 标题必须是**从文件名解析出来的**(`metadataOrigin == .filename`)。
-    ///   退回文件名的那一类(`video.mp4` / `IMG_0451.MOV`)问 TMDB 只会拿回一堆
-    ///   风马牛不相及的封面 —— 那正是「用假数据占位」。
+    /// 单条文件:只刮视频类,且标题须从文件名解析出来(`.filename`);
+    /// `IMG_0451.MOV` 这类退回原名的问 TMDB 只会配错。音频问 TMDB 只会拿回同名电影。
     static func isScrapable(_ item: SourceItem) -> Bool {
         guard item.metadataOrigin == .filename else { return false }
         switch item.kind {
@@ -579,26 +458,18 @@ actor BaiduPanMetadataScraper {
         }
     }
 
-    /// 目录卡片值不值得问 TMDB(按**剧**查)。
-    ///
-    /// 与 `isScrapable` 分开:目录恒为 `metadataOrigin == .none`(没有文件名可解析),
-    /// 而它的标题**就是**目录名 —— 对「目录名是剧名」这种存法,那反而是最可靠的剧名来源。
+    /// 目录恒为 `metadataOrigin == .none`,但目录名本身就是可靠的剧名来源,所以与 `isScrapable` 分开
     static func isScrapableFolder(_ item: SourceItem) -> Bool {
         item.kind == .folder && !item.title.isEmpty
     }
 
-    /// 一张 TMDB **剧级海报**的 `ImageDescriptor`(没有 `poster_path` 时为 `nil`)。
-    ///
-    /// ⚠️ 目录卡片(`apply`)与详情页的剧级信息(`FileSourceViewModel`)必须走
-    /// **同一把** `cacheKey` 拼法:同一个 `poster_path` + 同一个档位 → 同一条缓存。
-    /// 于是「从目录卡片进来」与「从继续观看进来」看到的剧集海报是同一张
-    /// —— 用户报的「两个入口封面 / 背景图不一样」正是各自拼各自的图造成的。
+    /// 剧级海报。⛔ 目录卡片与详情页(`FileSourceViewModel`)必须共用这里的拼法,否则两个入口海报不一致。
     static func posterDescriptor(for match: TMDBMatch, sourceID: UUID) -> ImageDescriptor? {
         guard let url = match.posterURL, let path = match.posterPath else { return nil }
         return .remote(
             ownerID: sourceID,
             url: url,
-            // TMDB 图床是公开 CDN,不带认证头(`docs/TMDB_API.md` §4)
+            // 公开 CDN,不带认证头(`docs/TMDB_API.md` §4)
             headers: [:],
             cacheKey: ImageDescriptor.tmdbPosterKey(
                 sourceID: sourceID,
@@ -608,15 +479,8 @@ actor BaiduPanMetadataScraper {
         )
     }
 
-    /// 把剧级命中项折回条目(电影 / 视频 / 目录卡片用)。
-    ///
-    /// 封面按 `ImageDescriptor.remote` 走既有图片通路;`cacheKey` 用 `poster_path`
-    /// 当版本段(`ImageDescriptor.tmdbPosterKey`,拼法见 `posterDescriptor`)。
-    ///
-    /// - Parameter fillTMDBID: 要不要把命中的 id 写回条目。**只有目录卡片要**
-    ///   (`enrichFolders`)—— 详情页拿它去取剧级信息与演职员(`seriesProfile`)。
-    ///   分集 / 单条视频填了反而会让下次刮削从「搜索」改走「按 id 直取」:
-    ///   那一次请求的**结果一模一样**,只是白多一次往返。
+    /// - Parameter fillTMDBID: 只有目录卡片要(详情页按它取 `seriesProfile`)。分集 / 单条视频填了
+    ///   会让下次刮削改走按 id 直取,白多一次请求。
     private static func apply(
         _ match: TMDBMatch,
         to item: SourceItem,
@@ -632,46 +496,19 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 剧级扩展信息(详情页专用)
 
-    /// 取一部剧 / 一部电影的**剧级扩展信息 + 演职员**。
+    /// 详情页专用的剧级扩展信息(类型 / 评分 / 标语 / 状态 / 制片公司)+ 演职员。
+    /// ⛔ 不要并进 `enrich`:那是每次列目录都跑的,并进去一屏会多几十次请求。
     ///
-    /// ⚠️ 与 `enrich(_:)` 是**两件事**,⛔ 不要合并:
+    /// 有 `tmdbID` 直接按 id 取(先剧后电影,credits 跟命中的一边);没有就按标题 + 年份搜,
+    /// 搜索键与 `enrichEpisodes` 相同,所以命中的就是分集上那部剧,且通常命中缓存零请求。
+    /// 不抛错,失败时详情页不显示这些块。
     ///
-    /// | | `enrich` | 这里 |
-    /// |---|---|---|
-    /// | 何时跑 | 每次列目录(列表要的) | **只在详情页** |
-    /// | 按什么查 | **标题** + 年份(批量) | **id**(精确);没 id 才退标题 |
-    /// | 拿什么 | 封面 / 简介 / 年份 / 集名 | 类型 / 评分 / 标语 / 状态 / 制片公司 + 演职员 |
-    ///
-    /// 合并的代价很具体:一屏三十个目录会多烧六十次 TMDB 请求。
-    ///
-    /// ## 两种身份来源,id 优先
-    ///
-    /// 详情页手里的线索有两档,按可信度取:
-    ///
-    /// 1. **`tmdbID`**(目录名里写了 `{tmdbid-N}`,或父目录刮削时按标题严格命中后回填)
-    ///    —— 直接 `GET /3/{tv|movie}/{id}`,这是权威答案;
-    /// 2. 没有 id 就用**标题 + 年份**走一次搜索。
-    ///
-    /// ⚠️ 第 2 档**不是新引入的风险**:它的键与判据与 `enrichEpisodes` 完全一样
-    /// (`searchMatch` 的 `QueryKey` 是「标题 + 年份 + 是剧」),所以详情页用的就是
-    /// **已经贴在这一季分集上**的那部剧 —— 两者不可能指向不同的作品。
-    /// 而且因为搜索缓存共用,父目录/分集刮过之后这一档通常**零请求**。
-    ///
-    /// ⚠️ `tmdbID` **不区分影 / 剧**(两个 id 空间各自编号),所以先按剧取、
-    /// 404 再按电影取(与 `folderMatch` 同一处置);credits 端点跟着**命中的那一边**走。
-    ///
-    /// ⛔ 不抛错:失败折成 nil + `lastFailureDescription`,详情页降级成「没有这些块」。
-    ///
-    /// - Parameters:
-    ///   - tmdbID: 权威 id。给了就不再搜索。
-    ///   - title: 剧名(没给 id 时用于搜索)。空串 = 搜不了。
-    ///   - year: 首播 / 上映年。没给就按标题对齐(与 `selectMatch` 同规则)。
+    /// - Parameter title: 没给 id 时用于搜索;空串 = 搜不了。
     func seriesProfile(tmdbID: Int?, title: String, year: Int?) async -> TMDBSeriesProfile? {
         let token: String
         do {
             guard let stored = try await credentials.tmdbReadAccessToken(),
                   !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                // 没填 token = 用户没开刮削,不是失败
                 return nil
             }
             token = stored
@@ -689,10 +526,7 @@ actor BaiduPanMetadataScraper {
                     title: title, year: year, isSeries: true, token: token) else {
                 return nil
             }
-            // 类型 / 标语 / 状态 / 制片公司只有详情端点给(`docs/TMDB_API.md` §9),
-            // 而搜索命中里这些是空的 → 再按 id 取一次详情。
-            // ⚠️ 详情这一步失败就**退回搜索命中**:它已经给出标题 / 年份 / 简介 / 海报,
-            // 只是没有类型那几行 —— 好过整块都不显示(⛔ 不用别的剧来补)。
+            // 类型等字段只有详情端点给(`docs/TMDB_API.md` §9);详情失败就退回搜索命中
             match = await seriesMatch(id: searched.tmdbID, token: token) ?? searched
         }
         guard let match else { return nil }
@@ -705,7 +539,7 @@ actor BaiduPanMetadataScraper {
         )
     }
 
-    /// 按 id 取剧级详情:先当**剧**、404 再当**电影**(标签只给 id,不给影 / 剧)。
+    /// 先剧,404 再电影
     private func seriesMatch(id: Int, token: String) async -> TMDBMatch? {
         if let series = await detailsMatch(id: id, isSeries: true, token: token) {
             return series
@@ -713,10 +547,7 @@ actor BaiduPanMetadataScraper {
         return await detailsMatch(id: id, isSeries: false, token: token)
     }
 
-    /// 查一次演职员(带缓存)。`nil` = 拿不到(没命中 / 这次失败)。
-    ///
-    /// ⚠️ 缓存口径与 `detailsMatch` 一致:404 这种**确定性**答案写缓存
-    /// (下次进详情页不重问),传输 / 认证类失败不写(要能重试)。
+    /// 缓存口径同 `detailsMatch`
     private func creditsMatch(id: Int, isSeries: Bool, token: String) async -> TMDBCredits? {
         let key = DetailsKey(id: id, isSeries: isSeries)
         if let cached = creditsCache[key] { return cached }
@@ -725,10 +556,8 @@ actor BaiduPanMetadataScraper {
         do {
             credits = try await client.credits(id: id, isSeries: isSeries, token: token)
         } catch is CancellationError {
-            // 用户换了目录 / 关了详情页:这次不算失败,也不写缓存(下次还要问)
             return nil
         } catch let error as TMDBError {
-            // ⛔ 不静默吞:记下最后一条失败原因,但**不影响详情页的其它块**
             lastFailureDescription = error.userMessage
             if case .notFound = error { creditsCache.updateValue(nil, forKey: key) }
             return nil

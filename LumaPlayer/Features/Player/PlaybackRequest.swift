@@ -1,19 +1,13 @@
 import Foundation
 
-/// 一次播放请求要播的**是哪一路来源**上的内容。
-///
-/// ⚠️ 为什么是枚举而不是「给 `PlaybackRequest` 加几个可选字段」:
-/// Emby 与文件树来源(百度网盘 / 本地文件夹)**没有共同的语义** —— Emby 有服务器 /
-/// Item / 服务端进度,文件树来源只有一条文件与它的来源内 id。做成可选字段就会出现
-/// 「既没服务器也没文件」这种不可能的状态,而每个调用点都要先判一遍。
+/// 一次播放请求的内容来源。做成枚举而非可选字段:Emby 与文件树来源没有共同语义,
+/// 可选字段会允许「既没服务器也没文件」的不可能状态。
 enum PlaybackSource: Sendable, Equatable {
     case emby(server: ServerProfile, item: EmbyItem)
     case baiduPan(file: BaiduPanFile)
-    /// 本地文件夹里的一个文件。带上来源:打开文件要它的书签(`LocalFolderAccess`),
-    /// 范围键(倍速 / 片头片尾 / 弹幕绑定)要它的 id 做隔离。
+    /// 带上来源:打开文件要它的书签(`LocalFolderAccess`),范围键(倍速 / 片头片尾 / 弹幕绑定)要它的 id 隔离。
     case localFolder(file: BaiduPanFile, source: LocalFolderSource)
 
-    /// Emby 来源才有(其它来源返回 nil)
     var embyServer: ServerProfile? {
         if case .emby(let server, _) = self { return server }
         return nil
@@ -29,10 +23,8 @@ enum PlaybackSource: Sendable, Equatable {
         return nil
     }
 
-    /// 文件树来源(百度网盘 / 本地文件夹)的那条文件;Emby 为 nil。
-    ///
-    /// 用于两边**同一套**的本地收尾:续播卡快照、播完落成已看 + 下一集占位
-    /// (`AppContainer.finishFileSourceEpisode`)、换集带队列。
+    /// 文件树来源(百度 / 本地文件夹)的文件;Emby 为 nil。两者共用本地收尾
+    /// (`AppContainer.finishFileSourceEpisode`)。
     var file: BaiduPanFile? {
         switch self {
         case .emby: return nil
@@ -40,7 +32,7 @@ enum PlaybackSource: Sendable, Equatable {
         }
     }
 
-    /// 上报 / 日志用的内容标识。Emby 是 Item Id,文件树来源是来源内 id(`fs_id`)。
+    /// 上报 / 日志用:Emby 是 Item Id,文件树来源是 `fs_id`。
     var contentID: String {
         switch self {
         case .emby(_, let item): return item.id
@@ -49,39 +41,25 @@ enum PlaybackSource: Sendable, Equatable {
     }
 }
 
-/// 一次「请播放器窗口播这一项」的请求(`AppState.nowPlaying`)。
+/// 请播放器窗口播这一项(`AppState.nowPlaying`)。
 ///
-/// 播放器是**单实例的独立窗口**(CLAUDE.md「架构主线」):详情页只负责
-/// 写入请求并唤起窗口。两个身份各管一层:
-/// - `id`:**一次播放会话**。每次新建都不同,所以同一项再点一次播放也会得到
-///   一个新会话(新 `PlayerViewModel`、新 mpv、新一轮上报),而不是被当成「没变」忽略。
-/// - `pageID`:**播放页**。窗口按它决定要不要重建播放页。从详情页 / 浏览页起播是新页;
-///   播放页里换集(`continuingPage`)沿用上一集的 —— 页面(全屏、控制层、选集抽屉)不动,
-///   只换里面那一集的会话,旧会话照样走完收尾上报。
+/// - `id`:一次播放会话。每次新建都不同,同一项再点播放也是新会话(新 ViewModel、新 mpv、新一轮上报)。
+/// - `pageID`:播放页。播放页内换集沿用上一集的(页面不动,只换会话,旧会话照样收尾上报)。
 struct PlaybackRequest: Identifiable, Equatable {
     let id: UUID
     let pageID: UUID
     let source: PlaybackSource
-    /// 「从头播放」:忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
+    /// 忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
     var startFromBeginning = false
-    /// 本次播放可切换的剧集队列(上一集 / 下一集 / 选集面板的唯一数据源)。
-    ///
-    /// 装配点按来源:百度由浏览页**在起播那一刻**用当前目录已列的条目装配
-    /// (⛔ 不为了换集再列一次网盘,配额见 `docs/BAIDU_PAN_API.md`);Emby 由播放页
-    /// 自己查(`PlayerViewModel.loadEpisodeQueue`)。换集时原样带进新请求。
-    /// nil = 不是剧集 / 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
+    /// 见 `EpisodeQueue`。Emby 由播放页自己查(`PlayerViewModel.loadEpisodeQueue`)。
+    /// nil = 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
     var episodeQueue: EpisodeQueue?
 
-    /// 随本次播放挂载的**外挂字幕**文件(百度侧同目录的 `.srt` / `.ass` …)。
-    ///
-    /// 为什么装文件而不是地址:地址要换 `dlink`(带 token),那是
-    /// `BaiduPanSessionPreparer` 的活;而配对只需要文件名,浏览页 / 队列装配时
-    /// 文件列表已经在手上 —— 放在这里就**零额外请求**。
-    /// Emby 侧恒为空(字幕内嵌或由服务端提供)。
+    /// 同目录外挂字幕(百度侧;Emby 恒为空)。装文件而非地址:换 `dlink` 是
+    /// `BaiduPanSessionPreparer` 的活,配对只需文件名。
     var subtitleFiles: [BaiduPanFile] = []
 
-    /// - Parameter continuingPage: 播放页内换集时传当前请求的 `pageID`(沿用播放页);
-    ///   nil = 新开一个播放页。
+    /// - Parameter continuingPage: 播放页内换集时传当前 `pageID`;nil = 新开播放页。
     init(
         source: PlaybackSource,
         startFromBeginning: Bool = false,
@@ -98,7 +76,6 @@ struct PlaybackRequest: Identifiable, Equatable {
         self.subtitleFiles = subtitleFiles
     }
 
-    /// 既有 Emby 调用点的形状(首页 / 媒体库 / 详情 / 搜索)。
     init(server: ServerProfile, item: EmbyItem, startFromBeginning: Bool = false) {
         self.init(source: .emby(server: server, item: item), startFromBeginning: startFromBeginning)
     }
@@ -121,24 +98,18 @@ struct PlaybackRequest: Identifiable, Equatable {
     var baiduFile: BaiduPanFile? { source.baiduFile }
 }
 
-/// 一次播放的收尾上报(最终 Progress + Stopped)**已经发完**。
-///
-/// 详情页 / 首页据此向服务端重读续播位置与已看状态(docs/PITFALLS.md Q22):
-/// 早于 Stopped 到达就读,拿到的仍是起播前的旧进度。
-/// 播放器挪到独立窗口后不能再用闭包回调给详情页,改为经 `AppState` 广播。
+/// 一次播放的收尾上报(最终 Progress + Stopped)已发完,经 `AppState` 广播。
+/// 详情页 / 首页据此重读续播位置与已看状态;早于 Stopped 读会拿到旧进度(docs/PITFALLS.md Q22)。
 struct FinishedPlayback: Equatable {
-    /// 对应 `PlaybackRequest.id`;观察方只用它判断「是不是新的一次」
+    /// 对应 `PlaybackRequest.id`,观察方只用它判断是不是新的一次
     let requestID: UUID
-    /// Emby 来源才有(百度来源没有服务器)。观察方按它过滤「是不是本页那台」。
+    /// Emby 来源才有,观察方按它过滤服务器
     let serverID: UUID?
     let itemID: String
 }
 
-/// 「下一集」查找(纯函数,无网络):在服务端返回的有序列表里取紧跟其后的一项。
-///
-/// 顺序完全以服务端为准(`Shows/{Id}/Episodes` 与 `Shows/{Id}/Seasons`
-/// 本身就按集号 / 季号排好),这里不按 `IndexNumber` 重排 ——
-/// 集号缺失或重复时自己排只会排错。
+/// 在服务端返回的有序列表里取相邻项(纯函数)。
+/// ⛔ 不按 `IndexNumber` 重排:服务端已排好,集号缺失或重复时自己排只会排错。
 enum NextEpisodeResolver {
     static func item(after id: String, in items: [EmbyItem]) -> EmbyItem? {
         guard let index = items.firstIndex(where: { $0.id == id }),
@@ -146,7 +117,6 @@ enum NextEpisodeResolver {
         return items[index + 1]
     }
 
-    /// 紧挨在前面的一项(上一集 / 上一季)
     static func item(before id: String, in items: [EmbyItem]) -> EmbyItem? {
         guard let index = items.firstIndex(where: { $0.id == id }), index > 0 else { return nil }
         return items[index - 1]

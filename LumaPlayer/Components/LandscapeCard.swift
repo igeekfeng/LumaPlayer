@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// 横版(16:9)卡片:「继续观看」「下一集」用(Emby Web / Apple TV 的做法 ——
-/// 续播内容用剧照而不是海报,一眼能认出停在哪一集)。
-///
-/// 非玻璃卡片(DesignTokens.swift「界面规则」);悬停时画面上出现玻璃播放按钮,
-/// 点它直接续播,点卡片其余位置打开详情。
+/// 「继续观看」「下一集」的横版卡片(用剧照,一眼认出停在哪一集)。非玻璃卡片;
+/// 悬停出现玻璃播放按钮直接续播,点其余位置打开详情。
 struct LandscapeCard: View {
     let item: EmbyItem
     let serverID: UUID
@@ -73,7 +70,7 @@ struct LandscapeCard: View {
 
     private static var hoverScale: CGFloat { 1.03 }
 
-    /// 分集显示剧名(剧名比集名更好认),其余显示自己的名字
+    /// 分集显示剧名(比集名好认)
     private var primaryTitle: String {
         item.kind == .episode ? (item.seriesName ?? item.name) : item.name
     }
@@ -88,12 +85,12 @@ struct LandscapeCard: View {
         return item.productionYear.map(String.init)
     }
 
-    /// 横版优先、没有横版就退回竖版海报(`EmbyItem.coverImage`)。
+    /// 横版优先,没有退回竖版海报(`EmbyItem.coverImage`)。
     private var imageSpec: ImageSpec? {
         item.coverImage.map { spec(for: $0) }
     }
 
-    /// 首选图加载失败时的退路(同一项的竖版海报,规则在 `EmbyItem.coverImageFallback`)。
+    /// 首选图加载失败时的退路(`EmbyItem.coverImageFallback`)。
     private var fallbackSpec: ImageSpec? {
         item.coverImageFallback.map { spec(for: $0) }
     }
@@ -109,8 +106,7 @@ struct LandscapeCard: View {
     }
 }
 
-/// 卡片底部的进度条(DesignTokens.swift「界面规则」:已播放 / 未看完的清晰标记)。
-/// 画在图片上,所以用白色 + 半透明轨道,不随深浅色变化。
+/// 卡片底部进度条。画在图片上,所以用白色 + 半透明轨道,不随深浅色变化。
 struct CardProgressBar: View {
     let fraction: Double
 

@@ -1,37 +1,27 @@
 import SwiftUI
 
-/// 某一季的分集:横向排列、可滚动的一排卡片(DesignTokens.swift「界面规则」的可扫描性优先)。
+/// 某一季的分集横排卡片,整季不把详情页撑长。
 ///
-/// 一集一张卡,卡内的信息不减(剧照 + 集号与集名 + 时长 / 日期 / 剩余 + 简介 +
-/// 进度条 + ✓),只是把「一行一集」的纵向列表改成横向一条 —— 整季不再把详情页撑长,
-/// 顺序往下看时当前集和后面几集就在眼前,要跳远的集滚一下就行。
-///
-/// 点一集是**就地换定位**(详情页的播放按钮跟着换),不是跳页,所以当前
-/// 定位的那一集要有明确的选中标记 —— 整卡高亮 + 描边 + `.isSelected` 语义。
-/// 打开或切季时把它滚到可见,否则定位的那一集在屏幕外,和播放按钮对不上。
-/// 想直接播某一集:悬停时缩略图上的播放按钮,或右键菜单。
+/// 点一集只换定位(播放按钮跟着换),所以定位集要有明确选中标记(高亮 + 描边 + `.isSelected`),
+/// 且打开 / 切季时滚到可见。直接播某集:悬停缩略图上的播放按钮或右键菜单。
 struct EpisodeListView: View {
     let episodes: [EmbyItem]
-    /// 当前定位的那一集(播放按钮作用于它);nil 表示还没定位
+    /// nil = 还没定位
     let selectedEpisodeID: String?
     let serverID: UUID
     let store: PosterImageStore
-    /// 正在写 UserData 的集(右键菜单里的已看切换据此禁用)
     let updatingIDs: Set<String>
-    /// 正在跑的批量标记(nil = 没有)。有值时标题行显示进度
     let batchProgress: MediaDetailViewModel.BatchPlayedProgress?
     let onSelect: (EmbyItem) -> Void
     /// 第二个参数:是否从头播放
     let onPlay: (EmbyItem, Bool) -> Void
     let onTogglePlayed: (EmbyItem) -> Void
-    /// 单季一键:整季标记为已看(true)/ 未看(false)
     let onMarkSeasonPlayed: (Bool) -> Void
-    /// 打开「勾选分集批量标记」面板
     let onOpenBatchPicker: () -> Void
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
-    /// 指针在分集区域(横排或滚动条)内。滚动条据此显示 —— 与系统覆盖式滚动条一致
+    /// 指针在分集区域内时显示滚动条
     @State private var isHoveringEpisodes = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -42,7 +32,6 @@ struct EpisodeListView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let batchProgress {
-                    // 逐条串行发请求(API_CONTEXT 5.8),几十集时要有进度,否则像点了没反应
                     Text("正在标记 \(batchProgress.completed)/\(batchProgress.total) 集…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -51,7 +40,6 @@ struct EpisodeListView: View {
                 Spacer(minLength: 0)
                 batchMenu
                 if geometry.isScrollable {
-                    // 几百上千集时一屏一屏翻太慢:直接从菜单选集,横排滚过去
                     EpisodeJumpMenu(episodes: episodes, onJump: jump(to:))
                     ShelfPagingButtons(position: $position, geometry: geometry)
                 }
@@ -85,8 +73,7 @@ struct EpisodeListView: View {
                 } action: { _, new in
                     geometry = new
                 }
-                // 横排下面的滚动条:拖它可快速左右滚动(鼠标用户没有横滑手势,
-                // 一屏一屏翻又太慢 —— 这条能直接拖到任意位置)
+                // 鼠标用户没有横滑手势,给一条可直接拖到任意位置的滚动条
                 if geometry.isScrollable {
                     EpisodeScrubber(
                         position: $position,
@@ -98,18 +85,17 @@ struct EpisodeListView: View {
             .onHover { isHoveringEpisodes = $0 }
         }
         .onAppear(perform: scrollToSelection)
-        // 切季时整段换掉,定位的集也跟着变 —— 重新对齐一次
+        // 切季
         .onChange(of: episodes.first?.id) { _, _ in scrollToSelection() }
     }
 
-    /// 只在初次出现与切季时对齐:点选某一集后再自动滚动,会把刚点的那张卡挪走
+    /// 只在初次出现与切季时对齐:点选后再自动滚动会把刚点的卡挪走
     private func scrollToSelection() {
         guard let selectedEpisodeID else { return }
         position.scrollTo(id: selectedEpisodeID, anchor: .leading)
     }
 
-    /// 从菜单跳到某一集:既换定位(播放按钮跟着换),也把它滚到可见 ——
-    /// 这里不是「用户点了眼前那张卡」,自动滚动不会把要看的卡挪走。
+    /// 从菜单跳:换定位并滚到可见(不是点眼前的卡,滚动不会挪走它)。
     private func jump(to episode: EmbyItem) {
         onSelect(episode)
         withAnimation(reduceMotion ? nil : .easeInOut(duration: Metrics.animationStandard)) {
@@ -117,10 +103,8 @@ struct EpisodeListView: View {
         }
     }
 
-    /// 单季一键 + 勾选面板的入口。
-    ///
-    /// Emby 没有批量端点(API_CONTRACT.md 5.8),这里只负责收集意图,逐条写由
-    /// `MediaDetailViewModel.runBatch` 串行做;已经在目标状态的集不计入,菜单项据此禁用。
+    /// 单季一键 + 勾选面板入口。只收集意图,逐条写在 `MediaDetailViewModel.runBatch`;
+    /// 没有待写的集时菜单项禁用。
     private var batchMenu: some View {
         let pendingPlayed = episodes.filter { !$0.isPlayed }.count
         let pendingUnplayed = episodes.count - pendingPlayed
@@ -167,22 +151,16 @@ struct EpisodeListView: View {
     }
 }
 
-/// 分集横排下方的滚动条:只有一条滑块,拖它直接滚到任意位置。
-///
-/// 外观与行为都贴近系统覆盖式滚动条:不画轨道底条,颜色很浅,且**只在悬停分集
-/// 区域或正在滚动时出现**,停止滚动后延迟淡出。滑块宽度按「容器宽 / 内容宽」的
-/// 比例算、位置按滚动偏移算 —— 和系统滚动条同一套映射。按下滑块所在轨道任意处
-/// 滑块就跳过去(scrubber 行为),接着拖即可连续滚动。集数极多时滑块会很细,
-/// `shelfScrubberThumbMinWidth` 保一个能点中的下限。
+/// 分集横排下方的滚动条,贴近系统覆盖式滚动条:无轨道底条,只在悬停或滚动时出现、停下后延迟淡出。
+/// 按下轨道任意处滑块跳过去,接着拖连续滚。集数极多时 `shelfScrubberThumbMinWidth` 保证滑块点得中。
 private struct EpisodeScrubber: View {
     @Binding var position: ScrollPosition
     let geometry: ShelfGeometry
-    /// 指针是否在分集区域内(由外层传入)。在,则显示
+    /// 由外层传入
     let isHovering: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 指针是否正压在滚动条自己身上(决定滑块深浅)
+    /// 决定滑块深浅
     @State private var isHoveringThumb = false
-    /// 最近是否滚动过(滚动时显示,停下后延迟淡出)
     @State private var isScrolling = false
     @State private var hideTask: Task<Void, Never>?
 
@@ -201,8 +179,7 @@ private struct EpisodeScrubber: View {
                     .frame(width: thumbWidth, height: Metrics.shelfScrubberThumbHeight)
                     .offset(x: travel * progress)
             }
-            // 必须 .leading:去掉轨道后 ZStack 的固有宽度只剩滑块,
-            // 用默认的 .center 会把滑块先居中、再叠加 offset,位置就全偏了
+            // 必须 .leading:ZStack 固有宽度只剩滑块,.center 会先居中再叠 offset,位置全偏
             .frame(width: trackWidth, height: proxy.size.height, alignment: .leading)
             .contentShape(Rectangle())
             .gesture(scrubGesture(trackWidth: trackWidth, thumbWidth: thumbWidth))
@@ -213,7 +190,6 @@ private struct EpisodeScrubber: View {
         .animation(.easeOut(duration: Metrics.animationStandard), value: isVisible)
         .animation(.easeOut(duration: Metrics.animationFast), value: isHoveringThumb)
         .onHover { isHoveringThumb = $0 }
-        // 滚动(含拖滚动条本身)时点亮,停下后延迟淡出
         .onChange(of: geometry.offset) { _, _ in flashWhileScrolling() }
         .onDisappear { hideTask?.cancel() }
         .accessibilityElement()
@@ -228,7 +204,6 @@ private struct EpisodeScrubber: View {
         }
     }
 
-    /// 滚动时保持可见,最后一次滚动之后再等 `shelfScrubberHideDelay` 才淡出
     private func flashWhileScrolling() {
         isScrolling = true
         hideTask?.cancel()
@@ -239,7 +214,7 @@ private struct EpisodeScrubber: View {
         }
     }
 
-    /// 滑块中心跟手:把手指的 x 映射回滚动偏移,按下即跳、拖动即连续滚。
+    /// 滑块中心跟手:按下即跳、拖动即连续滚。
     private func scrubGesture(trackWidth: CGFloat, thumbWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
@@ -252,20 +227,20 @@ private struct EpisodeScrubber: View {
             }
     }
 
-    /// 滑块宽度:容器占内容的比例;内容未知时先占满整条(等布局完成再收窄)
+    /// 容器占内容的比例;内容宽度未知时先占满
     private func thumbWidth(trackWidth: CGFloat) -> CGFloat {
         guard geometry.contentWidth > 0 else { return trackWidth }
         let ratio = geometry.containerWidth / geometry.contentWidth
         return max(Metrics.shelfScrubberThumbMinWidth, min(trackWidth, trackWidth * ratio))
     }
 
-    /// 当前滚动进度 0...1
+    /// 0...1
     private var progress: CGFloat {
         guard geometry.maxOffset > 0 else { return 0 }
         return min(max(geometry.offset / geometry.maxOffset, 0), 1)
     }
 
-    /// 键盘 / VoiceOver 的左右调节:一次翻大半屏(与翻页按钮一致)
+    /// 键盘 / VoiceOver 调节,一次翻大半屏(同翻页按钮)
     private func page(by direction: CGFloat) {
         let step = geometry.containerWidth * Self.pageFraction * direction
         let target = min(max(0, geometry.offset + step), geometry.maxOffset)
@@ -277,10 +252,7 @@ private struct EpisodeScrubber: View {
     private static var pageFraction: CGFloat { 0.8 }
 }
 
-/// 「跳转选集」菜单:一季几百上千集时,一屏一屏翻要翻很久,直接从菜单点一集。
-///
-/// 集数多时按每 100 集分组(子菜单),菜单不会一次铺开上千项;集数少时直接平铺,
-/// 少一层点击。菜单项用与卡片一致的「集号. 集名」,没有集号就只显示集名。
+/// 「跳转选集」菜单。集数多时按 100 集分子菜单,少时平铺。
 private struct EpisodeJumpMenu: View {
     let episodes: [EmbyItem]
     let onJump: (EmbyItem) -> Void
@@ -311,7 +283,6 @@ private struct EpisodeJumpMenu: View {
         }
     }
 
-    /// 每 100 集一组(如 0..<100、100..<200),最后一组按实际集数收尾
     private var buckets: [Range<Int>] {
         stride(from: 0, to: episodes.count, by: Self.bucketSize).map {
             $0 ..< min($0 + Self.bucketSize, episodes.count)
@@ -322,7 +293,7 @@ private struct EpisodeJumpMenu: View {
         "第 \(range.lowerBound + 1)–\(range.upperBound) 集"
     }
 
-    /// 与 `EpisodeCard.title` 一致:集号来自服务端,没有就只显示集名(不猜、不占位)。
+    /// 同 `EpisodeCard.title`
     private func itemLabel(for episode: EmbyItem) -> String {
         guard let index = episode.indexNumber else { return episode.name }
         return "\(index). \(episode.name)"
@@ -364,7 +335,7 @@ private struct EpisodeCard: View {
         }
         .padding(Metrics.spacingS)
         .frame(width: Metrics.landscapeCardWidth, alignment: .topLeading)
-        // 系统惯例:选中是整块高亮,再加一圈描边 —— 卡片挨得近时只靠底色分不清
+        // 选中:整块高亮 + 描边(卡片挨得近,只靠底色分不清)
         .background {
             RoundedRectangle(cornerRadius: Radius.panel)
                 .fill(isSelected
@@ -438,7 +409,7 @@ private struct EpisodeCard: View {
         }
     }
 
-    /// 「3. 集名」。集号来自服务端 `IndexNumber`,没有就只显示集名(不猜、不占位)。
+    /// 「3. 集名」;没有 `IndexNumber` 只显示集名,⛔ 不猜集号。
     private var title: String {
         guard let index = episode.indexNumber else { return episode.name }
         return "\(index). \(episode.name)"

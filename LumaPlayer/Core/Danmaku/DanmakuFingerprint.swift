@@ -1,48 +1,24 @@
 import CryptoKit
 import Foundation
 
-/// 弹弹play 匹配用的**媒体指纹**:文件前 16 MiB 的 MD5(32 位小写 hex)。
+/// 弹弹play `/match` 的 `fileHash`:文件前 16 MiB 的 MD5(32 位小写 hex,`docs/DANDANPLAY_API.md` §2),
+/// 「同一份文件」的唯一硬证据;不算只能靠文件名模糊匹配(Emby 只有合成名,Q45)。
 ///
-/// ## 为什么要算它
+/// 网络这一路只用于 Emby 直连流(这 16 MiB 正是播放器接下来要读的字节);⛔ 百度网盘不算(额外耗网盘流量)。
+/// - 只在 `DirectStream` 且 `Size` 已知时试:转码流的字节不是源文件;
+/// - `Range: bytes=0-16777215`,严格校验 `Content-Range`;服务端忽略 Range 回 200 时只在整文件 ≤ 16 MiB 才接受,
+///   ⛔ 绝不为算指纹把整部片下下来;
+/// - 任何一步不满足返回 nil(退回文件名匹配),⛔ 不抛错打断播放。
 ///
-/// `/match` 的 `fileHash` 是「同一份文件」的唯一硬证据(`docs/DANDANPLAY_API.md` §2:
-/// 官方描述就是「文件前 16MB 数据的 32 位 MD5」)。不算它,`/match` 只能拿文件名猜;
-/// Emby 那一路连文件名都拿不到(只能合成 `剧名 S01E03`),命中率全押在模糊匹配上
-/// (`KNOWN_ISSUES.md` Q45)。
-///
-/// ## 成本与边界
-///
-/// `DANMAKU.md` §6 原先的判断是「为匹配多拉 16 MB 不划算」。这条判断对**百度网盘**
-/// 成立(要额外消耗网盘流量);对 **Emby 直连流**不成立 —— 播放器本来就要从头读这个文件,
-/// 这 16 MiB 正是它接下来要读的字节,服务端与内核的 HTTP 缓存都可能已经有一份。
-///
-/// 因此网络这一路**只服务 Emby 直连流**(本机文件另有 `md5(ofFileAt:)`,不花流量),并且:
-///
-/// - 只在 `DirectStream` 且 `Size` 已知时才试 —— 转码流的前 16 MiB 是编码器输出,
-///   与源文件不是同一份字节,算出来的 MD5 没有意义;
-/// - 走 `Range: bytes=0-16777215`,并**严格校验 `Content-Range`**:只接受 206 且
-///   `start == 0`、`end` 与总长自洽;服务端若忽略 Range 回 200,**只有**在整文件
-///   ≤ 16 MiB 时才接受 —— ⛔ 绝不为算指纹把一部电影整段下载下来;
-/// - 任何一步不满足就返回 nil(调用方退回文件名匹配),⛔ 不抛错打断播放。
-///
-/// ## 为什么单独一个类型
-///
-/// `PlaybackFailureProbe` 已经在做同一件事(播放失败后补一次 `Range` 探测),但那是
-/// **诊断**路径、按失败触发;这里要的是**匹配**路径、按起播触发。两者的纪律
-/// (不跟随跨 host 跳转、只探一次)一致,但触发条件与用途不同,合在一起会让
-/// 两边的注释互相污染。
+/// 与 `PlaybackFailureProbe`(诊断路径、失败时触发)纪律一致但用途不同,刻意分开。
 enum DanmakuFingerprint {
 
-    /// 官方固定取前 16 MiB(不是前后各 16 MiB)。
+    /// 只取前 16 MiB(不是前后各 16 MiB)。
     static let byteCount = 16 * 1024 * 1024
 
-    /// 计算指纹。拿不到 / 不满足条件都返回 nil。
-    ///
     /// - Parameters:
-    ///   - url:直连流地址(`PlaybackPlan.directStream` 的 URL)
-    ///   - headers:播放用的认证头(与播放请求完全一致)
-    ///   - expectedFileSize:`MediaSource.Size`;nil = 未知,此时只接受带总长的 `Content-Range`
-    ///   - session:可注入(测试用 mock 协议)
+    ///   - headers:与播放请求完全一致的认证头
+    ///   - expectedFileSize:`MediaSource.Size`;nil = 未知
     static func md5(
         of url: URL,
         headers: [String: String],
@@ -65,7 +41,7 @@ enum DanmakuFingerprint {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            // 指纹是**锦上添花**:拿不到就走文件名匹配,⛔ 不让它挡住播放。
+            // 拿不到就走文件名匹配,⛔ 不挡播放
             return nil
         }
         guard let http = response as? HTTPURLResponse else { return nil }
@@ -75,15 +51,11 @@ enum DanmakuFingerprint {
         return MD5.hash(data)
     }
 
-    /// 本机文件的指纹(本地文件夹来源):直接读前 16 MiB,不足 16 MiB 就是整个文件。
-    ///
-    /// 与上面那条的成本判断正好相反:读本机文件不花流量、不碰任何服务器,
-    /// 而播放内核接下来要读的也正是这一段 —— 所以本地来源**总是值得算**
-    /// (仍受设置 › 弹幕 的开关管,见 `PlayerViewModel.mediaFingerprint`)。
-    /// 读不出来返回 nil(调用方退回文件名匹配),⛔ 不抛错打断播放。
+    /// 本机文件(本地文件夹来源):读前 16 MiB,不足就是整个文件。不花流量,总是值得算
+    /// (仍受设置开关管,见 `PlayerViewModel.mediaFingerprint`)。读不出返回 nil。
     static func md5(ofFileAt url: URL) async -> String? {
         guard url.isFileURL else { return nil }
-        // 读 16 MiB 是阻塞 IO:放到后台,别占调用方(主线程上的播放页)
+        // 阻塞 IO,别占主线程
         let task = Task.detached(priority: .utility) { () -> String? in
             guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
             defer { try? handle.close() }
@@ -93,9 +65,7 @@ enum DanmakuFingerprint {
         return await task.value
     }
 
-    /// 校验响应是否可以拿来算指纹,返回**应该收到的字节数**;不接受返回 nil。
-    ///
-    /// 单独抽出来是为了能离线覆盖每条拒绝分支(真实服务器上没法构造)。
+    /// 返回应该收到的字节数;不接受返回 nil。抽出来便于离线测试每条拒绝分支。
     static func acceptedByteCount(
         http: HTTPURLResponse, received: Int, expectedFileSize: Int64?
     ) -> Int? {
@@ -108,13 +78,13 @@ enum DanmakuFingerprint {
                 // 没有总长时只能要求「正好是前 16 MiB」
                 return range.end == Int64(byteCount - 1) ? byteCount : nil
             }
-            // 有总长:必须与已知的文件大小一致(不一致说明服务端给的是别的文件 / 别的版本)
+            // 总长与已知大小不一致说明是别的文件 / 版本
             if let expectedFileSize, expectedFileSize != total { return nil }
             let expectedEnd = min(Int64(byteCount), total) - 1
             guard range.end == expectedEnd else { return nil }
             return Int(range.end - range.start + 1)
         case 200:
-            // 服务端忽略了 Range:只有整文件 ≤ 16 MiB 时才安全(否则会把整部片下下来)
+            // 服务端忽略了 Range:只有整文件 ≤ 16 MiB 才安全
             guard let expectedFileSize, expectedFileSize > 0, expectedFileSize <= Int64(byteCount)
             else { return nil }
             guard received == Int(expectedFileSize) else { return nil }
@@ -152,7 +122,7 @@ enum DanmakuFingerprint {
         }
     }
 
-    /// MD5(只用于弹弹play 协议,不是安全用途)。
+    /// 只用于弹弹play 协议,不是安全用途。
     enum MD5 {
         static func hash(_ data: Data) -> String {
             Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()

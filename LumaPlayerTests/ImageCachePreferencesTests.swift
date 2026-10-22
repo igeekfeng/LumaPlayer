@@ -1,13 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 设置 → 缓存 →「上限」这一档(`ImageCachePreferences`)。
-///
-/// 守三件事:
-/// ① 默认档就是 `PosterDiskCache` 的默认上限,不另立一个数;
-/// ② 改过的档位重开 App 还在(⛔ 别每次启动都弹回 256 MB);
-/// ③ 读到脏值(字符串、档位表之外的数字)时回默认档 ——
-///    ⛔ 不能把它当成 0 传进缓存层,那等于直接把缓存关掉。
+/// 图片缓存上限档位(`ImageCachePreferences`):默认档等于 `PosterDiskCache` 的默认上限;改过的档位重开还在;
+/// 脏值(字符串、表外数字)回默认档,⛔ 不能当 0 传进缓存层(等于关掉缓存)。
 @MainActor
 final class ImageCachePreferencesTests: XCTestCase {
     private var suiteName: String!
@@ -43,7 +38,7 @@ final class ImageCachePreferencesTests: XCTestCase {
         XCTAssertFalse(reopened.isDefault)
     }
 
-    /// 档位表之外的存量值(比如降级回旧版本)按默认档处理
+    /// 表外存量值(如降级回旧版本)按默认档处理
     func testOutOfRangeValueFallsBackToDefault() {
         defaults.set(12, forKey: ImageCachePreferences.Key.byteLimitMB)
 
@@ -59,7 +54,7 @@ final class ImageCachePreferencesTests: XCTestCase {
         XCTAssertNotEqual(store.byteLimitBytes, 0)
     }
 
-    /// 档位表必须包含默认档,否则默认值连 Picker 都选不中
+    /// 档位表必须含默认档,否则 Picker 选不中
     func testOptionListContainsDefaultAndIsAscending() {
         let options = ImageCachePreferences.byteLimitOptionsMB
 

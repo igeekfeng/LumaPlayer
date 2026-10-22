@@ -1,27 +1,19 @@
 import Foundation
 
-/// Emby 的媒体项(BaseItem,术语见 API_CONTRACT.md 第 10 节)。
-///
-/// 字段按 `API_CONTRACT.md` 8.1 的可选性原则:**只有 `Id` 与 `Name` 必填**,
-/// 其余一律可选、缺失即 nil,⛔ 不填假默认值(「未知」「0」都不行)。
-///
-/// 字段名来源:2026-09-22 对官方 OpenAPI(swagger.emby.media,4.1.1.0)
-/// 的 BaseItemDto / UserItemDataDto 核实,见 API_CONTRACT.md 3.4。
+/// Emby 媒体项(BaseItemDto,API_CONTRACT.md 3.4 / 第 10 节)。
+/// 只有 `Id` 与 `Name` 必填(8.1),其余缺失即 nil,⛔ 不填假默认值。
 struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
-    /// 必填(API_CONTRACT.md 8.1)
     let id: String
-    /// 必填(API_CONTRACT.md 8.1)
     let name: String
-    /// `Movie` / `Series` / `Season` / `Episode` / ...(第 10 节术语表)
+    /// `Movie` / `Series` / `Season` / `Episode` / ...
     let type: String?
     let overview: String?
     let productionYear: Int?
-    /// 时长(ticks)。⚠️ **播放时长以 MediaSource.RunTimeTicks 为准**
-    /// (API_CONTRACT.md 4.3),这里的值只用于列表/详情页的粗略展示。
+    /// 只用于列表 / 详情页粗略展示;播放时长以 MediaSource.RunTimeTicks 为准(API_CONTRACT.md 4.3)。
     let runTimeTicks: Int64?
-    /// 集号(Episode)
+    /// 集号
     let indexNumber: Int?
-    /// 季号(Episode)
+    /// 季号
     let parentIndexNumber: Int?
     let seasonID: String?
     let seriesID: String?
@@ -30,49 +22,37 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
     let genres: [String]?
     let communityRating: Double?
     let officialRating: String?
-    /// 本项自己的图片 tag 集合,如 `{"Primary": "abc"}`
+    /// 如 `{"Primary": "abc"}`
     let imageTags: [String: String]?
-    /// `Primary` 图片的 tag。官方 4.1.1.0 OpenAPI 的 BaseItemDto 里没有这个字段
-    /// (只有 `ImageTags`),但 `API_CONTRACT.md` 3.3 以它为例且标 ✅;
-    /// 两个都解,取到的任意一个都算「有图」(见 docs/KNOWN_ISSUES.md Q13)。
+    /// 官方 OpenAPI 里没有(只有 `ImageTags`),但 API_CONTRACT.md 3.3 标 ✅;两个都解,任一有值算有图(Q13)。
     let primaryImageTag: String?
     let backdropImageTags: [String]?
-    /// 图片可从父级继承(API_CONTRACT.md 3.3):没有 backdrop/logo 时用父级 Id 请求
+    /// 没有自己的 backdrop / logo / thumb 时用父级 Id 请求(API_CONTRACT.md 3.3)
     let parentBackdropItemID: String?
     let parentBackdropImageTags: [String]?
     let parentLogoItemID: String?
     let parentLogoImageTag: String?
     let parentThumbItemID: String?
     let parentThumbImageTag: String?
-    /// 播放进度 / 已看 / 收藏;服务器未返回就是 nil。
     /// `var`:标记已看、收藏成功后用服务端返回的新 UserData 就地替换(API_CONTRACT.md 5.5/5.6)。
     var userData: EmbyUserData?
 
-    // MARK: 详情页字段(API_CONTRACT.md 3.4「详情页字段」)
+    // MARK: 详情页字段(API_CONTRACT.md 3.4)
     //
     // 单项接口默认返回;列表接口要显式 `Fields` 才有。
 
-    /// 演职人员
     let people: [EmbyPerson]?
-    /// 制片公司(只解 `Name`,见 `EmbyStudio`)
     let studios: [EmbyStudio]?
     let taglines: [String]?
-    /// 首映 / 首播日期(ISO 8601 原文;只用于展示年月日,不参与计算)
+    /// ISO 8601 原文,只用于展示年月日
     let premiereDate: String?
-    /// 剧集的季数(Series)
+    /// 剧集的季数
     let childCount: Int?
     let criticRating: Double?
-    /// 详情页「媒体信息」用;⚠️ 播放用的轨道仍以 PlaybackInfo 的 MediaSource 为准(4.3)
+    /// 只给详情页「媒体信息」;播放用的轨道以 PlaybackInfo 的 MediaSource 为准(4.3)
     let mediaStreams: [EmbyMediaStream]?
-    /// 外部元数据 id(`BaseItemDto.ProviderIds`,官方 OpenAPI 4.1.1.0 ✅:
-    /// `object<string,string>`)。键名由各个刮削器决定,常见 `Tmdb` / `Tvdb` / `Imdb` /
-    /// `MyAnimeList` / `AniList`;值是字符串。
-    ///
-    /// ⚠️ 列表接口默认**不返回**它,要 `Fields=ProviderIds`(`API_CONTRACT.md` 3.2)。
-    /// 键名大小写不统一(社区实测 `Tmdb` 与 `tmdb` 都出现过),取值统一按小写比较。
-    ///
-    /// `var` + 默认值:合成 `Decodable` 对带默认值的 `var` 照样按键解码,
-    /// 而逐成员构造器可以省略它(测试里手搓 `EmbyItem` 不必逐个补 nil)。
+    /// 外部元数据 id(`Tmdb` / `Tvdb` / `Imdb` …)。列表接口要 `Fields=ProviderIds` 才返回(API_CONTRACT.md 3.2);
+    /// 键名大小写不统一,按小写比较。`var` + 默认值只为让逐成员构造器可省略它。
     var providerIds: [String: String]? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -112,16 +92,16 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 演职人员(`BaseItemPerson`,官方 OpenAPI 4.1.1.0 核实 2026-09-23)。
+/// `BaseItemPerson`
 struct EmbyPerson: Decodable, Sendable, Equatable, Identifiable {
-    /// 人物条目 Id;头像走 `/Items/{Id}/Images/Primary`(API_CONTRACT.md 3.3)
+    /// 头像走 `/Items/{Id}/Images/Primary`(API_CONTRACT.md 3.3)
     let id: String
     let name: String
-    /// 饰演的角色(演员)或职务说明
+    /// 饰演的角色或职务说明
     let role: String?
     /// `Actor` / `Director` / `Writer` / `GuestStar` …(自由字符串,不枚举)
     let type: String?
-    /// 有值才请求头像(没有 tag 去请求只会 404)
+    /// 有值才请求头像
     let primaryImageTag: String?
 
     enum CodingKeys: String, CodingKey {
@@ -133,8 +113,7 @@ struct EmbyPerson: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 制片公司(`NameLongIdPair`)。只解 `Name`:4.1.1.0 规格里 `Id` 是 int64,
-/// 其他版本的类型未核实,解它有让整项详情解码失败的风险,而界面用不到它。
+/// 制片公司(`NameLongIdPair`)。只解 `Name`:`Id` 类型在各版本未核实,解它可能让整项详情解码失败。
 struct EmbyStudio: Decodable, Sendable, Equatable {
     let name: String
 
@@ -143,14 +122,14 @@ struct EmbyStudio: Decodable, Sendable, Equatable {
     }
 }
 
-/// 用户对某一项的播放数据(UserItemDataDto,官方 OpenAPI 核实 2026-09-22)。
+/// `UserItemDataDto`
 struct EmbyUserData: Decodable, Sendable, Equatable {
     let playbackPositionTicks: Int64?
     let played: Bool?
     let playedPercentage: Double?
     let playCount: Int?
     let isFavorite: Bool?
-    /// 剧集 / 季里还有几集没看(海报角标用)
+    /// 剧集 / 季里还有几集没看
     let unplayedItemCount: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -164,10 +143,7 @@ struct EmbyUserData: Decodable, Sendable, Equatable {
 }
 
 extension EmbyItem {
-    /// Item 的 `Type` 归类(API_CONTRACT.md 第 10 节:Movie / Series / Season / Episode)。
-    ///
-    /// 服务器返回别的值(或没有 Type)一律是 `.other`:不猜、不报错,
-    /// 由 UI 决定怎么展示。
+    /// 其他值或缺失一律 `.other`,不猜、不报错。
     var kind: EmbyItemKind {
         switch type {
         case "Movie": return .movie
@@ -178,13 +154,12 @@ extension EmbyItem {
         }
     }
 
-    /// `Primary` 图片的 tag;没有就不请求图片(否则会 404,API_CONTRACT.md 3.3)。
+    /// 没有就不请求图片(会 404,API_CONTRACT.md 3.3)。
     var primaryImageTagValue: String? {
         imageTags?["Primary"] ?? primaryImageTag
     }
 
-    /// 可请求 Backdrop 的 Item Id:优先自己,没有则回退父级(API_CONTRACT.md 3.3)。
-    /// 只在父级确实带 backdrop tag 时才回退。
+    /// 优先自己,没有则回退父级(须带 tag)。
     var backdropSource: (itemID: String, tag: String)? {
         if let tag = backdropImageTags?.first {
             return (id, tag)
@@ -195,7 +170,7 @@ extension EmbyItem {
         return nil
     }
 
-    /// 可请求 Logo 的 Item Id:优先自己,没有则回退父级(API_CONTRACT.md 3.3)。
+    /// 优先自己,没有则回退父级。
     var logoSource: (itemID: String, tag: String)? {
         if let tag = imageTags?["Logo"] {
             return (id, tag)
@@ -206,11 +181,8 @@ extension EmbyItem {
         return nil
     }
 
-    /// 横版(16:9)图:「继续观看」卡片与分集行用。
-    ///
-    /// 分集自己的 `Primary` 就是剧照截图,优先用它;其余类型依次取
-    /// 自己的 Thumb → 自己的 Backdrop → 父级 Thumb → 父级 Backdrop。
-    /// 每一级都要求对应 tag 存在才返回(没 tag 去请求只会 404,3.3)。
+    /// 横版(16:9)图。分集的 `Primary` 就是剧照,优先用它;其余依次取
+    /// 自己的 Thumb → Backdrop → 父级 Thumb → 父级 Backdrop,每级都要求 tag 存在。
     var landscapeImage: (itemID: String, type: EmbyImageType, tag: String)? {
         if kind == .episode, let tag = primaryImageTagValue {
             return (id, .primary, tag)
@@ -230,29 +202,16 @@ extension EmbyItem {
         return nil
     }
 
-    /// 卡片封面图:优先横版(剧照 / 背景),没有可用的横版图就退回**自己的竖版海报**(Q35)。
-    ///
-    /// 「继续观看 / 下一集」的 16:9 卡片用这个,而不是直接用 `landscapeImage`。
-    /// 原因(2026-10-01 在两台真实服务器的响应缓存里核实):`/Users/{UserId}/Items/Resume`
-    /// 里的**电影条目常常只有 `ImageTags["Primary"]`**,`BackdropImageTags` 是空数组 ——
-    /// 竖版海报是它手头唯一能拿到的图,不退回就只剩占位图。分集不受影响:
-    /// 分集的 `Primary` 本身就是 16:9 剧照,走的是 `landscapeImage` 的第一条。
-    ///
-    /// 竖版海报在 16:9 卡片里按 `.fill` 居中裁切(`PosterImage` 的行为,Emby Web 同款),
-    /// 比空占位图好认。
+    /// 「继续观看 / 下一集」卡片封面:优先横版,没有就退回自己的竖版海报(居中裁切,Q35)。
+    /// Resume 里的电影条目常常只有 `Primary`、`BackdropImageTags` 为空,不退回就只剩占位图。
     var coverImage: (itemID: String, type: EmbyImageType, tag: String)? {
         if let landscape = landscapeImage { return landscape }
         if let tag = primaryImageTagValue { return (id, .primary, tag) }
         return nil
     }
 
-    /// `coverImage` 的失败退路:同一项的竖版海报。
-    ///
-    /// 首选已经是海报(`Primary`)、或连海报都没有时返回 nil(没有退路就停在占位图)。
-    /// 需要它的原因:有的服务器在 `BackdropImageTags` 里**回填 `Primary` 的 tag**,
-    /// 而 `/Items/{Id}/Images/Backdrop` 直接 404(响应体 `… does not have an image of type
-    /// Backdrop`,2026-09-28 诊断日志实测)—— 只看 tag 存不存在决定请求谁,
-    /// 遇到这种服务器卡片就永远是占位图。
+    /// `coverImage` 的失败退路:同一项的竖版海报;首选已是海报或没有海报时为 nil。
+    /// 有的服务器在 `BackdropImageTags` 里回填 `Primary` 的 tag,而请求 Backdrop 直接 404。
     var coverImageFallback: (itemID: String, type: EmbyImageType, tag: String)? {
         guard coverImage?.type != .primary, let tag = primaryImageTagValue else { return nil }
         return (id, .primary, tag)
@@ -261,13 +220,7 @@ extension EmbyItem {
     var isPlayed: Bool { userData?.played ?? false }
     var isFavorite: Bool { userData?.isFavorite ?? false }
 
-    /// TMDB ID(`ProviderIds.Tmdb`)。
-    ///
-    /// 用途:弹幕匹配的降级层(`/search/episodes?tmdbId=`)与 TMDB 元数据补全 ——
-    /// 它是**语言无关**的作品身份,文件名 / 译名对不上时仍然有效。
-    ///
-    /// 键名按小写比较:官方 schema 只规定「字符串到字符串」,不规定键名大小写。
-    /// 值不是正整数时返回 nil(⛔ 不把脏数据当 id 发出去)。
+    /// `ProviderIds.Tmdb`,键名按小写比较。值不是正整数返回 nil(⛔ 不把脏数据当 id 发出去)。
     var tmdbID: Int? {
         guard let raw = providerIds?.first(where: { $0.key.lowercased() == "tmdb" })?.value
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -276,10 +229,7 @@ extension EmbyItem {
         return value
     }
 
-    /// 播放进度 0–1;缺时长或没看过时返回 nil(UI 据此决定画不画进度条)。
-    ///
-    /// 用「位置 / 时长」直接算比例,不引入 ticks 换算常量
-    /// (ticks ↔ 秒的换算统一走 `TickConverter`)。
+    /// 0–1;缺时长或没看过返回 nil。直接算比例,不引入 ticks 换算常量。
     var progressFraction: Double? {
         guard let runtime = runTimeTicks, runtime > 0,
               let position = userData?.playbackPositionTicks, position > 0 else {
@@ -288,8 +238,7 @@ extension EmbyItem {
         return min(1, Double(position) / Double(runtime))
     }
 
-    /// 「S1E2」这样的集标识,只对 Episode 有值。季号 / 集号都来自服务端字段,
-    /// 缺一个就只显示有的那个;两个都缺返回 nil(不填占位符)。
+    /// 「S1E2」,只对 Episode 有值;缺一个显示有的那个,都缺返回 nil。
     var episodeLabel: String? {
         guard kind == .episode else { return nil }
         switch (parentIndexNumber, indexNumber) {
@@ -301,12 +250,12 @@ extension EmbyItem {
     }
 }
 
-/// Item 的类型归类(只为 UI 分支服务;不是对 `Type` 的全集枚举)。
+/// 只为 UI 分支服务,不是 `Type` 的全集。
 enum EmbyItemKind: Sendable, Equatable {
     case movie
     case series
     case season
     case episode
-    /// 服务器返回的 Type 不在上述四种里(或缺失)
+    /// 不在上述四种里或缺失
     case other
 }

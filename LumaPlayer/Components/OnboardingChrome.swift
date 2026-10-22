@@ -28,7 +28,7 @@ struct OnboardingFormHeader: View {
     }
 }
 
-/// 表单里的警告 / 错误提示。图标 + 文本,不只靠颜色(DesignTokens.swift「界面规则」)。
+/// 警告 / 错误提示:图标 + 文本,不只靠颜色。
 struct OnboardingNotice: View {
     enum Style {
         case warning, error
@@ -51,7 +51,7 @@ struct OnboardingActionBar: View {
     let busyTitle: String
     let isBusy: Bool
     let canSubmit: Bool
-    /// nil = 不显示取消(首次启动的引导页没有可返回的地方)
+    /// nil = 不显示取消(首次启动引导页)
     let onCancel: (() -> Void)?
     let onSubmit: () -> Void
 

@@ -1,11 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 在线刮削层:`BaiduPanMetadataScraper`(挑命中项 / 补封面 / 失败处置 / 缓存)。
-///
-/// ⛔ **零真实网络**:全部走 `MockEmbyURLProtocol`(按 scheme + host + path 打桩)。
-/// ⚠️ 真实 TMDB 调用(链接、图床可达性、429 阈值)仍需用户自己的 token 在真机上验,
-/// 见 `docs/KNOWN_ISSUES.md`「TMDB 在线刮削」一节。
+/// ⛔ 零真实网络:全部走 `MockEmbyURLProtocol`。真实 TMDB 行为待真机验证,见 `docs/KNOWN_ISSUES.md`「TMDB 在线刮削」。
 final class BaiduPanMetadataScraperTests: XCTestCase {
 
     private let host = "api.themoviedb.org"
@@ -27,19 +23,17 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 命中判定(纯函数)
 
-    /// 年份解析出来了就**只认年份一致**的那条 —— 同名翻拍片靠它区分,
-    /// 让步一步就会配错片(宁可没有封面)。
+    /// 同名翻拍片靠年份区分,⛔ 不退而求其次(宁可没有封面)。
     func testYearMustMatchExactly() {
         let matches = [
             Self.match(id: 1, title: "Dune", year: 1984),
             Self.match(id: 2, title: "Dune", year: 2021),
         ]
         XCTAssertEqual(Self.select(matches, title: "Dune", year: 2021)?.tmdbID, 2)
-        // 没有同年份的 → 不认(⛔ 不退而求其次挑 1984 那部)
         XCTAssertNil(Self.select(matches, title: "Dune", year: 2024))
     }
 
-    /// 没有年份:先认「归一化后标题完全一致」的(大小写 / 空格 / 标点不算差别)。
+    /// 大小写 / 空格 / 标点不算差别。
     func testExactTitleWinsWhenYearUnknown() {
         let matches = [
             Self.match(id: 1, title: "Fight Club 斗阵俱乐部", year: 1999),
@@ -49,7 +43,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             Self.select(matches, title: "fight club", year: nil)?.tmdbID, 2)
     }
 
-    /// 没有年份、标题也对不上:只有**唯一一个结果**时才认,多条就放弃。
     func testSingleResultIsAcceptedOnlyWhenAlone() {
         let single = [Self.match(id: 7, title: "某部片", year: nil)]
         XCTAssertEqual(Self.select(single, title: "Another Name", year: nil)?.tmdbID, 7)
@@ -59,8 +52,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 谁会被刮
 
-    /// 文件名解析出来 (`.filename`) 的电影 / 剧才问 TMDB;
-    /// 目录、图片、音频,以及**退回文件名**的那种(标题是 `video`)一律不问。
+    /// 退回文件名的(标题是 `video`)也不问。
     func testOnlyParsedVideoItemsAreScraped() {
         XCTAssertTrue(BaiduPanMetadataScraper.isScrapable(
             item(title: "Fight Club", year: 1999, kind: .movie, origin: .filename)))
@@ -76,8 +68,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             item(title: "Movies", year: nil, kind: .folder, origin: .filename)))
     }
 
-    /// 目录卡片走**另一条**判据:它的标题就是目录名,反而是「目录名是剧名」
-    /// 这种存法里最可靠的剧名来源(`isScrapableFolder`)。
+    /// 目录名在「目录名是剧名」的存法里是最可靠的剧名来源。
     func testFolderCardsAreScrapedByDirectoryName() {
         XCTAssertTrue(BaiduPanMetadataScraper.isScrapableFolder(
             item(title: "琅琊榜", year: nil, kind: .folder, origin: .none)))
@@ -89,7 +80,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 端到端:补封面
 
-    /// 电影 → `/3/search/movie`,封面折成 `.remote` + `poster_path` 当版本段的 cacheKey。
     func testMovieGetsPosterDescriptor() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
@@ -114,14 +104,12 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
                 posterPath: "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
                 size: TMDBImage.posterSize))
         XCTAssertTrue(poster.isDiskCacheable, "cacheKey 含 poster_path,自带版本段,可进磁盘缓存")
-        // 查询串带上解析出的年份(§2)
         let query = try XCTUnwrap(
             MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/3/search/movie")?.url.query)
         XCTAssertTrue(query.contains("year=1999"), "实际:\(query)")
     }
 
-    /// 带季集的条目 → `/3/search/tv`(不另写一个文件名解析器),
-    /// 再钻一次季详情拿分集。
+    /// 复用文件名解析的季集,不另写解析器。
     func testEpisodeGoesToTVEndpointThenSeasonDetails() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -141,8 +129,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             "剧集必须再钻一次季详情,否则每集拿到的都是剧级海报")
     }
 
-    /// ★ 分集拿到的是**自己的剧照 / 集名 / 单集简介**,不是剧级海报。
-    /// 同一组只发**一次**搜索 + **一次**季详情 —— 不按条目数放大请求。
+    /// 分集要自己的剧照 / 集名 / 简介而非剧级海报;同一组只发一次搜索 + 一次季详情。
     func testEpisodesGetTheirOwnStillsAndTitles() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -162,8 +149,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(first.poster?.cacheKey, ImageDescriptor.tmdbPosterKey(
             sourceID: sourceID, posterPath: "/still1.jpg", size: TMDBImage.stillSize))
 
-        // 第二集的 `name` 是空串、`overview` 是 null → 不用空串冒充集名;
-        // 简介退到剧级(剧的简介对这一集也成立)
+        // 空串 / null 不冒充集名;简介退到剧级。
         let second = enriched[1]
         XCTAssertNil(second.episodeTitle)
         XCTAssertEqual(second.overview, "一部剧。")
@@ -176,8 +162,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
                        "同一组只该发一次搜索 + 一次季详情")
     }
 
-    /// 季详情里**没有这一集**(这一季只有 2 集,文件是第 3 集)→ 不给封面,
-    /// ⛔ 也不拿剧级海报充数;剧级简介 / 年份照补。
+    /// ⛔ 不拿剧级海报充数;剧级简介 / 年份照补。
     func testEpisodeMissingFromSeasonKeepsNoPoster() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -193,7 +178,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(enriched.first?.overview, "一部剧。")
     }
 
-    /// 季号解析出来了就用它(有 13 季的剧判错季就会配错剧照)。
+    /// 有多季的剧判错季就会配错剧照。
     func testEpisodeUsesParsedSeasonNumber() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -210,8 +195,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 端到端:目录卡片(剧集)
 
-    /// 目录卡片按**剧**查,拿到剧级海报 / 简介 / 首播年 —— 不再是一片空封面。
-    /// ⚠️ 目录不钻季详情(目录卡片要的是剧,不是某一集)。
+    /// 目录要的是剧,不钻季详情。
     func testFolderCardGetsSeriesPoster() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -230,8 +214,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
                      "目录卡片不该去拉季详情")
     }
 
-    /// ⛔ 目录卡片比单条文件更严:搜索只回一条、但标题对不上时**不认**
-    /// (单条文件才允许「唯一结果就认」)。否则一个叫《Movies》的目录会套上别的剧的海报。
+    /// 目录卡片比单条文件严:唯一结果但标题对不上也不认,否则叫《Movies》的目录会套上别的剧的海报。
     func testFolderCardIgnoresNonExactTitleMatch() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(
@@ -244,7 +227,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertNil(enriched.first?.poster)
     }
 
-    /// 用户自己放在网盘目录里的图优先 —— ⛔ 不被 TMDB 的海报盖掉。
     func testLocalCoverIsNotOverwritten() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
@@ -263,7 +245,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(enriched.first?.poster?.cacheKey, localKey)
     }
 
-    /// 年份对不上 → 什么都不补(⛔ 不端一张别的片子的封面来充数)。
     func testYearMismatchLeavesItemUntouched() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
@@ -277,8 +258,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 端到端:显式 TMDB id(`{tmdbid-N}`)
 
-    /// 目录名带 `{tmdbid-N}` → 直接 `GET /3/tv/{N}`,⛔ 不再按标题搜
-    /// (目录名里那串标签归一化后根本对不上任何 TMDB 标题)。
+    /// 目录名里的标签归一化后对不上任何标题,所以 ⛔ 不按标题搜。
     func testFolderWithExplicitIDQueriesByID() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/63926")
@@ -298,7 +278,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
                      "有显式 id 就不该再按标题搜")
     }
 
-    /// 显式 id 在**剧**端点不存在(404)→ 退一步当电影查(标签本身不区分影 / 剧)。
+    /// 标签本身不区分影 / 剧,剧端点 404 就退电影。
     func testExplicitIDFallsBackToMovieWhenNotASeries() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(
@@ -317,7 +297,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             size: TMDBImage.posterSize))
     }
 
-    /// 剧集带显式 id → `GET /3/tv/{id}` 取剧 + `GET /3/tv/{id}/season/{n}` 取分集,⛔ 不搜索。
     func testEpisodeWithExplicitIDSkipsSearch() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
@@ -336,7 +315,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 失败处置
 
-    /// 没填 token = 用户没开刮削:一个请求都不发,也不报失败。
+    /// 没填 token = 没开刮削:不发请求,也不算失败。
     func testMissingTokenSendsNoRequest() async throws {
         let scraper = Self.makeScraper(credentials)
         let items = [item(title: "Fight Club", year: 1999, kind: .movie, origin: .filename)]
@@ -348,7 +327,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertNil(failure, "没配置不是失败")
     }
 
-    /// token 被拒(401)→ 条目原样返回 + 如实留下失败原因(⛔ 不静默吞错)。
+    /// ⛔ 不静默吞错。
     func testUnauthorizedKeepsItemsAndReportsFailure() async throws {
         await save(token: "BAD_TOKEN")
         MockEmbyURLProtocol.stub(
@@ -365,7 +344,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertTrue(failure?.contains("token") ?? false, "实际:\(failure ?? "nil")")
     }
 
-    /// 连不上 → 也只是一句提示,不抛错(刮削是附加信息,⛔ 不该让浏览变错)。
+    /// 刮削是附加信息,⛔ 不该让浏览出错。
     func testTransportFailureIsNotThrown() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(
@@ -382,7 +361,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 缓存
 
-    /// 同一个「标题 + 年份 + 是不是剧」只问一次(含「查过但没命中」)。
+    /// 含「查过但没命中」。
     func testRepeatedDirectoryDoesNotRequery() async throws {
         await save(token: "READ_TOKEN")
         MockEmbyURLProtocol.stub(.json(Self.movieJSON), host: host, path: "/3/search/movie")
@@ -391,7 +370,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         let scraper = Self.makeScraper(credentials)
         let items = [
             item(title: "Fight Club", year: 1999, kind: .movie, origin: .filename),
-            // 没命中的那条也要记住「查过了」,否则每次进目录都白烧一轮请求
             item(title: "Some Show", year: nil, kind: .episode, origin: .filename),
         ]
         _ = await scraper.enrich(items)
@@ -404,8 +382,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
 
     // MARK: - 详情页的剧级扩展信息 + 演职员(`seriesProfile`)
 
-    /// 没填 token = 用户没开刮削,**不是失败**,而且一个请求都不发
-    /// (与 `enrich` 同一处置)。
     func testSeriesProfileWithoutTokenIsSilent() async {
         let scraper = Self.makeScraper(credentials)
 
@@ -416,8 +392,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
-    /// 有**显式 id** 时只按 id 取:详情 + 演职员各一次,⛔ 不再按标题搜
-    /// (给了权威 id 还去搜既慢又可能搜错)。
+    /// 给了权威 id 还去搜既慢又可能搜错。
     func testSeriesProfileWithExplicitIDSkipsSearch() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
@@ -433,7 +408,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(match.statusText, "已完结")
         XCTAssertEqual(match.productionCompanies, ["HBO"])
         XCTAssertEqual(match.networks, ["HBO"])
-        // fixture 里空名字那条被过滤,剩两个有名字的演员
         XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
         XCTAssertEqual(profile?.crewNames(withJob: "Director"), ["David Nutter"])
         XCTAssertEqual(
@@ -442,10 +416,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             "有 id 时只该发这两条")
     }
 
-    /// 没有 id 就用**剧名 + 年份**:先搜一次,再按命中的 id 取详情 + 演职员。
-    ///
-    /// ⚠️ 这里必须用一个**新的**刮削器:上一个用例已经把 `/3/tv/1399` 那两条缓存住了,
-    /// 复用同一个就只剩搜索这一条,看不到「搜完再按 id 取」的完整形状。
+    /// 必须用新的刮削器:上一个用例已缓存 `/3/tv/1399`,复用就看不到「搜完再按 id 取」的完整请求序列。
     func testSeriesProfileFallsBackToTitleSearch() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -462,7 +433,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             ["/3/search/tv", "/3/tv/1399", "/3/tv/1399/credits"])
     }
 
-    /// 同一部剧再问一次 → **零请求**(详情与演职员各有一层缓存)。
     func testSeriesProfileIsCached() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
@@ -479,11 +449,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             MockEmbyURLProtocol.recordedRequests().count, afterFirst, "第二次不该再发请求")
     }
 
-    /// ★ 详情页的剧级海报必须是**目录卡片那张同一张**。
-    ///
-    /// 「剧集列表」入口的封面来自目录卡片(`enrich`),「继续观看」入口的封面要等
-    /// 详情页那一趟剧级信息(`seriesProfile`)。两者拼出的 `ImageDescriptor` 必须相等
-    /// —— 不相等就是用户报的「两个入口封面和背景图不一样」。
+    /// 「剧集列表」入口封面来自目录卡片(`enrich`),「继续观看」入口来自 `seriesProfile`,两者的 `ImageDescriptor` 必须相等。
     func testSeriesProfilePosterMatchesDirectoryCard() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
@@ -491,13 +457,11 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
         let scraper = Self.makeScraper(credentials)
 
-        // 剧集列表入口:目录卡片
         let cards = await scraper.enrich([
             item(title: "Game of Thrones", year: nil, kind: .folder, origin: .none)
         ])
         let cardPoster = try XCTUnwrap(cards.first?.poster, "目录卡片没拿到剧集海报")
 
-        // 继续观看入口:详情页那一趟剧级信息
         let loaded = await scraper.seriesProfile(tmdbID: 1399, title: "Game of Thrones", year: nil)
         let profile = try XCTUnwrap(loaded)
         let detailPoster = try XCTUnwrap(
@@ -508,8 +472,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertTrue(detailPoster.isDiskCacheable)
     }
 
-    /// id 与标题都没有 → nil,⛔ 一个请求都不发
-    /// (拿空标题去搜只会端回一堆无关的剧,那正是硬规则 4 要避免的)。
+    /// 拿空标题去搜只会端回无关的剧。
     func testSeriesProfileWithoutAnyIdentitySendsNothing() async {
         await save(token: "T")
         let scraper = Self.makeScraper(credentials)
@@ -520,7 +483,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
-    /// 标签不区分影 / 剧:剧端点 404 → 退电影,演职员跟着**命中的那一边**走。
     func testSeriesProfileFallsBackToMovieWhenTVNotFound() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.notFoundJSON, statusCode: 404),
@@ -540,7 +502,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             "影 / 剧两个 id 空间各自编号,要分别试")
     }
 
-    /// 两边都 404 → nil,⛔ 不拿别的作品来凑;详情都拿不到时也**不再去问演职员**。
     func testSeriesProfileGivesUpWhenNeitherEndpointHasTheID() async {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.notFoundJSON, statusCode: 404),
@@ -586,8 +547,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             overview: nil,
             posterPath: nil,
             voteAverage: nil,
-            // 详情端点才给的字段(`docs/TMDB_API.md` §9):搜索响应里没有它们,
-            // 所以这个「搜索结果」形状的 fixture 一律为 nil
+            // 详情端点独有字段(`docs/TMDB_API.md` §9),搜索结果形状里一律为 nil
             genres: nil,
             tagline: nil,
             status: nil,
@@ -596,7 +556,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         ), kind: .movie)
     }
 
-    /// 一条可播的媒体文件条目(投影,不含播放所需信息)。
     private func item(
         title: String,
         year: Int?,
@@ -622,7 +581,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         )
     }
 
-    /// 官方规格 `/3/search/movie` 200 示例(`docs/TMDB_API.md` §3)
     private static let movieJSON = #"""
     {"page":1,"results":[{"adult":false,"id":550,"original_language":"en",
     "original_title":"Fight Club","overview":"一部电影。",
@@ -631,7 +589,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "vote_average":8.433,"vote_count":26279}],"total_pages":1,"total_results":1}
     """#
 
-    /// `/3/search/tv` 200 示例(字段名 `name` / `first_air_date`)
     private static let tvJSON = #"""
     {"page":1,"results":[{"adult":false,"id":1399,"origin_country":["US"],
     "original_language":"en","original_name":"Game of Thrones","overview":"一部剧。",
@@ -640,12 +597,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "vote_average":8.4,"vote_count":21000}],"total_pages":1,"total_results":1}
     """#
 
-    /// `/3/tv/{id}` 200 示例(按 id 直取剧):与 `/3/search/tv` 的 `results[]` 同字段名,
-    /// 但顶层就是条目本身,没有 `results` 包装。
-    ///
-    /// ⚠️ 比搜索结果**多**的那几个字段(`genres` / `tagline` / `status` /
-    /// `production_companies` / `networks`)是详情端点独有的(`docs/TMDB_API.md` §9)
-    /// —— 详情页的「类型 / 评分 / 状态 / 制片公司」那一行就靠它们。
+    /// 顶层就是条目本身,没有 `results` 包装;`genres` 等详情独有字段(`docs/TMDB_API.md` §9)供详情页那一行用。
     private static let tvDetailsJSON = #"""
     {"adult":false,"id":1399,"origin_country":["US"],"original_language":"en",
     "original_name":"Game of Thrones","overview":"一部剧。",
@@ -657,7 +609,6 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "networks":[{"id":49,"name":"HBO","logo_path":"/y.png","origin_country":"US"}]}
     """#
 
-    /// `/3/movie/{id}` 200 示例(按 id 直取电影)。同样带详情端点独有的字段。
     private static let movieDetailsJSON = #"""
     {"adult":false,"id":550,"original_language":"en","original_title":"Fight Club",
     "overview":"一部电影。","poster_path":"/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
@@ -668,9 +619,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "origin_country":"US"}]}
     """#
 
-    /// `/3/tv/{id}/credits` 200 示例(`docs/TMDB_API.md` §10):
-    /// ⚠️ 第 3 位演员 `name` 是空串 —— 覆盖「名字为空的条目一律滤掉」那条路径;
-    /// 导演的 `profile_path` 是 `null` —— 覆盖「没有头像就退成图标」。
+    /// 第 3 位演员 `name` 为空串(覆盖过滤路径);导演 `profile_path` 为 null(覆盖退成图标)。
     private static let creditsJSON = #"""
     {"id":1399,"cast":[{"id":1223786,"name":"Emilia Clarke",
     "profile_path":"/daenerys.jpg","character":"Daenerys Targaryen","order":0},
@@ -681,15 +630,13 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "department":"Directing","job":"Director"}]}
     """#
 
-    /// 404 响应体(`docs/TMDB_API.md` §5):`status_code: 34` = 资源不存在。
+    /// `status_code: 34` = 资源不存在。
     private static let notFoundJSON = #"""
     {"status_code":34,"status_message":"The resource you requested could not be found.",
     "success":false}
     """#
 
-    /// `/3/tv/1399/season/1` 200 示例(`docs/TMDB_API.md` §7):
-    /// 第 1 集有集名 / 单集简介 / 剧照;第 2 集的 `name` 是空串、`overview` 是 null
-    /// —— 用来验证「空串不当集名」的降级。
+    /// 第 2 集 `name` 空串、`overview` 为 null,验证「空串不当集名」的降级。
     private static let seasonJSON = #"""
     {"_id":"5256c8b219c2956ff6047cd8","air_date":"2011-04-17","id":3624,
     "name":"Season 1","overview":"第一季。","poster_path":"/zwaj4egrhnXOBIit1tyb4Sbt3KP.jpg",

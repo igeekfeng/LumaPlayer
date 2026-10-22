@@ -2,8 +2,7 @@ import AppKit
 import XCTest
 @testable import LumaPlayer
 
-/// 视频承载视图的几何契约:layer 必须和视图本身严丝合缝,
-/// 否则 mpv 画出来的画面会偏移 / 缩放错位。
+/// layer 必须和视图严丝合缝,否则 mpv 的画面会偏移 / 缩放错位。
 @MainActor
 final class MPVViewGeometryTests: XCTestCase {
 
@@ -26,7 +25,7 @@ final class MPVViewGeometryTests: XCTestCase {
         return (window, view, player)
     }
 
-    /// 视图不在父视图原点时,layer 的 frame(父 layer 坐标系)必须跟着视图走
+    /// layer 的 frame 在父 layer 坐标系里
     func testLayerFollowsViewFrameAtNonZeroOrigin() throws {
         let (window, view, player) = makeHostedView(origin: CGPoint(x: 120, y: 80))
         defer { window.contentView = nil; player.shutdown() }
@@ -36,7 +35,6 @@ final class MPVViewGeometryTests: XCTestCase {
         XCTAssertEqual(layer.bounds.size, view.bounds.size)
     }
 
-    /// 视图尺寸变化(窗口缩放 / 全屏)后 layer 同步变化
     func testLayerTracksResize() throws {
         let (window, view, player) = makeHostedView(origin: CGPoint(x: 10, y: 20))
         defer { window.contentView = nil; player.shutdown() }
@@ -46,7 +44,7 @@ final class MPVViewGeometryTests: XCTestCase {
         XCTAssertEqual(layer.frame, view.frame)
     }
 
-    /// Retina:layer 的像素密度与窗口一致(否则 FBO 尺寸与传给 mpv 的尺寸对不上)
+    /// 否则 FBO 尺寸与传给 mpv 的尺寸对不上
     func testContentsScaleMatchesWindow() throws {
         let (window, view, player) = makeHostedView(origin: .zero)
         defer { window.contentView = nil; player.shutdown() }

@@ -1,14 +1,12 @@
 import Foundation
 
-/// 本地文件夹来源的一次播放会话(`PlaybackSessionPreparing` 的本地实现)。
-///
-/// 地址就是文件本身(`file://`),交给内核直接按字节读 —— 拖动由内核自己做
-/// (`seekStrategy = .clientSeek`),所以 `startTimeTicks` 永远不会带值进来。
+/// `PlaybackSessionPreparing` 的本地文件夹实现。地址就是 `file://`,拖动由内核做(`.clientSeek`),
+/// 所以 `startTimeTicks` 正常不会带值。
 actor LocalFileSessionPreparer: PlaybackSessionPreparing {
 
     private let file: BaiduPanFile
     private let rootPath: String
-    /// 同目录里配好的外挂字幕(浏览页 / 队列装配时已用 `BaiduPanSubtitle.files` 配对)
+    /// 调用方已用 `BaiduPanSubtitle.files` 配对好
     private let subtitleFiles: [BaiduPanFile]
     private let resolveRoot: @Sendable () async throws -> URL
 
@@ -37,7 +35,7 @@ actor LocalFileSessionPreparer: PlaybackSessionPreparing {
         var session = try LocalFilePlaybackPlanner.session(
             file: file, url: url, playSessionID: UUID().uuidString)
         session.externalSubtitles = subtitleFiles.compactMap { subtitle in
-            // 字幕文件不在了就不挂这一条(挂上也是一次失败提示),⛔ 不挡播放
+            // 字幕文件不在了就跳过,⛔ 不挡播放
             guard let subtitleURL = try? LocalFolderListing.fileURL(
                 forPath: subtitle.path, root: root, rootPath: rootPath),
                   FileManager.default.fileExists(atPath: subtitleURL.path) else { return nil }
@@ -48,13 +46,8 @@ actor LocalFileSessionPreparer: PlaybackSessionPreparing {
     }
 }
 
-/// 本地文件 → 播放决策 → `PlaybackSession` 的映射(**纯函数,无 IO**)。
-///
-/// 与 `BaiduPanPlaybackPlanner` 同一个理由过 `PlaybackDecisionEngine`:「走哪条路」
-/// 只有一张判定表。本地文件只有一条路 —— 声明「支持直连、不支持转码」,判定表必然
-/// 给 `directStream`。⚠️ 这不是新增一种播放方式:`PlaybackPlan` 仍只有
-/// `.directStream` / `.transcode` 两种(`CLAUDE.md`「架构主线」),本地文件就是一条
-/// 地址为 `file://` 的直连流。
+/// 本地文件 → 播放决策 → `PlaybackSession`(纯函数,无 IO)。同 `BaiduPanPlaybackPlanner`,
+/// 也过唯一的判定表 `PlaybackDecisionEngine`;本地文件就是一条 `file://` 的直连流,⛔ 不新增播放方式。
 enum LocalFilePlaybackPlanner {
 
     static func session(
@@ -64,7 +57,7 @@ enum LocalFilePlaybackPlanner {
             mediaSources: [
                 EmbyMediaSource(
                     id: String(file.fsID),
-                    // 容器名只用于统计展示,取扩展名(与百度同一口径)
+                    // 容器名只用于展示,取扩展名
                     container: file.fileExtension.isEmpty ? nil : file.fileExtension,
                     supportsDirectStream: true,
                     supportsTranscoding: false,
@@ -77,13 +70,12 @@ enum LocalFilePlaybackPlanner {
             errorCode: nil
         ))
         guard decision.method == .directStream else {
-            // 判定表收到「只支持直连」却给了别的结论 —— 那是判定表的 bug,如实报
+            // 走到这里是判定表的 bug,如实报
             throw LocalFolderError.playbackUnsupported("本地文件只能直接播放,判定却给了转码。")
         }
         return PlaybackSession(
             plan: .directStream(
                 url: url,
-                // 本地文件没有请求头可言
                 headers: [:],
                 playSessionID: decision.playSessionID,
                 mediaSourceID: decision.source.id),

@@ -1,25 +1,20 @@
 import Foundation
 
-/// 弹弹play 请求的失败,折成可解释的一句中文(`userMessage`),与 `TMDBError` 同一口径。
-///
-/// ⚠️ 「没匹配上」「搜索无结果」**不是**错误 —— 那是合法的空结果,由上层按状态展示。
+/// 弹弹play 请求失败。「没匹配上」「搜索无结果」不是错误,是合法空结果。
 enum DandanplayError: Error, Equatable {
 
-    /// 还没在设置里填 AppId / AppSecret。与 `forbidden` 分开:这个要用户去填,那个要用户去查。
+    /// 还没填 AppId / AppSecret(要用户去填;`forbidden` 是要用户去查)。
     case credentialsMissing
-    /// HTTP 401:调用受限接口缺身份验证头(§1)。本项目只调公开接口,出现即说明签名头没带上。
+    /// 只调公开接口,出现即说明签名头没带上(§1)。
     case unauthorized
-    /// HTTP 403:AppId / AppSecret 无效、签名不符、时间戳偏差过大,或 IP 被屏蔽(§1)。
-    /// `reason` 取响应头 `X-Error-Message`(如 `Invalid Signature`),不含凭据。
+    /// 凭据无效、签名不符、时间戳偏差过大或 IP 被屏蔽(§1)。`reason` 取响应头 `X-Error-Message`。
     case forbidden(reason: String?)
-    /// 其余非 2xx。
     case server(statusCode: Int)
-    /// HTTP 200 但响应体 `success == false`(`errorCode` / `errorMessage` / `errorDetail` 原样带上)。
-    /// `detail` 是规格 `ResponseBase.errorDetail`,参数校验失败时指向具体字段。
+    /// HTTP 200 但 `success == false`。`detail` 在参数校验失败时指向具体字段。
     case api(code: Int?, message: String?, detail: String?)
-    /// 传输失败。⛔ 文本一律已过 `SecretRedactor`。
+    /// ⛔ 文本一律已过 `SecretRedactor`。
     case transport(String)
-    /// 解码失败。只带解码器描述,不带响应体。
+    /// 只带解码器描述,不带响应体。
     case decoding(detail: String)
 
     var userMessage: String {
@@ -50,7 +45,7 @@ enum DandanplayError: Error, Equatable {
         }
     }
 
-    /// 是不是「去设置页填 / 查凭据就能好」。
+    /// 去设置页填 / 查凭据就能好。
     var needsCredentials: Bool {
         switch self {
         case .credentialsMissing, .unauthorized: return true

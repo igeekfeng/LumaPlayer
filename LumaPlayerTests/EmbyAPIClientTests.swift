@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// HTTP 状态码映射、解码、取消、以及「token 是实例状态」的隔离性
-/// (API_CONTRACT.md 第 7 节)。
-///
-/// 全部走 `MockEmbyURLProtocol`,**零真实网络依赖**。
+/// API_CONTRACT.md 第 7 节。全部走 `MockEmbyURLProtocol`,零真实网络。
 final class EmbyAPIClientTests: XCTestCase {
     private var session: URLSession!
 
@@ -83,7 +80,7 @@ final class EmbyAPIClientTests: XCTestCase {
     // MARK: - 传输错误
 
     func testCancelledIsMappedToCancelled() async throws {
-        // 取消是正常流程,UI 不得显示为错误(API_CONTRACT.md 第 7 节)
+        // 取消是正常流程,UI 不得显示为错误
         MockEmbyURLProtocol.stub(.failure(.cancelled), path: "/emby/System/Info")
         do {
             _ = try await makeClient().sendVoid(.systemInfo)

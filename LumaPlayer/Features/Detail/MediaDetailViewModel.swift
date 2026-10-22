@@ -1,14 +1,9 @@
 import Foundation
 
-/// 详情页的数据。
+/// Emby 详情页的数据。
 ///
-/// 列表接口返回的字段比单项接口少(API_CONTRACT.md 3.2),所以选中一项后
-/// **必须**用 `/Users/{UserId}/Items/{Id}` 再取一次完整详情,
-/// 不能拿列表里的对象直接当详情展示。
-///
-/// 剧集走「单页」模型:季与分集就在这同一页里,页面只有**一个**播放按钮,
-/// 它作用于 `focusedEpisode` —— 进页面时自动定位(有续播记录定位到那一集,
-/// 否则第一集),点分集行只是就地换定位,不再跳到另一个详情页。
+/// 列表对象字段不全(API_CONTRACT.md 3.2),⛔ 不能直接当详情展示,必须再取 `/Users/{UserId}/Items/{Id}`。
+/// 剧集是单页模型:季与分集在同一页,唯一的播放按钮作用于 `focusedEpisode`;点分集行只换定位,不跳页。
 @MainActor
 @Observable
 final class MediaDetailViewModel {
@@ -18,31 +13,28 @@ final class MediaDetailViewModel {
     private(set) var seasonsState: LoadState<[EmbyItem]> = .idle
     private(set) var episodesState: LoadState<[EmbyItem]> = .idle
     private(set) var selectedSeason: EmbyItem?
-    /// 播放按钮作用于的那一集(只有剧集才有)。nil = 还没定位到任何一集。
+    /// 只有剧集才有。nil = 还没定位到
     private(set) var focusedEpisode: EmbyItem?
-    /// 相似推荐(电影 / 剧集才查)。失败或为空时页面不显示这一区块 ——
-    /// 它是附加信息,不值得为它占一块错误页。
+    /// 电影 / 剧集才查。失败或为空时页面不显示这一区块
     private(set) var similarState: LoadState<[EmbyItem]> = .idle
-    /// 标记已看 / 收藏失败的提示(写操作失败必须让用户知道,不能静默回滚)
+    /// 写操作失败必须让用户知道
     var userDataError: String?
-    /// 正在写入 UserData 的条目 Id(按钮据此禁用,防止连点发出相反的两次请求)
+    /// 按钮据此禁用,防连点发出相反的两次请求
     private(set) var updatingItemIDs: Set<String> = []
 
-    /// 详情页整体是否正在加载 / 刷新(顶栏加载线据此显示)。
-    /// 刷新时 `detailState` 仍是 `.loaded`(保留旧内容),所以单看 `detailState` 不够。
+    /// 刷新时 `detailState` 仍是 `.loaded`,单看它不够。
     var isLoading: Bool {
         detailState.isLoading || seasonsState.isLoading || episodesState.isLoading || isRefreshing
     }
-    /// 原地刷新(同一项、已有内容)进行中。首次加载由 `detailState == .loading` 表达。
+    /// 原地刷新中(首次加载由 `detailState` 表达)
     private var isRefreshing = false
 
     private var seriesID: String?
-    /// 当前内容对应的「服务器 + 打开的条目」。同一个键再次 `load` 是原地刷新:
-    /// 保留已有内容、不切回加载态(已有缓存时不该闪 loading)
+    /// 「服务器 + 条目」。同一个键再次 `load` 是原地刷新,不切回加载态
     private var loadedKey: String?
-    /// 服务端报的「最近可续播」的集 Id;用来决定初始定位在哪一集。
+    /// 服务端给的该播那一集,决定初始定位
     private var focusEpisodeID: String?
-    /// 用户手动点过分集。手动选过之后,切季以外的自动定位不再覆盖他的选择。
+    /// 手动选过后自动定位不再覆盖(切季重置)
     private var didPickEpisodeManually = false
     private var generation = 0
     private var detailTask: Task<Void, Never>?
@@ -51,18 +43,16 @@ final class MediaDetailViewModel {
     private var refreshTask: Task<Void, Never>?
     private var episodesRefreshTask: Task<Void, Never>?
     private var similarTask: Task<Void, Never>?
-    /// 批量标记的代次号:换条目(`load`)时 +1,旧批次的结果不再回写。
-    /// 与 `generation` 分开 —— 那个管的是详情 / 季 / 分集的加载任务。
+    /// 批量标记的代次号,换条目时 +1,旧批次结果不再回写。与管加载任务的 `generation` 分开。
     private var batchToken = 0
 
-    /// 相似推荐的条数(与 Emby Web 同为一行 12 个)
+    /// 与 Emby Web 同为一行 12 个
     static let similarLimit = 12
 
     init(container: AppContainer) {
         self.container = container
     }
 
-    /// 加载某一项的详情;剧集额外加载季,并自动定位到该播的那一集。
     func load(item: EmbyItem, server: ServerProfile) {
         detailTask?.cancel()
         seasonsTask?.cancel()
@@ -71,14 +61,13 @@ final class MediaDetailViewModel {
         episodesRefreshTask?.cancel()
         similarTask?.cancel()
         generation += 1
-        // 换条目:上一页的批量进度与提示不再属于这里(见 runBatch)
+        // 上一页的批量进度与提示不再属于这里(见 runBatch)
         batchToken += 1
         batchProgress = nil
         batchMessage = nil
         let myGeneration = generation
 
-        // 同一台服务器上的同一项、且已经有内容:原地刷新,不回退到 loading,
-        // 新数据到达后直接替换(失败则保留旧内容,与 refreshDetail 同一立场)
+        // 同一项且已有内容:原地刷新,失败保留旧内容
         let key = "\(server.id.uuidString)-\(item.id)"
         let isRefresh: Bool = {
             if loadedKey == key, case .loaded = detailState { return true }
@@ -97,20 +86,18 @@ final class MediaDetailViewModel {
             focusEpisodeID = nil
             didPickEpisodeManually = false
         } else {
-            // 已有内容:保留,只标记「在刷新」,让工具栏图标转起来
             isRefreshing = true
         }
 
         detailTask = Task {
             defer {
-                // 期间又发起了一轮(切条目 / 再刷新)就不动标记,交给新的一轮管
+                // 期间又发起了新一轮就不动标记,交给它管
                 if isRefresh, myGeneration == generation { isRefreshing = false }
             }
             do {
                 let connection = container.connection(for: server)
-                // 从「继续观看」「下一集」等处点进来的是分集:和 Emby Web 一样打开
-                // 它所属的整部剧,并定位到这一集,而不是只显示单集(否则没法切别的集)。
-                // 列表对象通常自带 SeriesId;没有时先取一次分集详情拿到它。
+                // 点进来的是分集:同 Emby Web,打开整部剧并定位到这一集。
+                // 列表对象通常自带 SeriesId,没有时先取分集详情拿到它。
                 var requestedEpisode: EmbyItem?
                 var full: EmbyItem
                 if item.kind == .episode, let seriesID = item.seriesID {
@@ -128,7 +115,6 @@ final class MediaDetailViewModel {
                 if full.kind == .movie || full.kind == .series {
                     loadSimilar(itemID: full.id, server: server, generation: myGeneration)
                 }
-                // 只有剧集才有季 / 分集(API_CONTRACT.md 3.2)
                 guard full.kind == .series else { return }
                 seriesID = full.id
                 await loadSeasons(server: server, generation: myGeneration, requestedEpisode: requestedEpisode)
@@ -147,9 +133,7 @@ final class MediaDetailViewModel {
 
     // MARK: - 已看 / 收藏(API_CONTRACT.md 5.5 / 5.6)
 
-    /// 切换已看。作用于剧集(Series)时服务端会把整部剧的分集一起标上
-    /// (服务端级联,客户端不依赖它做状态:写入后一律重读详情 / 分集),
-    /// 所以成功后要重拉分集与详情,而不只是改这一项。
+    /// 作用于 Series 时服务端会级联标分集;客户端不依赖级联,写后一律重读详情与分集。
     func togglePlayed(_ item: EmbyItem, server: ServerProfile) {
         let target = !(item.userData?.played ?? false)
         writeUserData(item, server: server, failureVerb: target ? "标记为已看" : "标记为未看") { connection in
@@ -159,49 +143,38 @@ final class MediaDetailViewModel {
 
     // MARK: - 批量标记(API_CONTRACT.md 5.8)
 
-    /// 正在进行的批量标记。nil = 没有在跑。
-    ///
-    /// Emby 没有批量端点,服务端只能逐条写,所以「标记一季」在网速慢时要几秒 ——
-    /// 界面必须能显示进度,否则用户以为点了没反应。
+    /// Emby 没有批量端点,只能逐条写,慢时要几秒,界面须显示进度。
     struct BatchPlayedProgress: Sendable, Equatable {
-        /// 本次要写的条数(已经处于目标状态的集不计入)
+        /// 不含已处于目标状态的集
         let total: Int
-        /// 已经成功写回的条数
         var completed: Int = 0
-        /// 目标是已看(true)还是未看(false)
         let played: Bool
     }
 
+    /// nil = 没有在跑
     private(set) var batchProgress: BatchPlayedProgress?
 
-    /// 一次批量标记的结果提示(成功也要说一声:几十集的写入不该静默结束)。
-    /// 有失败时它是错误文案,必须让用户看到。
+    /// 结果提示,成功也要说一声;有失败时是错误文案。
     var batchMessage: String?
 
-    /// 这些集里还有哪些需要写(已经处于目标状态的不再发请求)。
-    ///
-    /// `UserData` 缺失按「未看」算,与 `EmbyItem.isPlayed` 同一口径。
+    /// 已处于目标状态的不再发请求;`UserData` 缺失按未看算(同 `EmbyItem.isPlayed`)。
     nonisolated static func pendingIDs(in episodes: [EmbyItem], played: Bool) -> [String] {
         episodes.filter { $0.isPlayed != played }.map(\.id)
     }
 
-    /// 单季一键:把这一季里还没到目标状态的集逐条标记(API_CONTRACT.md 5.8)。
+    /// 单季一键
     func markSeasonPlayed(_ episodes: [EmbyItem], played: Bool, server: ServerProfile) {
         runBatch(itemIDs: Self.pendingIDs(in: episodes, played: played), played: played, server: server)
     }
 
-    /// 勾选面板:只标选中的那些。
+    /// 勾选面板
     func markEpisodesPlayed(_ episodes: [EmbyItem], played: Bool, server: ServerProfile) {
         runBatch(itemIDs: Self.pendingIDs(in: episodes, played: played), played: played, server: server)
     }
 
-    /// 批量写入的唯一出口:串行、失败不中断,结束后以服务端为准重读一次。
-    ///
-    /// 批量在后台跑时用户可能切到别的条目(`load` 会 `batchToken += 1`):
-    /// 那时旧批次**已经发出去的请求照样发完**(写操作不该半途丢下),但不再回写
-    /// 进度 / 提示,也不再碰新页面的 `updatingItemIDs`。清理一律放在 `defer` 里,
-    /// ⛔ 不能靠 `guard` 提前 return —— 那会把 `batchProgress` 永久卡住,
-    /// 新页面的批量入口就再也点不动了。
+    /// 批量写入唯一出口:串行、失败不中断,结束后以服务端为准重读。
+    /// 中途切了条目:请求照样发完,但不再回写进度 / 提示 / `updatingItemIDs`。
+    /// ⛔ 清理只能放 `defer`,不能靠 `guard` 提前 return:会把 `batchProgress` 永久卡住。
     private func runBatch(itemIDs: [String], played: Bool, server: ServerProfile) {
         guard !itemIDs.isEmpty, batchProgress == nil else { return }
         batchToken += 1
@@ -250,7 +223,7 @@ final class MediaDetailViewModel {
                 batchMessage = "\(verb):\(succeeded) 集成功,\(result.failedItemIDs.count) 集失败\(reason)。"
             }
             if result.firstError == .unauthorized { container.state.serverNeedingLogin = server }
-            // 已看状态会改变续播定位与剧 / 季上的汇总,以服务端为准重读
+            // 已看会改变续播定位与剧 / 季汇总,以服务端为准重读
             refreshAfterPlayback(server: server)
         }
     }
@@ -278,7 +251,7 @@ final class MediaDetailViewModel {
                 let userData = try await write(connection)
                 guard myGeneration == generation else { return }
                 apply(userData, to: item.id)
-                // 已看会连带改变父子项(剧 ↔ 集)的状态与续播定位,以服务端为准重读一次
+                // 会连带改变剧 ↔ 集的状态与续播定位,以服务端为准重读
                 refreshAfterPlayback(server: server)
             } catch let error as EmbyAPIError {
                 guard myGeneration == generation, error != .cancelled else { return }
@@ -291,7 +264,7 @@ final class MediaDetailViewModel {
         }
     }
 
-    /// 用服务端返回的 UserData 就地替换页面上所有同 Id 的对象。
+    /// 就地替换页面上所有同 Id 的对象。
     private func apply(_ userData: EmbyUserData, to itemID: String) {
         if case .loaded(var detail) = detailState, detail.id == itemID {
             detail.userData = userData
@@ -309,21 +282,13 @@ final class MediaDetailViewModel {
 
     // MARK: - 分集定位
 
-    /// 用户点了分集列表里的某一集:就地换定位,不跳页。
     func selectEpisode(_ episode: EmbyItem) {
         didPickEpisodeManually = true
         focusedEpisode = episode
     }
 
-    /// 播放结束后按服务端重读当前详情(docs/PITFALLS.md Q22)。
-    ///
-    /// 续播位置与已看状态以 `/Users/{UserId}/Items/{Id}` 为准 —— 服务端还有
-    /// MinResumePct / MaxResumePct / 最短可续播时长等规则,不在客户端复刻。
-    ///
-    /// 与 `load` 的区别:
-    /// - 不切回加载态,也不重拉季与分集:只是一次后台校正,页面不该闪;
-    /// - 失败时**保留现有内容**:旧详情仍可用,为一次后台校正把整页换成错误页
-    ///   得不偿失;401 等问题会在用户下一次操作时由正常路径暴露。
+    /// 播放结束后按服务端重读详情(PITFALLS.md Q22):续播与已看规则(MinResumePct 等)⛔ 不在客户端复刻。
+    /// 后台校正:不切加载态、不重拉季与分集,失败保留现有内容(401 等由下一次正常操作暴露)。
     func refreshDetail(server: ServerProfile) {
         guard case .loaded(let current) = detailState else { return }
         refreshTask?.cancel()
@@ -333,29 +298,23 @@ final class MediaDetailViewModel {
             do {
                 full = try await container.connection(for: server).item(id: current.id)
             } catch {
-                // 见上:刻意保留现有内容,不改 detailState
+                // 刻意保留现有内容
                 return
             }
-            // 期间换了条目(generation 已变)就丢弃,不能把上一项的详情写回来
             guard myGeneration == generation else { return }
             detailState = .loaded(full)
         }
     }
 
-    /// 播完一集后的完整校正:详情 + 当前季分集 + 定位集。
-    ///
-    /// 播的是分集时,只重读剧的详情拿不到这一集的新进度(剧对象上没有),
-    /// 所以还要把当前季的分集重拉一次,进度条才会动。
+    /// 详情 + 当前季分集一起重读:分集进度只在分集对象上。
     func refreshAfterPlayback(server: ServerProfile) {
         refreshDetail(server: server)
         refreshEpisodes(server: server)
     }
 
-    /// 选择某一季并加载它的分集。
     func selectSeason(_ season: EmbyItem, server: ServerProfile) {
         episodesTask?.cancel()
-        // 同一季的原地刷新(详情页重载)保留分集列表与用户手动选的集;
-        // 换季才回到加载态、并重新定位(上一季里手动选的集不适用于这一季)
+        // 同季原地刷新保留分集与手动选的集;换季才回到加载态并重新定位
         let isSameSeason = selectedSeason?.id == season.id
         selectedSeason = season
         if case .loaded = episodesState, isSameSeason {} else { episodesState = .loading }
@@ -364,8 +323,7 @@ final class MediaDetailViewModel {
         let series = seriesID
         episodesTask = Task {
             do {
-                // `Shows/{Id}/Episodes` 需要 SeriesId:优先季对象自带的 SeriesId,
-                // 缺失时退回当前详情项的 Id(它就是这部剧)
+                // 优先季对象自带的 SeriesId,缺失时用当前详情项(就是这部剧)
                 let seriesID = season.seriesID ?? series ?? season.id
                 let episodes = try await container.connection(for: server)
                     .episodes(seriesID: seriesID, seasonID: season.id)
@@ -385,7 +343,6 @@ final class MediaDetailViewModel {
         }
     }
 
-    /// 重试分集(页脚的失败态用)。
     func retryEpisodes(server: ServerProfile) {
         guard let season = selectedSeason else { return }
         selectSeason(season, server: server)
@@ -414,8 +371,7 @@ final class MediaDetailViewModel {
         }
     }
 
-    /// - Parameter requestedEpisode: 用户点进来的那一集(从分集进剧集页时)。
-    ///   有它就直接定位到它,不再问服务端「该播哪一集」。
+    /// `requestedEpisode`:从分集点进来时直接定位到它,不再问服务端。
     private func loadSeasons(server: ServerProfile, generation: Int, requestedEpisode: EmbyItem? = nil) async {
         guard let seriesID else { return }
         if case .loaded = seasonsState {} else { seasonsState = .loading }
@@ -438,8 +394,7 @@ final class MediaDetailViewModel {
         seasonsState = .loaded(seasons)
         guard !seasons.isEmpty else { return }
 
-        // 定位要在拉分集**之前**做:否则会先落在第一季、再跳到该播的那一集,页面闪一下。
-        // 顺序是 NextUp → 可续播 → 第一集,理由见 `ServerConnection.focusEpisode`。
+        // 定位要在拉分集之前做,否则先落第一季再跳,页面会闪。顺序见 `ServerConnection.focusEpisode`。
         let focus: EmbyItem?
         if let requestedEpisode {
             focus = requestedEpisode
@@ -447,24 +402,21 @@ final class MediaDetailViewModel {
             do {
                 focus = try await container.connection(for: server).focusEpisode(seriesID: seriesID)
             } catch {
-                // 只是一次定位:拿不到就回退到第一季,不把整页变成错误态。
-                // 紧随其后的分集请求走同一条连接,同类问题(如 401)会在那里正常暴露。
+                // 定位失败退回第一季,不把整页变错误态;401 等会在随后的分集请求暴露
                 focus = nil
             }
         }
         guard generation == self.generation else { return }
         focusEpisodeID = focus?.id
 
-        // 该播的集在哪个季就进哪个季;拿不到它的季(或压根定位不到)就进第一季。
+        // 进该播那集所在的季,否则第一季
         let target = focus.flatMap { episode in
             seasons.first { $0.id == episode.seasonID }
         } ?? seasons[0]
         selectSeason(target, server: server)
     }
 
-    /// 决定播放按钮作用于哪一集:有续播记录就定位到那一集,否则这一季的第一集。
-    ///
-    /// 用户手动点过之后不再自动改动(切季会重置这个标志)。
+    /// 有续播记录定位到那一集,否则本季第一集;手动点过后不再自动改。
     private func resolveFocus(episodes: [EmbyItem]) {
         guard !didPickEpisodeManually else { return }
         if let targetID = focusEpisodeID,
@@ -479,7 +431,7 @@ final class MediaDetailViewModel {
         focusedEpisode = episodes.first
     }
 
-    /// 静默重拉当前季的分集:播完一集后进度条要动,但列表不该闪。
+    /// 静默重拉当前季分集,列表不闪。
     private func refreshEpisodes(server: ServerProfile) {
         guard let season = selectedSeason else { return }
         episodesRefreshTask?.cancel()
@@ -492,12 +444,12 @@ final class MediaDetailViewModel {
                 episodes = try await container.connection(for: server)
                     .episodes(seriesID: seriesID, seasonID: season.id)
             } catch {
-                // 同 refreshDetail:一次后台校正失败就保留现有列表
+                // 同 refreshDetail,失败保留现有列表
                 return
             }
             guard myGeneration == generation else { return }
             episodesState = .loaded(episodes)
-            // 换成列表里的同 id 对象:它的字段更齐,进度也是新的
+            // 换成列表里的同 id 对象,进度是新的
             if let current = focusedEpisode {
                 focusedEpisode = episodes.first { $0.id == current.id } ?? current
             } else {

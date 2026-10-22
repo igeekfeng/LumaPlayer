@@ -1,31 +1,25 @@
 import Foundation
 
-/// assrt 的错误(HTTP 层 + 业务 `status` 码)。
-///
-/// 业务码来自 <https://assrt.net/api/doc#errors>(2026-10-21):
-/// `status != 0` 即失败,HTTP 仍可能是 200 —— ⛔ 不能只看 HTTP 状态。
-///
-/// 文案写给用户看:该说「密钥不对」就说「密钥不对」,⛔ 不把数字码丢出去。
+/// assrt 的错误(HTTP 层 + 业务 `status` 码,<https://assrt.net/api/doc#errors>)。
+/// `status != 0` 即失败,HTTP 仍可能是 200,⛔ 不能只看 HTTP 状态。文案给用户看,不抛数字码。
 enum AssrtError: LocalizedError, Equatable {
-    /// 还没填 API 密钥
     case missingToken
     /// 密钥无效 / 被重置(`20001`、HTTP 401)
     case invalidToken
-    /// 关键词太短(`101`,服务端要求至少 3 个字符)
+    /// `101`,至少 3 个字符
     case keywordTooShort
-    /// 没有这条字幕(`20900`)
+    /// `20900`
     case notFound
     /// 配额超限(`30900`,默认 20 次/分钟,按 token + IP 共享)
     case quotaExceeded
     /// 服务端故障(`30000` / `30001` / `30002` / `30300`)或其它非 2xx
     case server(message: String?)
-    /// 传输层失败(断网、超时、响应不是 HTTP)
+    /// 断网、超时、响应不是 HTTP
     case transport(String)
-    /// 这条字幕里没有能挂的文本文件(只有压缩包 / 图形字幕)
+    /// 只有压缩包 / 图形字幕
     case noTextFile
-    /// 下载被重定向到 assrt 的错误页(`AssrtClient.download`):
-    /// `expired = true` 是 `/download/failed/`(签名不对 / 过期,实测 HTTP 492),
-    /// `false` 是 `/download/error/`(服务端出错,实测 HTTP 493「服务器抽风啦」)
+    /// 下载被重定向到 assrt 错误页:`expired = true` 是 `/download/failed/`(签名不对 / 过期),
+    /// `false` 是 `/download/error/`(服务端出错)
     case downloadRejected(expired: Bool)
 
     var errorDescription: String? {

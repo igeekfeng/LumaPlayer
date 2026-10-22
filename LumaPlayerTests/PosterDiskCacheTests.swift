@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 海报图片磁盘缓存的单元测试(API_CONTRACT.md 3.3)。
-///
-/// 纯字节层(不解码图片,`NSImage` 的编解码归 `PosterImageTests` 管);
-/// 临时目录注入,不污染真实的 `~/Library/Caches`。
+/// 海报磁盘缓存(API_CONTRACT.md 3.3):纯字节层,临时目录注入。
 final class PosterDiskCacheTests: XCTestCase {
     private var directory: URL!
     private var cache: PosterDiskCache!
@@ -108,7 +105,6 @@ final class PosterDiskCacheTests: XCTestCase {
 
     // MARK: - 设置 → 缓存:占用 / 上限 / 清空
 
-    /// 「已用空间」显示的是磁盘上真实的大小与张数
     func testUsageCountsBytesAndFiles() async {
         let payload = Data(repeating: 0x62, count: 4096)
         await cache.store(payload, for: makeSpec(itemID: "ITEM-1", tag: "TAG-1"))
@@ -120,14 +116,13 @@ final class PosterDiskCacheTests: XCTestCase {
         XCTAssertEqual(usage.bytes, payload.count * 2)
     }
 
-    /// 空目录(或目录还不存在)时的占用必须是 0,⛔ 不是「估算中」卡住
+    /// 目录还不存在时占用是 0,⛔ 不能卡在「估算中」
     func testUsageIsZeroBeforeAnyStore() async {
         let usage = await cache.usage()
 
         XCTAssertEqual(usage, .zero)
     }
 
-    /// 「清空图片缓存」:文件全没了,占用归零,而且之后还能正常写
     func testRemoveAllClearsDiskAndStaysUsable() async {
         let spec = makeSpec(itemID: "ITEM-1", tag: "TAG-1")
         await cache.store(Data("poster-bytes".utf8), for: spec)
@@ -144,8 +139,7 @@ final class PosterDiskCacheTests: XCTestCase {
         XCTAssertEqual(rewritten, Data("again".utf8), "清空后目录要能自行重建")
     }
 
-    /// 调小上限**立即**按新上限淘汰,不等下一次写盘
-    /// (用户把 2 GB 改成 128 MB 后,盘上那 2 GB 不能还躺着)
+    /// 调小上限立即淘汰,不等下一次写盘
     func testLoweringLimitEvictsImmediately() async throws {
         let small = 64 * 1024
         let limited = PosterDiskCache(directory: directory, byteLimit: 1024 * 1024)
@@ -169,7 +163,6 @@ final class PosterDiskCacheTests: XCTestCase {
         XCTAssertLessThanOrEqual(after.bytes, small, "调小上限后占用必须落到新上限之内")
     }
 
-    /// 上限放宽时什么都不删
     func testRaisingLimitKeepsFiles() async {
         let payload = Data(repeating: 0x64, count: 4096)
         let spec = makeSpec(itemID: "ITEM-1", tag: "TAG-1")

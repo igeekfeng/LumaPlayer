@@ -26,7 +26,7 @@
 
 ### 0.3 回填
 
-核实后在同一次提交里改标记、写来源与日期;与文档不符**以实际为准改文档**;
+核实后在同一次提交里改标记、写来源;与文档不符**以实际为准改文档**;
 能存 fixture 的存脱敏 fixture;`KNOWN_ISSUES.md` 对应条目移除。
 
 ## 1. Base URL
@@ -79,7 +79,7 @@ Authorization: Emby UserId="{userId}", Client="LumaPlayer", Device="{device}", D
 
 ### 2.4 DeviceId
 
-首次启动 `UUID().uuidString`,存凭据文件(account `deviceId`);旧版在钥匙串,升级时原样导入,⛔ 不重新生成。
+首次启动 `UUID().uuidString`,存凭据文件(account `deviceId`);钥匙串里有旧值时原样导入,⛔ 不重新生成。
 **全 App 一个**,删服务器时不删 —— 按服务器生成会让 Emby 后台出现重复设备。
 
 ### 2.5 401 ✅
@@ -142,7 +142,7 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 - ⚠️ `Filters=IsResumable` **只在带 `ParentId` 时可信**:4.7.11.0 上不带 `ParentId` 返回的是媒体库条目(Q28)。
 - ⚠️ `IncludeItemTypes` 用在 `Resume` 上只能填可播放叶子类型,掺进 Series / Season / BoxSet 就归零。
 - 列表接口字段比单项少,要 `Overview` 等必须显式 `Fields=`。
-- **首页 hero 的「随机推荐」用的就是这个端点**(2026-10-15):`Recursive=true` +
+- **首页 hero 的「随机推荐」用的就是这个端点**:`Recursive=true` +
   `IncludeItemTypes=Movie,Series` + `SortBy=Random` + `Filters=IsUnplayed`,`Limit` = 推荐池大小。
   ⛔ **不带 `ParentId`**(要跨全部媒体库);⛔ `Limit` 要**大于**轮播张数(hero 必须带背景图,
   随机几页里带 `BackdropImageTags` 的往往只有一两条);⛔ 不改用 `/Movies/Recommendations`(理由见上表)。
@@ -173,7 +173,7 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 #### 3.4.1 `ProviderIds` ✅
 
 官方 OpenAPI 4.1.1.0:`BaseItemDto.ProviderIds` 是 `object<string,string>`
-(2026-10-19 从 `swagger.emby.media/openapi.json` 直接读出)。
+(`swagger.emby.media/openapi.json`)。
 
 - 键名由各刮削器决定,常见 `Tmdb` / `Tvdb` / `Imdb` / `MyAnimeList` / `AniList`;
   **键名大小写不统一**(社区实测 `Tmdb` 与 `tmdb` 都出现过)→ 取值一律按小写比较;
@@ -316,7 +316,7 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 
 ### 5.8 批量标记已看 ✅
 
-**Emby 没有批量端点。** 官方 OpenAPI(4.1.1.0,2026-10-18 下载核对)里 `PlayedItems` 只有
+**Emby 没有批量端点。** 官方 OpenAPI(4.1.1.0)里 `PlayedItems` 只有
 `/Users/{UserId}/PlayedItems/{Id}` 的 `POST` / `DELETE`;`/Items` 系列没有任何「按父项 / 按季批量置已看」的路径。
 所以「整季 / 多集标记」= **逐条发 5.5**,客户端串行发、不并发:
 

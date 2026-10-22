@@ -1,19 +1,14 @@
 import Foundation
 import Observation
 
-/// 全局 App 状态(ViewModel 层,@MainActor + @Observable,
-/// CLAUDE.md「并发分层」的分层规则)。
+/// 全局 App 状态。
 @MainActor
 @Observable
 final class AppState {
     var route: AppRoute = .launching
-    /// 当前**播放来源**(Emby / 百度网盘 / 未来的其它来源)。这是权威字段。
+    /// 当前播放来源。唯一真相。
     var currentSource: SourceProfile?
-    /// Emby 兼容访问器:当前来源是 Emby 时的服务器档案,否则 `nil`。
-    ///
-    /// 保留它是刻意的 —— `ServerProfile` 出现在 39 个文件里,让既有 Emby 侧代码
-    /// 继续按这个名字读写,改造就不必碰它们(`docs/SOURCE_ABSTRACTION_PLAN.md` §6.2)。
-    /// 写入时会同步写成 `.emby(_)`,所以 `currentSource` 始终是唯一真相。
+    /// Emby 侧代码的兼容访问器:当前来源是 Emby 时的服务器档案,否则 nil;写入即写 `currentSource`。
     var currentServer: ServerProfile? {
         get {
             if case .emby(let profile) = currentSource { return profile }
@@ -21,24 +16,19 @@ final class AppState {
         }
         set { currentSource = newValue.map(SourceProfile.emby) }
     }
-    /// 需要重新登录的服务器(token 缺失或已失效)。
-    /// 只标这一台,其他服务器不受影响(API_CONTRACT.md 2.5)
+    /// 需要重新登录的那一台(token 缺失或失效),不影响其他服务器(API_CONTRACT.md 2.5)
     var serverNeedingLogin: ServerProfile?
-    /// 服务器列表的修订号:增 / 改 / 删后 +1。列表本身在 ServerRegistry(actor)里,
-    /// 各视图持有的是快照,观察它来重读 —— 否则在设置窗口改了名,主窗口菜单还是旧名
+    /// 服务器列表增 / 改 / 删后 +1。列表在 ServerRegistry(actor)里,各视图持有快照,观察它来重读
     var serverListRevision = 0
     /// 启动期异常(如本地存储损坏),由 RootView 弹提示
     var startupError: AppError?
     /// 会话恢复只做一次(防 task 重入)
     var didRestoreSession = false
 
-    /// 正在加载 / 刷新的内容页。主窗口顶栏据此显示加载线,「Reload」菜单(⌘R)据此禁用。
-    ///
-    /// 用集合而不是一个布尔:栈上多页同时存在时,布尔会受「push 时旧页 `onDisappear`
-    /// 与新页上报的先后顺序」影响而抖一下;集合只按每页自己的状态增删,与顺序无关。
+    /// 正在加载的内容页(顶栏加载线、⌘R 禁用据此判断)。用集合不用布尔:push 时旧页 `onDisappear`
+    /// 与新页上报先后不定,布尔会抖。
     private var loadingPages: Set<ContentPage> = []
 
-    /// 有任意内容页在加载 / 刷新。
     var isPageLoading: Bool { !loadingPages.isEmpty }
 
     /// 内容页上报自己的加载状态(见 `reportsPageLoading(_:page:to:)`)。
@@ -52,8 +42,7 @@ final class AppState {
 
     // MARK: - 播放器窗口
 
-    /// 播放器窗口当前要播的内容。nil = 没在播(窗口应关闭)。
-    /// 播放器是单实例独立窗口(CLAUDE.md「架构主线」),换内容 = 换请求。
+    /// 播放器窗口要播的内容。nil = 没在播(窗口应关闭)。
     var nowPlaying: PlaybackRequest?
     /// 最近一次收尾上报已发完的播放。详情页 / 首页观察它重读服务端进度(Q22)。
     var lastFinishedPlayback: FinishedPlayback?

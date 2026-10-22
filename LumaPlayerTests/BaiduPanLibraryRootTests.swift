@@ -1,19 +1,14 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 片库根的边界判定（`BaiduPanPath` 的纯字符串规则）。
-///
-/// 背景：第三方应用能访问的范围是 `/apps/{应用目录名}` **一个目录**
-/// （`docs/BAIDU_PAN_API.md` §3），百度授权页**没有**「选文件夹」这一步 ——
-/// 所以「选」只能发生在应用目录**内部**（选一个子目录当进来时的起点）。
-/// 这条边界就是那次选择的护栏：越界的路径第三方应用访问不到，
-/// 设了就是个必然打不开的入口。
+/// 片库根的边界判定(`BaiduPanPath`)。第三方应用只能访问 `/apps/{应用目录名}` 一个目录(`docs/BAIDU_PAN_API.md` §3),
+/// 授权页没有选文件夹这一步,所以只能在应用目录内选子目录当起点;越界的路径必然打不开。
 final class BaiduPanLibraryRootTests: XCTestCase {
 
     private let root = "/apps/LumaPlayer"
 
     func testApplicationRootItselfIsAllowed() {
-        // 它就是默认起点，允许记下来（等于「没设」）
+        // 默认起点,允许记下来(等于「没设」)
         XCTAssertTrue(BaiduPanPath.isInside(root, applicationRoot: root))
     }
 
@@ -22,8 +17,7 @@ final class BaiduPanLibraryRootTests: XCTestCase {
         XCTAssertTrue(BaiduPanPath.isInside("/apps/LumaPlayer/电影/2024", applicationRoot: root))
     }
 
-    /// ⛔ 这是最要紧的一条：`hasPrefix` 会把「名字相近的另一个应用目录」
-    /// 也算进范围内，而那个目录的访问权限属于**另一个应用**。
+    /// ⛔ 最要紧:`hasPrefix` 会把名字相近的另一个应用目录也算进来,那是另一个应用的权限。
     func testSiblingDirectoryWithSharedPrefixIsRejected() {
         XCTAssertFalse(BaiduPanPath.isInside("/apps/LumaPlayerXX", applicationRoot: root))
         XCTAssertFalse(BaiduPanPath.isInside("/apps/LumaPlayerXX/电影", applicationRoot: root))

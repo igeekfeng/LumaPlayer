@@ -1,12 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// fixture 解码:字段缺失不崩、必填缺失报错
-/// (API_CONTRACT.md 8.1 的可选性原则与必填表)。
-///
-/// `public_info.json` 是**真实响应脱敏**后的 fixture(4.7.11.0,2026-09-22,
-/// 见 CLAUDE.md「真实服务器使用纪律」);
-/// 其余带 `_synthetic` 后缀的仍是构造数据,未经真实服务器验证(API_CONTRACT.md 9.4)。
+/// API_CONTRACT.md 8.1 的可选性原则与必填表。`public_info.json` 是真实 4.7.11.0 响应脱敏;带 `_synthetic` 后缀的是构造数据,未在真实服务器验证(9.4)。
 final class EmbyFixtureDecodingTests: XCTestCase {
     private let decoder = ResponseDecoder()
 
@@ -18,8 +13,7 @@ final class EmbyFixtureDecodingTests: XCTestCase {
     }
 
     func testRealResponseWithUnknownFieldsDecodes() throws {
-        // 真实响应里有 LocalAddresses / RemoteAddresses / IsCuveeServer 这些
-        // 我们不需要的字段:未知字段必须被忽略,不得导致解码失败(8.1)
+        // 真实响应里有 LocalAddresses / RemoteAddresses / IsCuveeServer 等未知字段,必须被忽略(8.1)
         let info = try decode(EmbyServerInfo.self, "public_info.json", endpoint: .publicSystemInfo)
         XCTAssertNotNil(info.id)
         XCTAssertEqual(info.version, "4.7.11.0")
@@ -50,7 +44,7 @@ final class EmbyFixtureDecodingTests: XCTestCase {
     }
 
     func testMissingAccessTokenIsDecodingError() throws {
-        // AccessToken 在 8.1 的必填表里:缺失即视为响应损坏
+        // AccessToken 必填(8.1):缺失即视为响应损坏
         do {
             _ = try decode(
                 AuthenticationResult.self,
@@ -78,7 +72,7 @@ final class EmbyFixtureDecodingTests: XCTestCase {
     }
 
     func testViewDecodesPrimaryImageTagForCover() throws {
-        // 媒体库封面:ImageTags["Primary"] 优先,缺失回退 PrimaryImageTag,都没有就不请求(3.3 / Q13)
+        // ImageTags["Primary"] 优先,缺失回退 PrimaryImageTag,都没有就不请求(3.3 / Q13)
         let json = Data(#"""
         {"Items":[
           {"Id":"V1","Name":"电影","ImageTags":{"Primary":"tag-a"}},
@@ -95,7 +89,7 @@ final class EmbyFixtureDecodingTests: XCTestCase {
     }
 
     func testViewWithoutIdIsDecodingError() throws {
-        // BaseItem 的 Id 必填(8.1)
+        // Id 必填(8.1)
         let json = Data(#"{"Items":[{"Name":"没有 Id 的库"}]}"#.utf8)
         XCTAssertThrowsError(
             try decoder.decode(

@@ -55,7 +55,7 @@ final class LegacyKeychainImportTests: XCTestCase {
     }
 
     func testImportedValuesReadBackThroughCredentialStore() async throws {
-        // 端到端:旧版 account 命名与新存储一致,导入后按原语义读得出来
+        // 端到端:旧版 account 命名与新存储一致,导入后读得出来
         let serverID = UUID()
         try addItem("LEGACY-DEVICE", account: "deviceId")
         try addItem("FAKE_TOKEN", account: "server-token:\(serverID.uuidString)")

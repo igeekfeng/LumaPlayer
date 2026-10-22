@@ -19,8 +19,7 @@ final class LibraryFeatureTests: XCTestCase {
         XCTAssertEqual(query.parentID, "VIEW-1")
     }
 
-    /// SortOrder 必须与 SortBy 一一对应(3.2);次级键 SortName 恒为升序,
-    /// 否则「加入日期降序」时同一天加入的片子会按名称倒排。
+    /// 次级键 SortName 恒为升序,否则「加入日期降序」时同一天加入的片子会按名称倒排(3.2)。
     func testSecondaryNameKeyStaysAscending() {
         let query = LibraryViewModel.makeQuery(
             parentID: nil, collectionType: "tvshows",

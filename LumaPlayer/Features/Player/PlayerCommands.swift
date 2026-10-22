@@ -1,17 +1,13 @@
 import SwiftUI
 
 extension FocusedValues {
-    /// 当前处于前台的播放页。只有播放窗口是 key window 时才有值,
-    /// 菜单项据此启用 / 禁用 —— 主窗口里按空格不会去暂停后台的播放器。
+    /// 只有播放窗口是 key window 时才有值:主窗口里按空格不会暂停后台的播放器。
     @Entry var playerViewModel: PlayerViewModel?
 }
 
-/// 菜单栏「Playback」菜单(播放快捷键和菜单)。
+/// 菜单栏「Playback」菜单。文案用英文,与系统菜单一致(App 只声明了 en);App 内界面仍是中文。
 ///
-/// 文案用英文:App 只声明了 en,系统自带的 File / Edit / View… 都是英文,
-/// 这里跟着它们,菜单栏不中英混排。App 内的界面仍是中文。
-///
-/// ## 快捷键表(改键时这里、`PlayerWindowView` 的按键处理、菜单三处一起改)
+/// 快捷键表(改键时这里、`PlayerWindowView` 的按键处理、菜单三处一起改):
 ///
 /// | 操作 | 键 |
 /// |---|---|
@@ -31,7 +27,7 @@ extension FocusedValues {
 /// | 退出全屏 | Esc |
 /// | 拖进度 | 触控板双指横滑(松手才 seek,纵向不拦截) |
 ///
-/// 主窗口(浏览)的快捷键不在这张表里的菜单上,但同样记在这里:
+/// 主窗口(浏览)的快捷键:
 ///
 /// | 操作 | 键 | 在哪 |
 /// |---|---|---|
@@ -40,12 +36,11 @@ extension FocusedValues {
 /// | 聚焦搜索框 | ⌘F | `ChromeSearchField`(浮动顶栏) |
 /// | 返回 | ⌘[ | `ChromeBackButton`(浮动顶栏) |
 ///
-/// 方向键 seek ⛔ 不挂在菜单上:菜单快捷键按住会连发,而转码模式下
-/// 每次 seek 都是一次重新起流;方向键只在视图里按 `.down` 处理。
+/// 方向键 seek ⛔ 不挂在菜单上:菜单快捷键按住会连发,转码模式下每次 seek 都重新起流;
+/// 方向键只在视图里按 `.down` 处理。
 struct PlayerCommands: Commands {
     @FocusedValue(\.playerViewModel) private var player
 
-    /// 没有播放页时用默认步长(设置页改了也只影响下一次播放的菜单文案)
     private var seekStep: Double { player?.seekStep ?? Metrics.seekStep }
 
     var body: some Commands {
@@ -58,8 +53,7 @@ struct PlayerCommands: Commands {
 
             Divider()
 
-            // 门禁取 `isReadyToSeek` 而不是 `session != nil`:内核还没 file-loaded
-            // 时 mpv 对 seek 必拒(PITFALLS),按下去只会闪一句失败。
+            // 用 `isReadyToSeek` 而非 `session != nil`:file-loaded 前 mpv 必拒 seek(PITFALLS)
             Button("Skip Back \(Int(seekStep)) Seconds") { player?.skip(by: -seekStep) }
                 .disabled(player?.isReadyToSeek != true)
             Button("Skip Forward \(Int(seekStep)) Seconds") { player?.skip(by: seekStep) }
@@ -156,8 +150,7 @@ struct PlayerCommands: Commands {
         }
     }
 
-    /// Z / X 提前 / 延后 0.1 秒,⇧ 为 1 秒(与 mpv 默认键位一致,PlayerCommands.swift 的快捷键表)。
-    /// 按住会连发 —— 和方向键 seek 不同,改 `sub-delay` 是纯本地操作,没有请求开销。
+    /// 按住连发无妨:改 `sub-delay` 是纯本地操作(对比方向键 seek)。
     @ViewBuilder
     private var subtitleDelayMenu: some View {
         if let player {

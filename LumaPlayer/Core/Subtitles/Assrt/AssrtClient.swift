@@ -1,23 +1,17 @@
 import Foundation
 import os
 
-/// assrt(伪射手)的 HTTP 客户端:纯传输 + 解码,⛔ 不含 token 存储、不碰凭据。
+/// assrt 的 HTTP 客户端:纯传输 + 解码,无状态,token 由调用方逐次传入。
 ///
-/// 分工与 `TMDBClient` / `BaiduPanAPIClient` 一致:token 由调用方逐次传入,
-/// 客户端无状态(`Sendable`),「token 从哪来」在上层(`SubtitleService`)。
-///
-/// ## 两个安全细节
-///
-/// 1. token 走 `Authorization: Bearer`,⛔ 不进查询串(会被 URL 日志带走)。
-/// 2. **下载不带 token**:下载地址在 `file0.assrt.net` 这类独立主机上,
-///    地址自带签名 —— 把 token 发给另一台主机是没必要的泄漏。
+/// - token 走 `Authorization: Bearer`,⛔ 不进查询串;
+/// - ⛔ 下载不带 token:下载地址在 `file0.assrt.net` 等独立主机,自带签名。
 struct AssrtClient: Sendable {
 
     init(session: URLSession? = nil, baseURL: URL = AssrtEndpoint.defaultBaseURL) {
         if let session {
             self.session = session
         } else {
-            // 与 TMDB 同一处置:不缓存、不存 cookie —— 搜索结果要「刚改就能看到」
+            // 不缓存、不存 cookie(同 TMDB)
             let configuration = URLSessionConfiguration.ephemeral
             configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
             configuration.urlCache = nil
@@ -35,8 +29,7 @@ struct AssrtClient: Sendable {
 
     // MARK: - 搜索
 
-    /// 按关键词搜字幕。一次最多 15 条(服务端上限),不做分页 ——
-    /// 用户真正要的是「挑一条能用的」,翻页只会多花配额。
+    /// 一次最多 15 条,不分页(翻页只会多花配额)。
     func search(keyword: String, token: String) async throws -> [AssrtSearchResult] {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= AssrtEndpoint.minimumKeywordLength else {
@@ -56,10 +49,7 @@ struct AssrtClient: Sendable {
 
     // MARK: - 详情
 
-    /// 取一条字幕的文件列表与下载地址。
-    ///
-    /// ⚠️ 返回的地址是**一次性**的(文档原话:每次生成都不同、有有效期),
-    /// ⛔ 不要缓存 URL;要缓存就缓存下载下来的**文件**。
+    /// ⚠️ 返回的地址是一次性的,⛔ 不要缓存 URL,要缓存就缓存文件。
     func detail(id: Int, token: String) async throws -> AssrtSubtitleDetail {
         let data = try await send(.detail(id: id), token: token)
         let envelope: AssrtDetailEnvelope = try decode(data)
@@ -72,10 +62,7 @@ struct AssrtClient: Sendable {
 
     // MARK: - 下载
 
-    /// 下载一个字幕文件(不带认证头,见类型注释)。
-    ///
-    /// 大小上限复用 `SubtitleFileStore.maximumBytes`:超了直接拒,⛔ 不把整个文件读进内存
-    /// 再交给 mpv —— 误点一个视频文件就会吃掉几百 MB。
+    /// 不带认证头。超过 `SubtitleFileStore.maximumBytes` 直接拒。
     func download(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -101,9 +88,8 @@ struct AssrtClient: Sendable {
         return data
     }
 
-    /// 下载失败时 file0 不直接回错误码,而是 302 到主站的错误页(2026-10-21 实测):
-    /// `/download/failed/<base64 路径>`(HTTP 492)与 `/download/error/<base64 路径>`(HTTP 493)。
-    /// URLSession 会跟随跳转,所以看**最终地址**认出来,给出能看懂的原因而不是「HTTP 493」。
+    /// 下载失败时 file0 会 302 到主站错误页 `/download/failed/…`(492)或 `/download/error/…`(493)。
+    /// URLSession 会跟随跳转,所以看最终地址识别。
     static func downloadRejection(finalURL: URL?) -> AssrtError? {
         guard let url = finalURL, let host = url.host()?.lowercased(),
               host == "assrt.net" || host.hasSuffix(".assrt.net") else { return nil }
@@ -114,10 +100,7 @@ struct AssrtClient: Sendable {
 
     // MARK: - 传输与解码
 
-    /// 构造一次 API 请求。
-    ///
-    /// 单独成方法是为了**能被断言**:token 必须在 `Authorization` 头里、
-    /// ⛔ 不能出现在 URL 上(URL 会进日志与诊断文件)。
+    /// 单独成方法供测试断言 token 只在头里、不在 URL 上。
     func request(for endpoint: AssrtEndpoint, token: String) throws -> URLRequest {
         guard !token.isEmpty else { throw AssrtError.missingToken }
         guard let url = endpoint.url(baseURL: baseURL) else {
@@ -158,13 +141,13 @@ struct AssrtClient: Sendable {
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            // 不吞错:响应格式变了要能看出来,而不是显示「没有结果」
+            // 响应格式变了要能看出来,而不是显示「没有结果」
             Self.logger.error("assrt 响应解析失败:\(String(describing: error), privacy: .public)")
             throw AssrtError.transport("响应格式不对")
         }
     }
 
-    /// 只解 `status` / `message` —— 非 2xx 时先判断业务码用。
+    /// 非 2xx 时先判断业务码用。
     private struct AssrtStatusOnly: Decodable {
         let status: Int
         let message: String?

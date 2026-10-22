@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 批量标记已看 / 未看(API_CONTRACT.md 5.8):Emby 没有批量端点,
-/// 客户端逐条串行发 5.5,失败不中断、401 即停,并一次作废缓存。
-///
-/// 全部走 `MockEmbyURLProtocol` 与合成数据,零真实网络依赖。
+/// 批量标记已看 / 未看(API_CONTRACT.md 5.8):Emby 没有批量端点,逐条串行发 5.5,失败不中断、401 即停,一次作废缓存。
 final class SeasonBatchPlayedTests: XCTestCase {
     private static let userID = "USER-1"
     private static let token = "FAKE_TOKEN_0123456789"
@@ -185,8 +182,7 @@ final class SeasonBatchPlayedTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
-    /// 批量跑到一半切走条目:旧批次不能再把进度 / 提示写进新页面,
-    /// 更不能把 `batchProgress` 永久卡住(那样新页面的批量入口就点不动了)。
+    /// 批量跑到一半切走条目:旧批次不能把进度 / 提示写进新页面,也不能把 `batchProgress` 卡住(新页面的批量入口会点不动)。
     @MainActor
     func testViewModelSwitchPageDuringBatchDoesNotStick() async throws {
         stubPlayed(itemID: "E1")

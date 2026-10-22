@@ -1,62 +1,44 @@
 import Foundation
 
-/// 首页:我的媒体 / 继续观看 / 每个媒体库的「最新」,外加顶部 hero 的**随机推荐池**。
+/// 首页:我的媒体 / 继续观看 / 每个媒体库的「最新」,外加顶部 hero 的随机推荐池。
+/// ⛔ 不做跨剧集的「下一集」行(PITFALLS.md Q31)。
 ///
-/// 没有跨剧集的「下一集」行(2026-10-02 去掉):用户所有服务器上它都是加载一下就消失,
-/// 见 `docs/PITFALLS.md` Q31。
-///
-/// 每个分区各自独立加载、各自有自己的状态:一个失败不该让另一个也消失。
-/// 每个分区都带 generation 检查 —— 快速切换服务器时,旧服务器慢到的响应
-/// 会被丢弃(不出现旧服务器内容)。
-///
-/// 状态**按服务器分开存**(issue #3):A → B → A 切回来时直接显示 A 上次的内容、
-/// 后台原地刷新,不回退到 loading;各台之间互不可见,不串台。
+/// 各分区独立加载、独立状态,一个失败不影响另一个;都带 generation 检查,丢弃切走的服务器的迟到响应。
+/// 状态按服务器分开存:切回来直接显示上次内容、后台原地刷新,不回退到 loading,不串台。
 @MainActor
 @Observable
 final class HomeViewModel {
-    /// 首页每个分区取多少条。不是设计 token,与布局无关。
+    /// 不是设计 token,与布局无关。
     static let sectionLimit = 20
 
-    /// 顶部 hero 的推荐池一次取多少条(:而非直接取轮播要的张数)。
-    ///
-    /// 不是设计 token,与布局无关。取 20 是给「必须带背景图」那道筛选留余量:
-    /// 2026-10-15 本机 4.9.5.0 实测,随机 6 条里只有 1 条带 `BackdropImageTags`
-    /// (顶层 `Series` 通常有,`Movie` 常常只有竖版海报)。只取 5 条的话
-    /// 十有八九筛完是空的。
+    /// 远多于轮播张数:给「必须带背景图」的筛选留余量,`Movie` 常常只有竖版海报。
     static let recommendationPoolLimit = 20
 
-    /// hero 轮播最多几张。轮播的每一张都要一张 1920 宽的背景图,
-    /// 张数越多首屏的图片请求越多 —— 见 `HomeHeroCarousel`。
+    /// 每张都要一张 1920 宽背景图,张数越多首屏请求越多。
     static let heroCarouselLimit = 5
 
-    /// 首页为之显示「最新」的媒体库类型。音乐 / 有声书 / 直播不在首版范围内
-    /// (非目标清单见 README.md「已知限制」),`CollectionType` 为 null 的混合库照常显示。
+    /// 显示「最新」的媒体库类型。音乐 / 有声书 / 直播是非目标;`CollectionType` 为 null 的混合库照常显示。
     static let latestCollectionTypes: Set<String?> = [nil, "movies", "tvshows", "homevideos", "musicvideos", "mixed"]
 
-    /// 「最新」同时最多在途几个请求。媒体库 20+ 的服务器上,一次刷新不该把
-    /// 二十几个请求同时压过去(真实服务器使用纪律:低频率)。取 4:
-    /// `URLSession` 每台主机默认 6 个连接,给「继续观看」与首屏图片留出余量。
+    /// 「最新」同时在途上限(低频率纪律)。`URLSession` 每台主机默认 6 个连接,给其余请求留余量。
     static let latestConcurrency = 4
 
     private let container: AppContainer
 
-    /// 首页的一行。每行一个独立的 `@Observable` 对象:行视图只读自己那一个 `state`,
-    /// 别的行到数据时不会让它(以及整个首页)重新求值 —— 媒体库多时「最新」有很多行。
+    /// 每行一个独立的 `@Observable` 对象:别的行到数据时不会让它(及整个首页)重新求值。
     @MainActor
     @Observable
     final class Row<Value: Sendable> {
         private(set) var state: LoadState<Value> = .idle
 
-        /// 已有内容(`.loaded`)保持不动;其余(空闲 / 失败 / 加载中)进入加载态。
-        /// 不变时不写属性:写 `@Observable` 属性即通知,哪怕值没变
+        /// 已有内容保持不动;其余进入加载态。不变时不写:写 `@Observable` 属性即通知,哪怕值没变
         func markLoading() {
             if case .loaded = state { return }
             if case .loading = state { return }
             state = .loading
         }
 
-        /// 新结果并入现有状态:成功一律替换;失败时若已有内容则保留内容(后台刷新失败不该
-        /// 把好好的一行换成错误卡片,401 等问题会在用户下一次操作时由正常路径暴露)
+        /// 成功一律替换;失败时若已有内容则保留(后台刷新失败不把好好的一行换成错误卡片)
         func receive(_ new: LoadState<Value>) {
             if case .failed = new, case .loaded = state { return }
             state = new
@@ -68,30 +50,26 @@ final class HomeViewModel {
         }
     }
 
-    /// 一台服务器的首页各分区
-    /// `heroPick` 的结果
     enum HeroPick: Equatable {
-        /// 决定它的行还在加载:hero 位置放骨架
+        /// 决定它的行还在加载:放骨架
         case pending
-        /// 没有能上 hero 的条目:不画 hero,首页从普通页面的顶部开始
+        /// 不画 hero
         case none
-        /// 铺满顶部的一项或多项。**只有一张**(退路)时轮播自然退化成静默的单张,
-        /// 不给箭头 / 圆点(`HomeHeroCarousel`)。
+        /// 只有一张时轮播退化成静默的单张(`HomeHeroCarousel`)
         case items([EmbyItem])
     }
+
+    /// 一台服务器的首页各分区
 
     @MainActor
     @Observable
     final class Sections {
-        /// 「我的媒体」:`/Users/{UserId}/Views`,入口列表来自服务器、不写死「电影/电视剧」
-        /// (DesignTokens.swift「界面规则」)。「最新」的行也按它来,所以先回来它才发「最新」的请求
+        /// 「我的媒体」,来自服务器、不写死(DesignTokens.swift「界面规则」)。它回来后才发「最新」
         let views = Row<[EmbyView]>()
         let resume = Row<[EmbyItem]>()
-        /// hero 轮播的候选池(`SortBy=Random`)。⛔ 它**不驱动**任何货架 ——
-        /// `HomeView` 的行列表里没有它,只有 hero 读。
+        /// hero 候选池。⛔ 不驱动任何货架,只有 hero 读。
         let recommended = Row<[EmbyItem]>()
-        /// 每个媒体库的「最新」,键是 View 的 Id。只在库的集合变了时整体替换,
-        /// 行对象跨刷新复用(刷新只改行内的 `state`)
+        /// 键是 View 的 Id。只在库的集合变了时整体替换,行对象跨刷新复用
         private(set) var latest: [String: Row<[EmbyItem]>] = [:]
 
         fileprivate func setLatest(_ rows: [String: Row<[EmbyItem]>]) {
@@ -100,40 +78,31 @@ final class HomeViewModel {
         }
     }
 
-    /// 键是 `ServerProfile.id`。只增不删:服务器数量很少,且首页重建
-    /// (删光服务器回到引导页再进来)时整个 ViewModel 随之重建。
-    ///
-    /// 不参与观察:`Sections` 对象一旦建出来就不再替换,视图观察的是对象内部的属性。
-    /// 所以 `sections(for:)` 可以在视图求值时按需建对象,不会触发「求值中改状态」
+    /// 键是 `ServerProfile.id`,只增不删(服务器很少,首页重建时 ViewModel 随之重建)。
+    /// 不参与观察:`Sections` 建出后不再替换,所以 `sections(for:)` 可在视图求值时按需建对象。
     @ObservationIgnored private var sectionsByServer: [UUID: Sections] = [:]
 
-    /// 正在写「继续观看」的条目(菜单里的「移出继续观看」据此禁用)
+    /// 菜单里的「移出继续观看」据此禁用
     private(set) var updatingResumeIDs: Set<String> = []
-    /// 「移出继续观看」失败的提示(写操作失败必须让用户知道,不能静默回滚)
+    /// 写操作失败必须让用户知道,不能静默回滚
     var resumeActionError: String?
-    /// hero 上剧集「播放」定位分集失败时的提示(`playSeries`)
     var seriesPlayError: String?
-    /// 正在为哪部剧定位分集(hero 的播放按钮据此转圈、防连点)
+    /// hero 播放按钮据此转圈、防连点
     private(set) var resolvingSeriesID: String?
 
     private var generation = 0
     private var tasks: [Task<Void, Never>] = []
 
-    /// 在途请求数。只统计首屏加载路径(媒体库列表、继续观看、各「最新」行)——
-    /// 播放后的静默校正与「移出继续观看」不计,那些不该让刷新图标转起来。
+    /// 只统计首屏加载路径;静默校正与写操作不计,不该让刷新图标转起来。
     private var inFlight = 0
-    /// 首屏是否正在加载 / 刷新(顶栏加载线据此显示)。
-    ///
-    /// 不能只看各行的 `state`:刷新时已有内容的行会保持 `.loaded`(不闪加载态),
-    /// 所以需要一个独立标记。
+    /// 顶栏加载线据此显示。不能只看各行 `state`:刷新时有内容的行保持 `.loaded`。
     private(set) var isLoading = false
 
     init(container: AppContainer) {
         self.container = container
     }
 
-    /// 某台服务器的首页内容;没加载过就是全 `.idle`。
-    /// 同一台服务器始终返回同一个对象(没有就当场建一个)
+    /// 同一台服务器始终返回同一个对象;没加载过就是全 `.idle`。
     func sections(for serverID: UUID) -> Sections {
         if let sections = sectionsByServer[serverID] { return sections }
         let sections = Sections()
@@ -141,28 +110,23 @@ final class HomeViewModel {
         return sections
     }
 
-    /// 加载(或切换服务器 / 刷新后重新加载)全部分区。
-    ///
-    /// 媒体库列表、继续观看、hero 的推荐池三路**并行**;「最新」等媒体库列表
-    /// 回来再按库发,每个库只请求一次。
+    /// 媒体库列表、继续观看、推荐池三路并行;「最新」等媒体库列表回来再按库发。
     func load(server: ServerProfile) {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
         generation += 1
-        // 这台服务器已有内容时不回退到 loading(同一台刷新、或从别的服务器切回来):
-        // 保留当前内容,新数据到达后原地替换,失败则保留旧内容。
-        // 首次加载 / 上次失败才显示加载态。
+        // 已有内容时不回退到 loading,原地替换;首次 / 上次失败才显示加载态
         let sections = self.sections(for: server.id)
         sections.views.markLoading()
         sections.resume.markLoading()
 
         let connection = container.connection(for: server)
-        // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
+        // @Sendable 闭包里不能读 MainActor 静态属性
         let limit = Self.sectionLimit
         track { try await connection.userViews() } apply: { [weak self] new in
             guard let self else { return }
             sections.views.receive(new)
-            // 刷新失败时保留的旧列表照常加载「最新」;首次就失败则没有「最新」可加载
+            // 刷新失败时用保留的旧列表照常加载「最新」
             loadLatest(views: sections.views.state.value ?? [], sections: sections, connection: connection)
         }
         track { try await connection.resume(limit: limit).items } apply: { new in
@@ -171,51 +135,36 @@ final class HomeViewModel {
         if container.homeAppearance.showsHeroRecommendations {
             loadRecommendations(sections: sections, connection: connection)
         } else {
-            // 关掉了就不发这个请求。行置空,下次打开开关时从干净状态开始
-            // (hero 本身另由 `heroPick` 短路成 `.none`)
+            // 关掉了就不发请求,行置空
             sections.recommended.replace(with: .loaded([]))
         }
     }
 
-    /// 首页顶部的随机推荐池(`SortBy=Random`,`ServerConnection.recommendations`)。
-    ///
-    /// 调用方**只在开关打开时**调这里 —— 关掉时不发这个请求(少一次往返,
-    /// 也少一批 1920 宽的背景图),由 `load` / `recommendationsPreferenceChanged` 判断。
+    /// 只在推荐开关打开时调用(由调用方判断)。
     private func loadRecommendations(sections: Sections, connection: ServerConnection) {
         sections.recommended.markLoading()
-        // 闭包是 @Sendable,不能在里面读 MainActor 上的静态属性,先取出来
         let poolLimit = Self.recommendationPoolLimit
         track { try await connection.recommendations(limit: poolLimit) } apply: { [weak self] new in
-            // 请求在途时用户把开关关了:结果丢弃。hero 反正不画,留着只会让下次
-            // 打开开关时露出上一批已经过时的内容
+            // 在途时开关被关:丢弃,免得下次打开露出过时的一批
             guard let self, self.container.homeAppearance.showsHeroRecommendations else { return }
             sections.recommended.receive(new)
         }
     }
 
-    /// 首页顶部推荐的开关变了(设置 → 通用 →「显示首页推荐」)。只动推荐这一路,
-    /// ⛔ 不重新加载媒体库列表、继续观看与各「最新」—— 用户改的是一个显示开关,
-    /// 不是要刷新整页。
+    /// 设置「显示首页推荐」变了。⛔ 只动推荐这一路,不重新加载整页。
     func recommendationsPreferenceChanged(server: ServerProfile) {
         let sections = self.sections(for: server.id)
         guard container.homeAppearance.showsHeroRecommendations else {
-            // 关掉:不发请求,行也置空。`heroPick` 同样直接短路成 `.none` ——
-            // 用户主动关掉的,不该又从「继续观看 / 各库最新」里找一张顶上来当替补
             sections.recommended.replace(with: .loaded([]))
             return
         }
-        // 刚打开:先占住 hero 的高度(`heroPick` 对 `.loading` 返回 `.pending`)。
-        // ⛔ 不能只靠 `loadRecommendations` 里的 `markLoading()` —— 它见状态是 `.loaded`
-        // 就不动(刷新时保留旧内容的规则),这里会停在 `.loaded([])`,退路先显示一张、
-        // 等推荐回来又换掉,首屏会跳
+        // 显式置 `.loading` 占住 hero 高度:`markLoading()` 见 `.loaded([])` 不动,
+        // 退路会先显示一张、推荐回来又换掉,首屏会跳
         sections.recommended.replace(with: .loading)
         loadRecommendations(sections: sections, connection: container.connection(for: server))
     }
 
-    /// 每个视频类媒体库一行「最新」。列表里已没有的库顺手丢掉。
-    ///
-    /// 按页面上**从上到下**的顺序发,同时最多 `latestConcurrency` 个:首屏那几行先回来,
-    /// 排队中的行先显示加载态。
+    /// 每个视频类媒体库一行,已不存在的库丢掉。按页面从上到下发,同时最多 `latestConcurrency` 个。
     private func loadLatest(views: [EmbyView], sections: Sections, connection: ServerConnection) {
         let latestViews = Self.latestViews(in: views)
         let rows = Dictionary(uniqueKeysWithValues: latestViews.map { view in
@@ -247,9 +196,8 @@ final class HomeViewModel {
         })
     }
 
-    /// 依次启动 `count` 个任务(下标从小到大),同时在跑的不超过 `maxConcurrent`;
-    /// 每完成一个就补一个,结果一回来就交给 `onResult`(在 MainActor 上,不等其余的)。
-    /// 外层任务被取消后不再启动新的,已在跑的随任务组一起取消。
+    /// 按下标顺序启动,同时不超过 `maxConcurrent`,完成一个补一个;结果逐个交给 `onResult`。
+    /// 外层取消后不再启动新的。
     static func runLimited<Result: Sendable>(
         count: Int,
         maxConcurrent: Int,
@@ -273,15 +221,13 @@ final class HomeViewModel {
         }
     }
 
-    /// 播放结束后静默刷新「继续观看」(Q22:进度以服务端为准)。
-    /// 不切回加载态、失败时保留原内容 —— 这是后台校正,页面不该闪。
+    /// 播放结束后静默刷新「继续观看」(Q22:进度以服务端为准)。不切加载态,失败保留原内容。
     func refreshProgress(server: ServerProfile) {
         let connection = container.connection(for: server)
         let myGeneration = generation
         let sections = self.sections(for: server.id)
         tasks.append(Task {
-            // 失败时刻意保留原内容(与 MediaDetailViewModel.refreshDetail 同一立场),
-            // 401 等问题会在用户下一次操作时由正常加载路径暴露。
+            // 失败刻意保留原内容;401 等会在下一次正常加载时暴露
             do {
                 let items = try await connection.resume(limit: Self.sectionLimit).items
                 if myGeneration == generation { sections.resume.replace(with: .loaded(items)) }
@@ -291,12 +237,7 @@ final class HomeViewModel {
 
     // MARK: - 移出继续观看(API_CONTRACT.md 5.7)
 
-    /// 把一条从「继续观看」里移出。**只隐藏、不清进度**(5.7),服务端仍然记着看到哪,
-    /// 也仍然是未看 —— 适合「看了一点、暂时不想看」。
-    ///
-    /// 乐观更新:先把这一项从列表里拿掉再发请求。写操作是用户明确点出来的,
-    /// 等一个往返再动界面会显得没反应;失败则把列表**按原样放回**并给出提示
-    /// (硬规则:不静默吞错、不用假数据占位)。
+    /// 只隐藏、不清进度(5.7)。乐观更新:先拿掉再发请求,失败则按原样放回并提示。
     func hideFromResume(_ item: EmbyItem, server: ServerProfile) {
         let resume = self.sections(for: server.id).resume
         let snapshot = resume.state
@@ -313,7 +254,7 @@ final class HomeViewModel {
                 _ = try await connection.setHiddenFromResume(itemID: item.id, hidden: true)
             } catch let error as EmbyAPIError {
                 guard let self, myGeneration == self.generation, error != .cancelled else { return }
-                // 列表已经换过一代(切服务器 / 刷新)就不回滚:快照是上一代的内容
+                // 已换代(切服务器 / 刷新)的不回滚(上面 guard),快照是上一代的
                 if error == .unauthorized { self.container.state.serverNeedingLogin = server }
                 resume.replace(with: snapshot)
                 self.resumeActionError = "移出继续观看失败:\(error.userMessage)"
@@ -325,11 +266,8 @@ final class HomeViewModel {
         })
     }
 
-    /// hero 上剧集的「播放」:定位该播的那一集(规则见 `ServerConnection.seriesPlaybackEpisode`),
-    /// 定位到了交给 `onResolved` 起播。
-    ///
-    /// 失败照实提示(硬规则:不静默吞错),⛔ 不退回去随便播一集;剧里没有分集也明说。
-    /// 定位期间同一部剧不重复发起(按钮转圈,连点无效)。
+    /// hero 上剧集的「播放」:定位分集(`ServerConnection.seriesPlaybackEpisode`)后交给 `onResolved`。
+    /// 失败照实提示,⛔ 不退回去随便播一集。定位期间不重复发起。
     func playSeries(_ series: EmbyItem, server: ServerProfile, onResolved: @escaping @MainActor (EmbyItem) -> Void) {
         guard resolvingSeriesID == nil else { return }
         resolvingSeriesID = series.id
@@ -358,10 +296,7 @@ final class HomeViewModel {
         })
     }
 
-    /// 等已发出的任务全部结束:加载、媒体库列表回来后才追加的「最新」、
-    /// 静默刷新、「移出继续观看」的写请求。`load` 是发出去就返回的,
-    /// 测试据此确定时序,不靠睡一个固定时长去赌请求已经回来。
-    /// 等待期间新追加的任务也会等到;没有在途任务时立即返回。
+    /// 等已发出的任务(含期间新追加的)全部结束。测试据此确定时序。
     func waitUntilIdle() async {
         var finished: Set<Task<Void, Never>> = []
         while let next = tasks.first(where: { !finished.contains($0) }) {
@@ -370,14 +305,10 @@ final class HomeViewModel {
         }
     }
 
-    /// 所有分区都加载完且都为空。
+    /// 所有分区都加载完且都为空。媒体库列表没回来时不算空。
     ///
-    /// 媒体库列表还没回来时不算空:「最新」的行要等它回来才知道有几行。
-    ///
-    /// ⛔ **推荐行(`recommended`)刻意不参与**。它空不代表这台服务器没内容,
-    /// 而「空」该不该报整页空状态由**货架**决定(hero 只是顶部一块装饰)。
-    /// 不会出现「hero 有内容却报整页空」:推荐查询是不带 `ParentId` 的根查询,
-    /// 媒体库列表为空时它必然也是空 —— 两者同源。
+    /// ⛔ 推荐行刻意不参与:整页空由货架决定。不会出现「hero 有内容却报整页空」:
+    /// 推荐是根查询,媒体库列表为空时它必然也空。
     static func isEverythingEmpty(
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
@@ -393,26 +324,12 @@ final class HomeViewModel {
         }
     }
 
-    /// 首页顶部 hero 铺哪几项。**纯函数**:只读已经加载的行,自己一个请求都不发 ——
-    /// 推荐池由 `load` 里那一路 `recommendations` 填(hero 从此**有**自己的请求了,
-    /// 但取数不在这个函数里,所以它照旧可以纯单测)。
+    /// hero 铺哪几项。纯函数,只读已加载的行。
     ///
-    /// **用户关掉推荐(`HomeAppearancePreferences.showsHeroRecommendations` = false)
-    /// 时直接 `.none`**,⛔ 不走退路 —— 用户主动关掉的,不该又从「继续观看 / 各库
-    /// 最新」里找一张顶上来当替补。
-    ///
-    /// **首选随机推荐**(`SortBy=Random`,见 `ServerConnection.recommendations`):
-    /// 池子里筛出带背景图的,最多 `heroCarouselLimit` 张交给轮播。
-    ///
-    /// **推荐行还没回来时返回 `.pending`**:先占住 hero 的高度等它,
-    /// 不然退路先显示了别的、等推荐回来又换掉,首屏会跳。
-    ///
-    /// **推荐为空 / 失败时退回老逻辑**:继续观看里第一个有背景图的 →
-    /// 各媒体库「最新」里(按媒体库顺序)第一个有背景图的 → 没有。
-    /// 这时只给**一张**,`HomeHeroCarousel` 会自动退化成静默的单张。
-    /// 留这条退路是因为「推荐拿不到图」在真实服务器上很常见:
-    /// 库没刮削过元数据时 `BackdropImageTags` 就是空的(DTS 那种静默删轨同理)。
-    /// 失败的行跳过 —— 它自己那一行会报错,hero 不跟着空着。
+    /// - 推荐关掉 → `.none`,⛔ 不走退路(用户主动关的,不找替补);
+    /// - 推荐还没回来 → `.pending`,占住高度,免得退路先显示、推荐回来又换掉;
+    /// - 推荐池里带背景图的,最多 `heroCarouselLimit` 张;
+    /// - 推荐为空 / 失败 → 退路(见 `fallbackHeroPick`)。库没刮削过时没有背景图很常见。
     static func heroPick(
         recommended: LoadState<[EmbyItem]>,
         views: LoadState<[EmbyView]>,
@@ -433,9 +350,8 @@ final class HomeViewModel {
         return fallbackHeroPick(views: views, resume: resume, latest: latest)
     }
 
-    /// 推荐拿不到时的退路(2026-10-15 之前 hero 的唯一逻辑)。
-    /// 只给一张 —— 轮播的箭头 / 圆点需要用户能预期「下一张是什么」,
-    /// 退路这几项之间没有那种关系,摊成轮播反而像随机跳。
+    /// 继续观看里第一个有背景图的 → 各库「最新」(按库顺序)第一个有背景图的 → 没有。
+    /// 失败的行跳过。只给一张:这几项之间没有关系,摊成轮播像随机跳。
     private static func fallbackHeroPick(
         views: LoadState<[EmbyView]>,
         resume: LoadState<[EmbyItem]>,
@@ -469,8 +385,7 @@ final class HomeViewModel {
         }
     }
 
-    /// 能上 hero 的条目:必须有背景图(自己的或父级的,`backdropSource`)。
-    /// 只有海报的条目铺成整宽 hero 会被裁成一条,不选。
+    /// 必须有背景图(自己或父级的):只有海报的铺成整宽会被裁成一条。
     static func isHeroCandidate(_ item: EmbyItem) -> Bool {
         item.backdropSource != nil
     }
@@ -494,8 +409,7 @@ final class HomeViewModel {
         })
     }
 
-    /// 开始 / 结束一个「首屏加载」请求(只由 `track` 与 `loadLatest` 调用)。
-    /// 用计数而不是布尔:一轮 `load` 里有多个并行请求,最后一个回来才算加载完。
+    /// 只由 `track` 与 `loadLatest` 调用。用计数:并行请求最后一个回来才算完。
     private func requestStarted() {
         inFlight += 1
         isLoading = true
@@ -506,7 +420,7 @@ final class HomeViewModel {
         isLoading = inFlight > 0
     }
 
-    /// 取一次数据并折成 `LoadState`。被取消(`.cancelled`)返回 nil:调用方什么都不应用
+    /// 被取消返回 nil:调用方什么都不应用
     nonisolated private static func fetchState<Value: Sendable>(
         _ fetch: @Sendable () async throws -> Value
     ) async -> LoadState<Value>? {

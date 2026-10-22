@@ -1,20 +1,15 @@
 import Foundation
 import Observation
 
-/// **文件树来源**(百度网盘 / 本地文件夹)那一页的状态(ViewModel)。
+/// 文件树来源(百度网盘 / 本地文件夹)页的 ViewModel。两个来源共用:列目录 → 合成 → TMDB 刮削 →
+/// 剧集详情 → 本地续播 / 已看。差别按 `source` 分派:
 ///
-/// 两个来源共用一套浏览:列目录 → 本地合成 → TMDB 刮削 → 剧集详情 → 本地续播 / 已看
-/// (`FileSource` 的类型注释)。差别收在少数几处,按 `source` 分派:
+/// - 授权只有百度有,三屏(填密钥 → 扫码 → 浏览)共用本 ViewModel,因为是一条连续流程。
+///   本地文件夹访问权来自书签,失效时在目录层报 `.needsFolderReselection`。
+/// - 目录缓存只有百度要(配额),见 `cachesDirectories`。
+/// - 删 / 改名只有百度能做(`FileSource.supportsDeletingFiles`)。
 ///
-/// - **授权**:只有百度有。百度那三屏(填密钥 → 扫码 → 浏览目录)共用这一个 ViewModel ——
-///   「保存密钥 → 立刻走扫码 → 授权完立刻列目录」是一条连续的流程,
-///   拆成三个 View 各自取状态反而要来回传。本地文件夹的访问权来自书签,
-///   失效时在目录那一层报(`FileSourceDirectoryFailure.needsFolderReselection`)。
-/// - **缓存**:只有百度要(配额),见 `cachesDirectories`。
-/// - **写操作**:只有百度能删 / 改名(`FileSource.supportsDeletingFiles`)。
-///
-/// 名字里的 `BaiduPan…`(`BaiduPanSortOrder` / `BaiduPanSeriesLayout` / 合成器 …)是百度先落地
-/// 留下的,那些纯函数对两个来源一视同仁。
+/// 名字带 `BaiduPan…` 的纯函数(排序、剧集判定、合成器)对两个来源通用。
 @MainActor
 @Observable
 final class FileSourceViewModel {
@@ -29,90 +24,47 @@ final class FileSourceViewModel {
     /// 正在等扫码(device code 已拿到)
     private(set) var deviceCode: BaiduPanDeviceCode?
     private(set) var isWaitingForAuthorization = false
-    /// 二维码渲染失败、片库根存不进去之类的本地提示(不打断当前流程)
+    /// 不打断当前流程的本地提示(二维码渲染失败、片库根存不进去等)
     private(set) var notice: String?
 
     // MARK: - 目录
 
-    /// 应用目录名(展示用:空状态里要告诉用户把片子放进哪个目录)
+    /// 应用目录名(空状态里告诉用户把片子放哪)
     private(set) var folderName: String?
-    /// 应用根目录 `/apps/{应用目录名}`。第三方应用能访问的**全部范围**
+    /// 应用根目录 `/apps/{应用目录名}`,第三方应用能访问的全部范围
     private(set) var rootDirectory: String?
-    /// 这个来源配的片库根(**已校验**:失效时已当作没设)。
-    ///
-    /// ⚠️ 它同时是**本页能退到的最外层**(见 `canGoUp`)—— 片库根之上是应用目录,
-    /// 那里只看得见刚设的这个目录名,没有意义。
-    /// 它**不落盘到这里**:列表在设置里维护(`BaiduPanSourceSettingsView`),
-    /// 这里只是读出来用。nil = 没配,直接用应用目录。
+    /// 已校验的片库根(失效视同没设;nil = 用应用目录)。也是本页能退到的最外层(`canGoUp`)。
+    /// 列表在设置里维护(`BaiduPanSourceSettingsView`),这里只读。
     private(set) var libraryRoot: BaiduPanLibraryRoot?
-    /// 当前目录
     private(set) var currentDirectory: String?
-    /// 当前目录的卡片(来源无关条目,带封面),**来源返回的原始顺序**。
-    /// ⚠️ 它**不含播放所需的信息**(`path` / 原始文件名),所以下面还有一份原始索引。
-    /// ⚠️ 界面⛔ 不要直接读它 —— 用 `sortedItems`(那个才是排好的)。
+    /// 来源返回的原始顺序,不含 `path` 等播放信息(见 `filesByID`)。⛔ 界面用 `sortedItems`。
     private(set) var items: [SourceItem] = []
-    /// `fs_id` → 原始文件。播放与「进目录」都要用它 ——
-    /// 合成后的 `SourceItem` 只保留展示所需字段,`path` 这类定位信息不在里面。
+    /// `fs_id` → 原始文件。播放与进目录要用的 `path` 只在这里。
     private var filesByID: [UInt64: BaiduPanFile] = [:]
-    /// 被用户隐藏的条目身份。**同步过滤**用 —— 计算属性里⛔ 不能 await,
-    /// 所以每轮 `loadFiles` 从本地库读一次,存成内存集合。
+    /// 被隐藏的条目。计算属性里不能 await,所以每轮 `loadFiles` 从本地库读进内存。
     private var hiddenRefs: Set<SourceItemRef> = []
 
-    /// **会话级**目录缓存:`目录路径` → 一次目录读取的完整结果。
-    ///
-    /// 为什么要有它:配额见 §7(`docs/BAIDU_PAN_API.md`),
-    /// 而「进目录 → 退回上层 → 再进同一个目录」这种来回走会把配额烧光。
-    /// 有了它,同一会话里重进**已列过**的目录就是**零请求**。
-    ///
-    /// ⚠️ 取舍:网盘里新增 / 删除的文件要等用户点刷新才反映 —— 这正是
-    /// 「有数据就不自动请求、把刷新交给用户」的既定策略。`reload()`(结构性变化)
-    /// 会清掉它;用户点「刷新 / 重试」走 `refreshFiles()` 强制重列。
-    ///
-    /// ⚠️ 缓存里的封面地址是百度 `dlink`(8 小时有效)。会话通常远短于 8 小时,
-    /// 且封面图本身另有磁盘缓存兜底,所以不为过期另做处理。
+    /// 会话级目录缓存:目录路径 → 完整读取结果。来回进出同一目录零请求(配额见
+    /// `docs/BAIDU_PAN_API.md` §7);网盘里的变化要用户点刷新(`refreshFiles()`)才反映,
+    /// `reload()` 清空它。封面 `dlink` 8 小时过期,会话远短于此且有磁盘缓存兜底,不另处理。
     private var directoryCache: [String: FileSourceDirectoryContent] = [:]
 
-    /// 命中**落盘缓存**之后,后台去拿真实目录的那一趟。
-    ///
-    /// ⚠️ 与 `loadTask` / `scrapeTask` 分开:它不阻塞界面(缓存内容已经画出来了),
-    /// 换目录时要取消 —— 否则上一层的刷新回来会把新一层的卡片写回来。
+    /// 命中落盘缓存后在后台拉真实目录。换目录时要取消,否则旧目录的结果会写进新目录。
     private var backgroundRefreshTask: Task<Void, Never>?
 
-    /// 排好序、去掉隐藏项、按观看状态筛过的条目 —— **界面用这个**。
+    /// 排序、去隐藏、按观看状态筛过的条目,界面用这个。零请求。
     ///
-    /// ## 默认顺序是「剧集顺序」
-    ///
-    /// 看剧都是从前往后看的,而这一档是唯一一个「认得出集号就按 (季, 集) 排、
-    /// 认不出就按自然名」的顺序(`BaiduPanSortOrder.episode`)—— 字符串序下
-    /// `10.mp4` 会跑到 `2.mp4` 前面。其余档位(名称 / 修改时间 / 大小)由页头的菜单切,
-    /// 切换本身不改任何请求。
-    ///
-    /// ⛔ 排的是**已经取回**的条目,不发任何请求(配额见 `docs/BAIDU_PAN_API.md` §7)。
-    ///
-    /// 为什么是计算属性而不是在 `loadFiles()` 里排一次:刮削回来会**整份换掉**
-    /// `items`(`startScrape`),排一次的做法会在那一刻把顺序丢掉。
-    ///
-    /// 为什么隐藏过滤在这里而不是从 `items` 里真删:`items` 会被刮削整份换掉,
-    /// 真删的做法会在那一刻把隐藏项又写回来。而且留着它,设置页点「恢复」
-    /// 能立刻重新出现 —— 不必再等一次列目录(配额:2 次请求)。
+    /// 默认「剧集顺序」(`BaiduPanSortOrder.episode`):认得出集号按 (季, 集),否则自然名序。
+    /// 做成计算属性、隐藏也在这里过滤而非真删:刮削回来会整份替换 `items`;
+    /// 且设置里「恢复」隐藏项能立刻出现,不用重列目录。
     var sortedItems: [SourceItem] {
         let ordered = sortOrder.apply(to: items, filesByID: filesByID, ascending: sortAscending)
         return visible(ordered).filter { matchesWatchFilter($0) }
     }
 
-    /// 片库根上的「最近添加」:按网盘 `server_mtime` 倒序的前若干条。⛔ 零请求。
-    ///
-    /// ## 为什么只在片库根、而且要够多才给
-    ///
-    /// Emby 首页那一行「最近添加」的对位物。片库根是「一眼看全库」的地方,
-    /// 子目录里再摆一行就与下面的网格高度重叠了。同理,条目少于
-    /// `recentShelfLimit` 时整行不给 —— 那一行会与网格**完全重复**,
-    /// 只是换个顺序,徒增滚动距离。
-    ///
-    /// ⚠️ 不进筛选:这一行答的是「最近有什么新东西」,用户把网格筛成「未看」
-    /// 不该让新片从这一行消失。
-    /// ⚠️ 目录的 `server_mtime` 在网盘里会随「往里加文件」更新,所以它也能反映
-    /// 「这部剧最近更新过」—— 这正是这一行想要的语义。
+    /// 片库根上的「最近添加」:按 `server_mtime` 倒序,零请求。只在片库根、且条目多于
+    /// `recentShelfLimit` 时给(否则只是把网格换个顺序重画)。不受观看筛选影响。
+    /// 目录的 `server_mtime` 随往里加文件更新,正好表示「这部剧最近更新过」。
     var recentItems: [SourceItem] {
         guard isAtLibraryRoot else { return [] }
         let dated = visible(items).compactMap { item -> (SourceItem, Date)? in
@@ -120,7 +72,6 @@ final class FileSourceViewModel {
                   let modified = filesByID[fsID]?.modifiedAt else { return nil }
             return (item, modified)
         }
-        // 只有「够多」时这一行才是真子集,否则它只是把网格换了个顺序再画一遍
         guard dated.count > Self.recentShelfLimit else { return [] }
         return dated
             .sorted { $0.1 > $1.1 }
@@ -128,193 +79,130 @@ final class FileSourceViewModel {
             .map(\.0)
     }
 
-    /// 「最近添加」最多几条。
     private static let recentShelfLimit = 12
 
-    /// 当前是不是停在**片库根**(配了片库根就是它,否则是应用目录)。
+    /// 配了片库根就是它,否则是应用目录
     private var isAtLibraryRoot: Bool {
         guard let current = currentDirectory else { return false }
         return current == topmostDirectory
     }
 
-    /// 网格的排序档位。默认「剧集顺序」—— 看剧都是从前往后看的。
-    ///
-    /// ⚠️ 排序与筛选都只作用于**已经取回**的条目,零请求(配额见
-    /// `docs/BAIDU_PAN_API.md` §7)。两者都放在页头(不是主窗口工具栏):
-    /// 工具栏只有「返回上一层」一个控件,那是用户明确要的简法。
+    /// 排序与筛选只作用于已取回的条目,零请求;控件放页头,不放主窗口工具栏。
     private(set) var sortOrder: BaiduPanSortOrder = .episode
     private(set) var sortAscending = true
 
-    /// 观看状态筛选(全部 / 未看 / 已看)。数据全来自本地续播库,零请求。
-    ///
-    /// ⚠️ 换目录**不重置**:用户想找的东西不会因为进了下一层就变了;
-    /// 筛选把一屏筛空时,空状态里给一个「显示全部」的按钮(`FileSourceBrowserView`)。
+    /// 观看状态筛选,数据来自本地续播库。换目录不重置;筛空时空状态给「显示全部」。
     private(set) var watchFilter: BaiduPanWatchFilter = .all
 
-    /// 目录路径 → 这一层里的集数。本地记录(`BaiduPanEpisodeCountStore`),
-    /// 撑起剧卡上的「已看 3 / 共 12 集」—— 总数只有进过详情页才知道(见 `episodeTotal(for:)`)。
+    /// 目录路径 → 集数(`BaiduPanEpisodeCountStore`),只有进过详情页才有(见 `episodeTotal(for:)`)。
     private(set) var episodeCounts: [String: Int] = [:]
 
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: FileSourceDirectoryFailure?
 
-    /// 是否已经完成过一次完整的目录加载。「Reload」(⌘R)据此决定语义
-    /// (首次 = 结构性重载,之后 = 只重读当前目录),见 `refreshFromToolbar()`。
+    /// ⌘R 据此决定语义,见 `refreshFromToolbar()`
     private(set) var hasLoadedOnce = false
 
-    /// 用户主动要改配置时(多半是应用目录名填错了)预填给表单的现值。
+    /// 用户要改配置时预填给表单的现值
     private(set) var configurationDraft: BaiduPanConfigurationDraft?
 
-    /// 本地观看状态(`fs_id` → 已看 / 已看到多少秒),用于卡片角标与续播区。
-    /// 覆盖**当前目录**、**详情页这一季的分集**,以及库里属于本来源的全部记录
-    /// (后者撑起剧目录卡片的「已看 N 集」)。⚠️ 全部来自本地续播库,**零请求**。
-    ///
-    /// 未看的不进这个字典(见 `WatchProgressStore.watchStates`)—— 查不到就是未看。
+    /// `fs_id` → 本地观看状态,来自本地续播库,零请求。覆盖当前目录、详情页当前季,
+    /// 以及本来源在库里的全部记录。未看的不在字典里。
     private(set) var watchStates: [String: WatchProgressStore.WatchState] = [:]
 
-    /// 目录路径 → 它下面**已看**的集数(含子目录)。剧目录卡片据此显示「已看 3 集」。
-    ///
-    /// ⚠️ 只统计**本地有记录**的集:要算「共几集 / 还有几集未看」得列子目录
-    /// (一次列目录 = 2 次请求,配额见 `docs/BAIDU_PAN_API.md` §7),网格上不能这么花。
-    /// 所以 Emby 剧卡上那个「还有 3 集未看」的气泡在百度侧**做不到**,这里只报已看的。
+    /// 目录路径 → 其下(含子目录)已看集数。只统计本地有记录的:算总集数要列子目录,
+    /// 网格上花不起配额,所以做不到 Emby 那种「还有 N 集未看」。
     private(set) var watchedEpisodeCounts: [String: Int] = [:]
 
     // MARK: - 剧集详情(目录形态)
 
-    /// 当前目录的**内容形态**:普通目录(网格)还是一部剧(详情页)。
-    ///
-    /// 判定是纯函数(`BaiduPanSeriesLayout`),这里只负责把结果接住 ——
-    /// 「点进去的是一层文件,还是一部剧」正是本页与 Emby 观感对齐的关键一步。
+    /// 普通目录(网格)还是一部剧(详情页),由 `BaiduPanSeriesLayout` 判定
     private(set) var directoryShape: BaiduPanDirectoryShape = .directory
 
-    /// 剧集形态下这一部剧的**剧级展示信息**。
-    ///
-    /// ⚠️ 为什么单留一格:剧级元数据(标题 / TMDB 海报 / 简介 / 年份)是**父目录列目录时**
-    /// 刮回来的(`BaiduPanMetadataScraper.enrichFolders`),而进了详情页之后列的是
-    /// **剧目录自己的内容**(集文件 + 季文件夹),那份元数据不在其中 ——
-    /// 不把用户点进来时那张卡片留住,详情页就只剩一个目录名。
+    /// 剧级展示信息。剧级元数据是列父目录时刮回来的(`enrichFolders`),
+    /// 剧目录自己的内容里没有,所以要留住用户点进来的那张卡片。
     private(set) var seriesItem: SourceItem?
 
-    /// 用户点进来时那张**目录卡片**(剧级元数据的来源)。只有 `enter(_:)` 会设置它。
+    /// 用户点进来的目录卡片,只有 `enter(_:)` 设置
     private var enteredSeriesItem: SourceItem?
 
-    /// 「继续观看」卡片快照里的封面 —— **暂代**剧级海报,拿到剧级信息后就换掉。
-    ///
-    /// ⚠️ 它不是剧级海报:续播快照记的是**那一集**的封面,配了 TMDB 时那是 16:9 的
-    /// 分集剧照(`applyEpisode`)。详情页的海报与 hero 背景都取自剧级封面,拿一张剧照顶上
-    /// 就与「从目录卡片进来」看到的剧集海报不一样 —— 用户报的「两个入口封面和背景图
-    /// 不一样」正是这个。所以它只当**过渡**:`seriesProfile` 一到就换成 TMDB 剧集海报
-    /// (见 `applySeriesPosterFromProfile`)。nil = 没有待替换的快照。
+    /// 从续播卡片进来时暂代剧级海报的封面。它是那一集的封面(配了 TMDB 时是 16:9 剧照),
+    /// 与目录卡片进来看到的海报不同,所以 `seriesProfile` 一到就换掉
+    /// (`applySeriesPosterFromProfile`)。nil = 没有待替换的。
     private var resumeSnapshotPoster: ImageDescriptor?
 
-    /// 上一轮判定形态的是哪个目录。
-    ///
-    /// 用途只有一个:区分「同一部剧的刷新」与「进了另一部剧」—— 前者要保住用户正看着的季,
-    /// 后者必须回到第一季。⛔ 不靠季号判断:两部剧都有「第 1 季」是常态。
+    /// 上一轮判定形态的目录。区分「同一部剧刷新」(保住当前季)与「进了另一部剧」(回第一季);
+    /// ⛔ 不靠季号判断,两部剧都有第 1 季。
     private var shapeDirectory: String?
 
-    /// 「继续观看」卡片点进详情页时,希望默认选中哪一季(`nil` = 没指定)。
-    ///
-    /// ⚠️ 它是一次**导航意图**,不是常驻状态:由 `openDetail(for:)` 写下、
-    /// `applyDirectoryShape` 消费一次即清 —— 留着会让下一次进别的目录时莫名选中某一季。
+    /// 续播卡片进详情页时想选中的季。一次性导航意图:`openDetail(for:)` 写、
+    /// `applyDirectoryShape` 消费即清,留着会影响下次进别的目录。
     private var preferredSeasonNumber: Int?
 
-    /// 当前选中的季
     private(set) var selectedSeason: BaiduPanSeason?
 
     /// 选中季的分集(已按集号排序;只含能播的条目)
     private(set) var episodes: [SourceItem] = []
     private(set) var isLoadingEpisodes = false
-    /// 读某一季失败的原因(nil = 没失败)。与 `directoryFailure` 分开:
-    /// 它只影响分集那一块,剧级信息与季列表照常能看。
+    /// 只影响分集区,剧级信息与季列表照常显示
     private(set) var episodeFailure: String?
 
-    /// 分集刮削的轮次。换季 / 换目录 / 换授权时 +1,回来时对不上就丢弃
-    /// (与 `directoryGeneration` 同一处置)。
+    /// 换季 / 换目录 / 换授权时 +1,回来对不上就丢弃
     private var episodeGeneration = 0
     private var episodeScrapeTask: Task<Void, Never>?
 
-    /// 详情页的播放主按钮作用于哪一集:**有本地续播进度的那一集**,都没有就是第一集。
-    /// 没有分集时为 nil —— UI 据此不画播放按钮,⛔ 不给一个点了没反应的按钮。
+    /// 播放主按钮对应的集:看到一半的 > 「下一集」占位 > 第一集。nil = 没有分集,不画按钮。
     var focusedEpisode: SourceItem? {
-        // 优先「看到一半」的那一集,其次「下一集」占位的那一集(上一集刚看完),
-        // 都没有才是第一集 —— 否则从续播卡点进详情页,播放主按钮会指回已经看过的第 1 集。
         episodes.first { (resumeSeconds(for: $0) ?? 0) > 0 }
             ?? episodes.first { upNextFileIDs.contains($0.ref.itemID) }
             ?? episodes.first
     }
 
-    /// 「下一集」占位那一批的 id(见 `FileSourceResumeCard.isUpNext`)。
-    /// 续播区已经把占位捞出来了,这里不必再读一遍库。
+    /// 「下一集」占位的 id(`FileSourceResumeCard.isUpNext`),直接取续播区的,不再读库
     private var upNextFileIDs: Set<String> {
         Set(resumeCards.filter(\.isUpNext).map(\.fileID))
     }
 
-    /// 详情页的**剧级扩展信息 + 演职员**(类型 / 评分 / 标语 / 状态 / 制片公司 / 演员表)。
-    ///
-    /// ⚠️ 它**不来自列表刮削**:`enrich` 走的搜索端点给不出这些字段,而且那一趟按标题
-    /// 批量查、要服务一屏三十个卡片。这一趟只在**详情页**发,按 id 精确取
-    /// (`BaiduPanMetadataScraper.seriesProfile`)。
-    ///
-    /// nil = 还没拿到 / 拿不到 —— 详情页按「缺就隐藏」处理(`CLAUDE.md` 硬规则 4)。
+    /// 剧级扩展信息与演职员。列表刮削的搜索端点给不出这些,只在详情页按 id 取
+    /// (`BaiduPanMetadataScraper.seriesProfile`)。nil = 没拿到,详情页缺就隐藏。
     private(set) var seriesProfile: TMDBSeriesProfile?
     private(set) var isLoadingSeriesProfile = false
 
-    // ⚠️ 这一趟**没有**单独的失败文案:刮削器的失败原因是**一个共用槽位**
-    // (`lastFailureDescription`),而详情页的分集刮削与它可能同时在跑 ——
-    // 读到的可能是另一趟留下的、指向别的原因的一句话。与其端出一句可能张冠李戴的
-    // 提示,不如什么都不说:这一块拿不到就整块隐藏,而「TMDB 连不上 / token 无效」
-    // 这类原因分集那一趟的 `scrapeFailure` 已经会如实报出来。
+    // 这一趟没有单独的失败文案:刮削器的 `lastFailureDescription` 是共用槽位,可能是分集刮削留下的。
+    // 拿不到就整块隐藏;TMDB 本身的问题由分集那趟的 `scrapeFailure` 报。
 
-    /// 剧级扩展信息的轮次。换剧 / 换授权时 +1,回来时对不上就丢弃。
+    /// 换剧 / 换授权时 +1,回来对不上就丢弃
     private var seriesProfileGeneration = 0
     private var seriesProfileTask: Task<Void, Never>?
 
-    /// 详情页里 TMDB 图片(人物头像)的归属来源 —— 与海报 / 剧照同一个 `sourceID`,
-    /// 于是头像与它们落在同一格缓存分区里。
-    ///
-    /// ⚠️ 详情页显示期间它实际上恒非 nil:`applyDirectoryShape` 保证 `seriesItem`
-    /// 已经被填过(`enteredSeriesItem` 或兜底条目),分集也一定已经列过。
-    /// 类型上写成可选只是为了不在代码里撒一个「一定不会 nil」的谎。
+    /// 人物头像的归属来源,与海报 / 剧照同一缓存分区。详情页显示期间实际恒非 nil。
     var seriesSourceID: UUID? { seriesItem?.ref.sourceID ?? episodes.first?.ref.sourceID }
 
-    /// 「继续观看」区的卡片:本地续播库里有进度、且带展示快照的条目,
-    /// 按最近看排序。⛔ 不限于当前目录 —— 它就是要跨目录把你看过的东西捞出来。
+    /// 本地续播库里有进度且带快照的条目,按最近看排序。⛔ 不限于当前目录。
     private(set) var resumeCards: [FileSourceResumeCard] = []
 
-    /// 正在为「继续观看」起播做准备(补列它所在的目录)的那张卡片。
-    /// 卡片据此转圈 —— 补列要发两次请求,不显示就等于「点了没反应」。
+    /// 正在为续播起播补列目录的卡片(要发请求,卡片据此转圈)
     private(set) var preparingPlaybackFileID: String?
 
     private let container: AppContainer
-    /// 这个页面属于哪个来源(决定 `sourceID`,也就决定了封面缓存 key)。
-    /// 可变只为一件事:设置里改了显示名 / 换了文件夹,页面不重建也要跟上(`sourceDidChange`)。
+    /// 可变只为设置里改了显示名 / 换了文件夹时跟上(`sourceDidChange`)
     private(set) var source: FileSource
-    /// 这个来源的 id(主窗口顶栏按它登记「根页有 hero」)
+    /// 主窗口顶栏按它登记「根页有 hero」
     var sourceID: UUID { source.id }
 
-    /// 目录要不要缓存(会话内存 + 落盘)。
-    ///
-    /// - **百度要**:一次列目录 = 2 次请求,配额见 `docs/BAIDU_PAN_API.md` §7;
-    /// - **本地不要**:读盘不花配额,而用户往文件夹里拷了新片子,回到这一层就该看到 ——
-    ///   每次进目录都重新读。时长另有进程内记忆(`LocalMediaDurationCache`),
-    ///   刮削有自己的缓存,重读一层只是一次 `contentsOfDirectory`。
+    /// 目录缓存(会话内存 + 落盘)只有百度要(配额)。本地每次重读,用户拷了新片子回来就能看到。
     private var cachesDirectories: Bool {
         if case .baiduPan = source { return true }
         return false
     }
-    /// 进到「已授权」那一屏时要不要顺带列目录。
-    /// 添加流程传 `false`:`authorization()` 一变 `.authorized` 就会落库并切页,
-    /// 此刻还照常列目录的话,那次请求(含封面)会被立刻丢掉 —— 白烧一次配额。
+    /// 授权后是否顺带列目录。添加流程传 `false`:授权一成功就落库切页,此时列目录是白烧配额。
     private let loadsDirectory: Bool
     private var authorizationTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
-    /// 这一轮目录读取的轮次。TMDB 刮削是**后台跑的第二趟**,回来时目录可能已经换了
-    /// —— 靠它丢掉过期结果(与 `MediaDetailViewModel.generation` 同一处置)。
+    /// TMDB 刮削是后台第二趟,回来时目录可能已换,靠它丢弃过期结果
     private var directoryGeneration = 0
     private var scrapeTask: Task<Void, Never>?
-    /// 上一次 TMDB 刮削的失败原因(nil = 没失败 / 没配置 token)。
-    /// ⚠️ 与 `notice` 分开:它是**附加信息**的失败,不能盖掉目录本身的提示。
+    /// nil = 没失败 / 没配 token。与 `notice` 分开,不盖掉目录本身的提示。
     private(set) var scrapeFailure: String?
 
     init(container: AppContainer, source: FileSource, loadsDirectory: Bool = true) {
@@ -327,12 +215,10 @@ final class FileSourceViewModel {
         self.init(container: container, source: .baiduPan(source), loadsDirectory: loadsDirectory)
     }
 
-    /// 百度连接。⚠️ 只在百度分支里用 —— 本地文件夹来源一个请求都不发。
+    /// 只在百度分支里用,本地文件夹来源不发请求
     private var connection: BaiduPanConnection { container.baiduConnection() }
 
-    /// 条目读取走来源自己的 provider —— 那里把「列目录 → 合成条目 →
-    /// 换封面地址 / 读时长 → 刮削补封面」几步收在一起,这一页不必知道封面
-    /// 从哪来、也不必知道刮削走的是哪个服务。
+    /// provider 负责列目录 → 合成 → 封面 / 时长 → 刮削
     private func makeProvider() -> any FileSourceBrowsing {
         switch source {
         case .baiduPan(let baidu):
@@ -347,8 +233,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 设置里改了这个来源(显示名 / 换了文件夹):页面不重建,把新值接过来。
-    /// ⛔ 不接别的来源 —— 换来源时主窗口按 id 重建整页(`BrowseView.rootPage`)。
+    /// 设置里改了本来源时接过新值。⛔ 不接别的来源:换来源时主窗口按 id 重建整页(`BrowseView.rootPage`)。
     func sourceDidChange(_ updated: FileSource) {
         guard updated.id == source.id, updated != source else { return }
         source = updated
@@ -363,11 +248,7 @@ final class FileSourceViewModel {
         await task.value
     }
 
-    /// 「Reload」(⌘R)的入口。
-    ///
-    /// ⚠️ 与 `reload()` 的分工:首次进入(还没加载过)按结构性变化处理,
-    /// 回到片库根重新列;之后只重读**当前所在**的目录 —— 刷新不该把人踢回起点。
-    /// 两条路都会绕过会话缓存走网络(`refreshFiles`)。
+    /// ⌘R:没加载过走 `reload()`(回片库根);之后只重读当前目录,不把人踢回起点。两条都绕过会话缓存。
     func refreshFromToolbar() async {
         if hasLoadedOnce {
             await refreshFiles()
@@ -380,21 +261,16 @@ final class FileSourceViewModel {
         isLoading = true
         loadFailure = nil
         defer { isLoading = false }
-        // 结构性变化(首次进入 / 换配置 / 换授权 / 用户按 ⌘R 刷新):会话缓存作废,
-        // 之后从片库根重新列起。⚠️ 放在这里而不是 `case .authorized` 里 ——
-        // 解绑 / 换密钥之后会走到「需要授权」那一屏,那条路也得把旧缓存清掉。
-        // ⚠️ `filesByID` 也要清:它是**合并**进去的(见 `loadFiles`),
-        // 不清就会带着上一次的条目跨配置留存。
+        // 结构性变化:会话缓存作废,从片库根重列。放在 `case .authorized` 之外,
+        // 因为解绑 / 换密钥后走「需要授权」那条路也得清。`filesByID` 是合并写入的,也要清。
         directoryCache.removeAll()
         filesByID.removeAll()
         enteredSeriesItem = nil
         resumeSnapshotPoster = nil
         shapeDirectory = nil
-        // 结构性重载:上一次「继续观看」点进来的选季意图已经不作数了
         preferredSeasonNumber = nil
         guard case .baiduPan = source else {
-            // 本地文件夹没有授权这一步:访问权来自书签,失效时由 `loadFiles` 如实报
-            // (`FileSourceDirectoryFailure.needsFolderReselection`)
+            // 本地文件夹没有授权步骤,书签失效由 `loadFiles` 报
             guard loadsDirectory else { return }
             currentDirectory = nil
             await loadFiles()
@@ -403,15 +279,11 @@ final class FileSourceViewModel {
         }
         do {
             authorization = try await connection.authorization()
-            // 目录名只用于展示。⛔ 这里的 `try?` 不是吞错:凭据文件读不出来时
-            // 上面的 `authorization()` 已经抛了同样的错误并进了 `loadFailure`。
+            // 目录名只用于展示。这里的 `try?` 不是吞错:读不出凭据时上面的 `authorization()` 已抛同样的错。
             folderName = try? await connection.appConfiguration().folderName
             switch authorization {
             case .authorized:
-                // ⚠️ 进这一屏一律**从片库根重新开始**:`reload()` 只在结构性变化后
-                // 被调用(首次进入 / 授权完成 / 保存配置 / 解除授权)。
-                // 手动刷新(⌘R)走 `refreshFromToolbar()` —— 首次进这一屏时等价于
-                // `reload()`,之后只重读当前目录,不会把人踢回起点。
+                // 结构性变化后一律从片库根开始;⌘R 走 `refreshFromToolbar()`
                 guard loadsDirectory else { break }
                 currentDirectory = nil
                 await loadFiles()
@@ -420,7 +292,7 @@ final class FileSourceViewModel {
                 break
             }
         } catch let error as BaiduPanError {
-            // ⚠️「还没配置」不是失败,是这一页的第一屏 —— 走配置表单,不报错
+            // 「还没配置」不是失败,是第一屏(配置表单)
             if error == .appCredentialsMissing {
                 authorization = .unconfigured
             } else {
@@ -498,13 +370,10 @@ final class FileSourceViewModel {
         deviceCode = nil
     }
 
-    // ⚠️ 「解除授权」**不在这里**:它是低频的配置动作,已经搬进设置里的来源页
-    // (`AppContainer.signOutBaidu` + `BaiduPanSourceSettingsView`)。解除之后
-    // 浏览页不会自己知道 —— 下一次刷新(`refreshFromToolbar`)会撞上
-    // `notAuthorized`,由 `loadFiles` 切回扫码那一屏。
+    // 解除授权在设置里(`AppContainer.signOutBaidu`)。浏览页不会立即知道,
+    // 下次刷新撞上 `notAuthorized` 时由 `loadFiles` 切回扫码屏。
 
-    /// 用户主动要改配置(典型场景:应用目录名填错,整页空着)。
-    /// ⛔ 只把界面切回表单,**不动 token** —— 改个目录名不该连带重新扫码。
+    /// 切回配置表单(典型:应用目录名填错)。⛔ 不动 token,改目录名不该要求重新扫码。
     func beginConfigurationEdit() async {
         if let configuration = try? await connection.appConfiguration() {
             configurationDraft = BaiduPanConfigurationDraft(
@@ -518,7 +387,6 @@ final class FileSourceViewModel {
         authorization = .unconfigured
     }
 
-    /// 改配置改到一半又不想改了:回到授权后的那一屏。
     func cancelConfigurationEdit() async {
         configurationDraft = nil
         await reload()
@@ -530,62 +398,48 @@ final class FileSourceViewModel {
         await loadFiles(allowingLibraryRootFallback: true)
     }
 
-    /// 强制重新列目录(用户点「刷新 / 重试」):⛔ 不用会话缓存,并把这一目录的缓存换成新的。
-    ///
-    /// ⚠️ 与 `loadFiles()` 的分工:`loadFiles()` 走**导航**(进目录 / 退回上层),
-    /// 命中会话缓存就零请求;这个是用户**明确要最新数据**,必须走网络。
+    /// 用户点「刷新 / 重试」:绕过会话缓存走网络并写回。导航(进 / 退目录)用 `loadFiles()`。
     func refreshFiles() async {
         await loadFiles(allowingLibraryRootFallback: true, forceRefresh: true)
     }
 
-    /// 播完一场 / 标记过状态后刷新**本地观看状态**(角标、续播区、剧卡计数)。
-    ///
-    /// ⛔ 不重新列目录:那是 2 次百度请求(`list` + `filemetas`),而这些状态变的
-    /// 只有本地续播库(`WatchProgressStore`)—— 目录内容一个字节都没动。
+    /// 播完 / 标记状态后只刷新本地观看状态。⛔ 不重列目录(2 次请求,而目录没变)。
     func refreshResumeState() async {
         await loadResumeCards()
         await loadWatchStates()
     }
 
-    /// 换排序档位:回到这一档的**自然方向**(与 `LibrarySort` 同一条纪律)。
+    /// 换档位时回到该档的自然方向(同 `LibrarySort`)
     func setSortOrder(_ order: BaiduPanSortOrder) {
         guard order != sortOrder else { return }
         sortOrder = order
         sortAscending = order.defaultAscending
     }
 
-    /// 翻转排序方向(升 / 降)。
     func toggleSortDirection() {
         sortAscending.toggle()
     }
 
-    /// 换观看状态筛选。⛔ 不发请求:筛的是已经在手上的条目。
     func setWatchFilter(_ filter: BaiduPanWatchFilter) {
         watchFilter = filter
     }
 
-    /// `allowingLibraryRootFallback`:片库根读不出来时,允许清掉它并回落到应用目录。
-    /// ⛔ 只回落**一次**。递归时传 false:再失败就是应用目录本身的问题,
-    /// 继续套娃只会把真正的错误(目录名填错)藏在一层层的重试里。
-    ///
-    /// `forceRefresh`:⛔ 不用会话缓存,强制走网络并把结果写回缓存(用户点刷新 / 重试)。
+    /// `allowingLibraryRootFallback`:片库根读不出时清掉它、回落应用目录。⛔ 只回落一次,
+    /// 递归时传 false,否则真正的错误(目录名填错)会被重试藏起来。
+    /// `forceRefresh`:绕过会话缓存走网络并写回。
     private func loadFiles(
         allowingLibraryRootFallback allowFallback: Bool, forceRefresh: Bool = false
     ) async {
         isLoadingFiles = true
         directoryFailure = nil
-        // 新一轮读取:上一轮的后台刮削结果已经作废
         cancelScrape()
         defer { isLoadingFiles = false }
 
-        // 隐藏列表是**本地**的,读它不发请求(配额纪律)。⛔ 必须每轮都读:
-        // 设置页可能刚刚恢复了一条,而浏览页这一屏还开着。
+        // 本地数据,零请求。每轮都要读:设置页可能刚恢复了隐藏项。
         hiddenRefs = await container.hiddenItems.hiddenRefs(sourceID: source.id)
-        // 集数记录同理(本地):剧卡上的「共 N 集」靠它,零请求。
         episodeCounts = await container.baiduEpisodeCounts.counts(sourceID: source.id)
 
-        // 「继续观看」独立于当前目录:目录读失败也要看得到它。只在最外层读一次
-        // —— 片库根回落是同一轮的递归,不必重读。
+        // 续播区与当前目录无关,目录失败也要显示。片库根回落是同一轮递归,不重读。
         if allowFallback { await loadResumeCards() }
 
         var directory = ""
@@ -596,29 +450,24 @@ final class FileSourceViewModel {
                 root = try await connection.applicationDirectory()
                 libraryRoot = try await connection.libraryRoot(for: baidu.id)
             case .localFolder(let local):
-                // 本地文件夹的最外层就是用户选的那个文件夹,没有「片库根」这一层
+                // 本地没有片库根,最外层就是选的文件夹
                 root = local.rootPath
                 libraryRoot = nil
             }
             rootDirectory = root
-            // 进来先落在片库根;没配就落在应用目录(本地:文件夹本身)。
-            // ⚠️ `currentDirectory` 优先:那是**导航**留下的位置(进目录 / 退回上层),
-            // 不该被一次刷新抹掉。
+            // 导航留下的位置优先,刷新不抹掉它
             directory = currentDirectory ?? libraryRoot?.path ?? root
             currentDirectory = directory
             let provider = makeProvider()
             let content: FileSourceDirectoryContent
             if !cachesDirectories {
-                // 本地:每次都读盘(理由见 `cachesDirectories`)
                 content = try await provider.content(directory: directory)
             } else if !forceRefresh, let cached = directoryCache[directory] {
-                // 命中会话缓存:同一会话里重进已列过的目录 → 零请求(配额纪律)
                 content = cached
             } else if !forceRefresh, let disk = await container.baiduDirectoryCache.content(
                 sourceID: source.id, directory: directory) {
-                // ★ 冷启动 / 换来源后的第一次进这一层:先把**盘上**的内容端出来。
-                // 卡片(标题 / 时长 / 文件夹结构)立刻可见,封面由紧接着的刮削缓存补,
-                // 真实目录与封面地址交给后台那一趟 —— 不再让人对着转圈等网络。
+                // 冷启动首次进这一层:先端出盘上内容(无封面),封面由刮削缓存补,
+                // 真实目录交给后台刷新,不让人对着转圈等网络。
                 let restored = Self.content(from: disk, sourceID: source.id)
                 content = restored
                 directoryCache[directory] = restored
@@ -634,24 +483,19 @@ final class FileSourceViewModel {
                 await storeDirectoryCache(content, directory: directory)
             }
             items = content.items
-            // 原始文件按 `fs_id` 留一份:播放与进目录要 `path` / 真实文件名。
-            // ⚠️ 用**合并**而不是覆盖:详情页会为季文件夹另外列一次子目录,
-            // 那一次的结果不该把剧目录里的文件挤掉 —— 分集的 `file(for:)` 还要靠它们。
-            // `fs_id` 全局唯一,同键覆盖只是同一个文件的新副本,没有语义冲突。
+            // 合并而非覆盖:详情页另列的季文件夹不能把剧目录里的文件挤掉(`file(for:)` 要用)。
+            // `fs_id` 全局唯一,同键覆盖无冲突。
             filesByID.merge(content.filesByID) { _, new in new }
             await applyDirectoryShape(directory: directory)
             startScrape(items: content.items, provider: provider)
             return
         } catch let error as BaiduPanError {
-            // token 没了(在设置里解除了授权 / 刷新失败被清)→ 回到扫码那一屏。
-            // ⛔ 不要停在一条「没权限」的目录错误上:那会让人以为网盘出了问题,
-            // 而真正要做的是重新授权。
+            // token 没了 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
             if case .notAuthorized = error {
                 authorization = .needsAuthorization(folderName: folderName ?? "")
                 return
             }
-            // 片库根在网盘里被删了 / 改了名 → 丢掉它,回落到应用目录。
-            // ⛔ 不弹错误:它只是个「进来先落在哪」的便利,不值得为此打断浏览。
+            // 片库根被删 / 改名 → 静默清掉并回落应用目录
             if allowFallback, error.isDirectoryUnavailable,
                let library = libraryRoot?.path, directory == library,
                library != rootDirectory {
@@ -666,8 +510,7 @@ final class FileSourceViewModel {
                     && directory == rootDirectory
             )
         } catch let error as LocalFolderError {
-            // 访问权没了(文件夹被挪 / 盘没插 / 书签失效)→ 失败页给「重新选择文件夹…」;
-            // 某一层读不出来 → 只报原因,重试可能就好了
+            // 访问权没了 → 失败页给「重新选择文件夹…」;某层读不出 → 只报原因
             directoryFailure = FileSourceDirectoryFailure(
                 message: error.userMessage,
                 isApplicationRootUnavailable: false,
@@ -681,12 +524,8 @@ final class FileSourceViewModel {
 
     // MARK: - 落盘缓存
 
-    /// 把一次列目录的结果写进落盘缓存。
-    ///
-    /// ⚠️ 写失败只影响「下次冷启动要不要等网络」,⛔ 不影响这一次浏览 ——
-    /// `store` 自己把原因记在 `lastWriteFailureDescription` 里,不往浏览链路抛。
-    /// ⛔ 封面地址**不存**:`dlink` 8 小时过期,存下来只会端出一批打不开的图
-    /// (见 `BaiduPanDirectoryCache` 的类型注释)。
+    /// 写失败不影响本次浏览,原因记在 store 的 `lastWriteFailureDescription`。
+    /// 不存封面地址(`dlink` 会过期,见 `BaiduPanDirectoryCache`)。
     private func storeDirectoryCache(
         _ content: FileSourceDirectoryContent, directory: String
     ) async {
@@ -694,22 +533,15 @@ final class FileSourceViewModel {
         await container.baiduDirectoryCache.store(
             sourceID: source.id,
             directory: directory,
-            // `filesByID` 是字典:按 `fs_id` 排一下,让落盘的 JSON 稳定
-            // (同一份目录两次写出来字节相同,排查与测试都好比对)
+            // 排序让落盘 JSON 稳定,便于比对
             files: content.filesByID.values.sorted { $0.fsID < $1.fsID },
             durations: content.durations
         )
     }
 
-    /// 把落盘缓存里的一份快照折成与 `BaiduPanSourceProvider.content(directory:)` 同形的结果。
-    ///
-    /// ⚠️ 折的时候**复用同一个合成器**:标题 / 集号 / 封面配对全是它的判据,
-    /// 另写一份就等于让「冷启动看到的卡片」与「刷新后看到的卡片」走两套逻辑。
-    /// 唯一额外补的是时长 —— 它不在列表接口里,来自缓存记下的那一格
-    /// (`filemetas` 的 `needmedia=1`)。
-    ///
-    /// ⛔ 封面一律没有:缓存里不存 `dlink`。卡片先降级成图标卡,
-    /// 紧接着的两趟(刮削缓存 / 后台刷新)会把封面补回来。
+    /// 落盘快照折成与 `BaiduPanSourceProvider.content(directory:)` 同形的结果。必须复用同一个合成器,
+    /// 冷启动与刷新后的卡片才一致;另补缓存里的时长(`filemetas` 的 `needmedia=1`)。
+    /// 没有封面,由随后的刮削缓存 / 后台刷新补。
     private static func content(
         from entry: BaiduPanDirectoryCache.Entry, sourceID: UUID
     ) -> FileSourceDirectoryContent {
@@ -732,21 +564,14 @@ final class FileSourceViewModel {
         )
     }
 
-    /// 后台刷新回来之后往哪儿写。
     private enum BackgroundRefreshTarget {
         /// 当前目录的网格(`items`)
         case directory
-        /// 详情页这一季的分集(`episodes`),带轮次
+        /// 详情页这一季的分集(`episodes`)
         case episodes(generation: Int)
     }
 
-    /// 命中落盘缓存之后,后台去拿**真实**目录。
-    ///
-    /// 为什么必须有这一趟:缓存里没有封面地址(不存 `dlink`),而且网盘里的文件随时会变。
-    /// 不刷新就等于「只要缓存没过 24 小时,新加的文件永远不出现」。
-    ///
-    /// ⚠️ 与 `loadTask` / `scrapeTask` 分开:它不阻塞界面(缓存内容已经画出来了),
-    /// 换目录时取消 —— 否则上一层的刷新回来会把上层的卡片画到新一层上。
+    /// 命中落盘缓存后拉真实目录:缓存里没封面地址,且网盘内容会变。
     private func startBackgroundRefresh(
         directory: String, target: BackgroundRefreshTarget = .directory
     ) {
@@ -758,8 +583,7 @@ final class FileSourceViewModel {
             do {
                 fresh = try await provider.content(directory: directory)
             } catch {
-                // ⛔ 不弹错误:盘上那份内容已经画出来了,这一趟只是补新鲜度。
-                // 真正要用户处理的失败(授权失效 / 目录被删)会在下一次前台读取时如实报出。
+                // 不报错:缓存内容已显示,真正的失败会在下次前台读取时报出
                 return
             }
             guard !Task.isCancelled else { return }
@@ -768,11 +592,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 把后台刷新拿到的内容写回界面与缓存。
-    ///
-    /// ⚠️ 两条路都先校验「这一趟还有效」:目录那条看 `currentDirectory`
-    /// (用户可能已经进了子目录),分集那条看 `episodeGeneration`(可能已经换季)。
-    /// 少了这一步,慢的那一趟回来就会把别的层画到眼前。
+    /// 先校验结果仍有效(目录看 `currentDirectory`,分集看 `episodeGeneration`)再写回。
     private func applyBackgroundRefresh(
         _ content: FileSourceDirectoryContent,
         provider: any FileSourceBrowsing,
@@ -797,21 +617,14 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 目录**已经能看**之后再问 TMDB 补封面(`docs/TMDB_API.md`)。
-    ///
-    /// ⚠️ 为什么是后台第二趟:这一趟要发 N 次外部请求(N = 认出来的片子数),
-    /// 让它参与列表加载就等于「TMDB 连不上 → 片库打不开」。所以列表先出、封面后补,
-    /// 回来时就地换图(`PosterImage` 认 `descriptor` 的 `cacheKey`,会自动重取)。
-    ///
-    /// 失败(没 token / token 无效 / 连不上)只挂一句提示到 `scrapeFailure`:
-    /// 卡片保持本地合成的样子,降级成图标卡 —— ⛔ 不假装有封面。
+    /// 列表出来后再在后台问 TMDB 补封面(`docs/TMDB_API.md`),TMDB 连不上不能让片库打不开。
+    /// 失败只挂到 `scrapeFailure`,卡片保持图标卡。
     private func startScrape(items directoryItems: [SourceItem], provider: any FileSourceBrowsing) {
         let myGeneration = directoryGeneration
         scrapeFailure = nil
         scrapeTask = Task { [weak self] in
             let enriched = await provider.scrape(items: directoryItems)
             let failure = await provider.lastScrapeFailureDescription()
-            // 期间换了目录:这一趟的结果已经过期,⛔ 不能把上一层的卡片写回来
             guard let self, myGeneration == self.directoryGeneration else { return }
             self.items = enriched
             self.scrapeFailure = failure
@@ -819,7 +632,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 丢掉正在跑的后台刮削(它的结果已经作废)。轮次 +1 也就是让它在回来时自行退出。
+    /// 轮次 +1,在途的刮削回来时自行丢弃
     private func cancelScrape() {
         directoryGeneration += 1
         scrapeTask?.cancel()
@@ -827,19 +640,11 @@ final class FileSourceViewModel {
         scrapeFailure = nil
     }
 
-    /// 进一个目录卡片。
-    ///
-    /// 进去之后是**文件网格**还是**剧集详情页**,由列出来的内容形态决定
-    /// (`applyDirectoryShape` → `BaiduPanSeriesLayout`)—— 点的时候不必预判,
-    /// 所以这一层目录只要列过一次,判定就是免费的(⛔ 不多发一次请求去探)。
+    /// 进去是网格还是详情页,由列出的内容决定(`applyDirectoryShape`),⛔ 不另发请求预判。
     func enter(_ item: SourceItem) async {
         guard item.kind.isContainer, let file = file(for: item) else { return }
-        // 记下这张目录卡片:若点进去的是一部剧,它就是这一部剧的剧级元数据来源
-        // (标题 / TMDB 海报 / 简介 / 年份,见 `enteredSeriesItem`)。
         enteredSeriesItem = item
-        // 点的是目录卡片:这就是剧级元数据本身,不欠着任何快照封面要换
         resumeSnapshotPoster = nil
-        // 手点目录进来自带上下文,上一次「继续观看」留下的选季意图到此为止
         preferredSeasonNumber = nil
         currentDirectory = file.path
         await loadFiles()
@@ -849,11 +654,8 @@ final class FileSourceViewModel {
         guard let current = currentDirectory, let top = topmostDirectory,
               current != top else { return }
         let parent = (current as NSString).deletingLastPathComponent
-        // ⛔ 不许退到最外层之上:配了片库根就是片库根,否则是应用目录。
-        // 片库根之上那一层只是「应用目录里有个叫 Videos 的文件夹」,退上去没意义;
-        // 应用目录再往外第三方应用也访问不到。
+        // ⛔ 不退到最外层(片库根 / 应用目录)之上:上面没意义,应用目录外也访问不到
         currentDirectory = BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top
-        // 退回上一层:上一层是什么形态要重新判,刚才那一部剧的剧级元数据也不再适用
         enteredSeriesItem = nil
         resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
@@ -862,15 +664,11 @@ final class FileSourceViewModel {
 
     // MARK: - 动作:剧集详情
 
-    /// 判这一层是**普通目录**还是**一部剧**,并据此把详情页要的状态备好。
-    ///
-    /// 判定本身零请求(只看已列出来的条目)。唯一可能的请求是「自动选中第一季」那一次
-    /// —— 季文件夹要另外列一次才知道里面有哪些集(百度配额,见 `docs/BAIDU_PAN_API.md` §7)。
+    /// 判定目录 / 剧集并备好详情页状态。判定零请求;唯一的请求是自动选中季时列季文件夹。
     private func applyDirectoryShape(directory: String) async {
         let shape = BaiduPanSeriesLayout.shape(of: items)
         directoryShape = shape
-        // 「继续观看」点进来时指定的那一季(见 `openDetail(for:)`)是一次性的导航意图:
-        // 这一层不是剧就丢掉 —— ⛔ 别让它漂到下一次进别的目录时生效。
+        // 一次性选季意图:这一层不是剧就丢掉
         let preferredSeasonNumber = self.preferredSeasonNumber
         self.preferredSeasonNumber = nil
         guard let structure = shape.seriesStructure else {
@@ -879,54 +677,37 @@ final class FileSourceViewModel {
             seriesItem = nil
             shapeDirectory = nil
             clearEpisodeState()
-            // 普通目录:网格上每一张卡的 ✓ /「已看到 mm:ss」也要有 —— 剧集形态那条路
-            // 由 `selectSeason` 读,这里不读的话网格上永远没有观看状态。
+            // 普通目录的观看状态在这里读(剧集形态由 `selectSeason` 读)
             await loadWatchStates()
             return
         }
-        // ⚠️ 同一部剧的**刷新**(手动刷新(⌘R) / 播完回来)要保住用户正看着的那一季;
-        // 换了一部剧才回到第一季。靠「上一轮判定的是哪个目录」区分这两件事。
+        // 同一部剧刷新要保住当前季,换了剧才回第一季
         let isSameSeries = shapeDirectory == directory
         shapeDirectory = directory
-        // 集数记录:平铺存法这一趟就已经知道总数了,季文件夹存法要等各季列完
-        // (`recordEpisodeCount`)。⛔ 不为了网格上的一个数字去列一遍子目录。
+        // 平铺存法此刻就知道总数;季文件夹要等各季列完。⛔ 不为这个数字去列子目录。
         await recordEpisodeTotal(structure: structure, directory: directory)
-        // 剧级条目:优先用用户点进来时那张卡片(带 TMDB 元数据);
-        // 直接落在剧目录(片库根就是一部剧)时没有那张卡片,退回只有目录名的兜底条目。
+        // 片库根直接就是一部剧时没有点进来的卡片,用只有目录名的兜底条目
         seriesItem = enteredSeriesItem
             ?? Self.fallbackSeriesItem(directory: directory, sourceID: source.id)
-        // 同一部剧刷新时剧级信息已经在手上,不必等那一趟重来:立刻把快照封面换回剧集海报。
-        // ⚠️ 只在同一部剧时补:换了一部剧时 `seriesProfile` 还是上一部剧的
-        // (下面 `startSeriesProfileLoad` 才清掉),拿它换就会贴错海报。
+        // 只在同一部剧时换:换了剧时 `seriesProfile` 还是上一部的,会贴错海报
         if isSameSeries { applySeriesPosterFromProfile() }
         let previousSeasonID = isSameSeries ? selectedSeason?.id : nil
-        // 选中哪一季的优先级:「继续观看」指定的那一季 > 同一部剧刷新时保住的那一季 > 第一季。
-        // ⚠️ 指定的排最前:用户从续播卡片点进来时看的多半不是第 1 季,而详情页的播放主按钮
-        // 作用于「有进度的那一集」—— 落在第一季会让「继续播放」变成「播放第 1 集」。
+        // 续播指定的季 > 刷新保住的季 > 第一季。指定的必须最优先,否则「继续播放」变成「播放第 1 集」。
         let target = preferredSeasonNumber
             .flatMap { number in structure.seasons.first { $0.number == number } }
             ?? structure.seasons.first { $0.id == previousSeasonID }
             ?? structure.seasons.first
         await selectSeason(target)
-        // 剧级扩展信息(类型 / 评分 / 演职员)是**另一趟**请求,不参与上面的加载。
-        // ⚠️ 同一部剧的刷新不再问:它是**剧级**的,不随季变化,已经有一份就留着 ——
-        // 重问会让演职员那一块先清空再填回(闪一下),而内容一个字都不会变。
-        // 上一趟还在飞时同样不起第二趟(结果一样)。只有「拿不到」才在刷新时重试。
+        // 剧级信息不随季变:同一部剧刷新时已有就不重问(否则演职员区会闪),
+        // 在飞也不重发,只有拿不到时才重试
         if !isSameSeries || (seriesProfile == nil && !isLoadingSeriesProfile) {
             startSeriesProfileLoad()
         }
     }
 
-    /// 起一趟「取剧级扩展信息 + 演职员」的后台请求(`BaiduPanMetadataScraper.seriesProfile`)。
-    ///
-    /// ⚠️ 为什么是后台第二趟:这一趟要发 1–2 次外部请求,让它参与详情页的加载就等于
-    /// 「TMDB 连不上 → 详情页打不开」。所以详情页先出(标题 / 海报 / 分集都已经有了),
-    /// 类型 / 演职员这一块后到、到了就地填上。
-    ///
-    /// 身份来源按可信度取:显式 / 父目录回填的 `tmdbID` 优先,没有就用**剧名 + 年份**
-    /// —— 那把键与分集刮削用的是同一把(`searchMatch` 的 `QueryKey`),
-    /// 所以详情页问到的必定就是**分集剧照所属于的那部剧**,而且通常命中缓存、零请求。
-    /// 两样都没有时**什么都不问**:拿空标题去搜只会端回一堆无关的剧(硬规则 4)。
+    /// 后台取剧级扩展信息(`BaiduPanMetadataScraper.seriesProfile`),不阻塞详情页。
+    /// 优先 `tmdbID`,否则剧名 + 年份(与分集刮削同一把 `QueryKey`,保证是同一部剧,通常命中缓存);
+    /// 都没有就不问,空标题只会搜回无关结果。
     private func startSeriesProfileLoad() {
         let tmdbID = seriesItem?.tmdbID ?? episodes.first?.tmdbID
         let title = seriesItem?.title ?? episodes.first?.title ?? ""
@@ -942,7 +723,6 @@ final class FileSourceViewModel {
         seriesProfileTask = Task { [weak self] in
             let profile = await scraper.seriesProfile(
                 tmdbID: tmdbID, title: title, year: year)
-            // 期间换了剧 / 退了目录 / 解了绑:这一趟的结果已经过期
             guard let self, myGeneration == self.seriesProfileGeneration else { return }
             self.seriesProfile = profile
             self.isLoadingSeriesProfile = false
@@ -950,14 +730,8 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 剧级信息到手后,把「续播快照顶上的那张封面」换成 TMDB 的剧集海报。
-    ///
-    /// 两个入口看到的必须是同一张图:从目录卡片进来时 `seriesItem.poster` 本来就是
-    /// 剧集海报(TMDB `poster_path`,与这里同一个 `cacheKey`),所以**只换快照顶上那张**
-    /// (`resumeSnapshotPoster` 记着它),⛔ 不覆盖卡片自己的封面。
-    ///
-    /// 拿不到 TMDB 剧集海报(没配 token / 没命中)时保留快照:一张剧照也好过占位图,
-    /// 而这正是快照当初的用途(见 `openDetail(for:)`)。
+    /// 把续播快照暂代的封面换成 TMDB 剧集海报,让两个入口看到同一张图。
+    /// ⛔ 只换快照那张,不覆盖目录卡片自己的封面;拿不到海报时保留快照(剧照好过占位图)。
     private func applySeriesPosterFromProfile() {
         guard let snapshot = resumeSnapshotPoster,
               let profile = seriesProfile,
@@ -966,13 +740,11 @@ final class FileSourceViewModel {
               let item = seriesItem else { return }
         let updated = item.withPoster(poster)
         seriesItem = updated
-        // 同一部剧刷新时 `seriesItem` 会从 `enteredSeriesItem` 重新取一份 ——
-        // 不一起换掉,刷新后又退回那张剧照
+        // 刷新时 `seriesItem` 会从 `enteredSeriesItem` 重取,不一起换会退回剧照
         if enteredSeriesItem?.poster == snapshot { enteredSeriesItem = updated }
         resumeSnapshotPoster = nil
     }
 
-    /// 丢掉正在跑的剧级扩展信息请求(它的结果已经作废)。轮次 +1 也就是让它回来时自行退出。
     private func cancelSeriesProfile() {
         seriesProfileGeneration += 1
         seriesProfileTask?.cancel()
@@ -981,17 +753,13 @@ final class FileSourceViewModel {
         isLoadingSeriesProfile = false
     }
 
-    /// 切到某一季。
-    ///
-    /// ⚠️ 季文件夹要**另外列一次**那个目录;平铺存法的分集已经在手上,零请求。
-    /// 同一季反复切会命中会话缓存(`directoryCache`),不会重复烧配额。
+    /// 季文件夹要另列一次(会话缓存兜住重复切换);平铺存法零请求。
     func selectSeason(_ season: BaiduPanSeason?) async {
         guard let season else { return }
         selectedSeason = season
         switch season.source {
         case .flatFiles(let files):
-            // 平铺的那一批已经在列剧目录时拿到并刮过了(见 `startScrape`),
-            // ⛔ 不在这里再列一次、再刮一次
+            // 列剧目录时已拿到并刮过,不再列 / 刮
             cancelEpisodeScrape()
             episodes = BaiduPanSeriesLayout.sortedEpisodes(visible(files))
             episodeFailure = nil
@@ -1007,23 +775,14 @@ final class FileSourceViewModel {
         applySeriesPosterFallback()
     }
 
-    /// 剧级海报的最后一层兜底:剧级条目没有封面时,用**刚列出来的**分集封面顶上。
-    ///
-    /// 为什么可信:分集封面就是同目录的 `poster.jpg`(或 TMDB 分集剧照),而且是这一趟
-    /// 列目录刚换到的 `dlink`。片库根直接落在一部剧上、或者续播卡的快照里没有封面时,
-    /// 详情页的海报与 hero 背景就靠它 —— ⛔ 不为此再列一遍父目录(配额)。
-    ///
-    /// ⛔ 只在剧级条目**没有**封面时补:用户从父目录卡片进来时那张是 TMDB 海报,优先。
+    /// 剧级条目没有封面时,用刚列出的分集封面顶上。⛔ 不为找剧级封面去列父目录(配额)。
     private func applySeriesPosterFallback() {
         guard let item = seriesItem, item.poster == nil,
               let poster = episodes.first(where: { $0.poster != nil })?.poster else { return }
         seriesItem = item.withPoster(poster)
     }
 
-    /// 列某一季的目录,取分集。
-    ///
-    /// ⚠️ 只收**能播的**条目:季目录里可能混着 `poster.jpg` 这类封面(合成器已滤掉),
-    /// 也可能有再下一层的目录 —— ⛔ 详情页只到「集」这一层,不递归。
+    /// 只收能播的条目,⛔ 不递归进季目录下的子目录。
     private func loadEpisodes(directory: String) async {
         isLoadingEpisodes = true
         episodeFailure = nil
@@ -1039,8 +798,7 @@ final class FileSourceViewModel {
                 content = cached
             } else if let disk = await container.baiduDirectoryCache.content(
                 sourceID: source.id, directory: directory) {
-                // 与 `loadFiles` 同一条路:盘上那份先出,真实分集交给后台那一趟。
-                // 冷启动直接点进续播卡时,详情页的分集列表就靠它免掉一次 `list` + `filemetas`。
+                // 同 `loadFiles`:盘上那份先出,真实分集交给后台刷新
                 content = Self.content(from: disk, sourceID: source.id)
                 directoryCache[directory] = content
                 await applyEpisodeContent(
@@ -1067,11 +825,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 把一季的目录内容装进详情页:原始文件索引、分集列表,以及第二趟刮削。
-    ///
-    /// 抽出来是因为它有**两个**调用方:前台列目录(`loadEpisodes`)与
-    /// 后台刷新(`applyBackgroundRefresh`)。两处各写一遍就会有一处忘了合并 `filesByID`
-    /// —— 那会让分集点不动(`file(for:)` 找不到路径)。
+    /// 前台(`loadEpisodes`)与后台刷新共用,保证都合并了 `filesByID`(否则分集点不动)。
     private func applyEpisodeContent(
         _ content: FileSourceDirectoryContent,
         provider: any FileSourceBrowsing,
@@ -1087,25 +841,19 @@ final class FileSourceViewModel {
 
     // MARK: - 集数记录
 
-    /// 记下「这一季有几集」,并顺手试试能不能凑出整部剧的总数。
-    ///
-    /// ⚠️ 只在数变了时才写盘:进同一季十次不该写十次文件。
+    /// 记下这一季的集数(变了才写盘),并试着凑出整部剧的总数(剧卡「共 N 集」的唯一来源)。
     private func recordEpisodeCount(directory: String, count: Int) async {
         if count > 0, episodeCounts[directory] != count {
             episodeCounts[directory] = count
             await container.baiduEpisodeCounts.store(
                 sourceID: source.id, directory: directory, count: count)
         }
-        // 这一季补上之后整部剧可能刚好凑齐了 —— 那是网格卡片「共 N 集」的唯一来源
         guard let structure = directoryShape.seriesStructure,
               let seriesDirectory = shapeDirectory else { return }
         await recordEpisodeTotal(structure: structure, directory: seriesDirectory)
     }
 
-    /// 能算出整部剧的总集数时记下来;算不出就**什么都不写**。
-    ///
-    /// ⛔ 不拿「已知那几季之和」冒充总数 —— 少报会让「还有 N 集未看」偏大,
-    /// 用户看到的数字与实际对不上,比不显示更糟(`CLAUDE.md` 硬规则 4)。
+    /// 有一季没列过就算不出,什么都不写。⛔ 不拿已知几季之和冒充总数。
     private func recordEpisodeTotal(
         structure: BaiduPanSeriesStructure, directory: String
     ) async {
@@ -1115,7 +863,6 @@ final class FileSourceViewModel {
             case .flatFiles(let items):
                 total += items.count
             case .folder(let item):
-                // 有一季还没列过 → 算不出来
                 guard let path = file(for: item)?.path,
                       let count = episodeCounts[path] else { return }
                 total += count
@@ -1127,17 +874,13 @@ final class FileSourceViewModel {
             sourceID: source.id, directory: directory, count: total)
     }
 
-    /// 分集的第二趟刮削:补集名 / 单集剧照 / 单集简介。
-    ///
-    /// 与目录那一趟同一个理由:TMDB 要发 N 次外部请求,让它参与列表加载就等于
-    /// 「TMDB 连不上 → 分集列表打不开」。所以列表先出、这些字段后补。
+    /// 后台补集名 / 剧照 / 简介,理由同 `startScrape`
     private func startEpisodeScrape(
         items: [SourceItem], provider: any FileSourceBrowsing, generation: Int
     ) {
         episodeScrapeTask = Task { [weak self] in
             let enriched = await provider.scrape(items: items)
             let failure = await provider.lastScrapeFailureDescription()
-            // 期间换了季 / 退了目录:这一趟的结果已经过期
             guard let self, generation == self.episodeGeneration else { return }
             self.episodes = enriched
             self.scrapeFailure = failure
@@ -1145,12 +888,8 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 刮削回来后同步详情页的分集。
-    ///
-    /// ⚠️ 只有**平铺存法**需要它:那种存法下分集就是当前目录的条目,而目录刮削是
-    /// **整份换掉** `items`(`startScrape`)—— 详情页那一份 `episodes` 还指着旧数组,
-    /// 不同步就等于「剧照补上了,但详情页看不到」。季文件夹的分集自己有一趟刮削
-    /// (`startEpisodeScrape`),不走这里。
+    /// 平铺存法的分集就是当前目录条目,目录刮削整份替换 `items` 后要同步到 `episodes`。
+    /// 季文件夹有自己的刮削(`startEpisodeScrape`)。
     private func refreshFlatSeason(from items: [SourceItem]) {
         guard case .flatFiles = selectedSeason?.source else { return }
         episodes = BaiduPanSeriesLayout.sortedEpisodes(
@@ -1158,14 +897,12 @@ final class FileSourceViewModel {
         applySeriesPosterFallback()
     }
 
-    /// 丢掉正在跑的分集刮削(它的结果已经作废)。轮次 +1 也就是让它在回来时自行退出。
     private func cancelEpisodeScrape() {
         episodeGeneration += 1
         episodeScrapeTask?.cancel()
         episodeScrapeTask = nil
     }
 
-    /// 清掉剧集详情的那一组状态(退回普通目录 / 换授权时)。
     private func clearEpisodeState() {
         cancelEpisodeScrape()
         cancelSeriesProfile()
@@ -1174,16 +911,8 @@ final class FileSourceViewModel {
         episodeFailure = nil
     }
 
-    /// 剧级展示信息的兜底条目:目录名 + 可能有的封面,没有简介 / 年份。
-    ///
-    /// ⛔ 不伪造任何字段 —— 详情页按「缺就隐藏」处理(`CLAUDE.md` 硬规则 4)。
-    /// `ref` 用目录路径当 id:它只用于展示,不参与播放(播放走分集条目)。
-    ///
-    /// - Parameters:
-    ///   - title: 覆盖目录名。从「继续观看」进来时传卡片标题(合成器给的是**剧名**,
-    ///     比季目录名 / 文件目录名准)。
-    ///   - poster: 覆盖封面。同样来自续播卡的快照 —— 它是详情页海报与 hero 背景
-    ///     唯一的来源(⛔ 不为此去列一遍父目录找那张剧卡:配额)。
+    /// 剧级兜底条目:目录名 + 可能有的封面,⛔ 不伪造其他字段。`ref` 用目录路径,只用于展示。
+    /// `title` / `poster` 来自续播卡快照(剧名比目录名准)。
     private static func fallbackSeriesItem(
         directory: String,
         sourceID: UUID,
@@ -1215,10 +944,7 @@ final class FileSourceViewModel {
         )
     }
 
-    /// 本页能退到的**最外层**:配了片库根就是它,否则是应用目录。
-    ///
-    /// 用户把 `apps/LumaPlayer/Videos` 设为片库根时,根目录就是 `Videos` ——
-    /// 再往上是应用目录,那里只看得见「有个叫 Videos 的文件夹」,退上去没有意义。
+    /// 本页能退到的最外层:片库根,否则应用目录
     private var topmostDirectory: String? {
         libraryRoot?.path ?? rootDirectory
     }
@@ -1230,30 +956,15 @@ final class FileSourceViewModel {
 
     // MARK: - 动作:片库根
     //
-    // 片库根是「进来先落在哪」的选择,不是授权范围 —— 授权范围由
-    // `/apps/{应用目录名}` 一个值决定,用户改不了,所以百度那边**没有**
-    // 「授权时选文件夹」这一步;能选的只有应用目录**里面**的起点。
-    //
-    // ⚠️ **一个来源一个**,在**设置**里维护(`BaiduPanSourceSettingsView`)——
-    // 顶部那条路径栏去掉之后,浏览页不再有「设为片库根」这个动作,也不再有
-    // 切换菜单(要两个起点就加两个来源:授权是应用级的,多来源共用同一份 token)。
-    // 这一节只剩「设置里改过之后,这一屏要跟着变」这一件事。
+    // 片库根是应用目录内「进来先落在哪」,不是授权范围(授权范围固定为 `/apps/{应用目录名}`)。
+    // 每个来源一个,在设置里维护(`BaiduPanSourceSettingsView`);要两个起点就加两个来源(共用 token)。
 
-    /// 设置里改过片库根之后重新读一次。
-    ///
-    /// ⚠️ 只在**真的变了**时才重载目录:变了就意味着入口换了,留在旧目录里没有意义。
-    /// 没变就什么都不做 —— 来源列表的每一次变更(改名 / 增删 / 解除授权)都会
-    /// 触发这个调用,一律重载会白烧配额(一次列目录 = 2 次请求,§7)。
-    ///
-    /// ⚠️ `hasLoadedOnce` 那道闸是必需的:这个 `.task(id:)` 在**首次出现**时
-    /// 也会跑一次,而那时 `reload()` 还没把片库根读进来 —— 不加闸就会把
-    /// 「nil → 有值」误判成「变了」,开局白列一次目录。
+    /// 设置里改过片库根后调用。来源列表任何变更都会触发,所以只在真的变了时重载(配额)。
+    /// `hasLoadedOnce` 闸必需:`.task(id:)` 首次出现也会跑,那时片库根还没读进来,会误判成变了。
     func refreshLibraryRoot() async {
         guard hasLoadedOnce else { return }
         guard case .baiduPan = source else {
-            // 本地文件夹没有片库根;这里会被调到,多半是设置里换了文件夹 / 改了名。
-            // 重读**当前这一层**(读盘不花配额):换了文件夹之后失败页要消失,
-            // ⛔ 不回到起点 —— 用户正看着的那一层不该因为改了个名字就被踢走
+            // 本地:多半是换了文件夹 / 改了名。重读当前层让失败页消失,⛔ 不回到起点
             await refreshFiles()
             return
         }
@@ -1263,10 +974,7 @@ final class FileSourceViewModel {
         await reload()
     }
 
-    /// 本地文件夹:用户重新选了文件夹(原来那个挪走了 / 访问权失效)。
-    ///
-    /// 换完从**根**重新列:原来停的那一层在新文件夹里未必还在。失败如实挂到 `notice`,
-    /// 失败页留着,用户可以再选一次。
+    /// 本地文件夹重新选择后从根重列(原来那层未必还在)。失败挂 `notice`,失败页留着可再选。
     func relinkFolder(to folderURL: URL) async {
         guard case .localFolder(let local) = source else { return }
         do {
@@ -1281,22 +989,14 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 把失效的片库根清掉(网盘里那个目录没了 / 改名了),回落到应用目录。
-    /// ⛔ 不弹错误:它只是个「进来先落在哪」的便利,不值得为此打断浏览。
+    /// 清掉失效的片库根,不报错。写回设置,免得下次又撞上。
     private func clearLibraryRoot() async {
         libraryRoot = nil
-        // 写回设置,免得下次进来又撞同一个失效路径(片库根只有百度有)
         guard case .baiduPan(let baidu) = source else { return }
         try? await container.setLibraryRoot(nil, for: baidu)
     }
 
-    /// 当前目录在标题栏上显示的名字。
-    ///
-    /// 应用目录根用应用目录名(或「百度网盘」);其余用路径最后一段 ——
-    /// 与 Emby 那边 `navigationTitle(媒体库名)` 的对位物。
-    /// 片库根那一层因此显示的就是那个目录名(设 `Videos` 为片库根 → 标题「Videos」)。
-    ///
-    /// 本地文件夹的根那一层显示**来源名**(默认就是文件夹名,用户可在设置里改)。
+    /// 标题栏名字:根层用应用目录名(百度)/ 来源名(本地),其余用路径最后一段。
     var currentDirectoryName: String {
         let fallback: String
         switch source {
@@ -1312,14 +1012,12 @@ final class FileSourceViewModel {
         return last.isEmpty ? fallback : last
     }
 
-    /// - Parameter fromBeginning: 从头播放(详情页「从头播放」按钮用)。默认按本地进度续播。
+    /// - Parameter fromBeginning: 详情页「从头播放」用。默认按本地进度续播。
     func play(_ item: SourceItem, fromBeginning: Bool = false) {
         guard let file = file(for: item) else { return }
-        // 起播这一刻顺手记下展示快照(标题 / 封面),「继续观看」才渲染得出来。
-        // ⛔ 不要等到渲染续播区时回头再列网盘(配额,见 `AppContainer.rememberResumeCard`)。
+        // 起播时记下展示快照,续播区才画得出来;⛔ 不在渲染续播区时回头列网盘
         Task { await container.rememberResumeCard(item: item, file: file) }
-        // 换集队列按**当前所处的上下文**装配:详情页里用这一季的分集,
-        // 文件网格里用当前目录那一份。两份都已经在手上,零请求。
+        // 详情页用这一季分集,网格用当前目录,零请求
         let queueItems = directoryShape.isSeries ? episodes : sortedItems
         container.play(
             file,
@@ -1330,17 +1028,8 @@ final class FileSourceViewModel {
             fromBeginning: fromBeginning)
     }
 
-    /// 用**当前目录已列的条目**装配剧集队列(播放页的上一集 / 下一集 / 选集面板)。
-    ///
-    /// ⛔ 这里一次网络请求都不发:兄弟集此刻就在 `items` / `filesByID` 里,
-    /// 而配额见 `docs/BAIDU_PAN_API.md` §7。顺序取调用方给的
-    /// `items`(浏览页传的就是界面那一份 `sortedItems`),与看到的**完全一致**。
-    ///
-    /// 纯函数,不碰 VM 状态 —— 测试直接驱动它,不必先造一个真目录。
-    ///
-    /// 只收 `.episode`:合成器判定「这一层像剧集序列」才会给这个 kind
-    /// (`BaiduPanMetadataSynthesizer.mediaItem`),所以单条视频 / 电影不会凭空得到
-    /// 一个「队列」,花絮之类也不会混进来。不足两集同样不给 —— 没有可切的一集。
+    /// 用已列出的条目装配剧集队列,零请求;顺序即传入的 `items`(与界面一致)。纯函数,便于测试。
+    /// 只收 `.episode`(合成器认定为剧集序列才给),不足两集返回 nil。
     static func episodeQueue(
         selecting item: SourceItem,
         in items: [SourceItem],
@@ -1358,9 +1047,7 @@ final class FileSourceViewModel {
                 title: entry.episodeTitle ?? entry.title,
                 source: source.playbackSource(for: file),
                 resumeItem: entry,
-                // 选集面板的封面:同目录同名图,或 TMDB 刮回来的分集剧照
                 poster: entry.poster,
-                // 外挂字幕:同一份 `filesByID` 里就有,配对零请求
                 subtitleFiles: BaiduPanSubtitle.files(for: file, in: Array(filesByID.values))
             )
         }
@@ -1368,20 +1055,11 @@ final class FileSourceViewModel {
         return EpisodeQueue(episodes: entries, currentIndex: index)
     }
 
-    /// 播「继续观看」区的一张卡片。
+    /// 播续播卡片。文件由快照重建(`fs_id` / `path` / `name` 是原值,播放用不到的字段留空)。
+    /// 换集队列要兄弟集,起播前补列文件所在目录(就是当前目录时复用)。
+    /// ⛔ 不改 `currentDirectory`:接着看不该让浏览页换一屏。
     ///
-    /// 卡片是**跨目录**的(那正是这个区的意义),所以文件本身只能靠快照重建 ——
-    /// ⚠️ 这不是「编一个文件」:`fs_id` / `path` / `name` 都是**当初那条文件**的原值,
-    /// 只是把播放用不到的字段(size / category / mtime)留空。
-    ///
-    /// 换集入口要的兄弟集不在手上,所以起播前**补列一次它所在的那个目录**
-    /// (目录由 `path` 推出);卡片恰好落在当前浏览的目录里时不列,直接复用。
-    /// 列回来的那一份同时带着封面,选集面板因此也有图。
-    ///
-    /// ⛔ 不改 `currentDirectory`:点「继续观看」是**接着看**,不是要跳到那个目录 ——
-    /// 那样浏览页会毫无征兆地换一屏。
-    ///
-    /// - Returns: 是否已经把播放请求写好(视图据此决定要不要唤起播放窗口)。
+    /// - Returns: 是否已发出播放请求(视图据此决定要不要唤起播放窗口)。
     @discardableResult
     func play(_ card: FileSourceResumeCard) async -> Bool {
         guard let file = card.reconstructedFile else { return false }
@@ -1396,8 +1074,7 @@ final class FileSourceViewModel {
                     selecting: item, in: content.items, filesByID: content.filesByID, source: source)
             }
         }
-        // 外挂字幕与换集队列同一份来源:补列回来的 `filesByID` 里就有同目录的 .srt
-        // (当前目录命中时是零请求的那一份)。拿不到目录时照常播放,只是没有字幕。
+        // 外挂字幕取自同一份 `filesByID`;拿不到目录时照常播放,只是没有字幕
         let subtitles = content.map {
             BaiduPanSubtitle.files(for: file, in: Array($0.filesByID.values))
         } ?? []
@@ -1405,29 +1082,14 @@ final class FileSourceViewModel {
         return true
     }
 
-    /// 点「继续观看」卡片的**非播放**区域:进它的详情页。
-    ///
-    /// 与 `play(_ card:)` 的分工:那个是接着看(⛔ 不动 `currentDirectory`,
-    /// 点一下不该把浏览页换一屏),这个是**跳到那个目录**看详情 ——
-    /// 与 Emby 首页「继续观看」卡片点空白处打开详情页对齐。
-    ///
-    /// 落在**剧目录**上,而不是文件所在的季文件夹上:季文件夹存法
-    /// (`琅琊榜/第1季/01.mp4`)下后者会显示成一部只有一季、剧名还是「第1季」的剧
-    /// (见 `BaiduPanPath.seriesDirectory(ofFilePath:)`)。那一层不是剧(单条视频 / 电影)时
-    /// 照常显示文件网格 —— 百度没有「单文件详情页」,文件所在目录就是能给的最近一层。
-    ///
-    /// ⚠️ 不越出这一页的最外层:用户把某一季设成了片库根时剧目录在它之上,
-    /// 那就退回文件所在目录(见 `detailDirectory(ofFilePath:topmost:)`)。
+    /// 点续播卡片非播放区域:跳到它的详情页(与 `play(_ card:)` 不同,会改 `currentDirectory`)。
+    /// 落在剧目录而非季文件夹,否则季文件夹存法会显示成一部叫「第1季」的剧
+    /// (`BaiduPanPath.seriesDirectory(ofFilePath:)`);不是剧时显示文件所在目录的网格。
+    /// 不越出最外层,见 `detailDirectory(ofFilePath:topmost:)`。
     func openDetail(for card: FileSourceResumeCard) async {
-        // 卡片那一集属于哪一季,点进去就默认选哪一季 —— 否则「继续播放」会变成
-        // 「播放第 1 集」(理由见 `applyDirectoryShape`)
         preferredSeasonNumber = Self.seasonNumber(ofFilePath: card.path)
         let directory = Self.detailDirectory(ofFilePath: card.path, topmost: topmostDirectory)
-        // 剧级元数据:这次不是从父目录那张卡片点进来的,但**续播卡自己带着封面快照**
-        // (播放那一刻记下的)。不用它兜底,详情页的海报与 hero 背景就都是空的
-        // —— 用户报的「从继续观看进详情,封面和背景图加载不出来」正是这个。
-        // ⚠️ 快照里那张是**那一集**的图(配了 TMDB 就是 16:9 剧照),只当过渡:
-        // `seriesProfile` 一到就换成剧集海报(见 `applySeriesPosterFromProfile`)
+        // 没有父目录卡片,用续播快照的封面兜底(过渡用,见 `resumeSnapshotPoster`)
         resumeSnapshotPoster = card.poster
         enteredSeriesItem = Self.fallbackSeriesItem(
             directory: directory,
@@ -1439,16 +1101,11 @@ final class FileSourceViewModel {
         await loadFiles()
     }
 
-    /// 某个目录的内容:就是当前目录就直接复用(0 请求),否则补列一次。
-    ///
-    /// ⛔ 拿不到就返回 nil,**照常播放**,只是没有换集入口 —— 「继续观看」的语义是
-    /// 接着看,不能因为一次列目录失败就播不了。目录本身的错误浏览页已经提示过,
-    /// 这里再弹一次只会把起播打断。
+    /// 当前目录直接复用,否则补列一次。拿不到返回 nil:照常播放,只是没有换集入口,不打断起播。
     private func directoryContent(
         for directory: String
     ) async -> FileSourceDirectoryContent? {
-        // ⚠️ 两个分支都要过隐藏过滤:从「继续观看」起播时,隐藏的兄弟集
-        // 不该因为换了个入口就回到选集面板里。
+        // 两个分支都要过隐藏过滤
         if directory == currentDirectory, !items.isEmpty {
             return FileSourceDirectoryContent(
                 items: sortedItems, filesByID: filesByID, durations: [:])
@@ -1456,7 +1113,7 @@ final class FileSourceViewModel {
         do {
             let provider = makeProvider()
             let content = try await provider.content(directory: directory)
-            // 逐集剧照只来自 TMDB 那一趟(⛔ 不抛错:没配 token / 连不上就退本地图)
+            // 剧照只来自 TMDB;刮削不抛错,失败退本地图
             let enriched = await provider.scrape(items: content.items)
             return FileSourceDirectoryContent(
                 items: visible(enriched), filesByID: content.filesByID,
@@ -1466,10 +1123,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 「继续观看」卡片点进详情页该落在哪一层(见 `openDetail(for:)`)。
-    ///
-    /// ⚠️ 剧目录若在**片库根之上**(用户把某一季设成了片库根),退回文件所在目录 ——
-    /// ⛔ 不越出这一页的最外层(与 `canGoUp` 同一把尺子)。
+    /// 剧目录在最外层之上(某一季被设成片库根)时,退回文件所在目录。
     static func detailDirectory(ofFilePath path: String, topmost: String?) -> String {
         let series = BaiduPanPath.seriesDirectory(ofFilePath: path)
         guard let topmost, !topmost.isEmpty else { return series }
@@ -1478,11 +1132,7 @@ final class FileSourceViewModel {
             : BaiduPanPath.directory(ofFilePath: path)
     }
 
-    /// 这一集属于第几季(`nil` = 认不出来)。只用于「点进详情页时默认选中哪一季」。
-    ///
-    /// 判据与合成器同源:父目录名整个是季标记时用它,否则看文件名里的 `SxxExx`。
-    /// 两样都没有就不给 —— 详情页退回第一季,与平铺存法(`琅琊榜/01.mp4` 一律算第 1 季)
-    /// 的口径一致。
+    /// 判据同合成器:父目录名是季标记就用它,否则看文件名 `SxxExx`。nil = 认不出(详情页落第一季)。
     static func seasonNumber(ofFilePath path: String) -> Int? {
         let parentName = (BaiduPanPath.directory(ofFilePath: path) as NSString).lastPathComponent
         if let season = BaiduPanMetadataSynthesizer.seasonNumber(fromDirectoryName: parentName) {
@@ -1492,14 +1142,8 @@ final class FileSourceViewModel {
             name: (path as NSString).lastPathComponent).season
     }
 
-    /// 把一条移出「继续观看」:删掉本地进度记录(⛔ 不动网盘上的文件)。
-    ///
-    /// ⚠️ 删的是**这一整部剧**:卡片是一部剧一张,只删当前那一集的话,
-    /// 同剧下一集有进度就会立刻顶上来 —— 表现为「移出了又回来了」。
-    /// (本地续播库没有「隐藏」这一态,删记录是它唯一的移除手段。)
-    ///
-    /// ⚠️ 走 `remove(fileIDs:)` 而不是 `forget(fileIDs:)`:这是用户主动弃掉进度,
-    /// 文件本身还在网盘 —— 他之后再点开这一集,进度当然要重新记下来。
+    /// 删掉整部剧的本地进度记录(不动网盘文件)。只删一集的话同剧下一集会立刻顶上来。
+    /// 用 `remove(fileIDs:)` 而非 `forget(fileIDs:)`:文件还在,之后再看要能重新记进度。
     func removeResumeCard(_ card: FileSourceResumeCard) async {
         let key = Self.seriesKey(title: card.title, locator: card.path)
         do {
@@ -1513,47 +1157,36 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 这一条的本地观看状态。没记录 = 未看。
+    /// 没记录 = 未看
     func watchState(for item: SourceItem) -> WatchProgressStore.WatchState {
         watchStates[item.ref.itemID] ?? .unwatched
     }
 
-    /// 已经看完了(显式标记,或自动判定过了 90%)。
+    /// 显式标记,或自动判定过了 90%
     func isWatched(_ item: SourceItem) -> Bool {
         watchState(for: item) == .watched
     }
 
-    /// 接着看的位置(秒)。看完 / 未看都是 nil。
+    /// 看完 / 未看都是 nil
     func resumeSeconds(for item: SourceItem) -> Double? {
         guard case .inProgress(let seconds) = watchState(for: item) else { return nil }
         return seconds
     }
 
-    /// 目录卡片上「已看 N 集」的 N(0 = 不显示)。
-    ///
-    /// ⚠️ 只数本地有记录的集。总数那一半见 `episodeTotal(for:)` —— 它只有
-    /// **进过详情页**之后才有值,所以卡片文案分三种形态(`FileSourceCard.subtitle`)。
+    /// 目录卡片「已看 N 集」的 N(0 = 不显示),只数本地有记录的
     func watchedEpisodeCount(for item: SourceItem) -> Int {
         guard item.kind.isContainer, let path = file(for: item)?.path else { return 0 }
         return watchedEpisodeCounts[path] ?? 0
     }
 
-    /// 这一部剧**一共几集**。nil = 还不知道(从没进过详情页 / 只进过其中几季)。
-    ///
-    /// 数据来自本地记录(`BaiduPanEpisodeCountStore`),零请求 —— 总数是
-    /// 用户某次进详情页时顺手记下的,而不是为了网格上的一个数字去列一遍子目录。
-    /// ⚠️ 网盘里增删了集之后这个数会偏,下次进详情页会重算并覆盖。
+    /// 总集数,来自进详情页时记下的本地记录,零请求。nil = 还不知道。网盘增删集后会偏,下次进详情页重算。
     func episodeTotal(for item: SourceItem) -> Int? {
         guard item.kind.isContainer, let path = file(for: item)?.path else { return nil }
         guard let total = episodeCounts[path], total > 0 else { return nil }
         return total
     }
 
-    /// 这一条算不算「已看」(筛选与角标共用)。
-    ///
-    /// - **能播的文件**:本地续播库的显式标记 / 自动判定(`watchStates`)。
-    /// - **目录**:看**是否看完** —— 知道总集数时要求「已看 ≥ 总数」,
-    ///   不知道时退回「有记录就算」。⛔ 不拿「有 3 集已看」冒充「整部看完」。
+    /// 筛选用。目录:知道总数时要求已看 ≥ 总数,不知道时有记录就算(否则「已看」档在没进过详情页的剧上永远空)。
     func isWatchedItem(_ item: SourceItem) -> Bool {
         guard item.kind.isContainer else { return isWatched(item) }
         let watched = watchedEpisodeCount(for: item)
@@ -1562,18 +1195,13 @@ final class FileSourceViewModel {
         return watched >= total
     }
 
-    /// 整条**看完**了(卡片右上角那个 ✓ 用它)。
-    ///
-    /// ⚠️ 与 `isWatchedItem` 分开:那个给**筛选**用,总数未知时退回「有记录」,
-    /// 免得「已看」这一档在没进过详情页的剧上永远是空的;但**角标**不能这么宽 ——
-    /// 一季看了 1 集就打 ✓ 比不打更误导。所以目录要求「知道总数且已看 ≥ 总数」。
+    /// ✓ 角标用,比 `isWatchedItem` 严:目录必须知道总数且已看 ≥ 总数。
     func isFullyWatched(_ item: SourceItem) -> Bool {
         guard item.kind.isContainer else { return isWatched(item) }
         guard let total = episodeTotal(for: item) else { return false }
         return watchedEpisodeCount(for: item) >= total
     }
 
-    /// 观看状态筛选(纯判定,零请求)。
     private func matchesWatchFilter(_ item: SourceItem) -> Bool {
         switch watchFilter {
         case .all: return true
@@ -1584,14 +1212,9 @@ final class FileSourceViewModel {
 
     // MARK: - 动作:观看状态
     //
-    // 百度**没有任何播放状态接口**(`docs/BAIDU_PAN_API.md` §2 只有授权 / 列表 /
-    // 元信息 / 播放流 / 删除 / 改名),所以「已看 / 未看」只能记在本地续播库里 ——
-    // 与进度同源:换台机器不同步,那正是这个来源的能力边界。
+    // 百度没有播放状态接口(`docs/BAIDU_PAN_API.md` §2),已看 / 未看只记在本地续播库,不跨机器同步。
 
-    /// 把这些条目标成已看 / 未看。⛔ 一个请求都不发。
-    ///
-    /// ⚠️ 顺手写展示快照:标记时并没有播放,不写的话这条记录没有 `locator`,
-    /// 删网盘文件时按路径圈不到它(`BaiduPanWatchHistory`),会留成死记录。
+    /// 零请求。顺手写展示快照:没有 `locator` 的记录在删网盘文件时按路径圈不到(`BaiduPanWatchHistory`)。
     func markPlayed(_ items: [SourceItem], played: Bool) async {
         let marks = items.filter { $0.kind.isPlayable }.map { item in
             WatchProgressStore.PlayedMark(
@@ -1600,22 +1223,17 @@ final class FileSourceViewModel {
             )
         }
         await applyPlayed(marks, played: played)
-        // 标完已看要让续播卡接着指向**下一个没看的**集 —— 否则把最后一张卡标成
-        // 已看,整部剧就从「继续观看」里消失了(用户报的就是这个)。
+        // 让续播卡指向下一个没看的集,否则标完最后一张整部剧就从续播区消失
         if played { await advanceUpNext() }
     }
 
-    /// 续播卡片上标已看:卡片是从记录折出来的,手上没有 `SourceItem`,
-    /// 所以不给展示快照 —— 那条记录本来就有(卡片就是靠它才画得出来)。
+    /// 续播卡对应的记录本来就有快照,不再给
     func markPlayed(_ card: FileSourceResumeCard) async {
         await applyPlayed(
             [WatchProgressStore.PlayedMark(fileID: card.fileID, display: nil)], played: true)
     }
 
-    /// 当前这一季的整季标记。分集已经在手上 —— 零额外请求(配额纪律)。
-    ///
-    /// ⚠️ 只作用于**已经列出来的**这一季:`episodes` 之外的东西不知道存在,
-    /// ⛔ 不为了「整部剧」回头列一遍别的季文件夹。
+    /// 只作用于已列出的这一季,⛔ 不为整部剧去列别的季文件夹。
     func markSeasonPlayed(_ played: Bool) async {
         await markPlayed(episodes, played: played)
     }
@@ -1630,14 +1248,9 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 标完已看后,把续播卡指向**下一个没看的**集(Emby 的 NextUp 对位物)。
-    ///
-    /// ⚠️ 只在**知道分集清单**时做 —— 也就是剧集详情页(`episodes` 就是这一季)。
-    /// 网格里标单个文件时不知道这部剧还有哪些集,⛔ 不为此去列目录(配额);
-    /// 那种情况下卡片退出续播区,等下次播完一集由 `AppContainer.advanceBaiduUpNext` 补位。
-    ///
-    /// ⚠️ 只认**这一季**:季末标完就什么都不写(别的季有哪些集我们不知道,
-    /// ⛔ 不猜「还有下一季」)。
+    /// 把续播卡指向这一季下一个没看的集(类似 Emby NextUp)。只在详情页(知道分集清单)时有效;
+    /// 网格里 `episodes` 为空,⛔ 不为此列目录,由 `AppContainer.advanceBaiduUpNext` 下次补位。
+    /// 季末不写,⛔ 不猜下一季。
     private func advanceUpNext() async {
         guard !episodes.isEmpty else { return }
         guard let next = episodes.first(where: { $0.kind.isPlayable && !isWatched($0) }),
@@ -1657,56 +1270,26 @@ final class FileSourceViewModel {
 
     // MARK: - 动作:删除 / 隐藏
 
-    /// 让一条条目从眼前消失:只本地隐藏,或连网盘里的文件一起删。
+    /// 隐藏或连网盘文件一起删(`alsoDeleteRemotely`)。两条路都清掉这一条名下的本地观看记录
+    /// (按路径圈定,见 `BaiduPanWatchHistory`;⛔ 不按标题 / 集号猜):
     ///
-    /// - Parameter alsoDeleteRemotely: 勾了「同时删除网盘里的文件」。
+    /// - 隐藏:写 `HiddenItemsStore`(可恢复),`items` 不动以便恢复时立刻重现;记录用 `remove`
+    ///   (恢复后再看要能重新记,但已删的进度不还原)。
+    /// - 真删:不写隐藏库(恢复不出东西),清缓存与卡片;记录用 `forget` 封 id,
+    ///   否则正在播的那场还会把进度写回来。只删一集时同剧其它集记录保留。
     ///
-    /// ⚠️ 两条路后果不同,⛔ 别混:
-    ///
-    /// - **只隐藏** → 写 `HiddenItemsStore`(设置页可恢复),`items` 不动
-    ///   —— 留着它,恢复那一刻条目立刻重现,不必再列一次目录(配额 2 次请求);
-    /// - **连网盘一起删** → ⛔ **不写**隐藏库:文件已经不在网盘,恢复不出任何东西,
-    ///   记一条只会让「已隐藏」列表越积越多。改成把本地这一份(缓存 / 卡片 /
-    ///   续播记录)一起清掉。
-    ///
-    /// ## 本地观看记录一起清(两条路都清)
-    ///
-    /// 用户的要求是「删剧集的时候同步删掉观看记录、继续观看里该剧集的内容」。
-    /// 所以两条路都会清掉**这一条名下**的记录(圈定靠 `BaiduPanWatchHistory`:
-    /// 删目录 = 递归包含,删文件 = 路径完全相等):
-    ///
-    /// - **隐藏**也清。隐藏之后这部剧的卡片不该还留在「继续观看」里 ——
-    ///   那就是用户说的「继续观看里面该剧集的内容」。恢复隐藏**不会**把记录
-    ///   还回来(进度是真删了,⛔ 不假装能还原),但条目本身会回到列表,
-    ///   重新看一集就又有了记录(所以这条路用 `remove`,不封 id)。
-    /// - **真删**清的是同一批,并且**封掉**这批 id(`forget`):文件已经不在了,
-    ///   正在播的那一场还在报进度,不挡就会把记录写回来。
-    ///   ⚠️ 只删一集时,同剧其它集的记录留着 —— 卡片会退到下一集,
-    ///   那正是「接着看」该有的样子。
-    ///
-    /// ⚠️ 圈定**只认路径**:拿标题 / 集号猜等于可能清错别人的进度(见
-    /// `BaiduPanWatchHistory` 的注释)。路径拿不到(`file(for:)` 返回 nil)时不猜 ——
-    /// 直接抛,连删除动作都不做(与「找不到就没法删」同一把尺子)。
-    ///
-    /// 勾了但网盘删失败 → **直接抛**,既不隐藏也不摘除 —— 让用户看到「没删成」,
-    /// ⛔ 不悄悄降级成隐藏(那会让人以为已经删干净了)。本地记录此时不动:
-    /// 文件还在,进度就该还在。
+    /// 找不到路径或网盘删除失败都直接抛,⛔ 不悄悄降级成隐藏;失败时本地记录不动。
     func delete(_ item: SourceItem, alsoDeleteRemotely: Bool) async throws {
         guard let file = file(for: item) else {
             throw BaiduPanError.configuration(
                 "找不到「\(item.title)」在\(source.storageNoun)里的路径,没法删除。")
         }
-        // 本地文件夹只读:界面不给「连文件一起删」的开关(`FileSource.supportsDeletingFiles`),
-        // 走到这里就是调用方的 bug —— 如实抛,⛔ 不悄悄降级成隐藏
+        // 本地文件夹只读,界面不给这个开关;走到这里是调用方 bug,如实抛
         if alsoDeleteRemotely, !source.supportsDeletingFiles {
             throw LocalFolderError.readOnly
         }
-        // 删的是不是目录只认 `BaiduPanFile` 自己那一格,⛔ 不从 `item.kind` 反推
-        // (`kind` 是给 UI 的分类,「认不出的文件」也是 `.unknown`,与目录语义无关)。
+        // ⛔ 不从 `item.kind` 反推是否目录(`.unknown` 也可能是文件)
         let isDirectory = file.isDirectory
-        // 先算出「这一条名下有哪些观看记录」—— 隐藏与真删共用这一份,⛔ 不各算一遍。
-        // ⚠️ 再加上它**自己的** `fs_id`:没有展示快照的老记录没有 `locator`,
-        // 按路径圈不到,但它可能就记在这个文件自己的 id 底下。
         let fileIDs = await affectedRecordIDs(
             path: file.path, isDirectory: isDirectory, ownItemID: item.ref.itemID)
         guard alsoDeleteRemotely else {
@@ -1718,8 +1301,6 @@ final class FileSourceViewModel {
                     path: file.path,
                     isDirectory: isDirectory))
             hiddenRefs.insert(item.ref)
-            // ⚠️ 走 `remove` 而不是 `forget`:隐藏**可恢复**,恢复之后这一项还能再播,
-            // 那时进度必须记得上。只有真删才用 `forget`(删除不可恢复,见下)。
             await removeRecords(fileIDs)
             for id in fileIDs { watchStates.removeValue(forKey: id) }
             await loadResumeCards()
@@ -1729,41 +1310,27 @@ final class FileSourceViewModel {
         guard case .baiduPan = source else { throw LocalFolderError.readOnly }
         try await connection.deleteFile(at: file.path)
 
-        // 删掉的若是片库根,顺手清掉 —— 留着就是指向已不存在目录的悬空值
         if libraryRoot?.path == file.path {
             await clearLibraryRoot()
         }
 
-        // 只进内存:下一轮 `loadFiles` 会从库里重读(这一条从来没写进库),
-        // 而那时目录缓存已经丢掉、条目来自网络 —— 删掉的自然不会再出现。
+        // 只进内存(不写隐藏库);下一轮 `loadFiles` 走网络,删掉的自然不再出现
         hiddenRefs.insert(item.ref)
         items.removeAll { $0.ref == item.ref }
         if let fsID = UInt64(item.ref.itemID) { filesByID.removeValue(forKey: fsID) }
-        // 缓存要丢两层:被删的那一条自己(目录的话还有它的子层),
-        // 以及**它所在的那一层** —— 后者还留着它的卡片,不丢就等于删了个寂寞。
-        // ⚠️ 所在那一层只丢自己(`includeDescendants: false`):同剧别的季没动,
-        // 连它们一起丢只会让下次进别的季白烧两次请求。
+        // 丢被删的那层(含子层)和它所在的那层;所在层不连子层丢,免得同剧别的季白烧请求
         await evictCachedDirectory(file.path)
         await evictCachedDirectory(
             BaiduPanPath.directory(ofFilePath: file.path), includeDescendants: false)
         await forgetRecords(fileIDs)
-        // 角标按清理后的记录重算:删 / 隐藏目录时,它下面每一集的「已看到 …」
-        // 都该消失。被删的文件已经不在 `items` / `episodes` 里,重算自然丢掉它们;
-        // 季文件夹存法下分集可能不在这两份里,再按刚算出的 id 兜一层。
+        // 重算角标;不在 `items` / `episodes` 里的分集再按 id 兜一层
         await loadWatchStates()
         for id in fileIDs { watchStates.removeValue(forKey: id) }
         await loadResumeCards()
     }
 
-    /// 删 / 隐藏这一条会带走哪些观看记录。
-    ///
-    /// 读的是 `storedRecords`(**不过滤已看完 / 位置 0**)—— 清的是「它名下全部」,
-    /// 只按续播语义找会漏掉已看完的那几集,留下指向不存在文件的死记录。
-    ///
-    /// ⚠️ 除了按路径圈,还要把**条目自己的 `fs_id`** 并进来:极老的记录可能没有
-    /// 展示快照(也就没有 `locator`),它在续播区里不显示,却仍然躺在库里 ——
-    /// 删掉的若是这一条,那条记录也得清。目录那条 id 底下不会有记录(目录不可播),
-    /// 并进来只是兜底,不会误伤。
+    /// 读 `storedRecords`(含已看完 / 位置 0 的),否则会漏下死记录。
+    /// 另并入条目自己的 `fs_id`:没有快照(无 `locator`)的老记录按路径圈不到。
     private func affectedRecordIDs(
         path: String, isDirectory: Bool, ownItemID: String
     ) async -> [String] {
@@ -1774,24 +1341,18 @@ final class FileSourceViewModel {
         return ids
     }
 
-    /// 把这批记录从库里删掉(一次落盘),失败只如实提示、⛔ 不推翻已经发生的删除。
-    ///
-    /// `forget` 与 `remove` 的差别只有一个:前者还会在本进程内拒绝再写这批 id。
-    /// - **真删**用 `forget`:文件已经不在网盘,正在播的那一场每 10 秒还在报进度,
-    ///   不挡住就会把刚清掉的记录写回来;
-    /// - **隐藏**用 `remove`:隐藏可恢复,恢复之后这一项还能再播,进度要记得上。
+    /// 真删用:`forget` 还会在本进程内拒绝再写这批 id(正在播的那场还在报进度)。
+    /// 失败只提示,⛔ 不算删除失败(删除已经发生)。
     private func forgetRecords(_ fileIDs: [String]) async {
         guard !fileIDs.isEmpty else { return }
         do {
             try await container.watchProgress.forget(fileIDs: fileIDs)
         } catch {
-            // 文件已经删掉了 / 隐藏已经生效,清不掉记录只是留几条死记录 ——
-            // 如实说一句,⛔ 不把它算成删除失败(那会让人再删一次)。
             notice = "条目已处理,但本地观看记录没清掉:\(error)"
         }
     }
 
-    /// 隐藏那条路用的批量清:只删记录,不封 id(见 `forgetRecords`)。
+    /// 隐藏用:只删记录,不封 id(见 `forgetRecords`)
     private func removeRecords(_ fileIDs: [String]) async {
         guard !fileIDs.isEmpty else { return }
         do {
@@ -1801,11 +1362,7 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 丢掉一条目录缓存(内存 + 落盘),默认连**所有子层**一起丢
-    /// —— 删掉一个目录后,子层的旧内容一样是垃圾。
-    ///
-    /// `includeDescendants: false` 用于「删掉的是某一层里的一个条目」:
-    /// 那一层本身还得留着(只是少了一条),整层丢掉只会让下次进来白烧两次请求。
+    /// 丢目录缓存(内存 + 落盘),默认连子层一起丢
     private func evictCachedDirectory(_ path: String, includeDescendants: Bool = true) async {
         guard !path.isEmpty, cachesDirectories else { return }
         directoryCache = directoryCache.filter { key, _ in
@@ -1816,21 +1373,8 @@ final class FileSourceViewModel {
             sourceID: source.id, directory: path, includeDescendants: includeDescendants)
     }
 
-    /// 读本地续播库里属于这个来源的记录,折成卡片。
-    ///
-    /// 与 `loadWatchStates` 的分工:那个读的是**当前目录**每一条的状态(画在
-    /// 卡片角上);这个读的是**全库**里有进度的条目 + 「下一集」占位
-    /// (撑起顶部的续播区)。
-    ///
-    /// ## 两道过滤
-    ///
-    /// 1. **按 `fs_id`**:被隐藏的那一条自己不出现(原做法);
-    /// 2. **按路径**:隐藏的是一个**目录**时,目录里各集的卡片也一并消失 ——
-    ///    那些记录记的是集文件的 `fs_id`,第 1 道挡不住。不挡的后果是「隐藏了整部剧,
-    ///    「继续观看」里还挂着它的卡,点开就播不了」(用户报的就是这个)。
-    ///
-    /// ⚠️ 过滤放在这里而不是调用方:这个方法在 `loadFiles` 的片库根回落里
-    /// 会被再调一次,只在外层过滤会漏掉那一趟。
+    /// 全库有进度的条目 + 「下一集」占位 → 续播卡(`loadWatchStates` 管当前目录的角标)。
+    /// 隐藏过滤两道:按 `fs_id`,再按路径(隐藏整个目录时,其下各集记录的 `fs_id` 挡不住)。
     private func loadResumeCards() async {
         let records = await container.watchProgress.resumeEntries(sourceID: source.id)
         let hiddenPaths = await container.hiddenItems.hiddenPaths(sourceID: source.id)
@@ -1842,10 +1386,7 @@ final class FileSourceViewModel {
         resumeCards = Self.oneCardPerSeries(visibleRecords).compactMap(FileSourceResumeCard.init(record:))
     }
 
-    /// 这条记录的文件是不是落在某个被隐藏的路径里(纯函数,单测覆盖)。
-    ///
-    /// ⚠️ 只认**路径**:拿标题 / 集号去碰等于可能把同名同集号的另一条藏掉。
-    /// 没有 `path` 的老隐藏记录不参与这一道(它们本来就只按 `fs_id` 生效)。
+    /// 只按路径判断(⛔ 不按标题 / 集号)。没有 `path` 的隐藏记录只按 `fs_id` 生效,不参与这里。
     static func isHidden(
         _ record: WatchProgressStore.ResumeRecord,
         by hiddenPaths: [HiddenItemsStore.HiddenPath]
@@ -1856,21 +1397,8 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 一部剧只留**一条**记录:同一目录 + 同一剧名的合成一张,取最近看的那一集。
-    ///
-    /// ## 为什么必须在展示层合
-    ///
-    /// 续播库按**文件**记(一集一条,换集 / 跳集都要各自记得住),而卡片上的标题
-    /// 是**剧名**(`BaiduPanMetadataSynthesizer.mediaItem`:剧集目录结构取目录名)。
-    /// 不合就会看到一排同名卡片 —— 一部剧看几集就占几张。
-    ///
-    /// ⛔ 不改续播库:各集的进度还得留着(进目录时角标要按集显示),这里只是**卡片**聚合。
-    ///
-    /// ## 「看到一半」压过「下一集」占位
-    ///
-    /// 同一部剧可能既有看到一半的一集、又有另一集的 `upNext` 占位(比如倒回去重看)。
-    /// 该续播的是**那一集**,不是再往后一集 —— 所以先按进度记录去重,占位只补空位。
-    /// 两趟都按 `updatedAt` 倒序,组内留下的仍是最近看的那一条。
+    /// 一部剧(同目录 + 同剧名)只出一张卡,取最近看的。续播库按文件记、不改,这里只聚合卡片。
+    /// 「看到一半」优先于「下一集」占位:先按进度记录去重,占位只补空位。
     static func oneCardPerSeries(
         _ records: [WatchProgressStore.ResumeRecord]
     ) -> [WatchProgressStore.ResumeRecord] {
@@ -1884,11 +1412,7 @@ final class FileSourceViewModel {
         return (progressed + upNext).sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// 一部剧的聚合键:剧名 + 所在目录。
-    ///
-    /// ⚠️ 目录也进键:不同目录下同名的内容是**两部**(重拍 / 同名电影),
-    /// 只按剧名合会把它们并成一张。代价是同一部剧分季目录
-    /// (`剧/Season 1`、`剧/Season 2`)会各出一张 —— 那正是「不并错」换来的。
+    /// 剧名 + 所在目录。目录进键防止不同目录的同名内容并成一张;代价是分季目录各出一张。
     static func seriesKey(of record: WatchProgressStore.ResumeRecord) -> String {
         seriesKey(title: record.display.title, locator: record.display.locator)
     }
@@ -1898,42 +1422,29 @@ final class FileSourceViewModel {
         return "\(name)|\(BaiduPanPath.directory(ofFilePath: locator))"
     }
 
-    /// `SourceItem` 只是给 UI 的投影;播放与进目录要原始文件(`path` / 真实文件名)。
-    /// ⛔ 找不到就什么都不做 —— 不拿投影反推一个假 `BaiduPanFile`。
+    /// ⛔ 找不到返回 nil,不拿 `SourceItem` 反推一个假 `BaiduPanFile`
     func file(for item: SourceItem) -> BaiduPanFile? {
         guard let fsID = UInt64(item.ref.itemID) else { return nil }
         return filesByID[fsID]
     }
 
-    /// 建一个「按 TMDB 重命名」流程的 ViewModel。
-    ///
-    /// ⚠️ 走工厂而不是把 `container` 暴露出去:那边需要的是凭据 / 连接 / 进度库
-    /// 三样东西,由这里按本 ViewModel 自己那份装配好,⛔ 不让调用方自己拼。
+    /// 工厂方法,不把 `container` 暴露给调用方
     func makeRenameViewModel() -> BaiduPanRenameSeriesViewModel {
         BaiduPanRenameSeriesViewModel(container: container)
     }
 
-    /// 去掉被隐藏的条目。
     private func visible(_ items: [SourceItem]) -> [SourceItem] {
         guard !hiddenRefs.isEmpty else { return items }
         return items.filter { !hiddenRefs.contains($0.ref) }
     }
 
-    /// 修改配置时预填给表单的现值。
     struct BaiduPanConfigurationDraft: Sendable, Equatable {
         let appKey: String
         let secretKey: String
         let folderName: String
     }
 
-    /// 读本地续播库,把「这一屏要画的条目」折成状态 + 剧卡计数。
-    ///
-    /// 与 `loadResumeCards` 的分工:那个折的是**跨目录的续播卡**(全库里有进度的);
-    /// 这个折的是**当前目录 / 当前季每一条的状态**(✓ 与「已看到 mm:ss」),外加
-    /// 剧目录卡片上的「已看 N 集」。
-    ///
-    /// ⚠️ 一次读盘拿两份:条目 id 与库里全部记录合起来查一次 `watchStates`,
-    /// 再按路径把已看的记录摊到各级目录上。全部本地,零请求。
+    /// 当前目录 / 当前季每条的状态,加剧目录卡片的已看集数。全部本地,零请求。
     private func loadWatchStates() async {
         var ids = Set<String>()
         for item in items + episodes where item.kind.isPlayable {
@@ -1946,13 +1457,8 @@ final class FileSourceViewModel {
         watchedEpisodeCounts = Self.watchedEpisodeCounts(records: records, states: states)
     }
 
-    /// 每个目录下**已看**的集数(含子目录)。纯函数,单测覆盖。
-    ///
-    /// 一条已看记录给自己所在的目录与它所有上层目录各 +1 —— 剧目录卡片查的
-    /// 就是自己的路径,所以季文件夹存法(`剧/第1季/01.mp4`)也数得进去。
-    ///
-    /// ⚠️ 只认 `storedRecords`(带展示快照的记录):没有定位信息的记录归不到
-    /// 任何目录,⛔ 也不拿文件名猜一个。
+    /// 每条已看记录给所在目录及所有上层目录各 +1,季文件夹存法也数得进剧目录。
+    /// 没有 `locator` 的记录不计,⛔ 不拿文件名猜。
     static func watchedEpisodeCounts(
         records: [WatchProgressStore.StoredRecord],
         states: [String: WatchProgressStore.WatchState]
@@ -1971,36 +1477,31 @@ final class FileSourceViewModel {
     }
 }
 
-/// 百度来源「继续观看」区的一张卡片。
-///
-/// 它是**从本地续播库的记录折出来的**(不是从目录列出来的)—— 因为续播区要
-/// 跨目录、甚至要能在目录读失败时也显示。展示所需的一切都来自播放那一刻
-/// 存下的快照(`WatchProgressStore.Display`)。
+/// 文件树来源续播区的卡片,由本地续播库记录折出(`WatchProgressStore.Display` 快照),
+/// 所以能跨目录、目录读失败时也能显示。
 struct FileSourceResumeCard: Identifiable, Sendable, Equatable {
     let fileID: String
     let title: String
     let positionSeconds: Double
-    /// 已知总时长;未知为 nil(百度不给时长时就没有,进度条也不画)
+    /// nil = 未知,不画进度条
     let durationSeconds: Double?
-    /// 第几集。nil = 不是一集,或快照里没记 —— 副标题就只报「已看到 …」
+    /// nil = 不是一集或快照里没记
     let episodeNumber: Int?
     let path: String
     let fileName: String
     let poster: ImageDescriptor?
-    /// 这一张不是「看到一半」,而是「下一集该看」的占位(上一集刚看完)。
-    /// 副标题报「下一集」,⛔ 不报「已看到 00:00」,也不画进度条。
+    /// 「下一集该看」的占位(上一集刚看完):报「下一集」,不画进度条
     let isUpNext: Bool
 
     var id: String { fileID }
 
-    /// 副标题:一部剧只出一张卡,得说清接着看的是第几集。
     var subtitle: String {
         let what = isUpNext ? "下一集" : "已看到 \(PlayerTime.text(positionSeconds))"
         guard let episodeNumber else { return what }
         return "第 \(episodeNumber) 集 · \(what)"
     }
 
-    /// 折不出可播文件(键不是合法 `fs_id`)就返回 nil —— ⛔ 不端一张点不动的卡片。
+    /// 键不是合法 `fs_id` 时返回 nil,⛔ 不端出点不动的卡片
     init?(record: WatchProgressStore.ResumeRecord) {
         guard UInt64(record.fileID) != nil else { return nil }
         self.fileID = record.fileID
@@ -2014,7 +1515,7 @@ struct FileSourceResumeCard: Identifiable, Sendable, Equatable {
         self.isUpNext = record.isUpNext
     }
 
-    /// 重建一个够播放用的 `BaiduPanFile`(见 `FileSourceViewModel.play(_ card:)`)。
+    /// 够播放用的 `BaiduPanFile`(见 `FileSourceViewModel.play(_ card:)`)
     var reconstructedFile: BaiduPanFile? {
         guard let fsID = UInt64(fileID) else { return nil }
         return BaiduPanFile(
@@ -2030,21 +1531,14 @@ struct FileSourceResumeCard: Identifiable, Sendable, Equatable {
     }
 }
 
-/// 目录读失败时的用户可见信息。
-///
-/// ⚠️ 没有复用 `LoadFailure`:那一个是给 Emby 那条的(带 `needsLogin`),
-/// 而这里的分支是文件树来源独有的,塞进去会让两类来源的状态互相污染。
+/// 目录读失败时的用户可见信息。不复用 Emby 的 `LoadFailure`(带 `needsLogin`),分支不同。
 struct FileSourceDirectoryFailure: Sendable, Equatable {
     let message: String
 
-    /// 是不是**应用目录本身**读不出来(`/apps/{应用目录名}` 不在 / 没权限)。
-    ///
-    /// 这一态要给完全不同的处置:重试没用,得让人去核对控制台里的「应用名称」。
-    /// ⛔ 它**不是**「大概是权限问题」的猜测 —— 只有 `errno` 是
-    /// `-7`(无权访问)/ `-9`(不存在)且失败的请求正是应用目录时才置 true。
+    /// 应用目录本身读不出(`errno` -7 无权 / -9 不存在,且失败的正是应用目录)。
+    /// 重试没用,要让人核对控制台里的「应用名称」。
     let isApplicationRootUnavailable: Bool
 
-    /// 本地文件夹的**访问权没了**(书签解析不出 / 系统不给读 / 文件夹不在):
-    /// 重试没用,失败页给「重新选择文件夹…」(`LocalFolderError.needsFolderReselection`)。
+    /// 本地文件夹访问权没了,重试没用,失败页给「重新选择文件夹…」
     var needsFolderReselection = false
 }

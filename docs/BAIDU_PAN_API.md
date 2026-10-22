@@ -48,10 +48,9 @@
 | 文件元信息(**含 dlink**) | `GET /rest/2.0/xpan/multimedia?method=filemetas&fsids=[fs_id]&dlink=1&needmedia=1&thumb=1` |
 | 播放流 | `GET /rest/2.0/xpan/file?method=streaming&path=&type=[&nom3u8=1][&adToken=]` |
 
-**实测差异(重要)**:文档写的元信息路是 `file?method=meta&dlink=1`,
-但 2026-10-10 用真实应用实测**既没有 `errno`、也没有 `dlink`** —— 条目里只有
-路径/大小/`md5`。给 `dlink` 的是 `multimedia?method=filemetas`(带 `errno`,
-条目带 `dlink` 与 `duration`)。⇒ **播放入口一律走 `filemetas`**,`method=meta` 不再使用。
+**实测差异(重要)**:文档写的元信息路 `file?method=meta&dlink=1` 实测**既没有 `errno`、也没有 `dlink`**。
+给 `dlink` 的是 `multimedia?method=filemetas`(带 `errno`,条目带 `dlink` 与 `duration`)。
+⇒ **播放入口一律走 `filemetas`**,⛔ 不用 `method=meta`。
 
 `fsids` 是 **JSON 数组字面量**(`[1106099239747639]`),整段编码后送
 (实测 `fsids=%5B1106099239747639%5D` 可用)。查文件用 `fs_id` 而不是 `path`:
@@ -99,7 +98,7 @@
 (`errno=0` + `info[0].errno=-9` 是常态)—— ⛔ 只看顶层等于静默吞错。
 
 **目录(文件夹)**:官方通篇只写「文件」,没说 `filelist` 能不能放目录路径。
-**实测(2026-10-12,真实应用)**:可以,而且是**递归删** —— 传一个目录路径,
+**实测(真实应用)**:可以,而且是**递归删** —— 传一个目录路径,
 目录连同里面的全部内容一起没了,非空目录也一样删得掉。
 ⇒ 本项目据此实现,⛔ 但这是官方未写的行为,改版后要重测。
 (空目录 / 非空目录都能删;`-9`「不存在」仍按 §5 处置。)
@@ -133,7 +132,7 @@
 
 ## 2.7 rename 待实测项(⛔ 未实测,写代码时不得当成已确认)
 
-2026-10-14 建立。以下四条**都没有在真实应用上跑过**,现有实现只是按
+以下四条**都没有在真实应用上跑过**,现有实现只是按
 「与 delete 同形 + 按位置匹配」的假设写的,实测后回填本节并把假设换成事实:
 
 1. 一次 `filelist` 最多能放几条(现按 50 分片,保守值);

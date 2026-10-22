@@ -2,33 +2,25 @@ import CoreGraphics
 import CoreText
 import Foundation
 
-/// 单条弹幕的预渲染:文字 + 描边**出场时画一次**成位图,之后每帧只挪图层(GPU 合成),不再重画。
+/// 单条弹幕的预渲染:出场时画一次成位图,之后每帧只挪图层。
 ///
-/// ## 为什么是描边而不是阴影
-///
-/// 阴影是模糊出来的软边,文字一动边缘就糊成一片;描边是实心硬边,移动中也能看清字形
-/// (主流弹幕站点的默认外观)。描边色随文字色走:深色字配白边,其余配黑边。
-///
-/// ## 像素对齐
-///
-/// 位图按 `scale`(屏幕像素密度)取整到整像素,摆放时原点也对齐到像素格(`aligned`),
-/// 位图像素与屏幕像素一一对应、不做重采样 —— 文字边缘每帧一样锐利,不会时虚时实。
+/// 用描边不用阴影:阴影是软边,移动中会糊。
+/// 位图尺寸与摆放原点都对齐到屏幕像素(`aligned`),避免重采样导致文字时虚时实。
 enum DanmakuSprite {
 
     struct Rendered {
         let image: CGImage
-        /// 位图尺寸(pt,= 像素 / scale)
+        /// pt(= 像素 / scale)
         let size: CGSize
-        /// 文字行框相对位图左上角的内缩(pt):位图四周留出描边的位置
+        /// 文字行框相对位图左上角的内缩(pt),留给描边
         let margin: CGFloat
     }
 
-    /// 描边宽度(pt,文字外侧可见部分)
+    /// pt,文字外侧可见部分
     static func outlineWidth(fontSize: CGFloat) -> CGFloat {
         max(1, fontSize * 0.06)
     }
 
-    /// 坐标对齐到最近的屏幕像素
     static func aligned(_ value: CGFloat, scale: CGFloat) -> CGFloat {
         guard scale > 0 else { return value }
         return (value * scale).rounded() / scale
@@ -42,15 +34,13 @@ enum DanmakuSprite {
         return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.15
     }
 
-    /// 字体与 `DanmakuController.measure` 一致(系统粗体),排版宽度与画出来的才对得上。
+    /// ⛔ 必须与 `DanmakuController.measure` 一致,否则排版宽度与实际对不上。
     static func font(size: CGFloat) -> CTFont {
         CTFontCreateUIFontForLanguage(.emphasizedSystem, size, nil)
             ?? CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil)
     }
 
-    /// 画一条。文字在 `lineHeight` 高的行框里垂直居中。
-    ///
-    /// 位图上下文建不出来(尺寸为 0 / 内存不足)时返回 nil,由调用方跳过这一条。
+    /// 文字在 `lineHeight` 行框里垂直居中。位图上下文建不出来时返回 nil,调用方跳过这一条。
     static func render(
         text: String, color rgb: UInt32, fontSize: CGFloat, lineHeight: CGFloat, scale: CGFloat
     ) -> Rendered? {

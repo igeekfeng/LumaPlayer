@@ -1,86 +1,54 @@
 import Foundation
 import os
 
-/// 组合根:装配 CredentialStore / ServerRegistry / AppState,
-/// 并承载跨视图的服务器管理动作(添加 / 切换 / 编辑 / 删除 / 会话恢复)。
-///
-/// View 与 ViewModel 不直接拼 URL、不直接碰凭据存储
-/// (CLAUDE.md「架构主线」)。
+/// 组合根:装配各存储与连接,承载跨视图的来源管理动作(添加 / 切换 / 编辑 / 删除 / 会话恢复)。
 @MainActor
 final class AppContainer {
     let credentials: CredentialStore
     let registry: ServerRegistry
     let state = AppState()
-    /// 接口响应缓存:所有服务器共用一个实例,按 serverID 隔离。
-    /// 注入给每台服务器的 `ServerConnection`,登录重建连接后缓存仍有效。
+    /// 所有服务器共用,按 serverID 隔离;登录重建连接后缓存仍有效。
     let responseCache = EmbyResponseCache()
-    /// 「同一部剧沿用同一个倍速」的内存记录(`PlaybackSpeedStore`)。
-    /// 放在组合根上是刻意的:换视频 / 换集都会新建 `PlayerViewModel`,
-    /// 记在 ViewModel 里跨不过去;而记在这里就恰好是「本次运行」的寿命。
+    /// 同一部剧沿用同一倍速。放组合根上:换集会新建 `PlayerViewModel`,寿命要的是「本次运行」。
     let playbackSpeeds = PlaybackSpeedStore()
-    /// 本地续播库。**百度来源用它**:百度没有播放进度上报接口
-    /// (`docs/BAIDU_PAN_API.md`),进度只能记在本地;Emby 来源仍然上报到服务端。
+    /// 本地续播库,给没有进度上报接口的来源(百度、本地文件夹)用;Emby 仍上报服务端。
     let watchProgress: WatchProgressStore
-    /// 本地「隐藏条目」库:用户不想再看到、但**网盘上还留着**的条目。
-    /// 与 `watchProgress` 同一套做法(JSON 文件,不用服务端),因为百度没有这类标记接口。
+    /// 用户隐藏、但网盘上还留着的条目(百度没有这类标记接口,只能记本地)。
     let hiddenItems: HiddenItemsStore
-    /// 本地「手动片头 / 片尾」库:服务端检测不出片头片尾时用户自己标的。
-    /// 与 `hiddenItems` 同一套做法(JSON 文件)—— Emby 没有写回章节标记的接口,
-    /// 只能记在本地。键是「同一部剧」的范围键(见 `ManualMarkersScope`)。
+    /// 用户手标的片头 / 片尾(Emby 没有写回章节标记的接口)。键见 `ManualMarkersScope`。
     let manualMarkers: ManualMarkersStore
-    /// 百度目录的**落盘缓存**(`BaiduPanDirectoryCache`):冷启动先出内容、后台刷新。
-    /// 全 App 一份 —— 它按 `来源 id` 分区,多个百度来源互不干扰。
+    /// 百度目录落盘缓存:冷启动先出内容、后台刷新。按来源 id 分区。
     let baiduDirectoryCache: BaiduPanDirectoryCache
-    /// 百度条目的**刮削结果落盘缓存**(`BaiduPanScrapeCache`),给刮削器用。
-    /// 与目录缓存分开:失效条件不同(文件变了 vs 元数据没变),混在一起会互相误伤。
+    /// 刮削结果落盘缓存。与目录缓存分开:失效条件不同,混在一起会互相误伤。
     let baiduScrapeCache: BaiduPanScrapeCache
-    /// 百度「每个目录里有几集」的本地记录(`BaiduPanEpisodeCountStore`)。
-    /// 撑起剧目录卡片上的「已看 3 / 共 12 集」—— 总数只有进过详情页才知道。
+    /// 每个目录有几集,供剧卡片显示「已看 3 / 共 12 集」(总数只有进过详情页才知道)。
     let baiduEpisodeCounts: BaiduPanEpisodeCountStore
-    /// 百度网盘来源的连接。与 `ServerProfile` 无关 —— 一个 App 只对应开放平台
-    /// 上的一个应用、一个授权,所以它是**全 App 一份**(不像 `connections` 按服务器分)。
+    /// 全 App 一份:一个 App 只对应开放平台上的一个应用、一个授权。
     private var baiduConnectionInstance: BaiduPanConnection?
-    /// 本地文件夹来源的访问权(安全作用域书签)。全 App 一份:访问权按来源开一次、
-    /// 开着直到来源被删 / 换文件夹(理由见 `LocalFolderAccess`)。
+    /// 本地文件夹的安全作用域访问权,按来源开一次、开到来源被删 / 换文件夹(见 `LocalFolderAccess`)。
     let localFolderAccess: LocalFolderAccess
-    /// 本地视频时长的进程内记忆(`LocalMediaDurationCache`):本地目录每次进都重新读盘,
-    /// 时长不必每次都去读文件头。
+    /// 本地视频时长的进程内记忆,免得每次进目录都读文件头。
     let localMediaDurations = LocalMediaDurationCache()
-    /// 字幕外观偏好(`SubtitleStyleStore`,UserDefaults 持久化)。设置窗口改、播放窗口读,
-    /// 必须是同一个实例,播放中改设置才能即时生效。
+    /// 设置窗口改、播放窗口读,必须同一实例,播放中改设置才即时生效。下面的偏好 / 设置 store 同理。
     let subtitleStyles: SubtitleStyleStore
-    /// 手动加载的外挂字幕落盘(`SubtitleFileStore`)。
-    /// 用户从磁盘选中的字幕当场复制进容器,播放器只读容器内路径 ——
-    /// 沙箱下不必长期持 security-scoped 权限(理由见该类型注释)。
+    /// 外挂字幕复制进容器后播放器只读容器内路径,不必长期持 security-scoped 权限。
     let subtitleFiles: SubtitleFileStore
-    /// 在线字幕(assrt)的编排(`SubtitleService`)。全 App 一份:
-    /// 凭据、落盘目录、缓存都只该有一个写入方。
+    /// 在线字幕(assrt)。全 App 一份:凭据、落盘目录、缓存只该有一个写入方。
     let subtitleService: SubtitleService
-    /// 每一集上次挂的外挂字幕(`SubtitleBindingStore`)。播放页起播时据此自动挂上。
+    /// 每集上次挂的外挂字幕,起播时自动挂上。
     let subtitleBindings: SubtitleBindingStore
-    /// 播放偏好(`PlaybackPreferences`,UserDefaults 持久化):起播默认值与播放期开关。
-    /// 与字幕外观同样的理由必须是同一个实例 —— 设置里改了步长 / 默认倍速,
-    /// 下一次起播就要用上。
     let preferences: PlaybackPreferences
-    /// 首页外观偏好(`HomeAppearancePreferences`,UserDefaults):要不要显示顶部 hero 推荐。
-    /// 设置窗口改、首页读,必须是同一个实例,改完回到首页立即生效。
     let homeAppearance: HomeAppearancePreferences
-    /// 图片缓存偏好(`ImageCachePreferences`,UserDefaults):海报磁盘缓存的上限档位。
-    /// 组合根建 `posterDiskCache` 时读它,设置页改它。
+    /// 建 `posterDiskCache` 时读上限档位
     let imageCachePreferences: ImageCachePreferences
-    /// 海报磁盘缓存。**单独持有**是因为设置页要看占用 / 清空 / 改上限:
-    /// 那些动作不该依赖 `posters` 懒加载出来的整条加载链。
+    /// 单独持有:设置页看占用 / 清空 / 改上限,不该依赖 `posters` 懒加载的整条加载链。
     let posterDiskCache: PosterDiskCache
-    /// 弹幕外观偏好(`DanmakuSettingsStore`,UserDefaults)。理由同 `subtitleStyles`:
-    /// 设置窗口与播放窗口必须共用同一个实例。
     let danmakuSettings: DanmakuSettingsStore
-    /// 弹幕编排(弹弹play)。**全 App 一份**:它带作品剧集列表的进程内记忆,
-    /// 绑定库 / 弹幕缓存也只该有一个写入方。凭据在用时向 `credentials` 取 —— 设置页刚填就生效。
+    /// 弹幕(弹弹play)。全 App 一份:带剧集列表的进程内记忆,绑定库 / 缓存只该有一个写入方。
+    /// 凭据用时才取,设置页刚填就生效。
     let danmaku: DanmakuService
-    /// 所有服务器连接共用的 URLSession。测试注入 `MockEmbyURLProtocol` 的会话。
-    ///
-    /// 非 private:弹幕指纹(`PlayerViewModel.mediaFingerprint`)要对直连流补一次
-    /// `Range` 请求,必须走**同一个**会话 —— 测试里换掉它,那条请求才不会真的发出去。
+    /// 所有连接共用,测试注入 `MockEmbyURLProtocol`。非 private:弹幕指纹的 `Range` 请求也要走它,
+    /// 测试里才不会真发出去。
     let session: URLSession
 
     init(
@@ -134,14 +102,10 @@ final class AppContainer {
             cache: DanmakuCommentCache(directory: DanmakuCommentCache.defaultDirectory))
     }
 
-    /// 生产组装:沙盒容器里的凭据文件 + UserDefaults(.standard)。
-    /// 服务器列表损坏时不静默吞掉:按空列表降级启动,
-    /// 并把 `AppError.serverListCorrupted` 挂到 state 由 RootView 提示
-    /// (不允许静默 try? 吞错)。
+    /// 生产组装。服务器列表损坏时按空列表启动,并挂 `AppError.serverListCorrupted` 由 RootView 提示。
     convenience init() {
-        // 测试跑在宿主 App 进程里、共享真实沙盒容器(见 NetworkDiagnostics 同名判断)。
-        // 宿主用一次性的临时文件、不做钥匙串导入:否则每跑一次测试都弹一轮授权窗,
-        // 而且宿主里生成的 DeviceId 一旦写进真实文件,会压过钥匙串里那个旧值。
+        // 测试宿主共享真实沙盒容器:用临时文件、不做钥匙串导入,否则每次测试弹授权窗,
+        // 且宿主生成的 DeviceId 会写进真实文件、压过钥匙串里的旧值。
         let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let storage = isTestHost
             ? CredentialFileStore(
@@ -168,7 +132,6 @@ final class AppContainer {
 
     // MARK: - 来源(来源无关)
 
-    /// 全部来源(Emby / 百度网盘 / …)。来源列表与工具栏切换菜单用它。
     func sources() async -> [SourceProfile] {
         await registry.allSources()
     }
@@ -177,7 +140,6 @@ final class AppContainer {
         await registry.allSources().first { $0.id == id }
     }
 
-    /// 百度网盘连接(全 App 一份,见属性注释)。
     func baiduConnection() -> BaiduPanConnection {
         if let existing = baiduConnectionInstance { return existing }
         let fresh = BaiduPanConnection(credentials: credentials)
@@ -185,9 +147,7 @@ final class AppContainer {
         return fresh
     }
 
-    /// 在线刮削(TMDB)。**全 App 一份**是刻意的:`BaiduPanMetadataScraper` 带一层
-    /// 「问过的标题」缓存,每次列目录都新建一个就等于每次都重新问一遍 TMDB。
-    /// token 由它自己在用时向 `credentials` 取 —— 设置页刚填的 token 立刻生效。
+    /// 全 App 一份:刮削器带「问过的标题」缓存,每次新建就等于每次重问 TMDB。token 用时才取。
     private var metadataScraperInstance: BaiduPanMetadataScraper?
 
     func metadataScraper() -> BaiduPanMetadataScraper {
@@ -200,19 +160,9 @@ final class AppContainer {
         return fresh
     }
 
-    /// 添加一个百度网盘来源:先存配置 → 再落库。
-    ///
-    /// ## 为什么可以有多条
-    ///
-    /// 百度开放平台的授权是**应用级**的:一个 AppKey 只有一份 token
-    /// (`docs/BAIDU_PAN_API.md` §6 第 3 条 —— 第二次申请会让第一次失效),
-    /// 所以多个百度来源**共用同一份授权与密钥**,只是各自记住自己的片库根。
-    /// 新增来源不会重新扫码 —— 已经授权过就直接落库,没授权过由调用方先走扫码
-    /// (`BaiduPanAddView` 的流程)。
-    ///
-    /// ⚠️ 应用目录名 / AppKey 变了会让**所有**来源的片库根失效,这里一并清掉。
-    ///
-    /// 抛 `BaiduPanError`(配置不全等)与 `ServerRegistryError`。
+    /// 添加百度来源:先存配置再落库。授权是应用级的(一个 AppKey 一份 token,`docs/BAIDU_PAN_API.md` §6),
+    /// 多个百度来源共用授权与密钥,只各记各的片库根;不重新扫码,没授权过由调用方先扫码。
+    /// 应用目录名 / AppKey 变了会让所有来源的片库根失效,一并清掉。
     @discardableResult
     func addBaiduSource(
         displayName: String = "",
@@ -231,17 +181,13 @@ final class AppContainer {
             await discardAllBaiduLibraryRoots()
         }
         state.serverListRevision += 1
-        // ⛔ 不要再写 `state.currentServer = nil` —— 那个 setter 会把 currentSource
-        // 一并置空(它就是 currentSource 的派生访问器),刚设好的来源立刻被抹掉。
+        // ⛔ 不要写 `state.currentServer = nil`:它是 currentSource 的派生访问器,会把来源一并抹掉
         state.currentSource = .baiduPan(source)
         state.route = .browse
         return source
     }
 
-    /// 百度来源的添加收尾:配置在扫码前已经存过了,这里只按现值落库并切换过去。
-    ///
-    /// 之所以不复用 `addBaiduSource(appKey:secretKey:folderName:)`:那条路要求调用方
-    /// 手上还攥着三串明文,而扫码屏只有加密后的凭据文件 —— 从文件回读才是唯一真相。
+    /// 扫码后的添加收尾:配置扫码前已存,这里从凭据文件回读现值再落库(扫码屏手上没有明文)。
     @discardableResult
     func registerBaiduSource() async throws -> BaiduPanSource {
         let configuration = try await baiduConnection().appConfiguration()
@@ -251,23 +197,20 @@ final class AppContainer {
             folderName: configuration.folderName)
     }
 
-    /// 库里所有的百度来源(按添加顺序)。
+    /// 按添加顺序。
     func baiduSources() async -> [BaiduPanSource] {
         await registry.allSources().compactMap(\.baiduPanSource)
     }
 
-    /// 清掉**所有**百度来源的片库根 —— 应用目录变了之后它们全部失效。
-    ///
-    /// ⚠️ 是**落一个「没有」**而不是删键:删键会让旧版兼容(`baidu-library-root`)
-    /// 把这些片库根又继承回来,应用目录已经变了,继承回来的路径必然是废的。
+    /// 应用目录变了后清掉所有片库根。⛔ 落「没有」而不是删键:删键会让旧键 `baidu-library-root`
+    /// 的兼容逻辑把废路径继承回来。
     private func discardAllBaiduLibraryRoots() async {
         for source in await baiduSources() {
             try? await credentials.saveBaiduPanLibraryRoot(nil, for: source.id)
         }
     }
 
-    /// 新百度来源的默认名:已有同名时往后编号(「百度网盘 2」「百度网盘 3」…),
-    /// 免得来源列表与工具栏菜单里出现两个一模一样的条目分不清。
+    /// 已有同名时往后编号(「百度网盘 2」…)。
     private func uniqueBaiduDisplayName() async -> String {
         let existing = Set(await baiduSources().map(\.displayName))
         guard existing.contains("百度网盘") else { return "百度网盘" }
@@ -278,19 +221,18 @@ final class AppContainer {
 
     // MARK: - 百度片库根
 
-    /// 某个百度来源的片库根(**已校验**:落在应用目录之内;失效则当作没设)。
-    /// nil = 没设,进来时落在应用目录。
+    /// 已校验落在应用目录内,失效当没设。nil = 没设,进来落在应用目录。
     func libraryRoot(for source: BaiduPanSource) async throws -> BaiduPanLibraryRoot? {
         try await baiduConnection().libraryRoot(for: source.id)
     }
 
-    /// 写入某个来源的片库根(nil = 清除,回到应用目录)。越界路径会抛 `BaiduPanError`。
+    /// nil = 清除。越界路径抛 `BaiduPanError`。
     func setLibraryRoot(_ path: String?, for source: BaiduPanSource) async throws {
         try await baiduConnection().setLibraryRoot(path, for: source.id)
         state.serverListRevision += 1
     }
 
-    /// 改某个百度来源的显示名(名称留空则回到「百度网盘」)。
+    /// 留空则回到「百度网盘」。
     func renameBaiduSource(_ source: BaiduPanSource, displayName: String) async throws {
         var updated = source
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -302,11 +244,7 @@ final class AppContainer {
         }
     }
 
-    /// 解除百度授权(清本机保存的 token)。
-    ///
-    /// ⚠️ 授权是**所有百度来源共用**的,所以这一下对所有百度来源生效 ——
-    /// AppKey / 密钥 / 片库根都保留,重新扫码即可恢复。
-    /// (入口在设置 →「来源」→ 百度网盘 → 编辑…,见 `BaiduPanSourceSettingsView`。)
+    /// 清本机 token。授权共用,对所有百度来源生效;AppKey / 密钥 / 片库根保留,重新扫码即恢复。
     func signOutBaidu() async throws {
         try await baiduConnection().signOut()
         state.serverListRevision += 1
@@ -314,13 +252,7 @@ final class AppContainer {
 
     // MARK: - 本地文件夹
 
-    /// 添加一个本地文件夹来源:做书签 → 落库 → 切过去。
-    ///
-    /// - Parameters:
-    ///   - folderURL: 打开面板 / `fileImporter` 给的文件夹 URL(本次运行带访问权)
-    ///   - displayName: 留空则用文件夹名
-    ///
-    /// 抛 `LocalFolderError`(做不出书签 / 文件夹不在)与 `ServerRegistryError`。
+    /// 做书签 → 落库 → 切过去。`folderURL` 须是打开面板给的(本次运行带访问权);`displayName` 留空用文件夹名。
     @discardableResult
     func addLocalFolderSource(
         folderURL: URL, displayName: String = ""
@@ -335,16 +267,13 @@ final class AppContainer {
             rootName: rootName)
         try await registry.add(.localFolder(source))
         state.serverListRevision += 1
-        // ⛔ 与百度同一条:不写 `state.currentServer = nil`(那会把 currentSource 一并抹掉)
+        // ⛔ 同上,不写 `state.currentServer = nil`
         state.currentSource = .localFolder(source)
         state.route = .browse
         return source
     }
 
-    /// 换一个文件夹(原文件夹被挪走 / 外接盘换了 / 访问权失效时,用户重新选一次)。
-    ///
-    /// ⚠️ **根名不变**(`rootName`):条目路径与 id 都挂在它下面,换了文件夹之后
-    /// 同名同路径的文件还认得出来,续播 / 隐藏 / 已看记录都还在。
+    /// 原文件夹挪走 / 访问权失效时重选。`rootName` 不变:条目路径与 id 挂在它下面,换后续播 / 隐藏 / 已看记录仍认得。
     @discardableResult
     func relinkLocalFolder(
         _ source: LocalFolderSource, to folderURL: URL
@@ -354,7 +283,7 @@ final class AppContainer {
             .first { $0.id == source.id }?.localFolderSource ?? source
         updated.bookmark = bookmark
         updated.lastKnownPath = folderURL.path
-        // 旧书签打开的访问权先关掉,下次读盘按新书签重开
+        // 关掉旧书签的访问权,下次读盘按新书签重开
         await localFolderAccess.close(sourceID: source.id)
         try await registry.update(.localFolder(updated))
         state.serverListRevision += 1
@@ -364,7 +293,7 @@ final class AppContainer {
         return updated
     }
 
-    /// 改本地文件夹来源的显示名(留空则回到文件夹名)。
+    /// 留空则回到文件夹名。
     func renameLocalFolderSource(_ source: LocalFolderSource, displayName: String) async throws {
         var updated = await registry.allSources()
             .first { $0.id == source.id }?.localFolderSource ?? source
@@ -377,11 +306,8 @@ final class AppContainer {
         }
     }
 
-    /// 本地文件夹来源的根目录 URL(访问权已打开)。浏览、封面、播放都经这里。
-    ///
-    /// 以注册表里的**现值**为准(调用方手上的可能是换文件夹之前的旧快照)。
-    /// 系统报书签陈旧时把新书签写回注册表 —— ⚠️ 不 +1 `serverListRevision`:
-    /// 这是一次静默维护,不该让浏览页把它当成「来源变了」去重读。
+    /// 根目录 URL(访问权已打开)。以注册表现值为准(调用方的可能是旧快照)。
+    /// 书签陈旧时写回新书签,但不 +1 `serverListRevision`:静默维护,不该触发浏览页重读。
     func localFolderRoot(for source: LocalFolderSource) async throws -> URL {
         let current = await registry.allSources()
             .first { $0.id == source.id }?.localFolderSource ?? source
@@ -393,7 +319,7 @@ final class AppContainer {
             do {
                 try await registry.update(.localFolder(updated))
             } catch {
-                // 写不回去只影响「下次启动还会再报一次陈旧」,⛔ 不挡这一次访问
+                // 写不回去只是下次还报陈旧,⛔ 不挡这次访问
                 Self.localFolderLogger.error(
                     "本地文件夹书签写回失败:\(error.localizedDescription, privacy: .public)")
             }
@@ -401,7 +327,6 @@ final class AppContainer {
         return resolution.url
     }
 
-    /// 本地文件夹来源的内容能力(浏览页用)。
     func localFolderProvider(for source: LocalFolderSource) -> LocalFolderSourceProvider {
         LocalFolderSourceProvider(
             source: source,
@@ -413,19 +338,16 @@ final class AppContainer {
     private static let localFolderLogger = Logger(
         subsystem: NetworkDiagnostics.subsystem, category: "local-folder")
 
-    /// 切换当前来源。切换时清除旧来源的临时内容与播放器状态(CLAUDE.md「架构主线」)。
+    /// 切换当前来源,并停掉旧来源的播放。
     func switchCurrent(to source: SourceProfile) async throws {
         stopPlayback(unlessOn: source.id)
         try await registry.markUsed(id: source.id, at: Date())
-        // 回读库内现值:传进来的可能是列表视图的旧快照,
-        // 直接赋值会让 lastUsedAt 停在切换之前
+        // 回读库内现值:传入的可能是旧快照,lastUsedAt 会停在切换前
         state.currentSource = await registry.allSources().first { $0.id == source.id } ?? source
     }
 
     // MARK: - 服务器连接
 
-    /// 一台服务器一个连接实例、一个 `EmbyAPIClient`,token 不共享
-    /// (CLAUDE.md「架构主线」)。
     func makeConnection(
         for profile: ServerProfile,
         schemeWasInferred: Bool = false
@@ -439,19 +361,15 @@ final class AppContainer {
         )
     }
 
-    /// 这台服务器能否免输入进入:本地有 token,或记住了密码。false = 需要用户重新登录。
+    /// 本地有 token 或记住了密码。false = 需要重新登录。
     func canResumeSession(for server: ServerProfile) async throws -> Bool {
         try await makeConnection(for: server).canAuthenticateWithoutPrompt()
     }
 
     // MARK: - 浏览用连接与图片缓存
 
-    /// 浏览用的连接实例按服务器缓存:`ServerConnection` 持有该服务器的
-    /// token 与 `/emby` 前缀状态,浏览期间必须复用同一个实例
-    /// (CLAUDE.md「架构主线」:每台服务器一个 `EmbyAPIClient`,token 不共享)。
-    ///
-    /// 登录 / 探测仍是 `makeConnection` 新建 —— 那条路径要带
-    /// `schemeWasInferred`,且失败就不该留下半成品状态。
+    /// 浏览用连接按服务器复用(持有 token 与 `/emby` 前缀状态)。登录 / 探测仍用 `makeConnection` 新建:
+    /// 要带 `schemeWasInferred`,且失败不该留下半成品。
     private var connections: [UUID: ServerConnection] = [:]
 
     func connection(for server: ServerProfile) -> ServerConnection {
@@ -465,22 +383,18 @@ final class AppContainer {
         await registry.all().first { $0.id == id }
     }
 
-    /// 海报图片的内存 + 磁盘缓存与加载器(Emby 图带认证头、百度图走 `dlink`,
-    /// 见 `ImageDescriptor`)。会话与接口请求共用同一个 —— 测试注入的
-    /// `MockEmbyURLProtocol` 才能把图片请求也拦住。
+    /// 与接口请求共用会话,测试的 `MockEmbyURLProtocol` 才能拦住图片请求。
     private(set) lazy var posters = PosterImageStore(
         loader: PosterImageLoader(container: self, session: session),
         disk: posterDiskCache
     )
 
-    /// 手动刷新(菜单「Reload」,⌘R)时作废这台服务器的接口缓存:
-    /// 用户按刷新就是要最新数据,不吃 TTL 内的缓存
-    /// (浏览路径仍吃缓存,只有显式刷新走这里,见 `EmbyResponseCache`)。
+    /// ⌘R 手动刷新时整台作废,不吃 TTL 内的缓存。
     func invalidateResponses(for server: ServerProfile) async {
         await responseCache.invalidate(serverID: server.id)
     }
 
-    /// 已有服务器重新登录(token 失效或未登录)。保留地址与用户名。
+    /// 已有服务器重新登录,保留地址与用户名。
     func login(
         to server: ServerProfile,
         username: String,
@@ -493,7 +407,7 @@ final class AppContainer {
             rememberPassword: rememberPassword
         )
         try await registry.update(result.profile)
-        // 缓存的浏览连接还拿着旧档案 / 旧 token 状态,换一个新的
+        // 浏览连接还拿着旧档案 / token 状态,丢掉
         connections.removeValue(forKey: result.profile.id)
         if state.currentServer?.id == result.profile.id {
             state.currentServer = result.profile
@@ -509,12 +423,7 @@ final class AppContainer {
 
     // MARK: - 服务器管理动作
 
-    /// 添加服务器:地址规范化 → 探测 → 登录 → **成功后才入库**
-    /// (API_CONTRACT.md 1.4 的顺序)。
-    ///
-    /// 登录失败不落库:否则会留下一条「存在但用不了」的服务器。
-    /// 抛 ServerURLError / ServerLoginError / EmbyAPIError / CredentialFileError / KeychainError /
-    /// ServerRegistryError,由调用方转成用户文案。
+    /// 地址规范化 → 探测 → 登录 → 成功后才入库(API_CONTRACT.md 1.4),失败不留「存在但用不了」的服务器。
     func addServer(
         address: String,
         displayName: String,
@@ -538,12 +447,11 @@ final class AppContainer {
         )
         var profile = result.profile
         if isBlank(displayName), let serverName = result.compatibility.serverName, !isBlank(serverName) {
-            // 用户没填名称:用服务器自报的 ServerName(探测时 /System/Info/Public 已拿到),
-            // 比主机名好认;服务器没报名称才退回主机名
+            // 没填名称时用服务器自报的 ServerName,没报才退回主机名
             profile.displayName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if Task.isCancelled {
-            // 用户在登录完成的瞬间点了取消:不入库,也不留下孤立凭证
+            // 登录完成瞬间被取消:不入库,不留孤立凭证
             try? await connection.logout()
             throw CancellationError()
         }
@@ -557,23 +465,14 @@ final class AppContainer {
 
     // MARK: - 播放
 
-    /// 请播放器窗口播放 `item`。窗口由调用方(视图)用 `openWindow` 唤起 ——
-    /// 这里只写请求,不碰 AppKit。正在播别的内容时,旧播放页随请求替换而
-    /// 拆除,收尾上报照常发出(API_CONTRACT.md 5.4)。
+    /// 只写请求、不碰 AppKit:⛔ 调用方(视图)必须自己 `openWindow`,漏了就是「点播放没反应」。
+    /// 替换正在播的内容时,旧播放页拆除,收尾上报照常发出(API_CONTRACT.md 5.4)。
     func play(_ item: EmbyItem, on server: ServerProfile, fromBeginning: Bool = false) {
         state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
     }
 
-    /// 播文件树来源(百度网盘 / 本地文件夹)里的一个文件。
-    ///
-    /// ⚠️ 这类来源与「当前 Emby 服务器」无关,所以切 Emby 服务器**不会**打断它
-    /// (见 `stopPlayback(unlessOn:)`)。
-    ///
-    /// ⛔ 与 Emby 那条一样:**调用方(视图)必须自己 `openWindow`**。这里只写请求,
-    /// 窗口不会因为 `nowPlaying` 有值自己出现 —— 漏了它表现为「点了播放没反应」。
-    ///
-    /// - Parameter episodeQueue: 同剧兄弟集(浏览页在起播那一刻用**当前目录已列条目**装配)。
-    ///   没有(单条视频 / 「继续观看」卡片)就传 nil —— 播放页据此不显示换集入口。
+    /// 播文件树来源(百度 / 本地文件夹)的文件;同样须调用方 `openWindow`。切 Emby 服务器不打断它。
+    /// `episodeQueue`:同剧兄弟集(起播时用当前目录已列条目装配);nil = 播放页不显示换集入口。
     func play(
         _ file: BaiduPanFile,
         in source: FileSource,
@@ -588,23 +487,14 @@ final class AppContainer {
             subtitleFiles: subtitleFiles)
     }
 
-    /// 播一个**已经装配好的**请求(播放页换集用)。
-    ///
-    /// 与上面两条的分工:那两条从「一项内容」现搭请求,这条直接采纳调用方搭好的请求 ——
-    /// 换集时队列必须**原样带过去**(百度的兄弟集只在这一次请求里,丢了就得再列网盘)。
+    /// 播放页换集用:队列须原样带过去(兄弟集只在这次请求里,丢了就得再列网盘)。
     func play(_ request: PlaybackRequest) {
         state.nowPlaying = request
     }
 
-    /// 记下「这条文件树来源的内容在「继续观看」里长什么样」:标题 + 定位 + 封面快照。
-    ///
-    /// 由浏览页在**起播那一刻**调用 —— 此刻 `SourceItem` 刚合成过,标题与封面
-    /// 都在手上。⛔ 不要在渲染续播区时回头再列一遍网盘:配额见 §7
-    /// (`docs/BAIDU_PAN_API.md`)。
-    ///
-    /// 写盘失败不抛给调用方:展示信息是**尽力而为**,失败不该打断播放 ——
-    /// 与进度上报同一处置(见 `LocalResumeReporting`)。两者写同一个文件,
-    /// 真正的写失败会由上报器的 `lastFailureDescription` 如实留下。
+    /// 记下续播卡的标题 + 定位 + 封面快照。起播时调用(此刻信息都在手上);⛔ 不要渲染续播区时再列网盘
+    /// (配额,`docs/BAIDU_PAN_API.md` §7)。写盘失败不抛:尽力而为,同一文件的写失败会由
+    /// 上报器 `lastFailureDescription` 留下(见 `LocalResumeReporting`)。
     func rememberResumeCard(item: SourceItem, file: BaiduPanFile) async {
         do {
             try await watchProgress.rememberDisplay(
@@ -614,26 +504,11 @@ final class AppContainer {
         } catch {}
     }
 
-    /// 文件树来源(百度 / 本地文件夹)**播完一集**之后的本地收尾:
-    /// ① 这一集落成「已看」 ② 续播卡指向下一集没看的。
-    ///
-    /// ## 为什么需要它
-    ///
-    /// Emby 的续播卡是服务端算出来的(「第一集没看的」),百度没有服务端 ——
-    /// 两件事都得自己记,而且必须是**同一个动作**:只做 ② 不做 ① 的话,刚看完的
-    /// 那一集还留在「看到 99%」,按 `oneCardPerSeries`「看到一半压过下一集占位」
-    /// 的规则,占位根本出不来,整部剧还是停在上一集(用户报的)。
-    ///
-    /// ① 之所以不能交给进度上报的比例判定:百度列表不给时长,`duration` 拿不到时
-    /// 比例算不出来(见 `WatchProgressStore.markFinished`)。
-    ///
-    /// ⚠️ 只认**播放队列里**的兄弟集(起播那一刻装配好的,零请求):队列里没有的
-    /// (别的季、没列过的目录)⛔ 不猜。
-    /// ⚠️ 跳过已看的集:队列里的下一集可能早就标过已看,那就该指向再下一集。
-    ///
-    /// - Parameters:
-    ///   - endedAt: 收尾那一刻的位置(秒)。播到文件末尾 = 这一集到此为止。
-    ///   - durationSeconds: 已知总时长;百度来源常常是 nil。
+    /// 文件树来源播完一集后的本地收尾:① 这集落成已看 ② 续播卡指向下一集没看的。
+    /// 两步必须一起做:只做 ② 的话,这集停在 99%,按 `oneCardPerSeries`「看到一半压过下一集占位」,占位出不来。
+    /// ① 不能交给进度比例判定:百度常拿不到时长(见 `WatchProgressStore.markFinished`)。
+    /// 只认播放队列里的兄弟集,⛔ 队列外(别的季、没列过的目录)不猜;跳过已看的集。
+    /// `endedAt` 单位秒;`durationSeconds` 百度常为 nil。
     func finishFileSourceEpisode(
         _ finished: PlaybackEpisode,
         in queue: EpisodeQueue,
@@ -651,8 +526,7 @@ final class AppContainer {
                 durationSeconds: durationSeconds
             )
         } catch {
-            // 写盘失败不该影响播放页收尾(与进度上报同一处置):下次播完再补。
-            // 不往下写占位 —— 上一集没落成已看时,占位也出不来(见上)。
+            // 写盘失败不影响播放页收尾,下次再补;上一集没落成已看时占位也出不来,不往下写
             return
         }
         guard let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
@@ -673,11 +547,8 @@ final class AppContainer {
         }
     }
 
-    /// 结束属于 `sourceID` 的播放(切换 / 删除来源时)。
-    ///
-    /// DesignTokens.swift「界面规则」:正在播放时切服务器,先结束旧播放会话再切换 ——
-    /// 否则播放器窗口里还是上一台的内容,上报也继续打到上一台。
-    /// ⛔ 百度来源不属于任何 Emby 服务器:切服务器不该打断它。
+    /// 切到别的来源时结束 Emby 播放(否则窗口还在播上一台、上报也打到上一台,DesignTokens.swift「界面规则」)。
+    /// ⛔ 文件树来源不属于任何 Emby 服务器,不打断。
     private func stopPlayback(unlessOn sourceID: UUID) {
         guard let playing = state.nowPlaying else { return }
         guard case .emby(let server, _) = playing.source else { return }
@@ -685,15 +556,13 @@ final class AppContainer {
         state.nowPlaying = nil
     }
 
-    /// 切换当前服务器(Emby 便利入口)。
     func switchCurrent(to server: ServerProfile) async throws {
         try await switchCurrent(to: .emby(server))
     }
 
     // MARK: - 播放会话装配
 
-    /// 按来源装配「会话准备」实现。播放页只认 `PlaybackSessionPreparing`,
-    /// ⛔ 不认 Emby / 百度 —— 新增来源时改的是这里,不是播放页。
+    /// 播放页只认 `PlaybackSessionPreparing`,⛔ 不认具体来源;新增来源改这里,不改播放页。
     func makeSessionPreparer(for request: PlaybackRequest) -> any PlaybackSessionPreparing {
         switch request.source {
         case .emby(let server, let item):
@@ -717,12 +586,10 @@ final class AppContainer {
         }
     }
 
-    /// 按来源装配「进度出口」:Emby → 服务端上报;百度 / 本地文件夹 → 本地续播库。
+    /// Emby → 服务端上报;文件树来源 → 本地续播库。
     func makeReporter(for request: PlaybackRequest) -> any PlaybackReporting {
         switch request.source {
-            // 上报走缓存的连接实例(与浏览同一个 `EmbyAPIClient`,token 不重取)。
-            // ⛔ 闭包是 `@Sendable`,不能在它里面调 `connection(for:)`
-            // (那是 MainActor 方法);连接实例本身是 actor,先取出来再捕获。
+            // 复用浏览连接。⛔ `@Sendable` 闭包里不能调 MainActor 的 `connection(for:)`,先取出再捕获。
         case .emby(let server, _):
             let connection = connection(for: server)
             return PlaybackProgressReporter { endpoint in
@@ -733,9 +600,7 @@ final class AppContainer {
         }
     }
 
-    /// 起播位置(秒)。Emby 读服务端 `UserData`,百度读本地续播库 ——
-    /// 两边都是「来源自己知道的事」,播放页不关心它从哪来。
-    /// 「从头播放」显式忽略它(返回 0,`API_CONTRACT.md` 8.1 禁止填假默认值)。
+    /// 起播位置(秒)。Emby 读 `UserData`,文件树来源读本地续播库;「从头播放」返回 0。
     func resumeSeconds(for request: PlaybackRequest, fromBeginning: Bool) async -> Double {
         guard !fromBeginning else { return 0 }
         switch request.source {
@@ -747,12 +612,8 @@ final class AppContainer {
         }
     }
 
-    /// 编辑服务器(显示名 / 地址)。地址变了就先重新探测:`/emby` 前缀与局域网
-    /// http 回退都跟着地址走(API_CONTRACT.md 1.4),直接存会留下一个用不了的地址
-    /// (例如不写 scheme 的局域网地址被补成 https)。探测不通就抛错、不保存。
-    /// 只改名称时不发任何请求。
-    ///
-    /// 抛 ServerURLError / ServerLoginError / ServerRegistryError。
+    /// 地址变了先重新探测(`/emby` 前缀与 http 回退跟着地址走,API_CONTRACT.md 1.4),不通就抛错不保存。
+    /// 只改名称不发请求。
     func editServer(_ server: ServerProfile, displayName: String, address: String) async throws {
         let normalized = try normalizeServerURL(address)
         var updated = server
@@ -770,8 +631,7 @@ final class AppContainer {
             updated.compatibility = probe.compatibility
             if let probedID = probe.serverID {
                 if let oldID = server.serverID, oldID != probedID {
-                    // 新地址是另一台 Emby:缓存 key 不含 host(同一台内外网切换要复用),
-                    // 旧服务器的列表不能端给新地址
+                    // 换成了另一台 Emby:缓存 key 不含 host,旧列表不能端给新地址
                     await responseCache.invalidate(serverID: server.id)
                 }
                 updated.serverID = probedID
@@ -780,26 +640,25 @@ final class AppContainer {
         try await updateServer(updated)
     }
 
-    /// 保存档案。若是当前服务器,同步刷新 currentServer。
+    /// 保存档案;若是当前服务器同步刷新 currentServer。
     func updateServer(_ profile: ServerProfile) async throws {
         try await registry.update(profile)
         state.serverListRevision += 1
-        // 缓存的浏览连接还拿着旧地址 / 旧前缀,换一个新的(否则要重启 App 才生效)
+        // 浏览连接还拿着旧地址 / 前缀,丢掉
         connections.removeValue(forKey: profile.id)
         if state.currentServer?.id == profile.id {
-            // 同上:update 是合并式的,库内结果未必等于传入值(lastUsedAt 被保留)
+            // update 是合并式的(保留 lastUsedAt),回读库内值
             state.currentServer = await registry.all().first { $0.id == profile.id } ?? profile
         }
     }
 
-    /// 删除来源(含其本地凭据);若删的是当前来源,
-    /// 切到剩余里最近使用的一个;一个不剩则回引导页。
+    /// 删除来源及其本地数据;删的是当前来源则切到最近使用的,一个不剩回引导页。
     func removeSource(id: UUID) async throws {
         if state.nowPlaying?.source.embyServer?.id == id {
             state.nowPlaying = nil
         }
         if case .localFolder(_, let playing) = state.nowPlaying?.source, playing.id == id {
-            // 访问权马上要关,正在播的文件下一次读就会失败 —— 先停
+            // 访问权马上要关,先停
             state.nowPlaying = nil
         }
         let target = await registry.allSources().first { $0.id == id }
@@ -807,14 +666,12 @@ final class AppContainer {
             await purgeLocalFolderData(sourceID: id)
         }
         if let baidu = target?.baiduPanSource {
-            // 这个来源自己的片库根先清掉(它是按来源存的)
             try? await credentials.deleteBaiduPanLibraryRoot(for: baidu.id)
-            // 落盘缓存也按来源分区:目录名就是用户在网盘里的片名,留着没有用处只有隐私风险
+            // 落盘缓存含片名,留着只有隐私风险
             await baiduDirectoryCache.purge(sourceID: baidu.id)
             await baiduScrapeCache.purge(sourceID: baidu.id)
             await baiduEpisodeCounts.purge(sourceID: baidu.id)
-            // 授权与密钥是**所有百度来源共用**的:只有删掉最后一个才清 ——
-            // 否则会把还在用的其它来源一起弄成「需要重新授权」。
+            // 授权与密钥共用:删最后一个百度来源才清
             let remaining = await baiduSources().filter { $0.id != baidu.id }
             if remaining.isEmpty {
                 try? await credentials.deleteBaiduPanToken()
@@ -824,19 +681,16 @@ final class AppContainer {
         }
         try await registry.remove(id: id)
         state.serverListRevision += 1
-        // 连接实例跟着服务器一起走:留着会持有一个已不存在的服务器的 token 状态
         connections.removeValue(forKey: id)
-        // 本地缓存也一起走:接口响应与图片磁盘目录都不留在盘上
         await responseCache.invalidate(serverID: id)
         await posters.purgeDisk(ownerID: id)
-        // 每集字幕记录的键带服务器 id(`DanmakuMediaQuery.itemKey`),这台的记录一起删;
-        // 字幕文件本身不分服务器,没人引用后由 `cleanUpSubtitleCache` 按时间淘汰
+        // 字幕 / 弹幕绑定键带服务器 id(`DanmakuMediaQuery.itemKey`);字幕文件与弹幕缓存不分服务器,
+        // 由 `cleanUp…Cache` 按时间淘汰
         do {
             try await subtitleBindings.purge(keyPrefix: "emby|\(id.uuidString)|")
         } catch {
             Self.logger.error("删除服务器的字幕记录失败:\(error.localizedDescription, privacy: .public)")
         }
-        // 弹幕的集 / 剧绑定键同样带服务器 id;弹幕缓存按弹幕库 id 存、不分服务器,由 `cleanUpDanmakuCache` 按时间清
         do {
             try await danmaku.purgeBindings(keyPrefix: "emby|\(id.uuidString)|")
         } catch {
@@ -850,16 +704,13 @@ final class AppContainer {
         }
     }
 
-    /// 本地文件夹来源被删时,把只属于它的本地数据一起清掉。
-    ///
-    /// 与百度那边不同:本地条目的 id 由「来源 id + 路径」哈希而来(`LocalFolderListing.fileID`),
-    /// 来源一删这些记录就**永远对不上**任何东西 —— 留着只是垃圾,而且路径里有片名(隐私)。
-    /// 清不掉只记日志,⛔ 不挡删除(删来源这件事本身已经成立)。
+    /// 本地条目 id 由「来源 id + 路径」哈希(`LocalFolderListing.fileID`),来源一删记录就永远对不上,
+    /// 且路径含片名,一起清。清不掉只记日志,⛔ 不挡删除。
     private func purgeLocalFolderData(sourceID id: UUID) async {
         await localFolderAccess.close(sourceID: id)
         await baiduScrapeCache.purge(sourceID: id)
         await baiduEpisodeCounts.purge(sourceID: id)
-        // 各清各的:一处写盘失败不该让后面几样留在盘上
+        // 各清各的,一处失败不连累后面
         func attempt(_ what: String, _ work: () async throws -> Void) async {
             do {
                 try await work()
@@ -878,7 +729,6 @@ final class AppContainer {
         await attempt("弹幕绑定") { try await danmaku.purgeBindings(keyPrefix: prefix) }
     }
 
-    /// 删除服务器(Emby 便利入口)。
     func removeServer(id: UUID) async throws {
         try await removeSource(id: id)
     }
@@ -887,10 +737,8 @@ final class AppContainer {
 
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "subtitles")
 
-    /// 启动时清理一次字幕缓存:先删过期的每集记录,再删没人引用且过期 / 超量的文件
-    /// (规则见 `SubtitleFileStore` 的「清理」)。
-    ///
-    /// 失败只记日志、不打扰用户:清不掉的缓存下次启动再清,不影响任何功能。⛔ 但不静默 —— 日志里留原因。
+    /// 启动时清理:先删过期的每集记录,再删没人引用且过期 / 超量的文件(规则见 `SubtitleFileStore`)。
+    /// 失败只记日志、不打扰用户,下次启动再清。
     func cleanUpSubtitleCache() async {
         do {
             let prunedBindings = try await subtitleBindings.prune()
@@ -909,9 +757,7 @@ final class AppContainer {
 
     private static let danmakuLogger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "danmaku")
 
-    /// 启动时清理一次弹幕缓存:删掉过期 / 损坏的文件(规则见 `DanmakuCommentCache` 的「清理」)。
-    ///
-    /// 失败只记日志、不打扰用户,理由同 `cleanUpSubtitleCache`。
+    /// 启动时删过期 / 损坏的文件(规则见 `DanmakuCommentCache`)。失败只记日志。
     func cleanUpDanmakuCache() async {
         do {
             let report = try await danmaku.cleanUpCache()
@@ -926,14 +772,8 @@ final class AppContainer {
 
     // MARK: - 会话恢复
 
-    /// 启动时恢复最近一次使用的服务器
-    /// (token 无效时回登录界面,但保留地址和用户名)。
-    ///
-    /// 有服务器就直接进主窗口的首页;
-    /// 缺 token 时由 `BrowseView` 的登录 sheet 兜住(没记住密码时不静默重登,API_CONTRACT.md 2.5)。
-    ///
-    /// 这里**不发网络请求**:只判断本地有没有 token。token 是否仍然有效
-    /// 由第一次鉴权请求决定,401 时回登录页(API_CONTRACT.md 2.5)。
+    /// 恢复最近使用的来源并直接进首页。⛔ 不发网络请求:只看本地有没有 token,缺了由 `BrowseView`
+    /// 的登录 sheet 兜;token 是否有效由第一次鉴权请求决定(API_CONTRACT.md 2.5)。
     func restoreSession() async {
         guard !state.didRestoreSession else { return }
         state.didRestoreSession = true
@@ -943,18 +783,17 @@ final class AppContainer {
         }
         state.currentSource = recent
         state.route = .browse
-        // 只有 Emby 来源有「要不要重新登录」这件事 —— 百度来源的授权状态
-        // 由它自己那一页读凭据判断,不在这里预判。
+        // 只有 Emby 在这里判断是否要重新登录;百度授权由它自己那一页判断
         guard case .emby(let server) = recent else { return }
         do {
             if try await !canResumeSession(for: server) {
                 state.serverNeedingLogin = server
             }
         } catch is KeychainError {
-            // 首次访问凭据时才做旧版钥匙串导入,这里是它最早被触发的地方
+            // 钥匙串导入在首次访问凭据时触发,通常就是这里
             state.startupError = .credentialMigrationFailed
         } catch {
-            // 读不到就不知道要不要重新登录 —— 如实挂到 state 上,不静默放过
+            // 读不到就不知道要不要重新登录,如实报出
             state.startupError = .credentialReadFailed
         }
     }
@@ -965,8 +804,7 @@ final class AppContainer {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 显示名留空时的临时名称 host[:port]。登录成功后若服务器报了 ServerName,
-    /// `addServer` 会改用它
+    /// 显示名留空时用 host[:port];`addServer` 拿到 ServerName 后会替换
     private func resolvedName(_ displayName: String, for url: URL) -> String {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {

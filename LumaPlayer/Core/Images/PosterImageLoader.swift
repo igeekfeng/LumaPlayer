@@ -1,17 +1,13 @@
 import Foundation
 
-/// 图片数据加载。抽象成协议是为了让缓存层可以脱离网络单测。
+/// 抽成协议让缓存层可以脱离网络单测。
 protocol ImageDataLoading: Sendable {
     func data(for spec: ImageSpec) async throws -> Data
     func data(for descriptor: ImageDescriptor) async throws -> Data
 }
 
 extension ImageDataLoading {
-    /// 默认实现:只认 Emby 端点,其余 origin 走不通。
-    ///
-    /// 之所以给默认实现:测试替身只关心「被调了几次、返回什么字节」,
-    /// 让它们为了协议完整性再写一遍 `switch` 是纯噪音。
-    /// 生产实现 `PosterImageLoader` 覆写本方法,三种 origin 都支持。
+    /// 默认只认 Emby 端点,省得测试替身各写一遍 `switch`;`PosterImageLoader` 覆写支持全部 origin。
     func data(for descriptor: ImageDescriptor) async throws -> Data {
         guard case .emby(let spec) = descriptor.origin else {
             throw PosterImageError.unsupportedOrigin
@@ -20,19 +16,12 @@ extension ImageDataLoading {
     }
 }
 
-/// 取图片字节(actor)。
-///
-/// 三条通路(见 `ImageDescriptor.Origin`):
-/// - `.emby` → 经 `ServerConnection` 走 Emby 图片端点(要认证头,`API_CONTRACT.md` 3.3);
-/// - `.remote` → 普通 `URLSession` 请求(百度 `dlink` 自带 `access_token`,
-///   但**必须带与 sign 绑定的 UA**,见 `docs/BAIDU_PAN_API.md` §1);
-/// - `.localFile` → 直接读盘。
-///
-/// ⛔ 不管走哪条,**只有 `Components/PosterImage.swift` 能触发它** ——
-/// 视图自己发图片请求会在认证 / 缓存 / 失败处置上各写一套。
+/// 取图片字节。`.emby` 经 `ServerConnection`(要认证头);`.remote` 普通请求,但百度 `dlink`
+/// 必须带与 sign 绑定的 UA(`docs/BAIDU_PAN_API.md` §1,由 `headers` 给);`.localFile` 直接读盘。
+/// ⛔ 只有 `Components/PosterImage.swift` 能触发它。
 actor PosterImageLoader: ImageDataLoading {
     private let container: AppContainer
-    /// 远程图片用的会话。默认 `.shared`;测试注入 `MockEmbyURLProtocol` 时传同一个。
+    /// 测试注入 `MockEmbyURLProtocol` 时传同一个会话
     private let session: URLSession
 
     init(container: AppContainer, session: URLSession = .shared) {
@@ -65,7 +54,7 @@ actor PosterImageLoader: ImageDataLoading {
             }
             let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                // `dlink` 过期后是 403,不是「服务器坏了」—— 由上层决定重取还是降级
+                // `dlink` 过期是 403,由上层决定重取还是降级
                 throw PosterImageError.badResponse(status: http.statusCode)
             }
             return data

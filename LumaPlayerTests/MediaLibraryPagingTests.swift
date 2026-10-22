@@ -1,18 +1,12 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 让 fetch 停在半路的闸门:用来构造「旧服务器的响应晚到」这一时序。
-///
-/// `withCheckedContinuation` 不响应任务取消,所以即使 `PagedItemList`
-/// 取消了上一次请求,旧结果仍会「回来」 —— 正好用来验证 generation 检查
-/// 真的会丢弃它(翻页时快速切换服务器不出现旧服务器内容)。
+/// 让 fetch 停在半路的闸门,构造「旧服务器响应晚到」。
+/// `withCheckedContinuation` 不响应取消,旧结果仍会回来 —— 正好验证 generation 检查会丢弃它。
 private actor StallGate {
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
-    /// 当前挂起在闸门上的 fetch 数量。
-    ///
-    /// 必须先等它达到预期再 `release()`:`PagedItemList` 的 `Task` 是异步起跑的,
-    /// 抢在它挂上闸门之前放行,闸门里空无一人,两边就永远等下去。
+    /// 挂起在闸门上的 fetch 数。必须等它达到预期再 `release()`:`Task` 异步起跑,抢先放行会两边永远等下去。
     var waiterCount: Int { continuations.count }
 
     func wait() async {
@@ -36,14 +30,8 @@ private actor CallCounter {
     }
 }
 
-/// 分页列表的加载、追加、generation 与取消语义
-/// (翻页取消映射为 `.cancelled` 不报错、切服务器不串台)。
-///
-/// `PagedItemList` 本身不碰网络:网络部分用 `MockEmbyURLProtocol` 在
-/// `MediaLibraryBrowsingTests` 里覆盖,这里只验证状态机。
-///
-/// 方法逐个标 `@MainActor`(不能标在整个类上:XCTestCase 是非隔离类,
-/// Swift 6 下 subclass 的隔离不允许与父类不同)。
+/// `PagedItemList` 状态机:加载、追加、generation 与取消语义(网络部分在 `MediaLibraryBrowsingTests`)。
+/// 方法逐个标 `@MainActor`:XCTestCase 是非隔离类,Swift 6 下子类隔离不能与父类不同。
 final class MediaLibraryPagingTests: XCTestCase {
     private var session: URLSession!
     private var storage: CredentialFileStore!
@@ -166,7 +154,6 @@ final class MediaLibraryPagingTests: XCTestCase {
 
     // MARK: - 手动刷新:保留已显示内容(不闪白屏)
 
-    /// 刷新期间不清空已加载内容、不切回 loading,只置 `isRefreshing`;新结果回来后整页替换。
     @MainActor
     func testRefreshKeepsItemsUntilNewPageArrives() async throws {
         let gate = StallGate()
@@ -201,7 +188,6 @@ final class MediaLibraryPagingTests: XCTestCase {
         XCTAssertFalse(list.isLoading)
     }
 
-    /// 刷新失败保留原内容(与首页 / 详情页的后台刷新同一立场),不换成错误页。
     @MainActor
     func testRefreshFailureKeepsExistingItems() async throws {
         let counter = CallCounter()
@@ -324,7 +310,7 @@ final class MediaLibraryPagingTests: XCTestCase {
         }
     }
 
-    /// 轮询等待条件成立(最多 2 秒)。本地测试用,避免固定 sleep 带来的偶发失败。
+    /// 轮询等待条件成立(最多 2 秒),避免固定 sleep。
     @MainActor
     private func waitUntil(
         timeout: TimeInterval = 2,
@@ -344,7 +330,6 @@ final class MediaLibraryPagingTests: XCTestCase {
     }
 
     private static func item(id: String, name: String) -> EmbyItem {
-        // 只用于测试构造;字段直接给全,不经过 JSON 解码
         EmbyItem(
             id: id,
             name: name,

@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 剧集队列:相邻项与换集定位。
-///
-/// 纯值类型,不碰网络与 UI —— 播放页的上一集 / 下一集 / 选集面板都建在它上面,
-/// 边界(首集没有上一集、末集没有下一集、目标不在队列里)正是最容易写错的地方。
+/// 播放页上一集 / 下一集 / 选集面板都建在它上面,边界最容易写错。
 final class EpisodeQueueTests: XCTestCase {
 
     func testWalksTheList() {
@@ -14,7 +11,7 @@ final class EpisodeQueueTests: XCTestCase {
         XCTAssertEqual(queue.next?.id, "3")
     }
 
-    /// ⛔ 不绕回:首集没有上一集,末集没有下一集。
+    /// ⛔ 不绕回。
     func testFirstHasNoPreviousAndLastHasNoNext() {
         XCTAssertNil(makeQueue(currentIndex: 0).previous)
         XCTAssertEqual(makeQueue(currentIndex: 0).next?.id, "2")
@@ -22,7 +19,7 @@ final class EpisodeQueueTests: XCTestCase {
         XCTAssertNil(makeQueue(currentIndex: 2).next)
     }
 
-    /// 定位不到(下标为 nil / 越界)时三个都为空 —— ⛔ 不猜一个邻居。
+    /// 下标为 nil / 越界时 ⛔ 不猜一个邻居。
     func testUnresolvedIndexYieldsNoNeighbours() {
         let unresolved = EpisodeQueue(episodes: makeEpisodes(), currentIndex: nil)
         XCTAssertNil(unresolved.current)
@@ -35,7 +32,7 @@ final class EpisodeQueueTests: XCTestCase {
         XCTAssertNil(outOfRange.next)
     }
 
-    /// 选集:换到某一集只挪当前下标,成员与顺序原样保留。
+    /// 成员与顺序原样保留。
     func testSelectingMovesTheIndexWithoutReordering() {
         let queue = makeQueue(currentIndex: 0)
         let selected = queue.selecting(queue.episodes[2])
@@ -46,7 +43,7 @@ final class EpisodeQueueTests: XCTestCase {
         XCTAssertNil(selected?.next)
     }
 
-    /// 目标不在队列里(Emby 跨季边界集就是这样)返回 nil,由新播放页自己重新定位。
+    /// Emby 跨季边界集就是这样,由新播放页自己重新定位。
     func testSelectingUnknownEpisodeReturnsNil() {
         let queue = makeQueue(currentIndex: 0)
         let outsider = PlaybackEpisode(

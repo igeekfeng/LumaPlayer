@@ -11,10 +11,15 @@ LumaPlayer 是自用的 macOS 原生 Emby 播放器,SwiftUI + **libmpv**(自编,
 | `docs/MPV_INTEGRATION.md` | libmpv 对接:构建、选项、事件、线程、轨道、字幕、生命周期 |
 | `docs/PITFALLS.md` | 踩坑记录。改签名 / 构建 / 播放内核 / 接口代码前先扫一眼 |
 | `docs/KNOWN_ISSUES.md` | 未决问题、待真实服务器核实项、待人工确认项 |
+| `docs/BAIDU_PAN_API.md` / `TMDB_API.md` / `DANDANPLAY_API.md` | 百度网盘 / TMDB / 弹弹play 接口的事实来源(同硬规则 1) |
+| `docs/DANMAKU.md` | 弹幕分层、匹配流程与渲染 |
 
 其余知识写在代码的文档注释里:设计 token 与 UI 硬约束在 `Components/DesignTokens.swift`,快捷键在
 `Features/Player/PlayerCommands.swift`,缓存策略在 `Core/Cache/EmbyResponseCache.swift`,凭据存储在
 `Core/Security/CredentialFileStore.swift`。**改了行为就同步改那里的注释**,不要另开文档。
+
+注释与文档只写**现在成立、看代码看不出来**的东西(约束、陷阱、外部接口怪癖、为什么不能改)。
+⛔ 不写修改记录、日期、「以前 / 改成 / 不再 / 已删除」—— 历史看 git;删掉的东西直接删,不留墓碑;不复述代码。
 
 引用约定:「API_CONTRACT.md 4.4」「MPV_INTEGRATION.md §8」是**章节编号**,编号稳定,改文档时不要重排;
 `Qnn` / `M2` / `M4` 是问题编号,未结案在 `KNOWN_ISSUES.md`,已结案在 `PITFALLS.md`。

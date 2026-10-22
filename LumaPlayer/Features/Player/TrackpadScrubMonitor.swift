@@ -1,17 +1,12 @@
 import AppKit
 
-/// 触控板双指横向滑动拖进度(IINA / QuickTime 的习惯)。
+/// 触控板双指横滑拖进度。
 ///
-/// 为什么用本地事件监听而不是在视频层上叠一个 NSView 接 `scrollWheel`:
-/// 叠上去的视图要参与 hit-test 才收得到滚动事件,而那样就会吃掉画面上的
-/// 单击(暂停)/ 双击(全屏)手势。本地监听只看滚动事件,其余事件原样放行。
+/// 用本地事件监听而非叠 NSView 接 `scrollWheel`:叠上去的视图会吃掉画面的单击 / 双击手势。
 ///
-/// 规则:
-/// - 只认有精确位移的设备(触控板 / 妙控鼠标);普通滚轮一格一跳,不适合拖进度;
-/// - 一次手势开始后先累计位移,横向明显占优才接管,否则整次手势放行给系统
-///   (纵向滑动不能被误判成拖进度);
-/// - 接管后吞掉该手势及其惯性阶段的全部事件,手指离开时才 seek 一次 ——
-///   转码模式下一次 seek 就是一次重新起流。
+/// - 只认精确位移设备;普通滚轮不接管。
+/// - 先累计位移,横向明显占优才接管,否则整次手势放行。
+/// - 接管后吞掉该手势及其惯性事件,手指离开才 seek 一次(转码模式每次 seek 都重新起流)。
 @MainActor
 final class TrackpadScrubMonitor {
     private var monitor: Any?
@@ -36,9 +31,8 @@ final class TrackpadScrubMonitor {
         onEnd: @escaping @MainActor () -> Void
     ) {
         guard monitor == nil else { return }
-        // 闭包在 MainActor 上下文里构造、又不是 @Sendable,编译器按 MainActor 隔离处理;
-        // 本地监听本来就在主线程回调(NSEvent 文档),二者一致。
-        // (不能套 `MainActor.assumeIsolated`:它要求返回值 Sendable,NSEvent 不是。)
+        // 非 @Sendable 闭包按 MainActor 隔离处理,本地监听本就在主线程回调。
+        // 不能套 `MainActor.assumeIsolated`:返回值 NSEvent 不是 Sendable。
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self, let target = window(), event.window === target else { return event }
             return self.handle(event, onScrub: onScrub, onEnd: onEnd)
@@ -60,7 +54,7 @@ final class TrackpadScrubMonitor {
     ) -> NSEvent? {
         guard event.hasPreciseScrollingDeltas else { return event }
 
-        // 惯性阶段:我们接管的手势,惯性一并吞掉(否则松手后画面还在「滑」);其余放行
+        // 接管的手势连惯性一并吞掉
         if !event.momentumPhase.isEmpty {
             return decision == .scrubbing ? nil : event
         }
@@ -70,7 +64,7 @@ final class TrackpadScrubMonitor {
             reset()
             return event
         case .changed:
-            // 统一成「手指向右 = 正」:自然滚动开启时系统已把位移反过来了
+            // 统一成手指向右 = 正(自然滚动时系统已反向)
             let dx = Double(event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX)
             let dy = Double(event.scrollingDeltaY)
             if decision == .undecided {

@@ -2,11 +2,7 @@ import Synchronization
 import XCTest
 @testable import LumaPlayer
 
-/// 本地文件夹来源的核心层:列目录 / 路径映射 / 稳定 id / 时长 / 访问权 / 播放会话 / 范围键。
-///
-/// 全部在临时目录里跑,⛔ 不碰真实用户文件夹。访问权用 `FakeBookmarks` 替身:
-/// 单测跑在宿主 App 的沙盒里,对临时目录做安全作用域书签的行为与用户选的文件夹不同
-/// (`LocalFolderBookmarking` 的注释)。**真实书签 + 外接盘 / 网络卷的行为未验证**。
+/// 全部在临时目录里跑,⛔ 不碰真实用户文件夹。访问权用 `FakeBookmarks`:沙盒里对临时目录做安全作用域书签的行为与用户选的文件夹不同(见 `LocalFolderBookmarking`)。真实书签 + 外接盘 / 网络卷的行为未验证。
 final class LocalFolderTests: XCTestCase {
     private var root: URL!
 
@@ -61,8 +57,7 @@ final class LocalFolderTests: XCTestCase {
         XCTAssertEqual(inner.map(\.path), ["/片库/琅琊榜/01.mkv"])
     }
 
-    /// id = 来源 + 虚拟路径:同一来源重读不变;另一个来源里同路径的文件**不同** ——
-    /// 续播库按 id 全局存,撞了就是两边进度互相覆盖。
+    /// 续播库按 id 全局存,两个来源里同路径的文件撞 id 就会互相覆盖进度。
     func testFileIDIsStablePerSourceAndDistinctAcrossSources() throws {
         try touch("a.mkv")
         let first = source()
@@ -105,7 +100,7 @@ final class LocalFolderTests: XCTestCase {
 
     // MARK: - 合成(与百度共用合成器)
 
-    /// 根上平铺剧集时,剧名取**根名**(= 文件夹名),所以根名不能是常量。
+    /// 根上平铺剧集时剧名取根名(= 文件夹名),所以根名不能是常量。
     func testFlatEpisodesAtRootTakeTheFolderNameAsSeriesTitle() throws {
         try touch("01.mkv")
         try touch("02.mkv")
@@ -165,7 +160,7 @@ final class LocalFolderTests: XCTestCase {
         let first = await cache.durations(for: [(file, url)])
         XCTAssertEqual(first[file.fsID] ?? 0, 60, accuracy: 0.001)
 
-        // 删掉文件后仍命中记忆(键带修改时间与大小,文件没换就不重读)
+        // 删掉文件后仍命中(键带修改时间与大小,文件没换就不重读)
         try FileManager.default.removeItem(at: url)
         let second = await cache.durations(for: [(file, url)])
         XCTAssertEqual(second[file.fsID] ?? 0, 60, accuracy: 0.001)
@@ -271,8 +266,7 @@ final class LocalFolderTests: XCTestCase {
 
     // MARK: - 范围键 / 快照 / 持久化
 
-    /// 本地的键带来源 id(两个来源里同名目录不是同一部);百度的键**原样不变**
-    /// (已有的弹幕 / 字幕绑定都记在那个形状下)。
+    /// 本地键带来源 id(两个来源里同名目录不是同一部);百度的键形状不能变,已有的弹幕 / 字幕绑定都记在那个形状下。
     func testScopeKeysIsolateLocalSourcesAndKeepBaiduKeysUnchanged() {
         let file = BaiduPanFile(
             fsID: 9, path: "/片库/剧/剧.S01E02.mkv", name: "剧.S01E02.mkv", sizeBytes: nil,
@@ -324,7 +318,7 @@ final class LocalFolderTests: XCTestCase {
 
 // MARK: - 替身
 
-/// 直通的「书签」:书签就是路径的 UTF-8,解析即还原。记下开 / 关访问权的次数。
+/// 书签就是路径的 UTF-8,解析即还原;记下开 / 关访问权的次数。
 final class FakeBookmarks: LocalFolderBookmarking {
     struct Counts { var started = 0; var stopped = 0 }
 

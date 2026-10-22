@@ -1,12 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 目录形态判定与季结构(`BaiduPanSeriesLayout`,纯函数)。
-///
-/// 这块判定的分量在于:**判错一次,整个片库的观感就崩了** ——
-/// 片库里的「电影」「纪录片」这类分类目录下面全是子目录,一旦被当成剧集,
-/// 点进去就是一张莫名其妙的详情页;反过来,`琅琊榜/第1季/` 判不出来,
-/// 用户就只能看到一层文件夹,拿不到与 Emby 对齐的观感。
+/// 目录形态判定与季结构(`BaiduPanSeriesLayout`,纯函数)。两个方向都不能判错:
+/// 分类目录(「电影」「纪录片」)当成剧集会进一张莫名其妙的详情页;`琅琊榜/第1季/` 判不出就只剩一层文件夹。
 final class BaiduPanSeriesLayoutTests: XCTestCase {
 
     private let sourceID = UUID()
@@ -62,7 +58,7 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertEqual(BaiduPanSeriesLayout.shape(of: []), .directory)
     }
 
-    /// 片库里的分类目录:下面全是**别的片名**的子目录,⛔ 一个都不许当季。
+    /// 分类目录下全是别的片名的子目录,⛔ 一个都不许当季。
     func testCategoryDirectoryWithNamedSubfoldersStaysDirectory() {
         let items = [
             item("肖申克的救赎", kind: .folder),
@@ -72,7 +68,7 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertEqual(BaiduPanSeriesLayout.shape(of: items), .directory)
     }
 
-    /// 平铺的电影:合成器给的是 `.video`(不是 `.episode`),不构成剧集。
+    /// 合成器给平铺电影的是 `.video` 而不是 `.episode`,不构成剧集。
     func testDirectoryOfMoviesStaysDirectory() {
         let items = [
             item("肖申克的救赎", kind: .video),
@@ -117,7 +113,7 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertFalse(structure.isSingleSeason)
     }
 
-    /// 季文件夹是**自己就成立**的判据:一季只有一集(特别篇季)也照样认。
+    /// 季文件夹自己就成立:一季只有一集(特别篇季)也照样认。
     func testSingleSeasonFolderIsStillSeries() {
         let items = [item("S0", kind: .folder, season: 0)]
         guard let structure = BaiduPanSeriesLayout.shape(of: items).seriesStructure else {
@@ -137,7 +133,7 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
             ["第 1 季", "第 2 季"])
     }
 
-    /// 季文件夹与平铺文件并存(罕见存法):平铺的那批**单列一季**,⛔ 不静默吞掉。
+    /// 季文件夹与平铺文件并存时,平铺的那批单列一季,⛔ 不静默吞掉。
     func testFlatEpisodesAlongsideSeasonFoldersGetTheirOwnSeason() {
         let items = [
             item("第1季", kind: .folder, season: 1),
@@ -179,8 +175,7 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
 
     // MARK: - 与合成器的联动
 
-    /// 合成器要把**目录名整个是季标记**的目录的季号填进条目 ——
-    /// 那是形态判定与详情页季列表的唯一线索。
+    /// 目录名整个是季标记时合成器要填季号 —— 那是形态判定与详情页季列表的唯一线索。
     func testSynthesizerFillsSeasonNumberForSeasonFolder() {
         let result = BaiduPanMetadataSynthesizer.synthesize(
             files: [file("第13季", isDirectory: true)], sourceID: sourceID)
@@ -193,7 +188,6 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertNil(result.first?.item.seasonNumber)
     }
 
-    /// 端到端:网盘里的 `琅琊榜/第1季/`、`琅琊榜/第2季/` 这一层要判成一部剧。
     func testSynthesizedSeasonFoldersFormASeries() {
         let files = [
             file("第1季", directory: "/apps/LumaPlayer/琅琊榜", isDirectory: true),
@@ -205,7 +199,6 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertEqual(structure?.seasons.map(\.number), [1, 2])
     }
 
-    /// 端到端:网盘里的 `琅琊榜/01.mp4`、`琅琊榜/02.mp4` 要判成第 1 季。
     func testSynthesizedFlatEpisodesFormFirstSeason() {
         let files = [
             file("01.mp4", directory: "/apps/LumaPlayer/琅琊榜"),
@@ -218,7 +211,6 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertEqual(structure?.seasons.first?.number, 1)
     }
 
-    /// 端到端:片库分类目录(子目录名不是季标记)⛔ 不许判成剧集。
     func testSynthesizedCategoryFoldersStayDirectory() {
         let files = [
             file("肖申克的救赎", directory: "/apps/LumaPlayer/电影", isDirectory: true),

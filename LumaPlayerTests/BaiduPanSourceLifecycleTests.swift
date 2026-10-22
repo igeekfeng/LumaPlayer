@@ -2,10 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 百度来源在组合根上的生命周期:添加 / 落库 / 切换 / 删除 / 起播位置。
-///
-/// 覆盖的是**不发网络请求**的那条路 —— `addBaiduSource` 的配置保存只写凭据文件,
-/// 不探活(与 Emby 的 `addServer` 不同:那条要探测 + 登录)。真实授权与列表
-/// 需要真网盘账号,按 `docs/SOURCE_ABSTRACTION_PLAN.md` §7 标注「未验证」。
+/// 只覆盖不发网络的路径:`addBaiduSource` 只写凭据文件、不探活(Emby 的 `addServer` 要探测 + 登录)。
 @MainActor
 final class BaiduPanSourceLifecycleTests: XCTestCase {
     private var storage: CredentialFileStore!
@@ -55,14 +52,12 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(sources.count, 1)
         XCTAssertEqual(sources.first?.baiduPanSource?.folderName, "LumaPlayer")
         XCTAssertEqual(sources.first?.id, source.id)
-        // 落库即设为当前来源并进浏览(与添加 Emby 服务器同一条纪律)
         XCTAssertEqual(container.state.currentSource?.id, source.id)
         XCTAssertNil(container.state.currentServer, "百度来源不该写 currentServer")
         XCTAssertEqual(container.state.route, .browse)
     }
 
-    /// 可以添加**多个**百度来源:授权是应用级的(一份 token),多个来源共用它,
-    /// 各自记住自己的显示名与片库根。
+    /// 授权是应用级的(一份 token),多个来源共用,各自记显示名与片库根。
     func testAddingBaiduSourceTwiceCreatesTwoSources() async throws {
         let container = try makeContainer()
         let first = try await container.addBaiduSource(
@@ -73,11 +68,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNotEqual(first.id, second.id)
         let sources = await container.sources()
         XCTAssertEqual(sources.count, 2)
-        // 后添加的是当前来源
         XCTAssertEqual(container.state.currentSource?.id, second.id)
     }
 
-    /// 多个来源的片库根互不干扰(按来源 id 存,一个来源一个)。
     func testLibraryRootIsScopedPerBaiduSource() async throws {
         let container = try makeContainer()
         let first = try await container.addBaiduSource(
@@ -109,7 +102,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNotNil(container.state.currentSource?.lastUsedAt)
     }
 
-    /// 删除百度来源要连授权与密钥一起清 —— 留着就是孤儿凭据。
+    /// 删来源要连授权与密钥一起清,否则成孤儿凭据。
     func testRemovingBaiduSourceClearsItsCredentials() async throws {
         let container = try makeContainer()
         let baidu = try await container.addBaiduSource(
@@ -127,13 +120,12 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         let configuration = try await credentials.baiduPanAppConfiguration()
         XCTAssertNil(token, "授权要一起清")
         XCTAssertNil(configuration, "密钥要一起清")
-        // 一个来源都不剩 → 回引导页
         XCTAssertEqual(container.state.route, .onboarding)
     }
 
     // MARK: - 起播位置
 
-    /// 百度来源的起播位置读本地续播库(Emby 读服务端响应),由组合根按来源给。
+    /// 百度来源的起播位置读本地续播库(Emby 读服务端响应)。
     func testResumeSecondsComesFromLocalStoreForBaidu() async throws {
         let container = try makeContainer()
         let file = makeFile()
@@ -149,14 +141,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(ignored, 0, "「从头播放」必须忽略续播位置")
     }
 
-    // ⚠️ 「目录排序」那一组测试已随排序菜单一起去掉:顺序现在**固定**为剧集顺序
-    // (`FileSourceViewModel.sortedItems` 直接调 `BaiduPanSortOrder.episode`),
-    // 排序算法本身仍由 `BaiduPanSortOrderTests` 覆盖。
-
     // MARK: - 续播卡片(「继续观看」区)
 
-    /// 起播时记下展示快照,「继续观看」区才渲染得出来(标题 / 定位 / 封面),
-    /// 且**不能抹掉**上报器已经写进去的进度。
+    /// 起播时记展示快照(标题 / 定位 / 封面),且 ⛔ 不能抹掉上报器已写入的进度。
     func testRememberResumeCardPersistsDisplayWithoutLosingProgress() async throws {
         let container = try makeContainer()
         let sourceID = UUID()
@@ -172,14 +159,13 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(records.first?.display.locator, "/apps/LumaPlayer/a.mp4")
         XCTAssertNotNil(records.first?.display.cover, "封面要随卡片一起记下来")
 
-        // 折成 UI 卡片:能从快照重建一个够播放用的文件
         let card = try XCTUnwrap(records.compactMap(FileSourceResumeCard.init(record:)).first)
         XCTAssertEqual(card.title, "示例电影")
         XCTAssertEqual(card.reconstructedFile?.fsID, 42)
         XCTAssertEqual(card.reconstructedFile?.path, "/apps/LumaPlayer/a.mp4")
     }
 
-    /// 键不是合法 `fs_id` 的记录不端成卡片 —— 点了也播不了。
+    /// 键不是合法 `fs_id` 的记录点了也播不了,不端成卡片。
     func testResumeCardRejectsNonNumericFileID() {
         let record = WatchProgressStore.ResumeRecord(
             fileID: "not-a-number",
@@ -192,7 +178,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNil(FileSourceResumeCard(record: record))
     }
 
-    /// 一部剧只出一张卡:看第 1 集一半又看第 2 集一半,退出后不该出现两张同名卡片。
+    /// 看第 1 集一半又看第 2 集一半,退出后只该有一张卡。
     func testOneCardPerSeriesKeepsMostRecentEpisode() throws {
         let records = [
             makeRecord(fileID: "1", title: "琅琊榜", episode: 2, at: Date(timeIntervalSinceNow: 0)),
@@ -206,7 +192,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(card.subtitle, "第 2 集 · 已看到 10:00")
     }
 
-    /// 同名但在**不同目录** = 两部内容,不能并成一张(重拍 / 同名电影)。
+    /// 同名但不同目录是两部内容(重拍 / 同名电影),不能并。
     func testOneCardPerSeriesKeepsSameTitlesInDifferentDirectoriesApart() throws {
         let records = [
             makeRecord(fileID: "1", title: "同名", locator: "/apps/LumaPlayer/A/01.mp4"),
@@ -216,8 +202,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(FileSourceViewModel.oneCardPerSeries(records).count, 2)
     }
 
-    /// 「看到一半」压过「下一集」占位:倒回去重看第 1 集时,卡片该指向第 1 集,
-    /// 而不是更晚写入的那条「下一集」占位。
+    /// 倒回去重看第 1 集时,卡片指向第 1 集,而不是更晚写入的「下一集」占位。
     func testOneCardPerSeriesPrefersProgressOverUpNextPlaceholder() throws {
         let records = [
             makeRecord(fileID: "2", title: "琅琊榜", locator: "/apps/LumaPlayer/琅琊榜/02.mp4",
@@ -233,7 +218,6 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(card.subtitle, "第 1 集 · 已看到 10:00")
     }
 
-    /// 「下一集」占位的副标题报「下一集」,不报「已看到 00:00」。
     func testUpNextCardSubtitle() throws {
         let record = makeRecord(fileID: "2", title: "琅琊榜", episode: 2, upNext: true)
         let card = try XCTUnwrap(FileSourceResumeCard(record: record))
@@ -269,8 +253,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
 
     // MARK: - 播放页换集(剧集队列)
 
-    /// 队列**复用当前目录已列的条目**:兄弟集此刻就在手上,⛔ 不为换集再列一次网盘
-    /// (未审核应用配额 10 次/小时)。顺序与调用方给的一致(浏览页传 `sortedItems`)。
+    /// 队列复用当前目录已列的条目,⛔ 不为换集再列网盘(未审核应用配额 10 次/小时)。
     func testEpisodeQueueReusesListedSiblings() throws {
         let sourceID = UUID()
         let items = (1...3).map { makeEpisodeItem(sourceID: sourceID, index: $0) }
@@ -304,7 +287,6 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             selecting: movie, in: [movie], filesByID: files, source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
     }
 
-    /// 只有一集:没有可切的一集 —— 播放页因此不显示换集入口。
     func testEpisodeQueueIsNilForSingleEpisode() {
         let sourceID = UUID()
         let only = makeEpisodeItem(sourceID: sourceID, index: 1)
@@ -313,7 +295,6 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             selecting: only, in: [only], filesByID: makeFiles(for: [only]), source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
     }
 
-    /// 同目录的花絮 / 电影不混进队列 —— 队列只收 `.episode`。
     func testEpisodeQueueExcludesNonEpisodeFiles() throws {
         let sourceID = UUID()
         let episodes = (1...2).map { makeEpisodeItem(sourceID: sourceID, index: $0) }
@@ -330,8 +311,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(queue.episodes.map(\.id), ["10", "20"], "花絮不占一集的位置")
     }
 
-    /// 队列条目带上封面的描述符:选集面板(`PlayerEpisodePanel`)靠它显示剧照。
-    /// 没有封面的条目保持 nil —— 面板由 `PosterImage` 降级成占位图,⛔ 不假装有封面。
+    /// 选集面板靠描述符显示剧照;没有封面保持 nil,⛔ 不假装有封面。
     func testEpisodeQueueCarriesEntryPoster() throws {
         let sourceID = UUID()
         let cover = ImageDescriptor.remote(
@@ -356,8 +336,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertNil(queue.episodes[1].poster, "没有封面就是 nil(面板降级成占位图)")
     }
 
-    /// 从文件路径反推所在目录:继续观看卡片起播时没有兄弟上下文,
-    /// 靠它决定去列哪一层(`play(_ card:)` 的 A1 路径)。
+    /// 继续观看卡片起播时没有兄弟上下文,靠它决定去列哪一层。
     func testDirectoryOfFilePath() {
         XCTAssertEqual(
             BaiduPanPath.directory(ofFilePath: "/apps/LumaPlayer/剧/第 1 集.mp4"),
@@ -367,9 +346,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
 
     // MARK: - 续播卡片点进详情页
 
-    /// 「继续观看」卡片点空白处进的是**剧目录**,不是文件所在的季文件夹 ——
-    /// 落在季文件夹上会显示成一部只有一季、剧名还是「第1季」的剧。
-    /// 判据与合成器的剧集文件夹判定同源:父目录名整个是季标记才再上一层。
+    /// 卡片进剧目录而非季文件夹(否则显示成剧名为「第1季」的单季剧)。判据与合成器的剧集文件夹判定同源。
     func testSeriesDirectorySkipsSeasonFolder() {
         // 平铺存法:剧目录下直接摆集文件,父目录就是剧目录
         XCTAssertEqual(
@@ -399,8 +376,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             "/第1季")
     }
 
-    /// 详情页落点不越出这一页的最外层(与 `canGoUp` 同一把尺子):
-    /// 用户把某一季设成片库根时,剧目录在它之上,那就退回文件所在目录。
+    /// 落点不越出这一页的最外层(同 `canGoUp`):片库根设在某一季时退回文件所在目录。
     func testDetailDirectoryStaysWithinTopmost() {
         let path = "/apps/LumaPlayer/Videos/琅琊榜/第1季/01.mp4"
 
@@ -418,8 +394,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             "/apps/LumaPlayer/Videos/琅琊榜", "还没读到最外层时不做限制")
     }
 
-    /// 点进详情页时默认选中卡片那一集所属的季 —— 落在第一季会让详情页的
-    /// 「继续播放」变成「播放第 1 集」。
+    /// 默认选卡片那一集所属的季,否则「继续播放」会变成「播放第 1 集」。
     func testSeasonNumberFromFilePath() {
         XCTAssertEqual(
             FileSourceViewModel.seasonNumber(
@@ -443,9 +418,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
 
     // MARK: - 「继续观看」按隐藏路径过滤
 
-    /// 隐藏的若是**目录**,目录里各集的续播卡片也要消失 —— 那些记录记的是
-    /// 集文件的 `fs_id`,只按 `ref` 过滤挡不住(用户报的正是「隐藏了剧,
-    /// 继续观看里还挂着它的卡,点开播不了」)。
+    /// 隐藏目录时其中各集的卡片也要消失:记录记的是集文件 `fs_id`,只按 `ref` 过滤挡不住。
     func testResumeRecordsUnderHiddenDirectoryAreFiltered() throws {
         let hidden = [HiddenItemsStore.HiddenPath(
             path: "/apps/LumaPlayer/琅琊榜", isDirectory: true)]
@@ -458,7 +431,6 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertFalse(FileSourceViewModel.isHidden(sibling, by: hidden))
     }
 
-    /// 隐藏的是**单个文件**时只挡那一条:同剧别的集还能接着看。
     func testResumeRecordHiddenByFilePathOnly() throws {
         let hidden = [HiddenItemsStore.HiddenPath(
             path: "/apps/LumaPlayer/琅琊榜/01.mp4", isDirectory: false)]

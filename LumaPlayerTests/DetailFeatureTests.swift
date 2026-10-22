@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 详情页:已看 / 收藏写入、相似推荐、新增字段解码与文案格式
-/// (API_CONTRACT.md 3.2、3.4、5.5、5.6)。
-///
-/// 全部走 `MockEmbyURLProtocol` 与合成 fixture,**零真实网络依赖**。
+/// 详情页:已看 / 收藏写入、相似推荐、字段解码与文案(API_CONTRACT.md 3.2、3.4、5.5、5.6)。
 final class DetailFeatureTests: XCTestCase {
     private static let userID = "USER-1"
     private static let token = "FAKE_TOKEN_0123456789"
@@ -109,8 +106,7 @@ final class DetailFeatureTests: XCTestCase {
         _ = try await connection.episodes(seriesID: "SERIES-1", seasonID: "SEASON-1")
 
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/Episodes"))
-        // Overview:分集行要显示简介,列表接口默认不给。
-        // ProviderIds:弹幕匹配要靠它的 Tmdb 走 TMDB 降级层(`DANMAKU.md` §3)。
+        // Overview:分集行显示简介,列表接口默认不给;ProviderIds:弹幕匹配靠 Tmdb 走降级层(`DANMAKU.md` §3)
         XCTAssertEqual(
             queryValue(request.url, "Fields"), "Overview,ProviderIds",
             "分集行要显示简介,列表接口默认不给;弹幕匹配还要 ProviderIds")
@@ -126,7 +122,7 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertEqual(item.people?.map(\.name), ["演员甲", "导演乙"])
         XCTAssertEqual(item.people?.first?.role, "角色甲")
         XCTAssertNil(item.people?.last?.primaryImageTag, "没有头像 tag 就是 nil,不请求图片")
-        // Studios[].Id 在 4.1.1.0 里是 int64:只解 Name,不能因它让整项失败
+        // Studios[].Id 在 4.1.1.0 里是 int64:只解 Name,不能让整项失败
         XCTAssertEqual(item.studios?.map(\.name), ["测试制片厂"])
         XCTAssertEqual(item.taglines, ["一句用于 fixture 的宣传语"])
         XCTAssertEqual(item.mediaStreams?.first?.displayTitle, "1080p H264")
@@ -164,12 +160,8 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertNil(bare.landscapeImage, "没有任何横版 tag 就不请求")
     }
 
-    /// 卡片封面(`coverImage`)与它的失败退路(`coverImageFallback`)。
-    ///
-    /// 2026-10-01 在两台真实服务器的响应缓存里核实:`/Users/{UserId}/Items/Resume`
-    /// 里的电影条目常常只有 `ImageTags.Primary`(`BackdropImageTags` 是空数组),
-    /// 只认横版 tag 的话「继续观看」里的电影永远只有占位图(分集不受影响:
-    /// 分集的 `Primary` 本身就是 16:9 剧照)。
+    /// 真实服务器的 `/Users/{UserId}/Items/Resume` 里电影常常只有 `ImageTags.Primary`(`BackdropImageTags` 为空),
+    /// 只认横版 tag 的话「继续观看」的电影永远是占位图(分集的 `Primary` 本身是 16:9 剧照)。
     func testCoverImageFallsBackToOwnPoster() throws {
         let movie = try decode(#"{"Id":"M","Name":"M","Type":"Movie","ImageTags":{"Primary":"P"}}"#)
         XCTAssertNil(movie.landscapeImage, "横版图的语义不变:没有横版 tag 就是 nil")

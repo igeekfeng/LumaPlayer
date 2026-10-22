@@ -1,12 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 上报请求**在 HTTP 层**的样子(API_CONTRACT.md 5.1:用 URLProtocol mock
-/// 断言完整 body)。
-///
-/// `PlaybackProgressReporterTests` 验的是「造出什么端点」,这里验的是
-/// 「真正发出去的 JSON 长什么样」—— 键名拼写、nil 是否省略、
-/// Content-Type 与 token 头,都在这一层才看得见。
+/// 上报请求在 HTTP 层真正发出的 JSON(API_CONTRACT.md 5.1):键名拼写、nil 是否省略、Content-Type 与 token 头只在这一层看得见。
 final class PlaybackReportRequestTests: XCTestCase {
     private static let userID = "USER-1"
     private static let token = "FAKE_TOKEN_0123456789"
@@ -29,7 +24,7 @@ final class PlaybackReportRequestTests: XCTestCase {
         session = nil
     }
 
-    /// Progress 的完整 body:5.1 的每个字段都在,不使用的字段一个都不发。
+    /// 不使用的字段一个都不发(5.1)。
     func testProgressRequestCarriesFullBody() async throws {
         MockEmbyURLProtocol.stub(.status(200), path: "/emby/Sessions/Playing/Progress")
 
@@ -63,13 +58,13 @@ final class PlaybackReportRequestTests: XCTestCase {
                 "EventName": "TimeUpdate",
             ] as NSDictionary
         )
-        // 5.1 明确不使用 / 当前无值的字段:一律不出现,而不是发 null
+        // 一律不出现,而不是发 null
         XCTAssertNil(json["SubtitleStreamIndex"])
         XCTAssertNil(json["SubtitleOffset"])
         XCTAssertNil(json["LiveStreamId"])
     }
 
-    /// Playing 与 Stopped 的 body 结构相同,只是没有 EventName(5.1)。
+    /// 与 Stopped 结构相同,只是没有 EventName(5.1)。
     func testPlayingRequestOmitsEventName() async throws {
         MockEmbyURLProtocol.stub(.status(200), path: "/emby/Sessions/Playing")
 
@@ -83,8 +78,7 @@ final class PlaybackReportRequestTests: XCTestCase {
         XCTAssertEqual(json["ItemId"] as? String, "ITEM-1")
     }
 
-    /// 401 按 2.5 处置:清本台 token 并如实抛出。
-    /// ⛔ 上报失败不影响播放(5.4),但「token 失效」必须让上层知道。
+    /// 按 2.5 处置:上报失败不影响播放(5.4),但「token 失效」必须让上层知道。
     func testUnauthorizedClearsToken() async throws {
         MockEmbyURLProtocol.stub(.status(401), path: "/emby/Sessions/Playing/Stopped")
         let connection = try await makeConnection()
@@ -126,7 +120,6 @@ final class PlaybackReportRequestTests: XCTestCase {
     }
 
     private static var progressBody: PlaybackReportBody { body(eventName: .timeUpdate) }
-    /// 5.1:Playing / Stopped 不带 EventName
     private static var playingBody: PlaybackReportBody { body() }
 
     private func makeConnection() async throws -> ServerConnection {

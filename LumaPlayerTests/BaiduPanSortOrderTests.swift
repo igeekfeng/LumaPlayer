@@ -1,11 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 百度目录的**客户端排序**(纯函数)。
-///
-/// 为什么这块非有不可:百度 `order=name` 是**纯字符串序**,`10.mp4` 排在
-/// `2.mp4` 前面 —— 而「看剧都是从前往后看」。文档也写明剧集排序要自行开发
-/// (`docs/BAIDU_PAN_API.md` §2.2)。
+/// 百度 `order=name` 是纯字符串序(`10.mp4` 在 `2.mp4` 前),剧集排序要客户端自己做(`docs/BAIDU_PAN_API.md` §2.2)。
 final class BaiduPanSortOrderTests: XCTestCase {
 
     private let sourceID = UUID()
@@ -13,7 +9,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
 
     // MARK: - 工具
 
-    /// 造一条百度条目。默认落在 `/apps/LumaPlayer/琅琊榜`(剧集文件夹结构)。
+    /// 默认落在 `/apps/LumaPlayer/琅琊榜`(剧集文件夹结构)。
     private func file(
         _ name: String,
         directory: String = "/apps/LumaPlayer/琅琊榜",
@@ -41,10 +37,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         names.map { file($0, directory: directory) }
     }
 
-    /// 走完整条链路(**合成 → 排序**)后回原始文件名。
-    ///
-    /// ⚠️ 刻意不手搓 `SourceItem`:集号 / 季号是 `BaiduPanMetadataSynthesizer`
-    /// 从文件名解析出来的,手搓就等于把被测的那一步跳过去了。
+    /// 走完整条链路(合成 → 排序)后回原始文件名。⛔ 不手搓 `SourceItem`:集号 / 季号由 `BaiduPanMetadataSynthesizer` 解析,手搓就跳过了被测的那一步。
     private func sortedNames(
         _ files: [BaiduPanFile],
         order: BaiduPanSortOrder,
@@ -61,7 +54,6 @@ final class BaiduPanSortOrderTests: XCTestCase {
 
     // MARK: - 剧集顺序(默认)
 
-    /// ★ 这一条就是这个功能存在的理由:字符串序下 `10` 在 `2` 前面。
     func testEpisodeOrderSortsNumbersNumerically() {
         let input = files("1.mp4", "10.mp4", "11.mp4", "12.mp4", "2.mp4", "3.mp4")
 
@@ -71,7 +63,6 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// 先季后集:第 2 季第 1 集排在第 1 季所有集之后。
     func testEpisodeOrderSortsBySeasonThenEpisode() {
         let input = files("S02E01.mkv", "S01E10.mkv", "S01E02.mkv")
 
@@ -81,8 +72,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// 目录恒在最前 —— 且**不跟随升降序**(倒着排一屏目录没有意义)。
-    /// ⚠️ 但**目录之间**的顺序跟随:`ascending = false` 时季文件夹也从后往前。
+    /// 目录恒在最前、不跟随升降序;但目录之间的顺序跟随。
     func testEpisodeOrderKeepsFoldersFirstInBothDirections() {
         let input = [
             file("2.mp4"),
@@ -101,7 +91,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// 认不出集号的(花絮、混进剧集目录的电影)排到后面,⛔ 不占「第 1 集」的位置。
+    /// 花絮、混进剧集目录的电影 ⛔ 不占「第 1 集」的位置。
     func testEpisodeOrderPutsItemsWithoutEpisodeNumberLast() {
         let input = files("1.mp4", "Making.of.2019.1080p.mkv", "2.mp4")
 
@@ -113,7 +103,6 @@ final class BaiduPanSortOrderTests: XCTestCase {
 
     // MARK: - 名称
 
-    /// 名称档是**自然序**:`2` 在 `10` 前(百度给的字符串序做不到这件事)。
     func testNameOrderIsNatural() {
         XCTAssertEqual(
             sortedNames(files("10.mp4", "2.mp4"), order: .name),
@@ -121,8 +110,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// ⚠️ 名称档比的是**原始文件名**,不是 `title`。
-    /// 剧集文件夹结构下 `title` 是剧名(整个目录每一张都一样),拿它排等于没排。
+    /// 剧集文件夹结构下 `title` 是剧名(整个目录都一样),拿它排等于没排。
     func testNameOrderUsesOriginalFileNameNotSeriesTitle() {
         let input = files("第10集.mp4", "第2集.mp4")
 
@@ -134,7 +122,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
 
     // MARK: - 修改时间 / 大小
 
-    /// 时间档默认**新的在前**;百度没给 `server_mtime` 的排最后(⛔ 不当成 1970)。
+    /// 缺 `server_mtime` ⛔ 不当成 1970。
     func testModifiedDateOrderPutsNewestFirstAndUnknownLast() {
         let input = [
             file("older.mp4", modifiedAt: Date(timeIntervalSince1970: 1_000_000)),
@@ -148,7 +136,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// 大小档默认**大的在前**;百度没给 `size` 的排最后(⛔ 不当成 0 字节)。
+    /// 缺 `size` ⛔ 不当成 0 字节。
     func testSizeOrderPutsLargestFirstAndUnknownLast() {
         let input = [
             file("small.mp4", size: 10),
@@ -162,8 +150,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// ⚠️ 「缺值排最后」**不跟随升降序** —— 倒序时它也必须在最后。
-    /// (第一版把它当成「值最小」处理,倒序就把它顶到了最前面。)
+    /// 「缺值排最后」不跟随升降序;当成「值最小」处理的话倒序会把它顶到最前。
     func testUnknownValuesStayLastWhenDescending() {
         let older = Date(timeIntervalSince1970: 1_000_000)
         let newer = Date(timeIntervalSince1970: 2_000_000)
@@ -193,7 +180,6 @@ final class BaiduPanSortOrderTests: XCTestCase {
         )
     }
 
-    /// 每档的自然方向:剧集 / 名称从小到大,时间 / 大小从新(大)到旧(小)。
     func testDefaultDirections() {
         XCTAssertTrue(BaiduPanSortOrder.episode.defaultAscending)
         XCTAssertTrue(BaiduPanSortOrder.name.defaultAscending)
@@ -201,8 +187,7 @@ final class BaiduPanSortOrderTests: XCTestCase {
         XCTAssertFalse(BaiduPanSortOrder.size.defaultAscending)
     }
 
-    /// 同键(同一秒的 mtime)时顺序也要**确定**:兜底键是自然名。
-    /// ⚠️ 没有它,同键条目的顺序会随数据规模漂移,测试也就不可复现。
+    /// 兜底键是自然名,否则同键条目的顺序随数据规模漂移、测试不可复现。
     func testEqualKeysFallBackToNaturalName() {
         let sameMoment = Date(timeIntervalSince1970: 1_000_000)
         let input = [

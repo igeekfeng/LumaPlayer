@@ -1,9 +1,7 @@
 import Foundation
 
-/// JSON 解码与解码错误的统一包装(API_CONTRACT.md 第 7 节的 `.decoding`)。
-///
-/// 不持有 `JSONDecoder` 实例:每次解码新建,避免跨隔离共享可变对象
-/// (CLAUDE.md「并发分层」)。
+/// JSON 解码,错误统一包成 `.decoding`(API_CONTRACT.md 第 7 节)。
+/// 每次新建 `JSONDecoder`,不跨隔离共享可变对象。
 struct ResponseDecoder: Sendable {
     func decode<T: Decodable & Sendable>(
         _ type: T.Type,
@@ -14,8 +12,7 @@ struct ResponseDecoder: Sendable {
         do {
             return try decoder.decode(type, from: data)
         } catch {
-            // 只带端点名,不带原始数据:响应里可能有 token,不得进日志
-            // (CLAUDE.md「安全与隐私」)
+            // 只带端点名,不带原始数据:响应里可能有 token
             throw EmbyAPIError.decoding(underlying: String(describing: error), endpointName: endpointName)
         }
     }

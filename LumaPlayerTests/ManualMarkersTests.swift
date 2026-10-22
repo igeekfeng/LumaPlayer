@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 手动片头 / 片尾:合并规则、作用范围键、持久化、时间解析,以及播放页接线。
-///
-/// 与 `PlaybackPolishTests` 同一原则:只验不需要 mpv、不需要网络的部分。
-/// ⛔ 菜单 / sheet 的实际观感是 UI 行为,本机无辅助功能权限,不在这里假装覆盖。
+/// 只验不需要 mpv、不需要网络的部分;菜单 / sheet 的观感不在这里覆盖。
 @MainActor
 final class ManualMarkersTests: XCTestCase {
 
@@ -130,7 +127,7 @@ final class ManualMarkersTests: XCTestCase {
     }
 
     func testBaiduScopeKeyKeepsMoviesApart() {
-        // 文件名看不出是剧集(4 位年份是「电影」的形状)→ 退回这一条文件自己
+        // 4 位年份是「电影」的形状 → 退回这一条文件自己
         XCTAssertNotEqual(
             ManualMarkersScope.key(for: .baiduPan(
                 file: baiduFile(fsID: 11, path: "/apps/LumaPlayer/电影/阿凡达.2009.mkv"))),
@@ -176,7 +173,7 @@ final class ManualMarkersTests: XCTestCase {
         XCTAssertEqual(permissions.intValue & 0o777, 0o600)
     }
 
-    /// 文件坏了要**如实报出来**,⛔ 不静默当成「没有手动标注」继续跑。
+    /// ⛔ 不静默当成「没有手动标注」继续跑。
     func testCorruptedFileIsReportedNotSwallowed() async throws {
         try Data("not json".utf8).write(to: fileURL)
         let store = makeStore()
@@ -198,7 +195,7 @@ final class ManualMarkersTests: XCTestCase {
             "0 要显示成 00:00,不是 --:--")
     }
 
-    /// 填了但**不会生效**的几种要看得出来(只填一端 / 顺序反了 / 片尾为 0)。
+    /// 只填一端 / 顺序反了 / 片尾为 0。
     func testSummaryFlagsMarkersThatWillNotTakeEffect() {
         XCTAssertEqual(ManualMarkers(introStart: 30).summary, "片头未生效")
         XCTAssertEqual(ManualMarkers(introEnd: 120).summary, "片头未生效")
@@ -228,7 +225,6 @@ final class ManualMarkersTests: XCTestCase {
 
     // MARK: - 播放页接线
 
-    /// 起播时把手动标注合并进来:手动片头覆盖服务端,没动过的片尾沿用服务端。
     func testPlaybackMergesManualMarkersOverServerChapters() async throws {
         let server = makeServer()
         let item = try embyItem(#"{"Id":"M1","Name":"测试影片","Type":"Movie"}"#)
@@ -251,7 +247,7 @@ final class ManualMarkersTests: XCTestCase {
             displaySleep: RecordingDisplaySleepInhibitor())
 
         viewModel.start()
-        // 等 `prepareAndLoad` 走到设标记那一步(它在建 MPVPlayer / 等 GL 之前)。
+        // 等 `prepareAndLoad` 走到设标记那一步(在建 MPVPlayer / 等 GL 之前)
         for _ in 0..<500 {
             if viewModel.markers != .none { break }
             await Task.yield()
@@ -263,7 +259,7 @@ final class ManualMarkersTests: XCTestCase {
         viewModel.stop()
     }
 
-    /// 服务端没有标记、用户也没标 → 仍是 `.none`(不凭空造标记)。
+    /// 不凭空造标记。
     func testPlaybackWithoutAnyMarkersStaysNone() async throws {
         let server = makeServer()
         let item = try embyItem(#"{"Id":"M1","Name":"测试影片","Type":"Movie"}"#)
@@ -281,12 +277,11 @@ final class ManualMarkersTests: XCTestCase {
             displaySleep: RecordingDisplaySleepInhibitor())
 
         viewModel.start()
-        // 等到「过了设标记那一步」——播放器建起来(或失败)说明已经走过了。
+        // 播放器建起来(或失败)说明已经过了设标记那一步
         for _ in 0..<500 {
             if viewModel.player != nil || viewModel.failure != nil { break }
             await Task.yield()
         }
-        // 标记不因「等到了播放器」而变成非 none:服务端没给、用户也没标,就始终是 .none
         XCTAssertEqual(viewModel.markers, .none)
         XCTAssertFalse(viewModel.hasManualMarkers)
         viewModel.stop()
@@ -294,7 +289,7 @@ final class ManualMarkersTests: XCTestCase {
 
     // MARK: - 替身与辅助
 
-    /// 只回一个固定会话的替身:验的是接线(标记从哪来),不是会话准备。
+    /// 验的是接线(标记从哪来),不是会话准备。
     private struct StubPreparer: PlaybackSessionPreparing {
         let session: PlaybackSession
         func makeSession(startTimeTicks: Int64?) async throws -> PlaybackSession { session }

@@ -1,28 +1,23 @@
 import AppKit
 import MediaPlayer
 
-/// 接入系统「正在播放」(控制中心 / 锁屏小组件)与键盘媒体键(F7–F9、耳机线控)。
+/// 接入系统「正在播放」(控制中心 / 锁屏)与媒体键。
 ///
-/// 这是 macOS 原生播放器相对网页端的优势之一:播放窗口不在前台时,
-/// 仍能用媒体键暂停、跳转。只在播放页存活期间注册,关窗即全部撤销 ——
-/// 否则关掉播放器后按媒体键,系统仍会把事件派给一个已经不存在的会话。
-///
-/// 进度只在状态变化(暂停 / 倍速 / 时长 / 定期校准)时写入:
-/// 系统会按 `playbackRate` 自己外推,不需要跟着每 0.2s 的 time-pos 刷新。
+/// 只在播放页存活期间注册,关窗全部撤销,否则媒体键会派给已不存在的会话。
+/// 进度只在状态变化时写入:系统按 `playbackRate` 自己外推。
 @MainActor
 final class NowPlayingController {
     private weak var viewModel: PlayerViewModel?
     private var targets: [(MPRemoteCommand, Any)] = []
-    /// 封面(剧照 / 海报),由播放页取到图后设置;没有就不带,系统显示默认图标
+    /// nil 时系统显示默认图标
     private var artwork: MPMediaItemArtwork?
 
     func setArtwork(_ image: NSImage) {
         artwork = Self.makeArtwork(image)
     }
 
-    /// `requestHandler` 由 MediaPlayer 在它自己的 accessQueue 上调用,不在主线程。
-    /// 闭包若写在本类(`@MainActor`)的方法里会继承主线程隔离,被调时 Swift 运行时
-    /// 隔离检查直接 trap(EXC_BREAKPOINT)—— 所以必须在 nonisolated 上下文里创建。
+    /// ⛔ 必须 nonisolated:`requestHandler` 在 MediaPlayer 自己的队列上调用,
+    /// 闭包若继承 MainActor 隔离,运行时隔离检查会直接 trap。
     nonisolated static func makeArtwork(_ image: NSImage) -> MPMediaItemArtwork {
         MPMediaItemArtwork(boundsSize: image.size) { _ in image }
     }
@@ -35,7 +30,6 @@ final class NowPlayingController {
         }
         let item = viewModel.playingItem
         var info: [String: Any] = [
-            // 标题走来源无关的口径:Emby 是剧集 / 电影名,百度是文件名
             MPMediaItemPropertyTitle: item.map { emby in
                 emby.kind == .episode
                     ? [emby.episodeLabel, emby.name].compactMap { $0 }.joined(separator: " · ")
@@ -46,7 +40,6 @@ final class NowPlayingController {
             MPNowPlayingInfoPropertyPlaybackRate: viewModel.isPaused || viewModel.isEnded ? 0 : viewModel.speed,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
         ]
-        // 副标题(剧名)只有 Emby 有
         if let series = item?.seriesName {
             info[MPMediaItemPropertyArtist] = series
         }
@@ -56,7 +49,7 @@ final class NowPlayingController {
         if let artwork {
             info[MPMediaItemPropertyArtwork] = artwork
         }
-        // 上一曲 / 下一曲 = 上一集 / 下一集;没有时置灰,而不是按了没反应
+        // 上一曲 / 下一曲 = 上一集 / 下一集;没有时置灰
         let commands = MPRemoteCommandCenter.shared()
         commands.previousTrackCommand.isEnabled = viewModel.previousEpisode != nil
         commands.nextTrackCommand.isEnabled = viewModel.nextEpisode != nil
@@ -85,8 +78,7 @@ final class NowPlayingController {
         add(commands.playCommand) { if $0.isPaused { $0.togglePlayPause() } }
         add(commands.pauseCommand) { if !$0.isPaused { $0.togglePlayPause() } }
 
-        // 系统「正在播放」的跳转间隔跟着设置页的步长走(注册时读一次;改了步长
-        // 要下一次起播才同步 —— 这是低频偏好,不值得为它拆一遍命令注册)。
+        // 跳转间隔注册时读一次设置页步长;改了要下次起播才同步
         let step = viewModel?.seekStep ?? Metrics.seekStep
         commands.skipForwardCommand.preferredIntervals = [NSNumber(value: step)]
         commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: step)]
@@ -96,8 +88,7 @@ final class NowPlayingController {
         add(commands.nextTrackCommand) { $0.playNextEpisode() }
         add(commands.previousTrackCommand) { $0.playPreviousEpisode() }
 
-        // 控制中心里的倍速:系统这条命令只能给离散档位(播放器内是连续滑块),
-        // 所以给一组覆盖常用区间的档位
+        // 系统倍速命令只支持离散档位
         let rate = commands.changePlaybackRateCommand
         rate.supportedPlaybackRates = PlayerViewModel.speedPresets.map { NSNumber(value: $0) }
         let rateTarget = rate.addTarget { [weak self] event in
@@ -124,9 +115,7 @@ final class NowPlayingController {
         targets.append((seek, target))
     }
 
-    /// 系统在主线程回调远程命令(MPRemoteCommand 文档),所以这里可以
-    /// `assumeIsolated` 回到 MainActor;若哪天不在主线程,它会直接崩在这里,
-    /// 而不是悄悄数据竞争。
+    /// 远程命令在主线程回调,故可 `assumeIsolated`;不在主线程时宁可崩,不悄悄数据竞争。
     private func add(_ command: MPRemoteCommand, _ action: @escaping @MainActor (PlayerViewModel) -> Void) {
         let target = command.addTarget { [weak self] _ in
             MainActor.assumeIsolated {

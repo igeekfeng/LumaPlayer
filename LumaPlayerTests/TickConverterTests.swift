@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// ticks ↔ 秒 的换算(API_CONTRACT.md 8.3)。
-///
-/// ⛔ 业务代码里出现 `10_000_000` 字面量是违规的(CLAUDE.md 提交前自检第 4 条),
-/// 换算只有这一个出处。
+/// ticks ↔ 秒 的换算(API_CONTRACT.md 8.3),换算只有这一个出处。
 final class TickConverterTests: XCTestCase {
 
     func testOneSecondIsTenMillionTicks() {
@@ -26,7 +23,7 @@ final class TickConverterTests: XCTestCase {
         XCTAssertEqual(TickConverter.seconds(fromTicks: 600_000_000), 60)
     }
 
-    /// 上报位置经 ticks 往返后不应漂移(5.1 的 PositionTicks 由秒换算而来)。
+    /// 上报位置经 ticks 往返不应漂移(5.1 的 PositionTicks 由秒换算而来)。
     func testRoundTripPreservesWholeSeconds() {
         for seconds in [0.0, 1.0, 42.0, 3600.0, 7325.0] {
             XCTAssertEqual(

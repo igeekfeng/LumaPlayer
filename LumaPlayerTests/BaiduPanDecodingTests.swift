@@ -1,14 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 百度网盘响应的解码。
-///
-/// 字段名以 `docs/BAIDU_PAN_API.md` §4 为准:
-/// `errno` / `list[]`(`fs_id` `path` `server_filename` `size` `isdir`
-/// `category` `md5` `server_mtime` `dlink` `media_info`)。
-///
-/// ⚠️ `media_info` 的**内层字段名没有逐字段核实**(官方只给了「时长要
-/// `needmedia=1`」这一句),所以那条断言的口径是「取不到就是 nil」。
+/// 百度网盘响应解码,字段名以 `docs/BAIDU_PAN_API.md` §4 为准。
+/// `media_info` 内层字段名未逐字段核实,断言口径是「取不到就是 nil」。
 final class BaiduPanDecodingTests: XCTestCase {
 
     // MARK: - 列表
@@ -32,14 +26,13 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(image.category, 3)
     }
 
-    /// 目录条目没有 `size` / `md5`(官方:仅文件条目存在),解出来必须是 nil,
-    /// ⛔ 不能填 0 假装「没有大小」。
+    /// 目录条目没有 `size` / `md5`,⛔ 不能填 0。
     func testDirectoryEntryLeavesSizeNil() throws {
         let response = try JSONDecoder().decode(BaiduPanListResponse.self, from: Data(listJSON.utf8))
         XCTAssertNil(response.list?[0].file?.sizeBytes)
     }
 
-    /// `fs_id` 与 `path` 缺一就没法定位文件 → 整条跳过,不编一个假的。
+    /// 缺 `fs_id` / `path` 就没法定位文件 → 整条跳过,不编假的。
     func testEntryWithoutFsIDIsSkipped() throws {
         let json = """
         {"errno":0,"list":[{"path":"/apps/L/x.mp4","server_filename":"x.mp4"}]}
@@ -48,7 +41,6 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertNil(response.list?.first?.file)
     }
 
-    /// 服务端没给 `server_filename` 时退回路径最后一段 —— 也不编名字。
     func testNameFallsBackToLastPathComponent() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":1,"path":"/apps/L/a.mp4","isdir":0,"category":1}]}
@@ -59,8 +51,7 @@ final class BaiduPanDecodingTests: XCTestCase {
 
     // MARK: - 元信息
 
-    /// `filemetas` 的真实形状(2026-10-10 抓自真机响应):`errno` + 条目上的
-    /// `dlink` / `duration` / `filename`。⚠️ 没有 `media_info`。
+    /// `filemetas` 的真实形状:`errno` + 条目上的 `dlink` / `duration` / `filename`,没有 `media_info`。
     func testDecodesDlinkAndDurationFromFilemetas() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":9,"path":"/apps/L/a.mp4","isdir":0,"filename":"a.mp4",
@@ -70,11 +61,10 @@ final class BaiduPanDecodingTests: XCTestCase {
         let entry = try XCTUnwrap(response.list?.first)
         XCTAssertEqual(entry.dlink, "https://d.baidupcs.com/file/x?fid=1&sign=abc")
         XCTAssertEqual(entry.durationSeconds, 7125)
-        // `filemetas` 用 `filename`(不是 `server_filename`)—— 也要能取出名字
+        // `filemetas` 用 `filename`(不是 `server_filename`)
         XCTAssertEqual(entry.file?.name, "a.mp4")
     }
 
-    /// 条目级 `duration` 优先于旧的 `media_info.duration`。
     func testEntryLevelDurationWinsOverMediaInfo() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":9,"path":"/a","duration":100,
@@ -84,7 +74,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(response.list?.first?.durationSeconds, 100)
     }
 
-    /// 失败描述两个名字都要认:`filemetas` 给 `errmsg`,列表 / 播放流给 `show_msg`。
+    /// `filemetas` 给 `errmsg`,列表 / 播放流给 `show_msg`。
     func testMetaFailureMessageReadsErrmsgToo() throws {
         let errmsg = """
         {"errno":-9,"errmsg":"file not found","list":[]}
@@ -99,7 +89,6 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(b.showMessage, "文件不存在")
     }
 
-    /// `duration_ms` 也要认(旧 `media_info` 形状,两种都试)。
     func testMediaDurationReadsMillisecondsToo() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":9,"path":"/a","media_info":{"duration_ms":7125000}}]}
@@ -108,8 +97,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(response.list?.first?.mediaInfo?.durationSeconds, 7125)
     }
 
-    /// ⛔ 字段名不对时**不能让整条解失败** —— 那会让整个目录打不开。
-    /// 取不到就是 nil,播放层退回内核读数。
+    /// ⛔ 字段名不对不能让整条解失败(会让整个目录打不开);取不到就是 nil,播放层退回内核读数。
     func testUnknownMediaInfoKeysYieldNilInsteadOfFailure() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":9,"path":"/a","media_info":{"时长":7125,"whatever":"x"}}]}
@@ -119,7 +107,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertNil(response.list?.first?.mediaInfo?.durationSeconds)
     }
 
-    /// `meta` 没给 dlink(例如不在 `/apps` 下)→ 如实留出 nil,由上层报错。
+    /// 例如不在 `/apps` 下;如实留 nil,由上层报错。
     func testMissingDlinkIsNil() throws {
         let json = """
         {"errno":0,"list":[{"fs_id":9,"path":"/a"}]}
@@ -144,7 +132,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertFalse(other.kind.isPlayable)
     }
 
-    /// `category` 缺失时按扩展名判 —— 这是 `BAIDU_PAN_API.md` §5 明确允许的。
+    /// `BAIDU_PAN_API.md` §5 允许按扩展名判。
     func testKindFallsBackToExtension() {
         let mkv = BaiduPanFile(
             fsID: 1, path: "/apps/L/a.MKV", name: "a.MKV", sizeBytes: 1,
@@ -155,8 +143,7 @@ final class BaiduPanDecodingTests: XCTestCase {
 
     // MARK: - 授权
 
-    /// 解码失败时错误里要带**响应顶层键名**,但**不能带值**
-    /// —— 响应里可能有 token / dlink 签名(CLAUDE.md「安全与隐私」)。
+    /// 错误里带响应顶层键名但⛔ 不带值:响应里可能有 token / dlink 签名。
     func testDecodingFailureCarriesTopLevelKeysButNotValues() throws {
         let client = BaiduPanAPIClient()
         let json = #"{"list":[],"request_id":42,"errmsg":"值不该出现在错误里"}"#
@@ -177,7 +164,6 @@ final class BaiduPanDecodingTests: XCTestCase {
         }
     }
 
-    /// 非 JSON 对象(HTML / 文本)没有顶层键可带,不能因此崩。
     func testTopLevelKeysIsNilForNonObjectJSON() {
         XCTAssertNil(BaiduPanAPIClient.topLevelKeys(in: Data("<html>403</html>".utf8)))
         XCTAssertNil(BaiduPanAPIClient.topLevelKeys(in: Data("[1,2]".utf8)))
@@ -202,7 +188,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertNotNil(code.qrCodeImageURL)
     }
 
-    /// ⛔ 不采信小于 5 的 interval:官方明说轮询间隔不能低于 5 秒。
+    /// 官方:轮询间隔不能低于 5 秒。
     func testIntervalIsClampedToFiveSeconds() throws {
         let json = """
         {"device_code":"dc","user_code":"u","expires_in":300,"interval":1}
@@ -226,8 +212,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertTrue(bundle.needsRefresh(now: Date(timeIntervalSince1970: 2592000 - 60)))
     }
 
-    /// ⚠️ 刷新响应必须带新的 refresh_token(`BAIDU_PAN_API.md` §6:旧的在刷新成功
-    /// 那一刻已失效)。没有就当这次授权不可用,⛔ 不沿用旧的。
+    /// 刷新成功那一刻旧 refresh_token 已失效(`BAIDU_PAN_API.md` §6),⛔ 不沿用旧的。
     func testTokenWithoutRefreshTokenIsRejected() throws {
         let json = """
         {"expires_in":2592000,"access_token":"AT"}
@@ -242,15 +227,14 @@ final class BaiduPanDecodingTests: XCTestCase {
         """
         let response = try JSONDecoder().decode(BaiduPanOAuthErrorResponse.self, from: Data(json.utf8))
         XCTAssertEqual(response.error, "invalid_grant")
-        // ⚠️ 白名单只认「肯定致命」的码:官方没写「用户还没确认」返回什么,
-        // 所以认不出来的码一律**继续等**(见 `isFatalOAuthCode` 的注释)。
+        // 官方没写「用户还没确认」返回什么,所以只认肯定致命的码,其余继续等(见 `isFatalOAuthCode`)
         XCTAssertFalse(BaiduPanError.isFatalOAuthCode("invalid_grant"))
         XCTAssertFalse(BaiduPanError.isFatalOAuthCode("authorization_pending"))
         XCTAssertTrue(BaiduPanError.isFatalOAuthCode("invalid_client"))
         XCTAssertTrue(BaiduPanError.isFatalOAuthCode("access_denied"))
     }
 
-    /// `errno=133`(非会员要看广告)要能读出 `adToken` 以便带回重试。
+    /// `errno=133`(非会员要看广告):读出 `adToken` 带回重试。
     func testDecodesAdEnvelope() throws {
         let json = """
         {"errno":133,"request_id":123,"adTime":15,"adToken":"TOK","ltime":15}
@@ -262,8 +246,7 @@ final class BaiduPanDecodingTests: XCTestCase {
 
     // MARK: - 删除结果(`docs/BAIDU_PAN_API.md` §2.4)
 
-    /// ⚠️ 顶层 `errno == 0` **只表示受理**:单条失败在 `info[].errno` 里。
-    /// 只看顶层会把「其实没删掉」吞成成功(CLAUDE.md 硬规则 4)。
+    /// 顶层 `errno == 0` 只表示受理,单条失败在 `info[].errno`;只看顶层会把「没删掉」吞成成功。
     func testFileManagerResultKeepsPerItemErrno() throws {
         let json = """
         {"errno":0,"info":[{"errno":-9,"path":"/apps/LumaPlayer/a.mkv"}],
@@ -277,7 +260,7 @@ final class BaiduPanDecodingTests: XCTestCase {
         XCTAssertEqual(entry.path, "/apps/LumaPlayer/a.mkv")
     }
 
-    /// 异步(`async≠0`)只回 `taskid`、没有 `info` —— 那种响应**说不清**删没删成。
+    /// 异步(`async≠0`)只回 `taskid`、没有 `info`,说不清删没删成。
     func testAsyncFileManagerResponseHasNoPerItemResult() throws {
         let json = """
         {"errno":0,"info":[],"request_id":9132303301733449639,"taskid":569942193355668}
@@ -302,8 +285,7 @@ final class BaiduPanDecodingTests: XCTestCase {
 
     // MARK: - 目录地址
 
-    /// 路径越界判断:用 `root + "/"` 前缀,⛔ 不用 `hasPrefix(root)`
-    /// —— 后者会把 `/apps/LumaPlayerXX` 也算进 `/apps/LumaPlayer`。
+    /// ⛔ 不用 `hasPrefix(root)`:会把 `/apps/LumaPlayerXX` 也算进 `/apps/LumaPlayer`。
     func testLibraryRootBoundaryUsesSlashSuffix() {
         XCTAssertTrue(BaiduPanPath.isInside("/apps/LumaPlayer", applicationRoot: "/apps/LumaPlayer"))
         XCTAssertTrue(BaiduPanPath.isInside("/apps/LumaPlayer/sub", applicationRoot: "/apps/LumaPlayer"))

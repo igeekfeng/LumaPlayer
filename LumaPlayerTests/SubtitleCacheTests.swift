@@ -1,13 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 字幕缓存与「每集用的字幕」记录(2026-10-21):
-/// - `SubtitleFileStore`:`<组>/<原文件名>` 布局、本地导入按内容去重、查缓存、清理;
-/// - `SubtitleBindingStore`:读写、跨实例持久化、按前缀删、过期删、损坏时拒绝覆盖;
-/// - `SubtitleService`:先查缓存,命中就不请求 assrt。
-///
-/// ⛔ 验不到的:播放页起播时的自动挂载(`PlayerViewModel.restoreRememberedSubtitle`)要真的
-/// 起一个 mpv 播放器,单测里 `player` 为 nil —— 需要真实 App 手验。
+/// 字幕缓存(`SubtitleFileStore`)、每集字幕记录(`SubtitleBindingStore`)、`SubtitleService` 先查缓存。
+/// 起播时的自动挂载(`PlayerViewModel.restoreRememberedSubtitle`)要真起 mpv,单测验不到,需真实 App 手验。
 final class SubtitleCacheTests: XCTestCase {
 
     private var directory: URL!
@@ -85,7 +80,7 @@ final class SubtitleCacheTests: XCTestCase {
         let fresh = try await store.storeDownloaded(data: Data(Self.srtText.utf8), fileName: "new.srt", group: "assrt-3")
         try setModified(stale.url, now.addingTimeInterval(-100 * Self.day))
         try setModified(kept.url, now.addingTimeInterval(-100 * Self.day))
-        // 旧版平铺的文件也要能被清掉
+        // 组目录之外平铺的文件(旧布局)也要能被清掉
         let legacy = storeDirectory.appending(path: "assrt-9-0.srt")
         try Data(Self.srtText.utf8).write(to: legacy)
         try setModified(legacy, now.addingTimeInterval(-100 * Self.day))

@@ -1,30 +1,25 @@
 import Foundation
 import os
 
-/// 每一集上次挂的外挂字幕(**本地**记录,不动任何服务端)。下次播同一集自动挂上。
+/// 每一集上次挂的外挂字幕(本地记录),下次播同一集自动挂上。
 ///
-/// - 键:`DanmakuMediaQuery.itemKey`(Emby 是 `emby|<服务器 id>|<Item Id>`,百度是 `baidu|fsid:<fs_id>`)。
-///   在线字幕的搜索关键词本来就取自同一个身份,⛔ 不另造一套来源判断。
-/// - 值:只记**最后一次**挂的那条(`SubtitleFileStore.Stored.relativePath`),不记一串。
-///   同一集挂过两条时,下次只恢复最后那条 —— 那是用户最近一次明确的选择。
-/// - 在线字幕同时记 assrt 的 id:缓存被清掉后能按 id 重新取回(`SubtitleService.download(assrtID:)`);
-///   本地字幕没有来源可以重取,文件没了就如实提示并删掉这条记录。
+/// - 键:`DanmakuMediaQuery.itemKey`(Emby `emby|<服务器 id>|<Item Id>`,百度 `baidu|fsid:<fs_id>`),⛔ 不另造身份。
+/// - 值:只记最后一次挂的那条。
+/// - 在线字幕同时记 assrt id,缓存被清后可重新取回;本地字幕文件没了就如实提示并删记录。
 ///
-/// 保留期与缓存同为 `SubtitleFileStore.retention`:超过这么久没播过的集,记录与文件一起清掉
-/// (`AppContainer.cleanUpSubtitleCache`)。删除 Emby 服务器时按前缀删掉它的记录(`purge(keyPrefix:)`)。
+/// 保留期同 `SubtitleFileStore.retention`,过期记录与文件一起清(`AppContainer.cleanUpSubtitleCache`);
+/// 删服务器时按前缀删(`purge(keyPrefix:)`)。
 ///
-/// ⚠️ 落点与凭据文件同级(`Library/Application Support/LumaPlayer/subtitle-bindings.json`),
-/// 写法与 `DanmakuBindingStore` 相同(0600、原子替换、不进备份;读盘失败过就拒绝覆盖)。
+/// 文件与凭据文件同目录,写法同 `DanmakuBindingStore`(0600、原子替换、不进备份;读盘失败过就拒绝覆盖)。
 actor SubtitleBindingStore {
 
     struct Binding: Codable, Sendable, Equatable {
-        /// 缓存目录里的相对路径(`<组>/<原文件名>`)
+        /// `<组>/<原文件名>`
         let relativePath: String
-        /// 菜单里显示的名字
         let title: String
-        /// 在线字幕的 assrt id;本地导入的为 nil
+        /// 本地导入的为 nil
         let assrtID: Int?
-        /// 最近一次挂上的时间(手动挂、自动恢复都会刷新)
+        /// 手动挂、自动恢复都会刷新
         let lastUsed: Date
     }
 
@@ -36,7 +31,7 @@ actor SubtitleBindingStore {
 
     private let fileURL: URL
     private var loaded: Contents?
-    /// 读盘失败的原因。⛔ 不假装「没有记录」:损坏时留下原因,且**不覆盖**原文件(见 `persist`)。
+    /// 读盘失败的原因;非 nil 时拒绝覆盖原文件(见 `persist`)。
     private(set) var lastLoadFailureDescription: String?
 
     init(fileURL: URL) {
@@ -57,7 +52,7 @@ actor SubtitleBindingStore {
 
     func binding(for itemKey: String) -> Binding? { contents().episodes[itemKey] }
 
-    /// 所有记录引用到的缓存组(清理时保留它们)
+    /// 清理缓存时要保留的组
     func referencedGroups() -> Set<String> {
         Set(contents().episodes.values.compactMap { $0.relativePath.split(separator: "/").first.map(String.init) })
     }
@@ -76,7 +71,7 @@ actor SubtitleBindingStore {
         try persist(current)
     }
 
-    /// 删掉键以 `keyPrefix` 开头的记录(删除服务器时用)。返回删了几条。
+    /// 返回删了几条。
     @discardableResult
     func purge(keyPrefix: String) throws -> Int {
         var current = contents()
@@ -87,7 +82,7 @@ actor SubtitleBindingStore {
         return removed
     }
 
-    /// 删掉超过保留期没用过的记录。返回删了几条。
+    /// 返回删了几条。
     @discardableResult
     func prune(now: Date = Date(), retention: TimeInterval = SubtitleFileStore.retention) throws -> Int {
         var current = contents()
@@ -130,7 +125,7 @@ actor SubtitleBindingStore {
     }
 
     private func persist(_ contents: Contents) throws {
-        // 读盘失败过就不写:写回去等于用空记录覆盖掉一个可能还能修的文件
+        // 读盘失败过就不写,免得用空记录覆盖可能还能修的文件
         if let lastLoadFailureDescription {
             throw SubtitleBindingStoreError.unreadable(lastLoadFailureDescription)
         }
@@ -165,7 +160,7 @@ actor SubtitleBindingStore {
 
 enum SubtitleBindingStoreError: LocalizedError, Sendable, Equatable {
     case writeFailed
-    /// 文件读不出来 / 已损坏,为保护原文件拒绝覆盖
+    /// 为保护原文件拒绝覆盖
     case unreadable(String)
 
     var errorDescription: String? {

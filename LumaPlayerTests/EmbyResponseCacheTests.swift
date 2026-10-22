@@ -2,15 +2,8 @@ import os
 import XCTest
 @testable import LumaPlayer
 
-/// 接口响应缓存的单元测试(规则见 `EmbyResponseCache` 的类型注释)。
-///
-/// 临时目录 + 注入时钟:仓库此前没有「注入临时目录」的先例,
-/// 这里用 `temporaryDirectory + UUID 子目录、tearDown 删除`的模式,
-/// 保证测试不污染真实的 `~/Library/Caches`。
-///
-/// 时钟装在 `OSAllocatedUnfairLock` 里:`now` 闭包是 `@Sendable`,
-/// 直接捕获可变属性会把非 Sendable 的 XCTestCase 一起抓进去
-/// (与 `MockEmbyURLProtocol` 的静态状态同一保护方式)。
+/// 规则见 `EmbyResponseCache` 的类型注释。临时目录 + 注入时钟,不污染真实 `~/Library/Caches`。
+/// 时钟装在 `OSAllocatedUnfairLock` 里:`now` 是 `@Sendable`,直接捕获可变属性会把非 Sendable 的 XCTestCase 抓进去。
 final class EmbyResponseCacheTests: XCTestCase {
     private var directory: URL!
     private var cache: EmbyResponseCache!
@@ -79,7 +72,6 @@ final class EmbyResponseCacheTests: XCTestCase {
         let epoch = await cache.currentEpoch(serverID: serverID)
         await cache.store(Data("x".utf8), serverID: serverID, endpoint: endpoint, epoch: epoch)
 
-        // 时间推进到 TTL 之外
         clock.withLock { $0.addTimeInterval(EmbyResponseCache.freshWindow + 1) }
         let hit = await cache.freshData(serverID: serverID, endpoint: endpoint)
 
@@ -95,7 +87,7 @@ final class EmbyResponseCacheTests: XCTestCase {
 
         // 失效发生在网络请求在途期间:epoch 被顶掉
         await cache.invalidate(serverID: serverID)
-        // 旧请求回来了,带着过期前的 epoch 写缓存 —— 必须被丢弃
+        // 旧请求带着失效前的 epoch 写缓存
         await cache.store(Data("stale".utf8), serverID: serverID, endpoint: endpoint, epoch: staleEpoch)
 
         let hit = await cache.freshData(serverID: serverID, endpoint: endpoint)
@@ -167,8 +159,7 @@ final class EmbyResponseCacheTests: XCTestCase {
     }
 
     func testMemoryLimitEvictsOldestInsertion() async {
-        // 磁盘层必须完全失效才能纯测内存 FIFO:注入「父路径是个文件」的目录,
-        // 所有磁盘读写都失败(store 静默降级为仅内存),磁盘不会接管淘汰
+        // 磁盘层必须完全失效才能纯测内存 FIFO:注入「父路径是个文件」的目录,磁盘读写全失败、降级为仅内存
         let blocker = FileManager.default.temporaryDirectory
             .appendingPathComponent("LumaPlayerCacheTests-\(UUID().uuidString).file")
         _ = FileManager.default.createFile(atPath: blocker.path, contents: Data("x".utf8))
@@ -177,7 +168,6 @@ final class EmbyResponseCacheTests: XCTestCase {
 
         let serverID = UUID()
         let epoch = await memoryOnly.currentEpoch(serverID: serverID)
-        // 超限一条:最先插入的那条被淘汰,其余保留
         for index in 0...EmbyResponseCache.memoryEntryLimit {
             let endpoint = EmbyEndpoint.item(userID: "USER-1", itemID: String(index))
             await memoryOnly.store(Data("\(index)".utf8), serverID: serverID, endpoint: endpoint, epoch: epoch)
@@ -234,8 +224,7 @@ final class EmbyResponseCacheTests: XCTestCase {
         let newestEndpoint = EmbyEndpoint.item(userID: "USER-1", itemID: "newest")
         await cache.store(big, serverID: serverID, endpoint: newestEndpoint, epoch: epoch)
 
-        // 新实例 = 空内存:store 同时写内存层,拿原实例断言会被内存
-        // 无条件命中,测不到磁盘淘汰
+        // 新实例 = 空内存:原实例的内存层会无条件命中,测不到磁盘淘汰
         let reader = EmbyResponseCache(directory: directory) { [clock] in clock.withLock { $0 } }
         let oldest = await reader.freshData(serverID: serverID, endpoint: oldestEndpoint)
         let newest = await reader.freshData(serverID: serverID, endpoint: newestEndpoint)

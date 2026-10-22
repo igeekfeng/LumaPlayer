@@ -1,10 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `PlaybackSessionCoordinator` 的端到端:请求 → 决策 → 认证头
-/// (PlaybackInfo → 决策 → 会话的衔接)。
-///
-/// 走 `MockEmbyURLProtocol`,**零真实网络**。
+/// `PlaybackSessionCoordinator` 端到端:PlaybackInfo 请求 → 决策 → 会话与认证头。走 `MockEmbyURLProtocol`,零真实网络。
 final class PlaybackSessionCoordinatorTests: XCTestCase {
     private static let userID = "USER-1"
     private static let token = "FAKE_TOKEN_0123456789"
@@ -59,7 +56,7 @@ final class PlaybackSessionCoordinatorTests: XCTestCase {
 
     // MARK: - 起播位置(4.5)
 
-    /// 转码 seek:必须带 `StartTimeTicks` 重新起流(4.5:转码流不能客户端 seek)。
+    /// 4.5:转码流不能客户端 seek,要带 `StartTimeTicks` 重新起流。
     func testStartTimeTicksIsSentWhenRequested() async throws {
         stubPlaybackInfo("playback_transcode_only_synthetic.json")
 
@@ -95,8 +92,7 @@ final class PlaybackSessionCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(playback.plan.method, .directStream)
         XCTAssertTrue(playback.plan.url.absoluteString.contains("static=true"))
-        // 认证头必须随 plan 一起交出去:mpv 自己发 HTTP 请求,
-        // 漏了就是 401,而且从 mpv 侧很难定位(API_CONTRACT.md 第 6 节)
+        // mpv 自己发 HTTP 请求:漏了认证头就是 401,且从 mpv 侧很难定位(API_CONTRACT.md 第 6 节)
         XCTAssertEqual(playback.plan.headers["X-Emby-Token"], Self.token)
         XCTAssertTrue(
             playback.plan.headers["Authorization"]?.contains("UserId=\"\(Self.userID)\"") == true)
@@ -141,8 +137,7 @@ final class PlaybackSessionCoordinatorTests: XCTestCase {
         } catch let error as EmbyAPIError {
             XCTAssertEqual(error, .unauthorized)
         }
-        // token 已被清掉。两步分开写:`await` 不能出现在 XCTAssert 的
-        // autoclosure 里(同一原因,档案也要先取出来)。
+        // `await` 不能出现在 XCTAssert 的 autoclosure 里,先取出来再断言
         let profile = await connection.currentProfile()
         let remainingToken = try await credentials.token(forServer: profile.id)
         XCTAssertNil(remainingToken)

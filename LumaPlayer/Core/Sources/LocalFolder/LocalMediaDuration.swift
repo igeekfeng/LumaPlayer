@@ -1,28 +1,21 @@
 import AVFoundation
 import Foundation
 
-/// 本地视频的总时长(秒),只读文件头。卡片上的时长 / 剩余 / 进度条靠它。
+/// 本地视频的总时长(秒),只读文件开头一小段,⛔ 不为一个数字读整部片。
 ///
-/// 百度那边的时长来自 `filemetas`(服务端给);本地没有服务端,只能自己读。
-/// 读法按容器分两路,都只碰文件**开头一小段**,⛔ 不为一个数字把整部片读一遍:
+/// - Matroska:自己解 EBML 头取 `Segment/Info/Duration`(AVFoundation 不认 mkv);
+/// - MP4 家族:交给 AVFoundation(只读 `moov`)。
 ///
-/// - **Matroska(mkv / webm)**:自己解 EBML 头,取 `Segment/Info` 里的 `Duration`
-///   (`matroskaDuration(in:)`,纯函数,单测覆盖)。AVFoundation 不认 mkv,而片库里
-///   mkv 恰恰最多;
-/// - **MP4 家族(mp4 / m4v / mov)**:交给 AVFoundation(它只读 `moov`)。
-///
-/// 其余容器(avi / ts / rmvb …)读不出来就是 nil —— 卡片上不显示时长,
-/// 播过一次之后续播库里有内核报的时长。⛔ 不估算。
+/// 其余容器返回 nil,⛔ 不估算(播过一次后续播库里有内核报的时长)。
 enum LocalMediaDuration {
 
-    /// 解 Matroska 头时最多读多少字节。`Info` 通常在前几 KB(紧跟 `SeekHead`);
-    /// 64 KB 没见到就当这个文件把 `Info` 放在了后面,不再往下读。
+    /// `Info` 通常在前几 KB;64 KB 内没见到就放弃。
     static let matroskaProbeBytes = 64 * 1024
 
     static let matroskaExtensions: Set<String> = ["mkv", "webm", "mk3d"]
     static let avFoundationExtensions: Set<String> = ["mp4", "m4v", "mov"]
 
-    /// 读这个文件的时长。读不出来(容器不支持 / 头里没写 / 读盘失败)返回 nil。
+    /// 读不出来返回 nil。
     static func seconds(of url: URL) async -> Double? {
         let ext = url.pathExtension.lowercased()
         if matroskaExtensions.contains(ext) {
@@ -51,23 +44,19 @@ enum LocalMediaDuration {
         static let duration: UInt32 = 0x4489
     }
 
-    /// 从 Matroska 文件开头的字节里取总时长(秒)。纯函数。
-    ///
-    /// 只走「EBML 头 → Segment → Info」这一条路:
-    /// - `Duration` 是浮点数,单位是 `TimestampScale` 纳秒(缺省 1 000 000,即毫秒);
-    /// - 走到 `Cluster`(媒体数据开始)还没见到 `Info`,或者某个元素的长度未知 / 越界,
-    ///   就停 —— 再往下就是在数据里瞎找。
+    /// 只走「EBML 头 → Segment → Info」:
+    /// - `Duration` 是浮点数,单位 `TimestampScale` 纳秒(缺省 1 000 000,即毫秒);
+    /// - 走到 `Cluster` 还没见到 `Info`,或元素长度未知 / 越界就停。
     static func matroskaDuration(in data: Data) -> Double? {
         let bytes = [UInt8](data)
         var offset = 0
-        // 顶层:跳过 EBML 头,进 Segment
         guard let header = element(in: bytes, at: offset), header.id == EBMLID.header,
               let headerSize = header.size else { return nil }
         offset = header.dataOffset + headerSize
         guard let segment = element(in: bytes, at: offset), segment.id == EBMLID.segment else {
             return nil
         }
-        // Segment 的长度常是「未知」(直播式写法),不影响:只在它里面往下走
+        // Segment 长度常是「未知」,不影响:只在它里面往下走
         offset = segment.dataOffset
         while let child = element(in: bytes, at: offset) {
             if child.id == EBMLID.cluster { return nil }
@@ -123,7 +112,7 @@ enum LocalMediaDuration {
         let dataOffset: Int
     }
 
-    /// 读一个元素头(ID + 长度)。字节不够 / 编码不合法返回 nil。
+    /// 读元素头(ID + 长度),不合法返回 nil。
     private static func element(in bytes: [UInt8], at offset: Int) -> Element? {
         guard let id = vint(bytes, at: offset, maxLength: 4, keepMarker: true),
               let size = vint(bytes, at: offset + id.length, maxLength: 8, keepMarker: false)
@@ -152,16 +141,13 @@ enum LocalMediaDuration {
     }
 }
 
-/// 本地时长的**进程内**记忆。
-///
-/// 本地目录不走会话缓存(每次进都重新读盘,见 `FileSourceViewModel` 的 `cachesDirectories`),
-/// 时长却没必要每次都去读文件头 —— 外接机械盘 / 网络卷上一层几十集,每次进来都开几十个文件
-/// 会明显卡。键带文件的修改时间与大小:文件被替换了,键就变,⛔ 不会端出旧时长。
+/// 本地时长的进程内缓存:本地目录每次进都重新读盘,但每次重读文件头在慢盘上会明显卡。
+/// 键含修改时间与大小,文件被替换就失效。
 actor LocalMediaDurationCache {
-    /// 值为 nil 表示「读过,读不出来」—— 也要记,否则读不出来的那些每次都重试
+    /// nil = 读过但读不出来,也要记,免得每次重试
     private var known: [String: Double?] = [:]
 
-    /// 这批文件的时长(读不出来的不在结果里)。没记过的并发读,最多同时开 4 个文件。
+    /// 读不出来的不在结果里。没记过的并发读,最多同时 4 个。
     func durations(for files: [(file: BaiduPanFile, url: URL)]) async -> [UInt64: Double] {
         var result: [UInt64: Double] = [:]
         var missing: [(key: String, fsID: UInt64, url: URL)] = []

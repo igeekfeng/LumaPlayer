@@ -2,30 +2,22 @@ import Foundation
 import Observation
 import os
 
-/// 弹幕外观偏好(全 App 一份,UserDefaults)。
-///
-/// 与 `SubtitleStyle` 同一套做法:值类型 + `clamped` 兜住越界值,
-/// 由 `DanmakuSettingsStore` 存取。不含任何凭据(AppId / AppSecret 在凭据文件里)。
+/// 弹幕外观偏好(全 App 一份,存 UserDefaults,⛔ 不放凭据)。`clamped` 兜住越界值。
 struct DanmakuDisplaySettings: Codable, Sendable, Equatable {
-    /// 打开播放页时是否自动加载并显示弹幕
+    /// 打开播放页时自动加载并显示
     var isEnabled = true
-    /// 不透明度 0.2 - 1
     var opacity = 0.85
-    /// 字号(pt,按 1080 高的画面计,渲染时按窗口高度等比缩放)
+    /// pt,按 1080 高的画面计,渲染时按窗口高度等比缩放
     var fontSize = 25.0
-    /// 一条滚动弹幕横穿画面的时长(秒),越小越快
+    /// 滚动弹幕横穿画面的秒数
     var scrollDuration = 8.0
-    /// 弹幕可占的画面高度比例(0.25 / 0.5 / 0.75 / 1)
+    /// 可占画面高度比例
     var displayArea = 0.75
     var showsScroll = true
     var showsTop = true
     var showsBottom = true
-    /// 用文件指纹(前 16 MiB 的 MD5)提高 `/match` 的准确度。
-    ///
-    /// 代价是起播时对**直连流**补一次 `Range` 请求拉 16 MiB(`DanmakuFingerprint`)。
-    /// 默认开:对 Emby 直连流来说这 16 MiB 正是播放器接下来要读的字节,而指纹是
-    /// 「同一份文件」唯一的硬证据(`DANMAKU.md` §3)。限速 / 按流量计费的服务器
-    /// 可以在这里关掉,关掉后退回文件名匹配。
+    /// 用文件指纹提高 `/match` 准确度,代价是起播时对直连流多拉 16 MiB(`DanmakuFingerprint`)。
+    /// 默认开:指纹是「同一份文件」唯一的硬证据(`DANMAKU.md` §3);限速 / 按流量计费的服务器可关。
     var usesFileFingerprint = true
 
     static let `default` = DanmakuDisplaySettings()
@@ -50,8 +42,7 @@ struct DanmakuDisplaySettings: Codable, Sendable, Equatable {
     }
 }
 
-/// 弹幕外观偏好的存取。挂在 `AppContainer` 上:设置窗口与播放窗口共用同一实例,
-/// 播放中改设置即时生效(理由同 `SubtitleStyleStore`)。
+/// 挂在 `AppContainer` 上,设置窗口与播放窗口共用同一实例,播放中改设置即时生效。
 @MainActor
 @Observable
 final class DanmakuSettingsStore {
@@ -83,7 +74,7 @@ final class DanmakuSettingsStore {
         do {
             return try JSONDecoder().decode(DanmakuDisplaySettings.self, from: data).clamped
         } catch {
-            // 偏好损坏只影响外观,不挡播放;记下原因,下次改设置会覆盖坏数据
+            // 只影响外观,不挡播放;下次改设置会覆盖坏数据
             logger.error("弹幕偏好解码失败,使用默认值: \(String(describing: error), privacy: .public)")
             return .default
         }

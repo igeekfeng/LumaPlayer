@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// 控制栏的「弹幕」菜单:开关、状态、偏移、手动选择与设置入口。
-///
-/// 手动选择要输入关键词,菜单里放不了可交互控件(见 `PlayerSpeedControl`),
-/// 所以只放一个入口,表单由播放窗口以 sheet 呈现(`DanmakuPickerSheet`,与手动片头片尾同一做法)。
+/// 控制栏的「弹幕」菜单。菜单里放不了输入控件,手动选择只放入口,表单由播放窗口以 sheet 呈现
+/// (`DanmakuPickerSheet`)。
 struct PlayerDanmakuMenu: View {
     let viewModel: PlayerViewModel
     @Binding var isPickerPresented: Bool

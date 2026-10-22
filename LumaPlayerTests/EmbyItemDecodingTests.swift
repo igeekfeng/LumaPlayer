@@ -2,10 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// `EmbyItem` 的 fixture 解码(API_CONTRACT.md 8.1 的可选性原则)。
-///
-/// 字段名来源:官方 OpenAPI(swagger.emby.media)的 BaseItemDto / UserItemDataDto,
-/// 2026-09-22 核实。所有 fixture 都是 `_synthetic` 构造数据
-/// (尚未拿到真实列表响应,见 docs/KNOWN_ISSUES.md Q12)。
+/// 字段名取自官方 OpenAPI 的 BaseItemDto / UserItemDataDto;fixture 都是 `_synthetic` 构造数据(Q12)。
 final class EmbyItemDecodingTests: XCTestCase {
     private let decoder = ResponseDecoder()
 
@@ -85,7 +82,7 @@ final class EmbyItemDecodingTests: XCTestCase {
     }
 
     func testUnknownFieldsAreIgnored() throws {
-        // 真实响应里会有一堆我们不需要的字段:未知字段不得导致解码失败(8.1)
+        // 未知字段不得导致解码失败(8.1)
         let json = Data(#"{"Id":"X","Name":"带未知字段","SomethingNew":{"a":1}}"#.utf8)
         let item = try decoder.decode(EmbyItem.self, from: json, endpointName: "Users/{UserId}/Items")
         XCTAssertEqual(item.name, "带未知字段")
@@ -94,8 +91,7 @@ final class EmbyItemDecodingTests: XCTestCase {
     // MARK: - 图片 tag(API_CONTRACT.md 3.3)
 
     func testPrimaryTagFallsBackToImageTags() throws {
-        // 官方 4.1.1.0 OpenAPI 的 BaseItemDto 只有 ImageTags,没有 PrimaryImageTag;
-        // 两个都解,取到哪个都算有图(docs/KNOWN_ISSUES.md Q13)
+        // 4.1.1.0 OpenAPI 只有 ImageTags 没有 PrimaryImageTag;两个都解,取到哪个都算有图(Q13)
         let json = Data(#"{"Id":"X","Name":"图","PrimaryImageTag":"DIRECT-TAG"}"#.utf8)
         let item = try decoder.decode(EmbyItem.self, from: json, endpointName: "Users/{UserId}/Items")
         XCTAssertEqual(item.primaryImageTagValue, "DIRECT-TAG")

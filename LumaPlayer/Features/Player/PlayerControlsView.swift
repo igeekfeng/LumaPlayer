@@ -2,41 +2,23 @@ import SwiftUI
 
 /// 播放器底部控制栏(DesignTokens.swift「界面规则」)。
 ///
-/// 从左到右:播放 / 暂停(**上下集紧贴它左右**,外侧是 ±`seekStep` 跳转)→ 音量
-/// → 倍速 / 字幕 / 音轨 / 选项 → **选集(最右)**。⛔ 控制栏里不再有全屏图标 —— F 与双击画面
-/// 两条通路已经够用,把最右这个「离手最近」的位置让给播剧时要反复点的选集(2026-10-14 改)。
+/// 从左到右:播放簇 → 音量 → 倍速 / 字幕 / 弹幕 / 音轨 / 选项 → 选集(最右)。
+/// ⛔ 不放全屏图标(F 与双击画面已够),最右位置留给选集。
 ///
-/// **形态:全宽底部横条 + 渐变压暗,不是悬浮玻璃药丸。**
+/// 形态:全宽底部横条 + 渐变压暗,⛔ 不用悬浮玻璃药丸(HIG 要求玻璃压视频须配 dimming layer;
+/// 渐变在明暗剧变的画面上更可预测)。
 ///
-/// 玻璃药丸是 2026-09 之前的做法,现在弃用,理由三条:
-/// - Apple TV / QuickTime / mpv OSC 默认布局(`bottombar`)/ Jellyfin 全是全宽,
-///   药丸在 mpv 里是 `floating` / `box` 这种备选;
-/// - HIG Materials:玻璃浮在 media background 上要配 dimming layer(Apple 给 35%),
-///   裸玻璃压在视频上不合规,社区也批评悬浮玻璃条遮挡画面底部、易误触;
-/// - 渐变压暗在明暗剧烈变化的视频上比玻璃的自适应行为可预测,
-///   也不依赖 Reduce Transparency 是否被正确响应。
+/// 进度条只交出目标秒数,DirectStream / 转码的 seek 差异在 `PlayerViewModel.seek` 分派(API_CONTRACT.md 4.5)。
 ///
-/// 进度条对两种播放方式**行为不同**:
-/// DirectStream 拖动 = mpv seek;转码拖动 = 停流 + `StartTimeTicks` 重新起流
-/// (API_CONTRACT.md 4.5)。差异在 `PlayerViewModel.seek` 里分派,
-/// 本视图只负责把目标秒数交出去。
-///
-/// 直接持有 ViewModel 而不是逐个传值:`@Observable` 按属性追踪读取,
-/// 每 0.2s 一次的 `time-pos` 只让读了位置的 `PlayerScrubber` 重算,
-/// 按钮行不跟着重绘(DesignTokens.swift「界面规则」)。
+/// 直接持有 ViewModel:`@Observable` 按属性追踪,每 0.2s 的 `time-pos` 只让 `PlayerScrubber` 重算。
 struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
-    /// 倍速浮层是否打开:打开期间控制栏不能自动隐藏,否则浮层连着控制栏一起消失
+    // 以下浮层 / 面板打开期间都要钉住控制栏,否则会随控制栏自动隐藏一起消失
     @Binding var isSpeedPopoverPresented: Bool
-    /// 选集抽屉是否打开:同上,打开期间要钉住控制栏(收起靠抽屉左缘的把手)
     @Binding var isEpisodePanelPresented: Bool
-    /// 手动片头片尾输入面板是否打开:同上,面板开着期间也要钉住控制栏
     @Binding var isMarkersEditorPresented: Bool
-    /// 手动选择弹幕的面板是否打开:同上
     @Binding var isDanmakuPickerPresented: Bool
-    /// 选择本地字幕文件的系统面板是否打开:同上(面板开着期间也要钉住控制栏)
     @Binding var isSubtitleImporterPresented: Bool
-    /// 在线搜索字幕的面板是否打开:同上
     @Binding var isSubtitleSearchPresented: Bool
 
     var body: some View {
@@ -63,13 +45,11 @@ struct PlayerControlsView: View {
         }
         .padding(.top, Metrics.controlBarTopInset)
         .padding(.bottom, Metrics.controlBarBottomInset)
-        // 全宽触底:压暗衬底一直铺到窗口底边,不能留出窗口背景色的窄条
+        // 压暗衬底铺到窗口底边,不留窗口背景色窄条
         .frame(maxWidth: .infinity)
         .background(alignment: .bottom) { scrim }
     }
 
-    /// 自下而上的黑色渐变,底端到 `controlBarScrimOpacity` 后完全透明。
-    /// 不用玻璃 —— 理由见类型注释。
     private var scrim: some View {
         LinearGradient(
             colors: [
@@ -83,15 +63,9 @@ struct PlayerControlsView: View {
         .accessibilityHidden(true)
     }
 
-    /// 播放 / 暂停,左右**紧贴**上一集 / 下一集(2026-10-14 指定):播剧时换集比
-    /// ±`seekStep` 的跳转频繁得多,贴着播放键那一簇才找得到。±跳转留在这一簇的最外侧,
-    /// 播放键仍在视觉中心。
+    /// 播放键左右紧贴上一集 / 下一集,±跳转在最外侧。上下集没有就不占位。
     ///
-    /// ⚠️ 已知取舍:播放键不再固定最左 —— 电影 / 单条视频没有上下集时整簇收窄,
-    /// 播放键会向左移一个按钮位。这是「换集贴着播放键」的必然代价,⛔ 不要再「修」回去。
-    ///
-    /// 上下集各自按可用性出现(没有就不占位);队列由 `PlayerViewModel` 按来源装好
-    /// (百度复用目录已列条目,Emby 查当前季)。
+    /// 已知取舍:没有上下集时播放键会左移一个按钮位,⛔ 不要「修」成固定最左。
     private var transport: some View {
         HStack(spacing: Metrics.spacingXS) {
             PlayerRepeatSkipButton(direction: .backward, viewModel: viewModel)
@@ -114,14 +88,8 @@ struct PlayerControlsView: View {
         }
     }
 
-    /// 选集:切换右侧滑出的分集抽屉(`PlayerEpisodePanel`),点任意一集直接切。
-    ///
-    /// 放在控制栏**最右端**,也就是原先全屏图标的位置:全屏已有 F 与双击画面两条通路。
-    /// ⚠️ 抽屉一打开就盖住控制栏右半段(含这个按钮),那条开关通路就断了 ——
-    /// 收起由抽屉左缘的把手承担(见 `PlayerEpisodePanel.collapseHandle`)。
-    ///
-    /// 用抽屉而不是 `Menu` / `popover`(第一版是 popover):几百集时菜单铺不开,
-    /// 而抽屉里能放带剧照的可滚动列表,并把当前集滚到可见(理由见 `PlayerEpisodePanel`)。
+    /// 切换 `PlayerEpisodePanel`。抽屉打开后会盖住这个按钮,收起靠抽屉左缘把手。
+    /// ⛔ 不用 `Menu` / `popover`:几百集时铺不开。
     @ViewBuilder
     private var episodePanelButton: some View {
         if viewModel.episodes.count > 1 {
@@ -134,26 +102,19 @@ struct PlayerControlsView: View {
 
 // MARK: - 进度条
 
-/// 进度条:悬停显示该点的时间,拖动中显示目标时间,松手才 seek。
+/// 进度条:悬停显示该点时间,拖动中显示目标时间,松手才 seek。
+/// 左边已播放,右边剩余时长 / 预计结束时刻(点击切换)。
 ///
-/// 时间**两端都显示**:左边已播放、右边剩余(Apple TV 的做法是
-/// "the timeline shows elapsed and remaining time",Plex 同)。
-/// 取消的是「总时长 / 剩余」那一档 —— 剩余时长已是默认显示态,再给一个
-/// 切回总时长的按钮等于让用户逐次点回去。右侧保留的那个切换是
-/// 「剩余时长 ↔ 预计结束时刻」,答的是「看完得到几点」。
-///
-/// 自绘而不是用 `Slider`:系统滑块没有悬停预览,且拖动中会被
-/// 每 0.2s 的 time-pos 拉回(所以才有 `dragging` 这个临时值)。
-/// 键盘与 VoiceOver 走 `accessibilityAdjustableAction`,与方向键同步长。
+/// 自绘而不用 `Slider`:系统滑块没有悬停预览,且拖动中会被 time-pos 拉回。
+/// 键盘与 VoiceOver 走 `accessibilityAdjustableAction`。
 struct PlayerScrubber: View {
     let viewModel: PlayerViewModel
 
     /// 拖动中的目标秒数;nil 表示跟随播放位置
     @State private var dragging: Double?
-    /// 悬停位置(进度条坐标系);nil = 没悬停
+    /// 进度条坐标系;nil = 没悬停
     @State private var hoverX: CGFloat?
-    /// 右侧显示剩余时长还是预计结束时刻。跨次启动记住 —— Apple TV 的进度条
-    /// 就是这个「再点一次切换」的交互,不是单向的。
+    /// 跨次启动记住
     @AppStorage("player.scrubberShowsEndTime") private var showsEndTime = false
 
     private var duration: Double { viewModel.durationSeconds }
@@ -178,11 +139,6 @@ struct PlayerScrubber: View {
         .padding(.horizontal, Metrics.controlBarSideInset)
     }
 
-    /// 右侧时间:默认「剩余时长」,点一下换成「预计结束时刻」。
-    ///
-    /// 为什么单独给它一个交互:1.25× 倍速下「还剩 22 分钟」远不如「21:35 结束」
-    /// 好用 —— 后者直接回答「看完得到几点」。Apple TV 的进度条就是这个第二态。
-    /// ⛔ 不做成常驻顶栏的一行:那是所有人在所有时间都要看的信息。
     private var trailingTime: some View {
         Button {
             showsEndTime.toggle()
@@ -198,11 +154,8 @@ struct PlayerScrubber: View {
         .accessibilityLabel(showsEndTime ? "预计结束时刻,点击显示剩余时间" : "剩余时间,点击显示预计结束时刻")
     }
 
-    /// 时长未知时给 `--:--` 不加负号(⛔ 不填 `0:00` 假装已知,同 `PlayerTime.text`)。
-    /// `endsAt` 为 nil(已播完 / 倍速非法)时自动退回剩余时长,不能给个空白。
-    ///
-    /// ⛔ 别写成 `"-" + PlayerTime.text(...)`:`text(0)` 返回 `--:--`,
-    /// 拼上负号就是 `---:--`。用 `PlayerTime.remainingText` 分开这两种情况。
+    /// `endsAt` 为 nil 时退回剩余时长。⛔ 别写成 `"-" + PlayerTime.text(...)`:
+    /// 时长未知时会拼出 `---:--`,用 `PlayerTime.remainingText`。
     private var trailingText: String {
         if showsEndTime, let endsAt {
             return "\(endsAt.formatted(date: .omitted, time: .shortened)) 结束"
@@ -213,8 +166,7 @@ struct PlayerScrubber: View {
         )
     }
 
-    /// 按剩余时长与倍速推算的结束时刻。时长未知、已播完、倍速非正时为 nil
-    /// —— 宁可不显示,也不显示一个编出来的时刻。
+    /// 时长未知、已播完、倍速非正时为 nil。
     private var endsAt: Date? {
         PlayerTime.endsAt(
             position: displayed,
@@ -230,9 +182,7 @@ struct PlayerScrubber: View {
             let fraction = duration > 0 ? min(1, max(0, displayed / duration)) : 0
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(Metrics.scrubberTrackOpacity))
-                // 已缓存到的位置(mpv demuxer-cache-time):比底色亮一档,比已播放暗。
-                // 画在已播放段**下面**,已播放段盖在上面 —— 两段重叠时只有已播放的亮,
-                // 不需要额外算交集。
+                // 已缓存段画在已播放段下面,重叠时不用算交集
                 if let buffered = bufferedFraction {
                     Capsule()
                         .fill(.white.opacity(Metrics.scrubberBufferedOpacity))
@@ -241,26 +191,19 @@ struct PlayerScrubber: View {
                 Capsule()
                     .fill(.white.opacity(Metrics.scrubberPlayedOpacity))
                     .frame(width: width * fraction)
-                // 片头 / 片尾标记:画在已播放段**之上** —— 播过片头之后还要看得见,
-                // 不然「设在哪了」只有回到片头才发现。用强调色,与白色的已播放 / 已缓存段区分。
-                // 颜色不是唯一表达:菜单里有文字摘要(无障碍规则)。
+                // 标记画在已播放段之上,播过后仍可见。颜色不是唯一表达:菜单里有文字摘要
                 markerOverlay(width: width)
             }
             .frame(height: trackHeight)
             .frame(maxHeight: .infinity)
             .animation(.easeOut(duration: Metrics.animationFast), value: isActive)
             .overlay(alignment: .leading) {
-                // 播放头圆点:mpv OSC `seekbarstyle=knob` 的做法(官方推荐
-                // `seekbarhandlesize=0.6`)。Apple 在 Liquid Glass 里也把播放头
-                // 「从小变得更大更显眼」,亮画面上小圆点根本看不见。
-                // 中心对齐轨道,拖动时跟着手指走。
                 Circle()
                     .fill(.white)
                     .frame(width: knobSize, height: knobSize)
                     .offset(x: min(max(width * fraction - knobSize / 2, 0), max(0, width - knobSize)))
                     .animation(.easeOut(duration: Metrics.animationFast), value: fraction)
-                    // value 要同时带 isActive:圆点大小由 knobSize 决定,
-                    // 只跟 fraction 的话悬停切换尺寸会硬跳(轨道高度是有动画的)。
+                    // 也跟 isActive 做动画,否则悬停切换尺寸会硬跳
                     .animation(.easeOut(duration: Metrics.animationFast), value: isActive)
                     .allowsHitTesting(false)
             }
@@ -300,8 +243,7 @@ struct PlayerScrubber: View {
             )
         }
         .frame(height: Metrics.spacingL)
-        // 拖不动的源不给拖动交互(判据见 `PlaybackSeekStrategy`):让进度条
-        // 看起来能拖、拖了才弹一句「不支持」,不如一开始就别给这个手势。
+        // 拖不动的源直接禁用(判据见 `PlaybackSeekStrategy`)
         .disabled(duration <= 0 || !viewModel.allowsSeeking)
         .help(viewModel.seekUnavailableReason ?? "拖动调整进度")
         .accessibilityElement()
@@ -321,9 +263,7 @@ struct PlayerScrubber: View {
         return min(1, buffered / duration)
     }
 
-    /// 片头区间带 + 片尾起点竖条(位置来自 `viewModel.markers`,手动标注与服务端标记合并后的结果)。
-    ///
-    /// 时长未知时**不画**:没有分母就算不出位置,画在哪儿都是猜的。
+    /// 片头区间带 + 片尾起点竖条(`viewModel.markers`)。时长未知时不画。
     @ViewBuilder
     private func markerOverlay(width: CGFloat) -> some View {
         if duration > 0 {
@@ -375,11 +315,7 @@ struct PlayerVolumeControl: View {
     }
 }
 
-/// 倍速:连续调节(滑块 + 步进),**不是固定档位**。
-///
-/// 用 `popover` 而不是 `Menu`:macOS 的 SwiftUI 菜单不承载可交互控件
-/// (滑块放进去拖不动),浮层才行。滑块每动一步就直接写 mpv 的 `speed`,
-/// 画面上的屏显同步跟着变,松手即停在那儿。
+/// 倍速:连续调节(滑块 + 步进)。用 `popover` 不用 `Menu`:macOS 菜单里的滑块拖不动。
 struct PlayerSpeedControl: View {
     let viewModel: PlayerViewModel
     @Binding var isPresented: Bool
@@ -439,7 +375,7 @@ struct PlayerSpeedControl: View {
         .frame(width: 240)
     }
 
-    /// ± 一步(步长 `Metrics.speedStep`);贴着区间端点时置灰,而不是按了没反应
+    /// 贴着区间端点时置灰
     private func stepButton(up: Bool, action: @escaping () -> Void) -> some View {
         let label = up ? "加快" : "减慢"
         return Button(action: action) {
@@ -458,26 +394,15 @@ struct PlayerSpeedControl: View {
     }
 }
 
-/// 字幕菜单(DesignTokens.swift「界面规则」:临时层,低频操作放浮层不占底栏)。
-/// 与音轨**分成两个入口** —— Apple TV 右下角就是独立的 CC 与 Audio 两个按钮,
-/// Plex 也是 `S` 字幕 / `A` 音轨分开;合并成一个菜单会让人多找一次。
+/// 字幕菜单,与音轨分成两个入口。用 `Picker` 而非手画勾:VoiceOver 能读出选中态(8.3)。
 ///
-/// 用 `Picker` 而不是手画勾:系统菜单的勾选态 VoiceOver 能读出「已选择」(8.3)。
+/// 字幕延迟只给步进按钮(菜单里放不了滑块);连续调靠 Z / X。外观在设置窗口「字幕」页。
 ///
-/// 轨道下面是**字幕延迟**与「字幕外观…」入口。延迟只给步进按钮、不给滑块:
-/// 菜单里放不了可交互控件(见 `PlayerSpeedControl`),而且延迟要的是 0.1 秒级的微调,
-/// 连续调主要靠 Z / X(菜单栏「Playback › Subtitle Delay」,按住可连发),这里是给鼠标用户的入口。
-/// 外观是长期偏好,放设置窗口的「字幕」页,播放中改了即时生效。
-///
-/// ⚠️ **菜单整体不再按「有没有字幕轨」禁用**:`打开本地字幕…` 恰恰是给
-/// 「容器里一条字幕都没有」的片源准备的 —— 禁用等于把唯一入口锁死。
-/// 没有轨时菜单里显示一句「没有字幕轨」,其它入口照常可用。
+/// ⛔ 菜单整体不按「有没有字幕轨」禁用:「打开本地字幕…」正是给没有字幕轨的片源用的。
 struct PlayerSubtitleMenu: View {
     let viewModel: PlayerViewModel
-    /// 打开系统的文件选择面板(面板由 `PlayerWindowView` 呈现,菜单点开就收起来了,
-    /// 不能在这里挂 `fileImporter`)
+    // 面板与 sheet 挂在 `PlayerWindowView` 上:菜单点开就收起,不能在这里挂 `fileImporter`
     @Binding var isImporterPresented: Bool
-    /// 打开在线搜索面板(同上,sheet 也挂在窗口上)
     @Binding var isSearchPresented: Bool
 
     @Environment(\.openSettings) private var openSettings
@@ -531,18 +456,16 @@ struct PlayerSubtitleMenu: View {
         .accessibilityLabel("字幕")
     }
 
-    /// 有选中轨道时用实心图标,和「关着」区分得开 —— 与音量按钮同一套做法。
     private var symbol: String {
         viewModel.selectedSubtitleTrackID == nil ? "captions.bubble" : "captions.bubble.fill"
     }
 }
 
-/// 字幕延迟的提前 / 延后 / 重置。控制栏的字幕菜单与菜单栏「Playback › Subtitle Delay」共用,
-/// 快捷键只挂在菜单栏那份上(`PlayerCommands`),这里挂会注册第二遍。
-/// 菜单栏那份用英文,与系统菜单一致(见 `PlayerCommands`)。
+/// 字幕延迟按钮,控制栏字幕菜单与菜单栏「Playback › Subtitle Delay」共用。
+/// 快捷键只挂在菜单栏那份上,两份都挂会注册两遍。
 struct PlayerSubtitleDelayButtons: View {
     let viewModel: PlayerViewModel
-    /// 菜单栏那份:带快捷键、英文文案;控制栏里的不带快捷键、中文文案
+    /// 菜单栏那份:带快捷键、英文文案
     var inMenuBar = false
 
     var body: some View {
@@ -586,7 +509,6 @@ struct PlayerSubtitleDelayButtons: View {
     }
 }
 
-/// 音轨菜单。与字幕分开一个入口,理由同 `PlayerSubtitleMenu`。
 struct PlayerAudioMenu: View {
     let viewModel: PlayerViewModel
 
@@ -617,11 +539,10 @@ struct PlayerAudioMenu: View {
     }
 }
 
-/// 低频的播放偏好:自动跳过片头、自动播下一集、手动片头片尾、置顶、统计信息。
-/// 与菜单栏「Playback」菜单里的对应项是同一份状态。
+/// 低频播放偏好,与菜单栏「Playback」里的对应项同一份状态。
 struct PlayerOptionsMenu: View {
     @Bindable var viewModel: PlayerViewModel
-    /// 手动片头片尾输入面板(由播放窗口持有并呈现 sheet;这里只负责打开)
+    /// sheet 由播放窗口呈现,这里只负责打开
     @Binding var isMarkersEditorPresented: Bool
 
     var body: some View {
@@ -650,19 +571,12 @@ struct PlayerOptionsMenu: View {
         .accessibilityLabel("播放选项")
     }
 
-    /// 手动片头 / 片尾:服务端检测不出来时自己标。**同一部剧的每一集共用一份**,
-    /// 所以在一集里标好后,这部剧后面的集数都套用(见 `ManualMarkersScope`)。
+    /// 手动片头 / 片尾,同一部剧共用(`ManualMarkersScope`)。
     ///
-    /// 「按当前位置打点」放在最前:拖到片头 / 片尾再点最省事;要精确到秒才用「手动输入…」。
-    ///
-    /// ⚠️ 标签里⛔ **不要**写 `viewModel.positionSeconds`:它是每 0.2s 变一次的值,
-    /// 一读就会让整个 `PlayerOptionsMenu` 跟着重绘,`ellipsis.circle` 这个 Menu 按钮
-    /// 被反复重建 —— 悬停高亮一直在闪(2026-10-12 实测)。打点的具体秒数由点击后的
-    /// 屏显提示(`flash`)给出,这里只报「会打在当前位置」。
+    /// ⛔ 标签里不要读 `viewModel.positionSeconds`:每 0.2s 变一次,会让 Menu 按钮反复重建、
+    /// 悬停高亮一直闪。打点的秒数由点击后的屏显给出。
     private var markersMenu: some View {
         Menu("片头片尾") {
-            // 已经设了什么:先摆出来,否则设完只在屏显里闪一下,回头完全看不出来。
-            // `manualMarkerValues` 只在用户改动时变,不会像 `positionSeconds` 那样每 0.2s 抖。
             if let summary = viewModel.manualMarkerValues?.summary {
                 Text(summary)
                 Divider()
@@ -689,13 +603,9 @@ struct PlayerOptionsMenu: View {
 // MARK: - 手动片头 / 片尾的文案
 
 extension ManualMarkers {
-    /// 菜单里显示「已经设了什么」的一行摘要;三个位置都没填时 nil。
+    /// 例:`片头 00:30–02:00 · 片尾 22:00`;都没填时 nil。不会生效的组合明确写「未生效」。
     ///
-    /// 例:`片头 00:30–02:00 · 片尾 22:00`。只填了一端、终点不晚于起点、片尾为 0
-    /// 这几种都**不会生效**,摘要里明确写「未生效」—— 光看数字看不出这个区别。
-    ///
-    /// ⚠️ 放在 Features 层而不是 `ManualMarkers` 定义处:它要用 `PlayerTime.markerText`,
-    /// 而 `ManualMarkers` 在 Core(⛔ Core 不依赖 Features)。
+    /// 放在 Features 层:要用 `PlayerTime.markerText`,⛔ Core 不依赖 Features。
     var summary: String? {
         var parts: [String] = []
         switch (introStart, introEnd) {
@@ -715,7 +625,6 @@ extension ManualMarkers {
 
 // MARK: - 图标按钮
 
-/// 轨道菜单里的一项:名称 + 语言 / 编码等补充信息(补充信息用次级色)。
 struct PlayerTrackLabel: View {
     let track: MPVTrack
 
@@ -728,23 +637,16 @@ struct PlayerTrackLabel: View {
     }
 }
 
-/// 连点累加的跳转倍数(纯值 + 显式时间参数,无 IO 无 SwiftUI,靠单元测试覆盖)。
-///
-/// 单独成类型而不是塞在按钮视图里:视图里的 `@State` + `Date()` 没法测,
-/// 而「第几次点击跳几倍」「什么时候归零」正是最容易写错的地方。
+/// 连点累加的跳转倍数(纯值 + 显式时间参数,便于单测)。
 struct PlayerSkipRepeat {
-    /// 上一次点击的时刻;nil = 还没点过
+    /// nil = 还没点过
     private(set) var lastClick: Date?
-    /// 上一次点击用的倍数
     private(set) var multiple = 0
 
     init() {}
 
-    /// 记一次点击,返回这次该跳的倍数。
-    ///
-    /// 距上次点击超过 `Metrics.seekRepeatResetDelay` 就重新从 1 开始;
-    /// 否则在上一档上加 1,到 `Metrics.seekRepeatMaxMultiple` 封顶
-    /// (不封顶的话连点几十次会一次跳走几小时)。
+    /// 返回这次该跳的倍数:距上次超过 `seekRepeatResetDelay` 从 1 重来,否则 +1,
+    /// 到 `seekRepeatMaxMultiple` 封顶。
     mutating func advance(now: Date) -> Int {
         let expired = isExpired(now)
         multiple = expired ? 1 : min(multiple + 1, Metrics.seekRepeatMaxMultiple)
@@ -752,7 +654,7 @@ struct PlayerSkipRepeat {
         return multiple
     }
 
-    /// 下一次点击会用几倍 —— tooltip 要预告这个数,不是上一次已经用过的。
+    /// 下一次点击会用几倍(tooltip 预告用)。
     func upcoming(now: Date) -> Int {
         let current = isExpired(now) ? 0 : min(multiple, Metrics.seekRepeatMaxMultiple)
         return min(current + 1, Metrics.seekRepeatMaxMultiple)
@@ -763,15 +665,8 @@ struct PlayerSkipRepeat {
     }
 }
 
-/// 后退 / 前进按钮:**连点累加**。
-///
-/// 第 n 次点击跳 `seekStep × n`(上限 `seekRepeatMaxMultiple` 倍),
-/// 超过 `seekRepeatResetDelay` 没再点就归零重来。Apple TV 的说明写的是
-/// "Click again to skip another 10 seconds",Plex 的 10 秒 / 10 分钟两级也是
-/// 同一个思路:想跳远一点就多连点几次,不用先去找一个「跳 5 分钟」的入口。
-///
-/// 归零判断用 `Date` 直接比对,不另起 `Task` 计时 —— 每次点击都要能立刻
-/// 读到当前累计值,定时器会引入状态竞争。
+/// 后退 / 前进按钮,连点累加:第 n 次跳 `seekStep × n`(见 `PlayerSkipRepeat`)。
+/// 归零用 `Date` 比对,⛔ 不另起 `Task` 计时(会引入状态竞争)。
 struct PlayerRepeatSkipButton: View {
     enum Direction {
         case backward
@@ -780,8 +675,7 @@ struct PlayerRepeatSkipButton: View {
         var delta: TimeInterval { self == .forward ? 1 : -1 }
         var verb: String { self == .forward ? "前进" : "后退" }
 
-        /// 图标:系统只画得出 `Metrics.seekStepOptions` 这几档带数字的样式,
-        /// 其余步长(以及设置页改了但这里还没刷新的一瞬)用不带数字的箭头。
+        /// SF Symbols 只有 `Metrics.seekStepOptions` 这几档带数字,其余用不带数字的箭头。
         func symbol(seconds: Double) -> String {
             let base = self == .forward ? "goforward" : "gobackward"
             let value = Int(seconds)
@@ -800,10 +694,8 @@ struct PlayerRepeatSkipButton: View {
             let multiple = skipRepeat.advance(now: Date())
             viewModel.skip(by: direction.delta * viewModel.seekStep * Double(multiple))
         }
-        // 内核还没 file-loaded、或已经播完时不给按:那两种状态下 mpv 对 seek
-        // 必拒(PITFALLS),按了只会闪一句失败。
-        // ⛔ 门禁只取 `isReadyToSeek`,刻意不含 `seekStrategy` —— 拖不动的源
-        // 按下去要能听到一句「为什么不行」(`seek` 的 `.unsupported` 分支)。
+        // file-loaded 前 / 播完后 mpv 必拒 seek(PITFALLS)。
+        // ⛔ 刻意不含 `seekStrategy`:拖不动的源按下去要给出原因(`seek` 的 `.unsupported` 分支)
         .disabled(!viewModel.isReadyToSeek)
     }
 
@@ -812,8 +704,7 @@ struct PlayerRepeatSkipButton: View {
     }
 }
 
-/// 播放器里统一的图标按钮:固定点击区域、悬停时画一个淡圆底,
-/// 带 tooltip 与 `accessibilityLabel`(DesignTokens.swift「界面规则」)。
+/// 播放器统一图标按钮(DesignTokens.swift「界面规则」)。
 struct PlayerIconButton: View {
     let systemImage: String
     let label: String
@@ -844,8 +735,7 @@ struct PlayerIconButton: View {
 // MARK: - 时间文案
 
 enum PlayerTime {
-    /// 时间标签。总时长未知(0 / 非有限值)时显示 `--:--`,
-    /// ⛔ 不填 `0:00` 假装已知(API_CONTRACT.md 8.1)。
+    /// 0 / 非有限值显示 `--:--`,⛔ 不填 `0:00` 假装已知(API_CONTRACT.md 8.1)。
     static func text(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds > 0 else { return "--:--" }
         let total = Int(seconds.rounded())
@@ -858,11 +748,7 @@ enum PlayerTime {
         return String(format: "%02d:%02d", minutes, secs)
     }
 
-    /// 标记位置的回显:`0` 也要显示成 `00:00`。
-    ///
-    /// ⛔ 与 `text(_:)` 分开:`text(0)` 返回 `--:--`(那是「时长未知」的语义),
-    /// 而标记位置的 0 是「片头从片首开始」这个**真实值** —— 按 `text` 回显成 `--:--`,
-    /// 再保存一次就把它弄丢了。`nil` 返回空串(那一格没标)。
+    /// 标记位置回显,0 显示 `00:00`(真实值,⛔ 不能用 `text` 回显成 `--:--` 再存丢);nil 返回空串。
     static func markerText(_ seconds: Double?) -> String {
         guard let seconds, seconds.isFinite, seconds >= 0 else { return "" }
         let total = Int(seconds.rounded())
@@ -875,11 +761,8 @@ enum PlayerTime {
         return String(format: "%02d:%02d", minutes, secs)
     }
 
-    /// 解析用户输入的时间(手动片头片尾的文本框):接受 `hh:mm:ss` / `mm:ss` / 秒数
-    /// (`90` / `90.5`)。`hh` 与纯秒数那一档可以任意大,`mm` / `ss` 必须落在 0–59。
-    ///
-    /// 解析不出、为空、或为负时返回 nil —— ⛔ 不当作 0:`text(0)` 是「未知」的语义,
-    /// 拿 0 冒充用户填的值会把片头标到片首(与「时长未知不给 0」同一立场)。
+    /// 接受 `hh:mm:ss` / `mm:ss` / 秒数(`90.5`);首段可任意大,其余须在 0–59。
+    /// 解析不出、为空、为负返回 nil,⛔ 不当作 0(会把片头标到片首)。
     static func parse(_ text: String) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
@@ -888,29 +771,21 @@ enum PlayerTime {
         var total: Double = 0
         for (index, part) in parts.enumerated() {
             guard let value = Double(part), value.isFinite, value >= 0 else { return nil }
-            // 除第一段(时 / 纯秒数)外,分与秒必须落在 0–59
             if index > 0, value >= 60 { return nil }
             total = total * 60 + value
         }
         return total
     }
 
-    /// VoiceOver 读的版本:「1 小时 2 分 3 秒」,不读冒号。
+    /// VoiceOver 用:「1 小时 2 分 3 秒」。
     static func spokenText(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds > 0 else { return "未知" }
         let duration = Duration.seconds(Int(seconds.rounded()))
         return duration.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
     }
 
-    /// 剩余时长的标签:比 `text` 多一个 `-` 前缀。
-    ///
-    /// 抽出来是因为**剩余为 0 和时长未知是两回事**,而两者都会让
-    /// `text` 返回 `--:--`,拼上 `-` 就成了 `---:--`(2026-10-03 修复):
-    ///
-    /// - 时长未知(`duration <= 0`)→ `--:--`,⛔ 不加负号。负号在这里
-    ///   是「相对总时长的差值」的语义,没有总量就没有差值。
-    /// - 剩余为 0(拖到最右 / 播到结尾)→ `-00:00`,负号保留。这是「确实
-    ///   剩 0 秒」,不是不知道 —— `text(0)` 的 `--:--` 语义在这里是错的。
+    /// 剩余时长,带 `-` 前缀。剩余为 0 与时长未知是两回事:
+    /// 时长未知 → `--:--`(不加负号);剩余为 0 → `-00:00`。
     static func remainingText(_ seconds: Double, durationKnown: Bool) -> String {
         guard durationKnown else { return text(0) }
         let clamped = seconds.isFinite ? max(0, seconds) : 0
@@ -924,14 +799,8 @@ enum PlayerTime {
         return String(format: "-%02d:%02d", minutes, secs)
     }
 
-    /// 按剩余时长与当前倍速推算的结束时刻。
-    ///
-    /// 倍速必须参与计算:1.25× 下「还剩 44 分钟」实际只过 35 分钟,
-    /// 不换算就会算出一个偏晚的时刻。显示层拿它回答「看完得到几点」。
-    ///
-    /// 返回 nil 的四种情况,都是「宁可不显示也不显示编出来的值」:
-    /// 时长未知(`API_CONTRACT.md` 8.1)、已播完、倍速非正或非有限、
-    /// 剩余时长非正。
+    /// 按剩余时长 ÷ 倍速推算的结束时刻。时长未知(`API_CONTRACT.md` 8.1)、已播完、
+    /// 倍速非法、剩余非正时返回 nil。
     static func endsAt(
         position: Double,
         duration: Double,

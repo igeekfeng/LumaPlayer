@@ -1,15 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 设置 → 通用 →「显示首页推荐」这个开关(`HomeAppearancePreferences`)。
-///
-/// 这一组守三件事:
-/// ① 存住:关掉后重开 App 还是关的(⛔ 别让它每次都弹回开着的);
-/// ② 关掉时**不发**推荐请求 —— 少一次往返,少一批 1920 宽的背景图;
-/// ③ 关掉时 hero **完全不画**,⛔ 不退回「继续观看 / 各库最新」那张 ——
-///    那条退路只是**请求失败**时的容错,不是用户的选择。
-///
-/// 数据一律走 `MockEmbyURLProtocol`,零真实网络依赖。
+/// 「显示首页推荐」开关(`HomeAppearancePreferences`):关掉后跨重启保持、不发推荐请求、hero 完全不画。
+/// ⛔ 关掉时不退回「继续观看 / 各库最新」:那条退路只是请求失败时的容错,不是用户的选择。
 @MainActor
 final class HomeAppearancePreferencesTests: XCTestCase {
     private static let userID = "USER-1"
@@ -48,7 +41,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
 
     // MARK: - 偏好本身
 
-    /// 默认开:与引入 hero 时(2026-10-15)的行为一致,老用户升级后首屏不会突然少一块
+    /// 默认开,老用户升级后首屏不会突然少一块。
     func testDefaultsToShowingRecommendations() {
         let store = HomeAppearancePreferences(defaults: defaults)
         XCTAssertTrue(store.showsHeroRecommendations)
@@ -64,8 +57,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         XCTAssertFalse(reopened.showsHeroRecommendations)
     }
 
-    /// 「没存过」不能被当成「关过」:`bool(forKey:)` 读一个存成字符串的值会返回 false,
-    /// 手改过偏好时那会让首页凭空少掉 hero
+    /// `bool(forKey:)` 读字符串值会返回 false,「没存过 / 存坏了」⛔ 不能当成「关过」。
     func testGarbageValueFallsBackToDefault() {
         defaults.set("off", forKey: HomeAppearancePreferences.Key.showsHeroRecommendations)
         XCTAssertTrue(HomeAppearancePreferences(defaults: defaults).showsHeroRecommendations)
@@ -73,8 +65,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
 
     // MARK: - 关掉时不发推荐请求
 
-    /// 关掉后一次 `load` 里**没有** `/Users/{uid}/Items` 那个推荐查询,
-    /// 其余分区照常请求(⛔ 别把这个开关做成「首页什么都不加载了」)
+    /// 只少 `/Users/{uid}/Items` 那个推荐查询,其余分区照常请求。
     func testDisabledSkipsRecommendationRequest() async throws {
         try stubStandardSections()
         let (viewModel, server) = try await makeHomeViewModel(recommendationsEnabled: false)
@@ -90,7 +81,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         XCTAssertEqual(requests.filter { $0.url.path.hasSuffix("/Items/Resume") }.count, 1)
     }
 
-    /// 对照组:开着就照旧请求那一次 —— 证明上一条不是「mock 没拦住」才显得没有的
+    /// 对照组:证明上一条不是 mock 没拦住。
     func testEnabledStillRequestsRecommendations() async throws {
         try stubStandardSections()
         let (viewModel, server) = try await makeHomeViewModel(recommendationsEnabled: true)
@@ -105,8 +96,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
 
     // MARK: - 关掉时 hero 不画
 
-    /// 关闭状态下 `heroPick` 直接 `.none`,**即使**推荐池里有能上 hero 的条目
-    /// —— ⛔ 别让它退回「继续观看 / 各库最新」那张
+    /// 即使推荐池里有能上 hero 的条目也 `.none`,⛔ 不退回「继续观看 / 各库最新」。
     func testHeroPickIsNoneWhenDisabled() throws {
         let recommended = try item("R1", backdrop: true)
         let resumeItem = try item("C1", backdrop: true)
@@ -121,8 +111,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         XCTAssertEqual(pick, .none)
     }
 
-    /// 关闭状态**早于**任何加载态短路:推荐行还在加载也不占 hero 的高度
-    /// (`.pending` 会让 hero 位置空着一大块,等一个永远不会来的请求)
+    /// 关闭早于加载态短路:否则 `.pending` 会让 hero 位置空着等一个永远不来的请求。
     func testDisabledBeatsPendingState() {
         let pick = HomeViewModel.heroPick(
             recommended: .loading,
@@ -136,8 +125,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
 
     // MARK: - 运行中改开关
 
-    /// 加载完再关掉:hero 立刻不画,并把那批推荐清掉 ——
-    /// 下次打开开关时不该先露出上一批已经过时的内容
+    /// 并清掉那批推荐,下次打开时不先露出过时内容。
     func testTogglingOffClearsExistingRecommendations() async throws {
         try stubStandardSections(recommendationsJSON: Self.oneRecommendation)
         let (viewModel, server) = try await makeHomeViewModel(recommendationsEnabled: true)
@@ -152,8 +140,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         XCTAssertEqual(heroPick(viewModel, server: server, enabled: false), .none)
     }
 
-    /// 关 → 开:补发那一路推荐请求。hero 先占住高度(`.pending`),
-    /// 不然退路会先显示一张、等推荐回来又换掉,首屏会跳
+    /// 补发推荐请求;hero 先 `.pending` 占住高度,否则退路先显示一张再被换掉,首屏会跳。
     func testTogglingOnRefetchesRecommendations() async throws {
         try stubStandardSections(recommendationsJSON: Self.oneRecommendation)
         let (viewModel, server) = try await makeHomeViewModel(recommendationsEnabled: false)
@@ -173,8 +160,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         XCTAssertEqual(viewModel.sections(for: server.id).recommended.state.value?.count, 1)
     }
 
-    /// 改开关**不该**把整页重来一遍:媒体库 / 继续观看 / 「最新」都不再请求
-    /// (真实服务器使用纪律:低频率)
+    /// 改开关不重载整页(真实服务器纪律:低频率)。
     func testTogglingDoesNotReloadOtherSections() async throws {
         try stubStandardSections()
         let (viewModel, server) = try await makeHomeViewModel(recommendationsEnabled: false)
@@ -203,7 +189,7 @@ final class HomeAppearancePreferencesTests: XCTestCase {
             .filter { $0.url.path.hasSuffix("/Users/USER-1/Items") }.count
     }
 
-    /// 媒体库列表 / 继续观看 / 推荐三路的常规响应
+    /// 媒体库列表 / 继续观看 / 推荐三路的常规响应。
     private func stubStandardSections(
         recommendationsJSON: String = #"{"Items":[],"TotalRecordCount":0}"#
     ) throws {
@@ -218,7 +204,6 @@ final class HomeAppearancePreferencesTests: XCTestCase {
         MockEmbyURLProtocol.stub(.json(recommendationsJSON), path: "/emby/Users/USER-1/Items")
     }
 
-    /// 造一个 container,`homeAppearance` 按 `recommendationsEnabled` 预置好
     private func makeHomeViewModel(
         recommendationsEnabled: Bool
     ) async throws -> (HomeViewModel, ServerProfile) {
