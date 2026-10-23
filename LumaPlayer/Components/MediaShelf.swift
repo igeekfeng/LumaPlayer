@@ -5,10 +5,16 @@ struct MediaShelf<Content: View>: View {
     let title: String
     /// 有值时标题旁出现「查看全部」
     var seeAll: (() -> Void)? = nil
+    /// 上次离开界面时的横向偏移。货架随页面切换被销毁,位置只能由调用方留存
+    var initialOffset: CGFloat = 0
+    /// 货架被移出界面时回写当前偏移
+    var onLeave: ((CGFloat) -> Void)? = nil
     @ViewBuilder var content: () -> Content
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
+    /// 待复位的偏移。等量出内容宽度再滚:那时才知道 `maxOffset`,内容变少时能夹住
+    @State private var pendingRestore: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
@@ -45,7 +51,19 @@ struct MediaShelf<Content: View>: View {
                 )
             } action: { _, new in
                 geometry = new
+                if let target = pendingRestore, new.contentWidth > 0 {
+                    pendingRestore = nil
+                    position.scrollTo(x: min(target, new.maxOffset))
+                }
             }
+            // 重建(返回上一级)后回到原来的横向位置。放在 `task` 而不是 `onAppear`:
+            // 那时已经过一轮布局,滚动请求不会落空;量宽回调晚到时再夹一次
+            .task {
+                guard initialOffset > 1 else { return }
+                pendingRestore = initialOffset
+                position.scrollTo(x: initialOffset)
+            }
+            .onDisappear { onLeave?(geometry.offset) }
         }
     }
 

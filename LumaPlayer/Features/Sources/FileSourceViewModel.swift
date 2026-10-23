@@ -37,6 +37,10 @@ final class FileSourceViewModel {
     /// 列表在设置里维护(`BaiduPanSourceSettingsView`),这里只读。
     private(set) var libraryRoot: BaiduPanLibraryRoot?
     private(set) var currentDirectory: String?
+    /// 导航目标(进 / 退目录、进详情页),内容到手才与 `items` 一起提交给 `currentDirectory`。
+    /// ⛔ 别在发请求前就写 `currentDirectory`:目录换了条目还没换,按目录算的区块
+    /// (如「最近添加」)会在加载途中先消失,界面剩下半新半旧的一帧。
+    private var pendingDirectory: String?
     /// 来源返回的原始顺序,不含 `path` 等播放信息(见 `filesByID`)。⛔ 界面用 `sortedItems`。
     private(set) var items: [SourceItem] = []
     /// `fs_id` → 原始文件。播放与进目录要用的 `path` 只在这里。
@@ -269,6 +273,8 @@ final class FileSourceViewModel {
         resumeSnapshotPoster = nil
         shapeDirectory = nil
         preferredSeasonNumber = nil
+        // 结构变了,导航目标也作废(否则重试会去追赶已不存在的目录)
+        pendingDirectory = nil
         guard case .baiduPan = source else {
             // 本地文件夹没有授权步骤,书签失效由 `loadFiles` 报
             guard loadsDirectory else { return }
@@ -395,12 +401,18 @@ final class FileSourceViewModel {
     // MARK: - 动作:目录
 
     func loadFiles() async {
-        await loadFiles(allowingLibraryRootFallback: true)
+        await loadFiles(directory: nil, allowingLibraryRootFallback: true)
     }
 
-    /// 用户点「刷新 / 重试」:绕过会话缓存走网络并写回。导航(进 / 退目录)用 `loadFiles()`。
+    /// 用户点「刷新 / 重试」:绕过会话缓存走网络并写回。导航(进 / 退目录)用 `navigate(to:)`。
+    /// 上一次导航失败没提交时仍按那个目标重试(`pendingDirectory`)。
     func refreshFiles() async {
-        await loadFiles(allowingLibraryRootFallback: true, forceRefresh: true)
+        await loadFiles(directory: nil, allowingLibraryRootFallback: true, forceRefresh: true)
+    }
+
+    /// 导航:目标先记进 `pendingDirectory`,列完目录才与 `items` 一起提交。
+    private func navigate(to directory: String) async {
+        await loadFiles(directory: directory, allowingLibraryRootFallback: true)
     }
 
     /// 播完 / 标记状态后只刷新本地观看状态。⛔ 不重列目录(2 次请求,而目录没变)。
@@ -424,16 +436,22 @@ final class FileSourceViewModel {
         watchFilter = filter
     }
 
+    /// `directory`:导航目标;nil = 当前位置(`pendingDirectory` 优先,见属性注释)。
     /// `allowingLibraryRootFallback`:片库根读不出时清掉它、回落应用目录。⛔ 只回落一次,
     /// 递归时传 false,否则真正的错误(目录名填错)会被重试藏起来。
     /// `forceRefresh`:绕过会话缓存走网络并写回。
     private func loadFiles(
-        allowingLibraryRootFallback allowFallback: Bool, forceRefresh: Bool = false
+        directory explicitDirectory: String?,
+        allowingLibraryRootFallback allowFallback: Bool,
+        forceRefresh: Bool = false
     ) async {
         isLoadingFiles = true
         directoryFailure = nil
         cancelScrape()
-        defer { isLoadingFiles = false }
+        // 本次读取的轮次(`cancelScrape` 刚 +1)。连着点两张卡片时只有最新那次能提交,
+        // 先发后到的结果不许把界面拽回旧目录。
+        let loadID = directoryGeneration
+        defer { if loadID == directoryGeneration { isLoadingFiles = false } }
 
         // 本地数据,零请求。每轮都要读:设置页可能刚恢复了隐藏项。
         hiddenRefs = await container.hiddenItems.hiddenRefs(sourceID: source.id)
@@ -455,9 +473,10 @@ final class FileSourceViewModel {
                 libraryRoot = nil
             }
             rootDirectory = root
-            // 导航留下的位置优先,刷新不抹掉它
-            directory = currentDirectory ?? libraryRoot?.path ?? root
-            currentDirectory = directory
+            // 导航目标 > 上次没提交的目标(重试)> 当前位置;刷新不抹掉导航留下的位置
+            directory = explicitDirectory ?? pendingDirectory ?? currentDirectory
+                ?? libraryRoot?.path ?? root
+            pendingDirectory = directory
             let provider = makeProvider()
             let content: FileSourceDirectoryContent
             if !cachesDirectories {
@@ -471,8 +490,8 @@ final class FileSourceViewModel {
                 let restored = Self.content(from: disk, sourceID: source.id)
                 content = restored
                 directoryCache[directory] = restored
-                items = restored.items
-                filesByID.merge(restored.filesByID) { _, new in new }
+                guard loadID == directoryGeneration else { return }
+                commit(restored, directory: directory)
                 await applyDirectoryShape(directory: directory)
                 startScrape(items: restored.items, provider: provider)
                 startBackgroundRefresh(directory: directory)
@@ -482,14 +501,13 @@ final class FileSourceViewModel {
                 directoryCache[directory] = content
                 await storeDirectoryCache(content, directory: directory)
             }
-            items = content.items
-            // 合并而非覆盖:详情页另列的季文件夹不能把剧目录里的文件挤掉(`file(for:)` 要用)。
-            // `fs_id` 全局唯一,同键覆盖无冲突。
-            filesByID.merge(content.filesByID) { _, new in new }
+            guard loadID == directoryGeneration else { return }
+            commit(content, directory: directory)
             await applyDirectoryShape(directory: directory)
             startScrape(items: content.items, provider: provider)
             return
         } catch let error as BaiduPanError {
+            guard loadID == directoryGeneration else { return }
             // token 没了 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
             if case .notAuthorized = error {
                 authorization = .needsAuthorization(folderName: folderName ?? "")
@@ -501,7 +519,11 @@ final class FileSourceViewModel {
                library != rootDirectory {
                 await clearLibraryRoot()
                 currentDirectory = nil
-                await loadFiles(allowingLibraryRootFallback: false, forceRefresh: forceRefresh)
+                pendingDirectory = nil
+                await loadFiles(
+                    directory: nil,
+                    allowingLibraryRootFallback: false,
+                    forceRefresh: forceRefresh)
                 return
             }
             directoryFailure = FileSourceDirectoryFailure(
@@ -510,6 +532,7 @@ final class FileSourceViewModel {
                     && directory == rootDirectory
             )
         } catch let error as LocalFolderError {
+            guard loadID == directoryGeneration else { return }
             // 访问权没了 → 失败页给「重新选择文件夹…」;某层读不出 → 只报原因
             directoryFailure = FileSourceDirectoryFailure(
                 message: error.userMessage,
@@ -517,12 +540,24 @@ final class FileSourceViewModel {
                 needsFolderReselection: error.needsFolderReselection
             )
         } catch {
+            guard loadID == directoryGeneration else { return }
             directoryFailure = FileSourceDirectoryFailure(
                 message: "读取目录失败:\(error)", isApplicationRootUnavailable: false)
         }
     }
 
     // MARK: - 落盘缓存
+
+    /// 目录与条目一起提交。⛔ 别拆成两处写:中间那一帧目录已换、条目还是旧的,
+    /// 按目录算的区块会先消失(见 `pendingDirectory`)。
+    private func commit(_ content: FileSourceDirectoryContent, directory: String) {
+        currentDirectory = directory
+        pendingDirectory = nil
+        items = content.items
+        // 合并而非覆盖:详情页另列的季文件夹不能把剧目录里的文件挤掉(`file(for:)` 要用)。
+        // `fs_id` 全局唯一,同键覆盖无冲突。
+        filesByID.merge(content.filesByID) { _, new in new }
+    }
 
     /// 写失败不影响本次浏览,原因记在 store 的 `lastWriteFailureDescription`。
     /// 不存封面地址(`dlink` 会过期,见 `BaiduPanDirectoryCache`)。
@@ -646,20 +681,18 @@ final class FileSourceViewModel {
         enteredSeriesItem = item
         resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
-        currentDirectory = file.path
-        await loadFiles()
+        await navigate(to: file.path)
     }
 
     func goUp() async {
-        guard let current = currentDirectory, let top = topmostDirectory,
+        guard let current = pendingDirectory ?? currentDirectory, let top = topmostDirectory,
               current != top else { return }
         let parent = (current as NSString).deletingLastPathComponent
-        // ⛔ 不退到最外层(片库根 / 应用目录)之上:上面没意义,应用目录外也访问不到
-        currentDirectory = BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top
         enteredSeriesItem = nil
         resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
-        await loadFiles()
+        // ⛔ 不退到最外层(片库根 / 应用目录)之上:上面没意义,应用目录外也访问不到
+        await navigate(to: BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top)
     }
 
     // MARK: - 动作:剧集详情
@@ -950,7 +983,9 @@ final class FileSourceViewModel {
     }
 
     var canGoUp: Bool {
-        guard let current = currentDirectory, let top = topmostDirectory else { return false }
+        // 加载中 / 上次导航失败没提交时按目标算,否则返回按钮会在失败页上消失
+        guard let current = pendingDirectory ?? currentDirectory, let top = topmostDirectory
+        else { return false }
         return current != top
     }
 
@@ -1097,8 +1132,7 @@ final class FileSourceViewModel {
             title: card.title,
             poster: card.poster
         )
-        currentDirectory = directory
-        await loadFiles()
+        await navigate(to: directory)
     }
 
     /// 当前目录直接复用,否则补列一次。拿不到返回 nil:照常播放,只是没有换集入口,不打断起播。
