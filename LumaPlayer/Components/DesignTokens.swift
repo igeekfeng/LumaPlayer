@@ -184,6 +184,12 @@ enum Metrics {
     static let subtitleDelayStep: Double = 0.1
     /// ⇧Z / ⇧X
     static let subtitleDelayLargeStep: Double = 1
+    /// 音频延迟区间(秒)。超过 ±10 秒是音轨本身对错了版本,再调也救不回来
+    static let audioDelayRange: ClosedRange<Double> = -10...10
+    /// 音频延迟步长:0.1 秒是人耳可辨的下限,再细反而调不完
+    static let audioDelayStep: Double = 0.1
+    /// ⇧ 加速档
+    static let audioDelayLargeStep: Double = 1
     /// 播放器图标按钮的点击区域边长(统一,避免图标宽窄不一导致跳动)
     static let playerButtonSize: CGFloat = 32
     /// 屏显提示停留时长
@@ -210,6 +216,10 @@ enum Metrics {
     static let scrubberMarkerWidth: CGFloat = 2
     /// 片头很短时也要看得见
     static let scrubberMarkerMinWidth: CGFloat = 3
+    /// 章节刻度:1pt 细线 + 半透明,画在已播放段之上、片头片尾标记之下。
+    /// ⛔ 不用 `tint`:那是片头片尾标记的颜色,两者要能分清
+    static let scrubberChapterTickWidth: CGFloat = 1
+    static let scrubberChapterTickOpacity: Double = 0.55
     /// 续播时从服务端记录位置往回退的秒数
     static let resumeRewind: TimeInterval = 5
     /// 片头最后几秒不再显示「跳过片头」(`PlaybackMarkers.isInIntro`)

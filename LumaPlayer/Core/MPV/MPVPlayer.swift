@@ -240,6 +240,9 @@ final class MPVPlayer: @unchecked Sendable {
         ("track-list", MPV_FORMAT_NODE),
         ("mute", MPV_FORMAT_FLAG),
         ("sub-delay", MPV_FORMAT_DOUBLE),
+        ("audio-delay", MPV_FORMAT_DOUBLE),
+        // 章节只在文件加载后才有;NODE 一次拿全部,和 track-list 同理
+        ("chapter-list", MPV_FORMAT_NODE),
     ]
 
     /// ctx = `openGLFramework`;两个参数都可能为 NULL(render_gl.h)。
@@ -515,6 +518,33 @@ final class MPVPlayer: @unchecked Sendable {
                         code: MPV_ERROR_INVALID_PARAMETER.rawValue,
                         message: "setSubtitleProperties 只接受 sub-* 属性,收到 \(name)")
                 }
+                let err = mpv_set_property_string(handle, name, value)
+                guard err >= 0 else { throw mpvFailure(err, "设置 \(name)=\(value)") }
+            }
+        }
+    }
+
+    // MARK: - 音频延迟(MPV_INTEGRATION.md 7.2)
+
+    /// 音频延迟(秒,`audio-delay`,RW):正值 = 音频晚于画面,负值 = 音频提前。
+    /// 与 `sub-delay` 互不相干:转码音频、蓝牙耳机、本身不同步的音轨各调各的。
+    func setAudioDelay(_ seconds: Double) throws {
+        try withLiveHandle { handle, _ in
+            var v = seconds
+            let err = mpv_set_property(handle, "audio-delay", MPV_FORMAT_DOUBLE, &v)
+            guard err >= 0 else { throw mpvFailure(err, "设置 audio-delay") }
+        }
+    }
+
+    // MARK: - 画面适配(MPV_INTEGRATION.md 7.4)
+
+    /// 填充 / 缩放 / 旋转 / 宽高比,值由 `PictureSettings.mpvProperties` 生成。
+    ///
+    /// 四项都是运行时可改属性(不是 `mpv_initialize` 前的选项),播放中改立即生效。
+    /// 中途某一项被拒即抛错,前面已设上的保持生效(mpv 无批量事务),与 `setSubtitleProperties` 一致。
+    func setPicture(_ picture: PictureSettings) throws {
+        try withLiveHandle { handle, _ in
+            for (name, value) in picture.mpvProperties {
                 let err = mpv_set_property_string(handle, name, value)
                 guard err >= 0 else { throw mpvFailure(err, "设置 \(name)=\(value)") }
             }
@@ -1203,6 +1233,16 @@ final class MPVPlayer: @unchecked Sendable {
         case ("sub-delay", MPV_FORMAT_DOUBLE):
             guard let data = property.data else { return }
             submitEvent(.subtitleDelay(data.assumingMemoryBound(to: Double.self).pointee))
+
+        case ("audio-delay", MPV_FORMAT_DOUBLE):
+            guard let data = property.data else { return }
+            submitEvent(.audioDelay(data.assumingMemoryBound(to: Double.self).pointee))
+
+        case ("chapter-list", MPV_FORMAT_NODE):
+            // 与 track-list 同一个所有权规则:⛔ 不 free,同步解析完
+            guard let data = property.data else { return }
+            var node = data.assumingMemoryBound(to: mpv_node.self).pointee
+            submitEvent(.chapterList(MPVChapterListParser.parse(&node)))
 
         case ("hwdec-current", MPV_FORMAT_STRING):
             guard let data = property.data else { return }

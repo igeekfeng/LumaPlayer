@@ -18,6 +18,8 @@ extension FocusedValues {
 /// | 静音 | M |
 /// | 加快 / 减慢 / 正常速度(0.25–4×,步长 0.1) | ] / [ / \ |
 /// | 字幕提前 / 延后 0.1 秒(⇧ 为 1 秒) | Z / X |
+/// | 音频提前 / 延后 0.1 秒(⇧ 为 1 秒) | C / V |
+/// | 上一章 / 下一章 | ⌘↑ / ⌘↓ |
 /// | 上一集 / 下一集 | ⌘← / ⌘→ |
 /// | 跳过片头(只在片头区间内生效) | S |
 /// | 统计信息 | I |
@@ -86,12 +88,19 @@ struct PlayerCommands: Commands {
             subtitleMenu
             subtitleDelayMenu
             audioMenu
+            audioDelayMenu
 
             Divider()
 
             Button("Skip Intro") { player?.skipIntro() }
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(player?.isSkipIntroAvailable != true)
+            Button("Previous Chapter") { player?.skipChapter(by: -1) }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(player?.canSkipChapter != true)
+            Button("Next Chapter") { player?.skipChapter(by: 1) }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(player?.canSkipChapter != true)
             Button("Previous Episode") { player?.playPreviousEpisode() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
                 .disabled(player?.previousEpisode == nil)
@@ -160,6 +169,19 @@ struct PlayerCommands: Commands {
             .disabled(!player.canAdjustSubtitleDelay)
         } else {
             Menu("Subtitle Delay") {}.disabled(true)
+        }
+    }
+
+    /// 快捷键挂在按钮上(c / v 与 ⇧),窗口里另有同样的按键兜底(`PlayerWindowView`)。
+    @ViewBuilder
+    private var audioDelayMenu: some View {
+        if let player {
+            Menu("Audio Delay: \(PlayerViewModel.audioDelayValueText(player.audioDelay, unit: "s"))") {
+                PlayerAudioDelayButtons(viewModel: player, inMenuBar: true)
+            }
+            .disabled(!player.canAdjustAudioDelay)
+        } else {
+            Menu("Audio Delay") {}.disabled(true)
         }
     }
 

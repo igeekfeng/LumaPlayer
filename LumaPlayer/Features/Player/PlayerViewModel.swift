@@ -67,6 +67,26 @@ final class PlayerViewModel {
     /// ⛔ 只活在这一集:不跨集沿用(不进 `PageCarryOver`)、不持久化。
     private var requestedSubtitleDelay: Double = 0
 
+    // MARK: - 音频延迟(MPV_INTEGRATION.md 7.2)
+
+    /// 音频延迟(秒,mpv `audio-delay` 读回值):正 = 音频晚于画面。
+    private(set) var audioDelay: Double = 0
+    /// 用户要的音频延迟,理由同 `requestedSubtitleDelay`(读回有延迟,连按会丢步;新 mpv 一律是 0)。
+    /// ⛔ 只活在这一集,与字幕延迟同一套策略。
+    private var requestedAudioDelay: Double = 0
+
+    // MARK: - 章节(MPV_INTEGRATION.md 7.3)
+
+    /// 内核看到的容器章节(Emby / 百度 / 本地文件夹统一由 mpv 给)。转码流通常没有。
+    /// 新播放器 = 新文件,起播前清空(`prepareAndLoad`)。
+    private(set) var chapters: [MPVChapter] = []
+
+    // MARK: - 画面适配(MPV_INTEGRATION.md 7.4)
+
+    /// 当前生效的填充 / 缩放 / 旋转 / 宽高比。新 mpv 一律是默认值,
+    /// 所以转码 seek 与换集都要重新套用(`applyPlaybackAdjustments`)。
+    private(set) var picture = PictureSettings.default
+
     // MARK: - 体验打磨(倍速 / 缓冲 / 播完 / 下一集 / 屏显提示)
 
     /// 播放速率(mpv `speed` 读回值,不是设置值);跨集沿用见 `container.playbackSpeeds`。
@@ -235,22 +255,25 @@ final class PlayerViewModel {
     private var generation = 0
 
     /// 换集时从上一集带过来的播放页级状态(ViewModel 与 mpv 仍是每集一份,§8 一实例一 URL)。
-    /// 带:音量 / 静音(新 mpv 默认 100 且不静音)、统计面板。
-    /// ⛔ 不带这一集的东西:字幕延迟、续播位置、轨道选择;倍速走 `PlaybackSpeedStore`。
+    /// 带:音量 / 静音(新 mpv 默认 100 且不静音)、统计面板、画面适配(同剧各集通常是同一种压制)。
+    /// ⛔ 不带这一集的东西:字幕延迟、音频延迟、续播位置、轨道选择;倍速走 `PlaybackSpeedStore`。
     struct PageCarryOver: Equatable {
         var volume: Double
         var isMuted: Bool
         var showsStatistics: Bool
+        var picture = PictureSettings.default
     }
 
-    /// 交给下一集的状态。播放器没建起来时音量是占位值,那时只带统计面板。
+    /// 交给下一集的状态。播放器没建起来时音量是占位值,那时只带统计面板与画面适配。
     var pageCarryOver: PageCarryOver? {
         guard player != nil else {
-            return showsStatistics
-                ? PageCarryOver(volume: Metrics.defaultVolume, isMuted: false, showsStatistics: true)
-                : nil
+            guard showsStatistics || picture != .default else { return nil }
+            return PageCarryOver(
+                volume: Metrics.defaultVolume, isMuted: false,
+                showsStatistics: showsStatistics, picture: picture)
         }
-        return PageCarryOver(volume: volume, isMuted: isMuted, showsStatistics: showsStatistics)
+        return PageCarryOver(
+            volume: volume, isMuted: isMuted, showsStatistics: showsStatistics, picture: picture)
     }
 
     /// 上一集带过来的页面级状态;nil = 新开的播放页。只在建 mpv 时读。
@@ -274,6 +297,7 @@ final class PlayerViewModel {
         self.carryOver = carryOver
         self.frozenPlayer = lastFramePlayer
         self.showsStatistics = carryOver?.showsStatistics ?? false
+        self.picture = carryOver?.picture ?? .default
         // 会话准备与进度出口按来源装配;测试可注入替身(接线规则不该依赖网络)。
         self.preparer = preparer ?? container.makeSessionPreparer(for: request)
         self.reporter = reporter ?? container.makeReporter(for: request)
@@ -590,17 +614,178 @@ final class PlayerViewModel {
     /// 屏显用:「字幕延后 0.3 秒」…;用延后 / 提前而不是正负号(没人记得住 `+0.3` 是谁快了)。
     static func subtitleDelayText(_ seconds: Double) -> String {
         guard seconds != 0 else { return "字幕无延迟" }
-        return "字幕\(seconds > 0 ? "延后" : "提前") \(subtitleDelaySeconds(abs(seconds))) 秒"
+        return "字幕\(seconds > 0 ? "延后" : "提前") \(delaySecondsText(abs(seconds))) 秒"
     }
 
     /// 菜单里的当前值(「+0.3 秒」);`unit`:App 内界面用「秒」,菜单栏传 `"s"`(`PlayerCommands`)。
     static func subtitleDelayValueText(_ seconds: Double, unit: String = "秒") -> String {
         guard seconds != 0 else { return "0 \(unit)" }
-        return "\(seconds > 0 ? "+" : "-")\(subtitleDelaySeconds(abs(seconds))) \(unit)"
+        return "\(seconds > 0 ? "+" : "-")\(delaySecondsText(abs(seconds))) \(unit)"
     }
 
-    private static func subtitleDelaySeconds(_ value: Double) -> String {
+    // MARK: 音频延迟
+
+    /// 能不能调音频延迟:有会话即可(不像字幕要求选了轨 —— 有声音就能对)。
+    var canAdjustAudioDelay: Bool { session != nil }
+
+    /// 设音频延迟,夹在 `Metrics.audioDelayRange` 内;播放器没建起来也记下,由 `applyPlaybackAdjustments` 设上。
+    func setAudioDelay(_ seconds: Double) {
+        let target = Self.clampedAudioDelay(seconds)
+        do { try player?.setAudioDelay(target) } catch { return }
+        requestedAudioDelay = target
+        flash(Self.audioDelayText(target), systemImage: "waveform")
+    }
+
+    /// 从要的值步进(理由同字幕:读回值滞后,连按会丢步)。
+    func stepAudioDelay(later: Bool, step: Double = Metrics.audioDelayStep) {
+        guard canAdjustAudioDelay else { return }
+        setAudioDelay(requestedAudioDelay + (later ? step : -step))
+    }
+
+    func resetAudioDelay() {
+        guard canAdjustAudioDelay else { return }
+        setAudioDelay(0)
+    }
+
+    /// 夹到区间并抹到两位小数;非有限值归零。
+    static func clampedAudioDelay(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        let clamped = min(max(value, Metrics.audioDelayRange.lowerBound),
+                          Metrics.audioDelayRange.upperBound)
+        let rounded = (clamped * 100).rounded() / 100
+        return rounded == 0 ? 0 : rounded
+    }
+
+    /// 屏显用:「音频延后 0.3 秒」。正 = 音频晚于画面,与 mpv `audio-delay` 同向。
+    static func audioDelayText(_ seconds: Double) -> String {
+        guard seconds != 0 else { return "音频无延迟" }
+        return "音频\(seconds > 0 ? "延后" : "提前") \(delaySecondsText(abs(seconds))) 秒"
+    }
+
+    /// 菜单里的当前值;`unit` 约定同 `subtitleDelayValueText`。
+    static func audioDelayValueText(_ seconds: Double, unit: String = "秒") -> String {
+        guard seconds != 0 else { return "0 \(unit)" }
+        return "\(seconds > 0 ? "+" : "-")\(delaySecondsText(abs(seconds))) \(unit)"
+    }
+
+    /// 两位以内、去掉尾随 0,固定 POSIX(不受系统地区的小数点影响)。
+    private static func delaySecondsText(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX")))
+    }
+
+    // MARK: 章节
+
+    /// 当前章节:按播放位置反推。⛔ 不观察 mpv 的 `chapter` —— 那是内核自己 seek 出来的状态,
+    /// 转码流下永远追不上客户端重新起流的位置。
+    var currentChapter: MPVChapter? {
+        MPVChapter.current(at: positionSeconds, in: chapters)
+    }
+
+    /// 下一章:严格晚于当前位置的第一条
+    var nextChapter: MPVChapter? {
+        guard positionSeconds.isFinite else { return nil }
+        return chapters.first { $0.time > positionSeconds }
+    }
+
+    /// 上一章:先回本章开头,已经在开头才退到上一章 —— 连按能一路往前退
+    var previousChapter: MPVChapter? {
+        guard let current = currentChapter else { return nil }
+        if positionSeconds - current.time > Self.chapterRestartTolerance { return current }
+        return chapters.last { $0.time < current.time }
+    }
+
+    /// 至少两章才值得给入口(单章列表等于整片)
+    var hasChapters: Bool { chapters.count > 1 }
+
+    /// 有章节、源能 seek(`PlaybackSeekStrategy`)才给菜单与快捷键
+    var canSkipChapter: Bool { hasChapters && allowsSeeking }
+
+    /// 跳章节:走 `seek` 的分派 —— 转码流必须由客户端重新起流(API_CONTRACT.md 4.5),
+    /// ⛔ 不能设 mpv 的 `chapter` 属性让内核自己 seek(会静默失败或跳回 0)。
+    func seekToChapter(_ chapter: MPVChapter) {
+        guard canSkipChapter else { return }
+        seek(to: chapter.time)
+        flash(chapter.displayName, systemImage: "list.bullet.rectangle")
+    }
+
+    func skipChapter(by delta: Int) {
+        guard canSkipChapter else { return }
+        let target = delta >= 0 ? nextChapter : previousChapter
+        guard let target else { return }
+        seekToChapter(target)
+    }
+
+    /// 离本章起点多近算「已经在本章开头」(再按上一章才退到前一章)
+    private static let chapterRestartTolerance: Double = 1
+
+    // MARK: 画面适配
+
+    /// 套用一整组画面设置。失败只留痕不挂 `failure`:画面修正不上不该挡住播放(与字幕外观一致)。
+    func setPicture(_ new: PictureSettings) {
+        let target = new.clamped
+        picture = target
+        guard let player else { return }
+        do {
+            try player.setPicture(target)
+        } catch {
+            Self.logger.error("画面适配设置失败: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    func setPictureFit(_ fit: PictureSettings.Fit) {
+        var next = picture
+        next.fit = fit
+        setPicture(next)
+        flash(fit.displayName, systemImage: "rectangle.inset.filled")
+    }
+
+    /// 缩放一档约 7%;夹在 `PictureSettings.zoomRange`(50%–200%)内。
+    func stepPictureZoom(up: Bool) {
+        var next = picture
+        next.zoom += up ? PictureSettings.zoomStep : -PictureSettings.zoomStep
+        setPicture(next)
+        flash(Self.zoomText(next.zoom),
+              systemImage: up ? "plus.magnifyingglass" : "minus.magnifyingglass")
+    }
+
+    func resetPictureZoom() {
+        var next = picture
+        next.zoom = 0
+        setPicture(next)
+        flash(Self.zoomText(0), systemImage: "1.magnifyingglass")
+    }
+
+    /// 顺时针 90°:0 → 90 → 180 → 270 → 0(手机竖拍 / 元数据标错时用)
+    func rotatePicture() {
+        var next = picture
+        let rotations = PictureSettings.rotations
+        let index = rotations.firstIndex(of: next.rotation) ?? 0
+        next.rotation = rotations[(index + 1) % rotations.count]
+        setPicture(next)
+        flash("旋转 \(next.rotation)°", systemImage: "rotate.right")
+    }
+
+    func setPictureAspect(_ aspect: PictureSettings.Aspect) {
+        var next = picture
+        next.aspect = aspect
+        setPicture(next)
+        flash(aspect.displayName, systemImage: "arrow.left.and.right")
+    }
+
+    /// 整组复位(默认值就是 mpv 默认,不持久化)
+    func resetPicture() {
+        setPicture(.default)
+        flash("画面已复位", systemImage: "arrow.counterclockwise")
+    }
+
+    /// 动过画面设置(菜单里「复位」的启用判据,也是跨集要不要带过去的判据)
+    var isPictureAdjusted: Bool { picture != .default }
+
+    /// 「缩放 113%」
+    private static func zoomText(_ zoom: Double) -> String {
+        var value = PictureSettings.default
+        value.zoom = zoom
+        return "缩放 \(value.clamped.zoomPercent)%"
     }
 
     // MARK: 字幕外观
@@ -631,6 +816,26 @@ final class PlayerViewModel {
             let delay = requestedSubtitleDelay
             Self.logger.error(
                 "字幕延迟 \(delay, privacy: .public) 秒设回新建播放器失败: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// 新建的 mpv:把本集的音频延迟与画面适配设上(转码 seek / 重试会换播放器,这两项要跟过去)。
+    /// 时机同 `applySubtitleSettings`:挂事件桥之前,免得屏显先闪一下默认值。
+    private func applyPlaybackAdjustments(to player: MPVPlayer) {
+        if requestedAudioDelay != 0 {
+            do {
+                try player.setAudioDelay(requestedAudioDelay)
+            } catch {
+                let delay = requestedAudioDelay
+                Self.logger.error(
+                    "音频延迟 \(delay, privacy: .public) 秒设回新建播放器失败: \(String(describing: error), privacy: .public)")
+            }
+        }
+        guard picture != .default else { return }
+        do {
+            try player.setPicture(picture)
+        } catch {
+            Self.logger.error("画面适配设回新建播放器失败: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -1324,6 +1529,8 @@ final class PlayerViewModel {
             // 渲染后端策略见 MPVRenderBackendPolicy;新播放器 = 新字幕轨列表,重试 / 起流都要重挂字幕。
             // 码率给缓冲预算标定(MPVCacheBudget):回退命中身后缓冲才不用重新拉流。
             didAddExternalSubtitles = false
+            // 新播放器 = 新文件:上一集的章节刻度不能留在进度条上(转码流的新章节可能永远不来)
+            chapters = []
             let player = MPVPlayer(
                 backendPolicy: container.preferences.renderBackendPolicy,
                 bitrateBitsPerSecond: prepared.mediaSource.bitrate)
@@ -1341,6 +1548,7 @@ final class PlayerViewModel {
             applyRememberedSpeed(to: player)
             applyDefaultVolume(to: player)
             applySubtitleSettings(to: player)
+            applyPlaybackAdjustments(to: player)
 
             let generation = self.generation
             let bridge = MPVEventBridge { [weak self] event in
@@ -1563,6 +1771,13 @@ final class PlayerViewModel {
         case .subtitleDelay(let value):
             // 不上报:5.1 的 `SubtitleOffset` 单位未核实(KNOWN_ISSUES.md Q39),发错单位比不发更糟。
             subtitleDelay = value
+
+        case .audioDelay(let value):
+            // 纯客户端修正,服务端没有对应字段(与字幕延迟同理)
+            audioDelay = value
+
+        case .chapterList(let list):
+            chapters = list
 
         case .buffering(let value):
             if value != isBuffering { bufferingEpoch &+= 1 }

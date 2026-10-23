@@ -188,6 +188,8 @@ struct PlayerScrubber: View {
                         .fill(.white.opacity(Metrics.scrubberBufferedOpacity))
                         .frame(width: width * buffered)
                 }
+                // 章节刻度画在已播放段**之下**:经过的章节不必再占视觉(也避开白底白线)
+                chapterTickOverlay(width: width)
                 Capsule()
                     .fill(.white.opacity(Metrics.scrubberPlayedOpacity))
                     .frame(width: width * fraction)
@@ -261,6 +263,22 @@ struct PlayerScrubber: View {
     private var bufferedFraction: Double? {
         guard duration > 0, let buffered = viewModel.bufferedUntilSeconds, buffered > 0 else { return nil }
         return min(1, buffered / duration)
+    }
+
+    /// 章节起点竖线(`viewModel.chapters`)。至少两章才画:单章等于整片,画在 0 处只是杂讯。
+    /// 转码流通常没有章节,自然不画。
+    @ViewBuilder
+    private func chapterTickOverlay(width: CGFloat) -> some View {
+        if duration > 0, viewModel.chapters.count > 1 {
+            ForEach(viewModel.chapters) { chapter in
+                if chapter.time > 0, chapter.time < duration {
+                    Rectangle()
+                        .fill(.white.opacity(Metrics.scrubberChapterTickOpacity))
+                        .frame(width: Metrics.scrubberChapterTickWidth, height: trackHeight)
+                        .offset(x: width * (chapter.time / duration))
+                }
+            }
+        }
     }
 
     /// 片头区间带 + 片尾起点竖条(`viewModel.markers`)。时长未知时不画。
@@ -509,6 +527,7 @@ struct PlayerSubtitleDelayButtons: View {
     }
 }
 
+/// 音轨菜单:选轨 + 音频延迟。延迟放这里而不是单开一个按钮 —— 都是「听」的事,也免得控制栏挤。
 struct PlayerAudioMenu: View {
     let viewModel: PlayerViewModel
 
@@ -523,6 +542,12 @@ struct PlayerAudioMenu: View {
                 }
             }
             .pickerStyle(.inline)
+
+            Divider()
+
+            Section("音频延迟:\(PlayerViewModel.audioDelayValueText(viewModel.audioDelay))") {
+                PlayerAudioDelayButtons(viewModel: viewModel)
+            }
         } label: {
             Image(systemName: "waveform")
                 .font(.title3)
@@ -539,6 +564,54 @@ struct PlayerAudioMenu: View {
     }
 }
 
+/// 音频延迟按钮,控制栏音轨菜单与菜单栏「Playback › Audio Delay」共用。
+/// 快捷键只挂在菜单栏那份上(与字幕延迟同一个约定:两份都挂会注册两遍)。
+struct PlayerAudioDelayButtons: View {
+    let viewModel: PlayerViewModel
+    /// 菜单栏那份:带快捷键、英文文案
+    var inMenuBar = false
+
+    var body: some View {
+        Group {
+            Button(earlier(Metrics.audioDelayStep)) {
+                viewModel.stepAudioDelay(later: false)
+            }
+            .keyboardShortcut(shortcut("c", []))
+            Button(later(Metrics.audioDelayStep)) {
+                viewModel.stepAudioDelay(later: true)
+            }
+            .keyboardShortcut(shortcut("v", []))
+            Button(earlier(Metrics.audioDelayLargeStep)) {
+                viewModel.stepAudioDelay(later: false, step: Metrics.audioDelayLargeStep)
+            }
+            .keyboardShortcut(shortcut("c", .shift))
+            Button(later(Metrics.audioDelayLargeStep)) {
+                viewModel.stepAudioDelay(later: true, step: Metrics.audioDelayLargeStep)
+            }
+            .keyboardShortcut(shortcut("v", .shift))
+            Button(inMenuBar ? "Reset Audio Delay" : "重置音频延迟") { viewModel.resetAudioDelay() }
+                .disabled(viewModel.audioDelay == 0)
+        }
+        .disabled(!viewModel.canAdjustAudioDelay)
+    }
+
+    private func earlier(_ step: Double) -> String {
+        inMenuBar ? "Advance Audio by \(Self.seconds(step)) s" : "音频提前 \(Self.seconds(step)) 秒"
+    }
+
+    private func later(_ step: Double) -> String {
+        inMenuBar ? "Delay Audio by \(Self.seconds(step)) s" : "音频延后 \(Self.seconds(step)) 秒"
+    }
+
+    private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
+        inMenuBar ? KeyboardShortcut(key, modifiers: modifiers) : nil
+    }
+
+    private static func seconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+}
+
 /// 低频播放偏好,与菜单栏「Playback」里的对应项同一份状态。
 struct PlayerOptionsMenu: View {
     @Bindable var viewModel: PlayerViewModel
@@ -551,6 +624,9 @@ struct PlayerOptionsMenu: View {
             Toggle("自动播放下一集", isOn: $viewModel.autoPlayNext)
             Divider()
             markersMenu
+            chapterMenu
+            Divider()
+            pictureMenu
             Divider()
             Toggle("窗口置顶", isOn: $viewModel.floatsOnTop)
             Toggle("显示统计信息", isOn: Binding(
@@ -597,6 +673,73 @@ struct PlayerOptionsMenu: View {
             }
             .disabled(!viewModel.hasManualMarkers)
         }
+    }
+
+    /// 容器章节(Emby / 百度 / 本地统一由 mpv 给)。至少两章才出现在菜单里。
+    ///
+    /// 跳转走 `viewModel.seekToChapter` 而不是 mpv 的 `chapter` 属性:转码流必须由客户端重新起流。
+    @ViewBuilder
+    private var chapterMenu: some View {
+        if viewModel.hasChapters {
+            Picker("章节", selection: Binding<Int?>(
+                get: { viewModel.currentChapter?.id },
+                set: { id in
+                    guard let id, let chapter = viewModel.chapters.first(where: { $0.id == id })
+                    else { return }
+                    viewModel.seekToChapter(chapter)
+                }
+            )) {
+                ForEach(viewModel.chapters) { chapter in
+                    Text("\(PlayerTime.markerText(chapter.time))  \(chapter.displayName)")
+                        .tag(Int?.some(chapter.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .disabled(!viewModel.canSkipChapter)
+        }
+    }
+
+    /// 画面适配:填充 / 宽高比 / 缩放 / 旋转(MPV_INTEGRATION.md 7.4)。
+    /// 都是「针对这一集源」的临时修正,所以不给持久化,换片回到自动。
+    private var pictureMenu: some View {
+        Menu("画面") {
+            Picker("比例", selection: Binding(
+                get: { viewModel.picture.fit },
+                set: { viewModel.setPictureFit($0) }
+            )) {
+                ForEach(PictureSettings.Fit.allCases) { fit in
+                    Text(fit.displayName).tag(fit)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Picker("宽高比", selection: Binding(
+                get: { viewModel.picture.aspect },
+                set: { viewModel.setPictureAspect($0) }
+            )) {
+                ForEach(PictureSettings.Aspect.allCases) { aspect in
+                    Text(aspect.displayName).tag(aspect)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+
+            Button("放大") { viewModel.stepPictureZoom(up: true) }
+            Button("缩小") { viewModel.stepPictureZoom(up: false) }
+            Button("缩放 100%") { viewModel.resetPictureZoom() }
+                .disabled(viewModel.picture.zoom == 0)
+            Button("顺时针旋转 90°") { viewModel.rotatePicture() }
+            if viewModel.picture.rotation != 0 {
+                Text("已旋转 \(viewModel.picture.rotation)°")
+            }
+
+            Divider()
+
+            Button("画面设置复位") { viewModel.resetPicture() }
+                .disabled(!viewModel.isPictureAdjusted)
+        }
+        .disabled(viewModel.session == nil)
     }
 }
 

@@ -19,6 +19,10 @@ enum MPVPlayerEvent: Sendable, Equatable {
     case speed(Double)
     /// `sub-delay`,秒,正 = 字幕延后(7.1)
     case subtitleDelay(Double)
+    /// `audio-delay`,秒,正 = 音频延后(7.2)
+    case audioDelay(Double)
+    /// `chapter-list` 完整快照;没有章节时是空数组(7.3)
+    case chapterList([MPVChapter])
     /// `track-list` 完整快照
     case trackList([MPVTrack])
     case endFile(MPVEndFileReason)

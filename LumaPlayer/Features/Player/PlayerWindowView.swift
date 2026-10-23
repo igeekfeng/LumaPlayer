@@ -186,11 +186,20 @@ struct PlayerWindowView: View {
                 ? Metrics.seekStepLarge : viewModel.seekStep)
             return .handled
         }
-        .onKeyPress(.upArrow, phases: [.down, .repeat]) { _ in
+        .onKeyPress(.upArrow, phases: [.down, .repeat]) { press in
+            // ⌘↑ 是换章(与菜单栏同一个键);转码模式下每次换章都重新起流,只认首次按下
+            if press.modifiers.contains(.command) {
+                if press.phase == .down { viewModel.skipChapter(by: 1) }
+                return .handled
+            }
             viewModel.adjustVolume(by: Metrics.volumeStep)
             return .handled
         }
-        .onKeyPress(.downArrow, phases: [.down, .repeat]) { _ in
+        .onKeyPress(.downArrow, phases: [.down, .repeat]) { press in
+            if press.modifiers.contains(.command) {
+                if press.phase == .down { viewModel.skipChapter(by: -1) }
+                return .handled
+            }
             viewModel.adjustVolume(by: -Metrics.volumeStep)
             return .handled
         }
@@ -210,6 +219,15 @@ struct PlayerWindowView: View {
             viewModel.stepSubtitleDelay(
                 later: key.lowercased() == "x",
                 step: key == key.uppercased() ? Metrics.subtitleDelayLargeStep : Metrics.subtitleDelayStep)
+            return .handled
+        }
+        // 音频延迟与字幕延迟对称:C / V(⇧ 为 1 秒)。改的是纯客户端属性,按住连发无妨
+        .onKeyPress(characters: CharacterSet(charactersIn: "cvCV"), phases: [.down, .repeat]) { press in
+            guard viewModel.canAdjustAudioDelay else { return .ignored }
+            let key = press.characters
+            viewModel.stepAudioDelay(
+                later: key.lowercased() == "v",
+                step: key == key.uppercased() ? Metrics.audioDelayLargeStep : Metrics.audioDelayStep)
             return .handled
         }
         .onKeyPress("f") { toggleFullScreen(); return .handled }

@@ -91,7 +91,7 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 ### 6.1 观察的属性
 
 `time-pos`、`duration`、`pause`、`volume`、`mute`、`speed`、`paused-for-cache`、`track-list`、`aid` / `sid`、
-`hwdec-current`、`sub-delay` 等(列表在 `MPVPlayer`)。统计与缓冲进度这类高频变化值**不 observe**,
+`hwdec-current`、`sub-delay`、`audio-delay`、`chapter-list` 等(列表在 `MPVPlayer`)。统计与缓冲进度这类高频变化值**不 observe**,
 由调用方低频轮询 `stringPropertiesAsync(_:)`:用 `mpv_get_property_async` 入队,事件线程处理
 `GET_PROPERTY_REPLY`、复制字符串后恢复等待方,不在 MainActor 同步读核心,也不把长同步读取挪到持有 state 锁的后台任务。
 每轮属性串行读取、重复名字去重;属性暂不可用时省略键,其它错误抛出并由监控日志记录,不伪装为空结果。
@@ -140,6 +140,35 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 | 对 ASS 也套用 | `sub-ass-override=force`(默认关:手册原话会把特效字幕渲染坏) |
 
 默认值与 mpv 自身默认一致:没改过 = 什么都不改。起播默认轨见 `SubtitlePreference`(`slang` 挑不出简体中文)。
+
+### 7.2 音频延迟
+
+- `audio-delay`(秒,RW):**正 = 音频晚于画面**。与 `sub-delay` 是两个独立时钟,互不影响。
+- 区间 ±10 秒(`Metrics.audioDelayRange`):超出就是音轨版本对不上,调偏移救不回来。
+- 不上报:Emby `Progress` 没有音频偏移字段(与 Q39 同一类:发错单元比不发更糟)。
+
+### 7.3 章节
+
+- `chapter-list`(NODE,可 observe):只解 `title` / `time`(秒);没有时间的条目整条丢掉,空标题退化成
+  「第 N 章」(`MPVChapter.displayName`)。节点所有权与 `track-list` 相同(⛔ 不 free、同步解析)。
+- **跳转走 `PlayerViewModel.seek`,⛔ 不设 mpv 的 `chapter` 属性**:那是让内核自己 seek,转码流没有起流位置参数,
+  会静默失败或跳回 0(API_CONTRACT.md 4.5)。
+- 当前章按播放位置反推(`MPVChapter.current(at:in:)`),不 observe `chapter` —— 客户端重新起流后那个值追不上位置。
+- 转码流通常不带章节;本地 / 百度文件由容器给。少于一章时 UI 不给入口。
+
+### 7.4 画面适配
+
+| 设置 | mpv 属性 | 说明 |
+|---|---|---|
+| 填满窗口 | `panscan`(`0` / `1`) | 裁边填满,不是缩放;与 `video-zoom` 可叠加 |
+| 缩放 | `video-zoom` | log2 倍率:0 = 100%,±1 = 50% / 200% |
+| 旋转 | `video-rotate`(`0` / `90` / `180` / `270`) | 显式写 0 才能把设置过的角度收回去 |
+| 宽高比 | `video-aspect-override`(`no` / `16:9` / `4:3`) | mpv 读回会归一成小数(16:9 → `1.777778`),⛔ 不按字符串比对 |
+
+- 四项都是**运行时属性**(不是 `mpv_initialize()` 前的选项),播放中改立即生效。`picture.mpvProperties` 顺序固定、
+  一次写全:切回「自动」时上一项的值必须被覆盖。
+- 不持久化:都是针对这一集源的临时修正。跨集沿用走 `PageCarryOver.picture`(同一部剧多数是同一种压制)。
+- `setPicture` 复用了 `MPV_FORMAT` 字符串写入,所以值必须走 `PictureSettings` 生成,⛔ 不要在 View 里拼属性名。
 
 ## 8. 生命周期
 
