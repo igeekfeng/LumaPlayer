@@ -1322,9 +1322,11 @@ final class PlayerViewModel {
             refreshMarkers()
 
             // 渲染后端策略见 MPVRenderBackendPolicy;新播放器 = 新字幕轨列表,重试 / 起流都要重挂字幕。
+            // 码率给缓冲预算标定(MPVCacheBudget):回退命中身后缓冲才不用重新拉流。
             didAddExternalSubtitles = false
             let player = MPVPlayer(
-                backendPolicy: container.preferences.renderBackendPolicy)
+                backendPolicy: container.preferences.renderBackendPolicy,
+                bitrateBitsPerSecond: prepared.mediaSource.bitrate)
             // `MPVPlayer.init` 的失败路径都是直接 return,只写 `initializationFailure` 不抛错。
             // 不在这里查就会一路走到 glAttached 轮询,2s 后误报成「渲染上下文超时」,
             // 把真正原因(mpv_create NULL / 选项被拒 / initialize 失败)丢掉(docs/PITFALLS.md Q1)。

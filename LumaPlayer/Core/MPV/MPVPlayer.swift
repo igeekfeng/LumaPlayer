@@ -207,7 +207,8 @@ final class MPVPlayer: @unchecked Sendable {
     private let openGLFramework =
         dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", RTLD_LAZY)
 
-    /// §3 必设选项,`mpv_initialize` 之前设。
+    /// §3 必设选项,`mpv_initialize` 之前设。缓冲预算(`demuxer-max-bytes` /
+    /// `demuxer-max-back-bytes`)不在这张表:按码率算,见 `MPVCacheBudget`。
     private static let startupOptions: [(name: String, value: String)] = [
         ("config", "no"),
         ("load-scripts", "no"),
@@ -219,8 +220,6 @@ final class MPVPlayer: @unchecked Sendable {
         ("vo", "libmpv"),
         ("hwdec", "auto"),
         ("cache", "yes"),
-        // 128 MiB(§3,待 M2 实测调整)
-        ("demuxer-max-bytes", "134217728"),
         // 默认 0.05 时 render 要阻塞到上屏时刻,而 draw 在主线程,界面与弹幕会被压到视频帧率
         // (render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
         ("video-timing-offset", "0"),
@@ -259,7 +258,9 @@ final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 生命周期
 
-    init(backendPolicy: MPVRenderBackendPolicy = .automatic) {
+    /// - Parameter bitrateBitsPerSecond: `EmbyMediaSource.bitrate`(bps),驱动缓冲预算
+    ///   (`MPVCacheBudget`);nil 时预算走下限。
+    init(backendPolicy: MPVRenderBackendPolicy = .automatic, bitrateBitsPerSecond: Int64? = nil) {
         self.backendPolicy = backendPolicy
         _ = Self.loggedClientAPIVersion
 
@@ -269,7 +270,8 @@ final class MPVPlayer: @unchecked Sendable {
         }
 
         // 默认 UA 是 `libmpv`,与 Authorization 里的 Client 不一致
-        for (name, value) in Self.startupOptions + [("user-agent", ClientUserAgent.value)] {
+        let budget = MPVCacheBudget(bitrateBitsPerSecond: bitrateBitsPerSecond)
+        for (name, value) in Self.startupOptions + budget.options + [("user-agent", ClientUserAgent.value)] {
             let err = mpv_set_option_string(handle, name, value)
             guard err >= 0 else {
                 let failure = "选项 \(name)=\(value) 设置失败: "

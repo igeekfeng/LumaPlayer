@@ -119,6 +119,11 @@ legacy 后端不认识这些选项 → 连回退也崩。要加就 post-create �
 `FILE_LOADED` 那一刻起才返回 0,播完(eof)后又回到 -12。`duration` 不能当「能 seek」用(百度源的时长在会话准备阶段就有)。
 判据是内核里有文件(`PlayerViewModel.isReadyToSeek`);拖动失败⛔ 不能写进 `failure`(那是整页覆盖层,会压在正常播放的画面上)。
 
+**回退超出身后缓冲就要重新拉流,缓冲预算不能只管前向(M2)。** `demuxer-max-back-bytes` 决定播放位置身后保留多少字节:
+回退落在这段里是纯内存 seek,超出就重新请求;它与 `demuxer-max-bytes` 单位都是字节,折算成秒随码率变
+(80 Mbps 下 128 MiB 只有约 13 秒),⛔ 不能拍固定值。`MPVCacheBudget` 按 `MediaSource.Bitrate` 标定两块预算
+(取值、下限与上限见 `MPV_INTEGRATION.md` §3;码率缺失的合成源走下限),在 `mpv_initialize()` 之前设。
+
 **沙盒 App 收不到 `open --args`,直接 exec 会 SIGTRAP。** 外部驱动只能靠 URL scheme;⛔ 不要加「播任意 URL」的 scheme(任何网页都能触发)。
 
 ## 3. Emby 接口

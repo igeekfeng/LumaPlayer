@@ -44,10 +44,13 @@ FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;传 `FLIP_Y = 1`;
 所以设 `video-timing-offset=0`(§3),并在每次 render 显式传 `BLOCK_FOR_TARGET_TIME=0`(只设 offset 不关闭等待分支),
 否则主线程被压到视频帧率(`PITFALLS.md`「渲染阻塞主线程」,未验证项见 Q49)。
 
-## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer` 里的表)
+## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer.startupOptions` + `MPVCacheBudget`)
 
 `config=no`、`load-scripts=no`、`terminal=no`(libmpv 默认即如此,防御性显式设置)、`msg-level`、`vo=libmpv`、
-`hwdec=auto`、`cache=yes`、`demuxer-max-bytes=128MiB`(未按码率标定,M2)、`video-timing-offset=0`(见 §2)。
+`hwdec=auto`、`cache=yes`、`video-timing-offset=0`(见 §2)。
+缓冲预算 `demuxer-max-bytes`(前向)/ `demuxer-max-back-bytes`(身后)由 `MPVCacheBudget` 按 `MediaSource.Bitrate`
+标定:前向 ≥15 秒、身后 ≥30 秒,下限 128 / 50 MiB(码率缺失的合成源走下限),上限各 512 MiB。
+回退只有命中身后缓冲保留的数据才不用重新拉流,超出范围 = 重新请求(坑见 `PITFALLS.md` M2)。
 任何 `mpv_set_option_string` 失败都当致命。⛔ 不设 `tls-verify=no` 及任何跳过证书校验的选项。
 
 ### 3.1 hwdec
@@ -167,4 +170,4 @@ C API 返回 < 0 → `commandFailed`;`END_FILE` reason=error → `loadFailed`。
 
 ## 10. 未解决
 
-见 `KNOWN_ISSUES.md`:M2(缓冲大小)、M4(外挂字幕)、Q18(hardened runtime)、Q29(无 Homebrew 机器)、Q42(DV / gpu-next 验证)。
+见 `KNOWN_ISSUES.md`:M4(外挂字幕)、Q18(hardened runtime)、Q29(无 Homebrew 机器)、Q42(DV / gpu-next 验证)。

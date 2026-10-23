@@ -1,7 +1,7 @@
 # 未决问题与待验证清单
 
 > 不确定、不能猜、或缺外部条件才能核实的事登记在这里,不要只写 `// TODO`。
-> 编号 `Qnn` / `M2` / `M4` 被代码注释引用;结案后挪到 `PITFALLS.md`(写一句结论)或直接删掉。
+> 编号 `Qnn` / `Mnn` 被代码注释引用;结案后挪到 `PITFALLS.md`(写一句结论)或直接删掉。
 > 条目格式:问题 → 现在怎么处理 → 结案还缺什么。
 
 ## A. 要真实服务器才能核实的接口行为
@@ -168,7 +168,10 @@
   猜测是 PHP 把空数组编成 `{}`,⛔ 未证实,不要凭猜测改成「字典也当空」。结案:复现时记下关键词 / 字幕 id,单次请求看原始结构。
 - **Q18 hardened runtime 生效时 `MPVPlayer()` 会让进程约 5 秒后死掉。** 无崩溃报告,原因未查明,所以 `ENABLE_HARDENED_RUNTIME = NO`。
   要分发时逐条加 `cs.allow-unsigned-executable-memory` / `cs.allow-jit` / … 实测定位,⛔ 不一次全加就宣布解决。
-- **M2 `demuxer-max-bytes` 未按真实码率标定。** 现为 128 MiB,4K remux(~80 Mbps)下约 13 秒。频繁缓冲再按 `MediaSource.Bitrate` 动态算。
+- **Q53 按码率标定的缓冲(`MPVCacheBudget`)在真实片源上的效果未验证。**
+  已验:取值有单测,`demuxer-max-bytes` / `demuxer-max-back-bytes` 两条启动选项被真实 libmpv 接受(选项名写错会致命)。
+  ⛔ 未验:真实 Emby DirectStream 回退 30 秒内不再重新拉流、统计面板 `Cache` 实际读数、高码率片源不再频繁缓冲。
+  结案:本地实例 `Tools/emby-dev/` 播高码率片,拖回前后看 stats 与诊断日志。
 - **Q32 中文简繁判定只在合成用例上跑过。** 只标 `chi` / `zho` 的轨排第三档;判不出不动。
   结案:找一部同时有简繁轨的片子,记下 `lang` / `title` 原文回填单测。
 - **M4 Emby `IsExternal` 字幕流(要带 token)怎么 `sub-add`。** 本地文件已支持;远程要沿用 `http-header-fields`,未实测。

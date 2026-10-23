@@ -100,6 +100,23 @@ final class EmbyFixtureDecodingTests: XCTestCase {
         )
     }
 
+    func testMediaSourceBitrateDecodes() throws {
+        // Bitrate(4.3)给缓冲预算标定;缺失为 nil、⛔ 不填 0(8.1)
+        let withBitrate = try decoder.decode(
+            EmbyMediaSource.self,
+            from: Data(#"{"Id":"S1","Bitrate":80000000}"#.utf8),
+            endpointName: "Items/{Id}/PlaybackInfo"
+        )
+        XCTAssertEqual(withBitrate.bitrate, 80_000_000)
+
+        let missing = try decoder.decode(
+            EmbyMediaSource.self,
+            from: Data(#"{"Id":"S2"}"#.utf8),
+            endpointName: "Items/{Id}/PlaybackInfo"
+        )
+        XCTAssertNil(missing.bitrate)
+    }
+
     // MARK: - 辅助
 
     private func decode<T: Decodable & Sendable>(

@@ -1,7 +1,7 @@
 import Foundation
 
 /// `PlaybackInfo` 返回的可播源(MediaSourceInfo,API_CONTRACT.md 4.3)。
-/// 只有 `Id` 必填(8.1);只解真正要用的字段,不用的(`Path` / `Bitrate` …)不解。
+/// 只有 `Id` 必填(8.1);只解真正要用的字段,不用的(`Path` …)不解。
 struct EmbyMediaSource: Decodable, Sendable, Equatable {
     let id: String
     /// DirectStream URL 的扩展名取这里(输出 == 输入,4.5)
@@ -12,6 +12,8 @@ struct EmbyMediaSource: Decodable, Sendable, Equatable {
     let transcodingUrl: String?
     /// 字节。弹幕匹配的 `fileSize` 与 `DanmakuFingerprint` 校验 `Content-Range` 总长用。
     var size: Int64? = nil
+    /// bps。播放内核的缓冲预算按它标定(`MPVCacheBudget`);百度 / 本地合成源没有 → nil,预算走下限。
+    var bitrate: Int64? = nil
     let mediaStreams: [EmbyMediaStream]?
     /// 章节与片头片尾标记(4.3.1)。取源上的而不是 Item 上的:多版本源的片头位置可以不同。
     /// `var` + 默认值只为让逐成员构造器可省略它。
@@ -28,6 +30,7 @@ struct EmbyMediaSource: Decodable, Sendable, Equatable {
         case directStreamUrl = "DirectStreamUrl"
         case transcodingUrl = "TranscodingUrl"
         case size = "Size"
+        case bitrate = "Bitrate"
         case mediaStreams = "MediaStreams"
         case chapters = "Chapters"
     }
