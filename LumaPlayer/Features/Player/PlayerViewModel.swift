@@ -240,7 +240,7 @@ final class PlayerViewModel {
     private var startTask: Task<Void, Never>?
     /// 最近一次 `finishReporting` 的任务(finish + drain),供关窗后等待
     private var reportingFinishTask: Task<Void, Never>?
-    /// 文件树来源播完后要落进本地续播库的东西(已看 + 下一集占位);单独存是为了关窗时能等它。
+    /// 文件树来源收尾要落进本地续播库的东西(已看 + 下一集占位);单独存是为了关窗时能等它。
     private var fileSourceFinishTask: Task<Void, Never>?
     /// 合并后的倍速上报任务(拖滑块时只留最后一次)
     private var rateReportTask: Task<Void, Never>?
@@ -483,6 +483,14 @@ final class PlayerViewModel {
         didAutoSkipIntro = false
         isUpNextDismissed = false
         retry()
+    }
+
+    /// 关窗 / 换集:`stop()` 之外再给文件树来源收尾 —— 越过 90% 直接关窗也是看完了,续播卡要指向下一集。
+    /// ⛔ 不放进 `stop()`:重试与转码重新起流也走它,那不是这一集结束。播完那次已在 `.endFile(.eof)` 收过。
+    func close() {
+        stop()
+        guard !isEnded else { return }
+        settleFileSourceEpisode(naturalEnd: false)
     }
 
     /// 收尾:先按 API_CONTRACT.md 5.4 结束上报会话(最终 Progress + Stopped),再拆播放器。
@@ -1711,18 +1719,22 @@ final class PlayerViewModel {
         await fileSourceFinishTask?.value
     }
 
-    /// 文件树来源播完的收尾:已看 + 下一集占位(`AppContainer.finishFileSourceEpisode`)。
-    /// ⚠️ 先等最终进度落盘再写「已看」,反过来的话「播到 99%」会把状态翻回「进行中」。
-    private func finishFileSourceEpisodeIfNeeded() {
-        guard let queue = episodeQueue, let finished = queue.current,
-              finished.source.file != nil else { return }
+    /// 文件树来源一场播放的收尾:播完落成已看,已看就补下一集占位(`AppContainer.settleFileSourceEpisode`)。
+    /// ⚠️ 先等最终进度落盘再判已看,反过来的话「播到 99%」会把状态翻回「进行中」。
+    private func settleFileSourceEpisode(naturalEnd: Bool) {
+        let playing = request.source
+        guard playing.file != nil else { return }
+        let queue = episodeQueue
         let final = reportState
         let previous = reportingFinishTask
+        let previousSettle = fileSourceFinishTask
         fileSourceFinishTask = Task { [container] in
             await previous?.value
-            await container.finishFileSourceEpisode(
-                finished,
-                in: queue,
+            await previousSettle?.value
+            await container.settleFileSourceEpisode(
+                playing,
+                queue: queue,
+                naturalEnd: naturalEnd,
                 endedAt: final.positionSeconds,
                 durationSeconds: final.durationSeconds)
         }
@@ -1838,8 +1850,8 @@ final class PlayerViewModel {
             updateDisplaySleepAssertion()
             finishReporting(sendFinalProgress: false)
             // 文件树来源:落成「已看」+ 补「下一集」占位,否则续播区会停在上一集
-            // (Emby 由服务端算 NextUp)。队列是起播时装配的,零请求。
-            finishFileSourceEpisodeIfNeeded()
+            // (Emby 由服务端算 NextUp)。
+            settleFileSourceEpisode(naturalEnd: true)
             // 没有片尾标记也没赶上结束前提示时,播完卡片同样按设置倒计时播下一集。
             if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
 

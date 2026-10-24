@@ -504,48 +504,157 @@ final class AppContainer {
         } catch {}
     }
 
-    /// 文件树来源播完一集后的本地收尾:① 这集落成已看 ② 续播卡指向下一集没看的。
-    /// 两步必须一起做:只做 ② 的话,这集停在 99%,按 `oneCardPerSeries`「看到一半压过下一集占位」,占位出不来。
-    /// ① 不能交给进度比例判定:百度常拿不到时长(见 `WatchProgressStore.markFinished`)。
-    /// 只认播放队列里的兄弟集,⛔ 队列外(别的季、没列过的目录)不猜;跳过已看的集。
+    /// 文件树来源一场播放结束后的本地收尾(播完、关窗、换集都走这里)。
+    /// `naturalEnd`(自然播完)时先把这集落成已看:⛔ 不能交给进度比例判定,百度常拿不到时长
+    /// (见 `WatchProgressStore.markFinished`)。之后只要这集已看(含越过 90% 直接关窗)就补「下一集」占位。
     /// `endedAt` 单位秒;`durationSeconds` 百度常为 nil。
-    func finishFileSourceEpisode(
-        _ finished: PlaybackEpisode,
-        in queue: EpisodeQueue,
+    func settleFileSourceEpisode(
+        _ playing: PlaybackSource,
+        queue: EpisodeQueue?,
+        naturalEnd: Bool,
         endedAt positionSeconds: Double,
         durationSeconds: Double?
     ) async {
-        guard let file = finished.source.file else { return }
-        do {
-            try await watchProgress.markFinished(
-                fileID: finished.id,
-                display: finished.resumeItem.map {
-                    WatchProgressStore.Display(item: $0, file: file)
-                },
-                endedAt: positionSeconds,
-                durationSeconds: durationSeconds
-            )
-        } catch {
-            // 写盘失败不影响播放页收尾,下次再补;上一集没落成已看时占位也出不来,不往下写
-            return
-        }
-        guard let start = queue.episodes.firstIndex(where: { $0.id == finished.id }) else { return }
-        for episode in queue.episodes[(start + 1)...] {
-            guard let nextFile = episode.source.file,
-                  let item = episode.resumeItem else { continue }
-            guard await watchProgress.watchState(forFileID: episode.id) != .watched else { continue }
+        guard let file = playing.file else { return }
+        let fileID = String(file.fsID)
+        if naturalEnd {
+            let resumeItem = queue?.episodes.first { $0.id == fileID }?.resumeItem
             do {
-                try await watchProgress.setUpNext([
-                    WatchProgressStore.PlayedMark(
-                        fileID: episode.id,
-                        display: WatchProgressStore.Display(item: item, file: nextFile))
-                ])
+                try await watchProgress.markFinished(
+                    fileID: fileID,
+                    display: resumeItem.map { WatchProgressStore.Display(item: $0, file: file) },
+                    endedAt: positionSeconds,
+                    durationSeconds: durationSeconds
+                )
             } catch {
+                // 没落成已看时占位也不该出(会与停在 99% 的这集抢卡),下次播完再补
+                Self.watchProgressLogger.error(
+                    "播完落成已看失败:\(String(describing: error), privacy: .public)")
                 return
             }
-            return
+        }
+        await advanceFileSourceUpNext(after: file, playing: playing, queue: queue)
+    }
+
+    /// 一集已看后把续播卡指向下一个没看的集(类似 Emby NextUp);这集不是已看就什么都不做。
+    /// 不补的话这部剧在续播库里没有进行中记录,整张卡从「继续观看」消失。
+    ///
+    /// 找法:先在 `queue`(起播时装配,零请求)里往后找;没有队列时列一次所在目录。
+    /// 这一季都看过了再按季文件夹往后找(每季末至多再列两次目录,配额 `docs/BAIDU_PAN_API.md` §7)。
+    /// 平铺存法整部剧就在所在目录里,⛔ 不往外猜;特别篇(第 0 季)与未分季不算「后面的季」。
+    func advanceFileSourceUpNext(
+        after file: BaiduPanFile,
+        playing: PlaybackSource,
+        queue: EpisodeQueue?
+    ) async {
+        let fileID = String(file.fsID)
+        guard await watchProgress.watchState(forFileID: fileID) == .watched else { return }
+        var provider: (any FileSourceBrowsing)?
+        do {
+            let laterInSeason: [(item: SourceItem, file: BaiduPanFile)]
+            if let queue, let index = queue.episodes.firstIndex(where: { $0.id == fileID }) {
+                laterInSeason = queue.episodes[(index + 1)...].compactMap { episode in
+                    guard let item = episode.resumeItem, let file = episode.source.file else { return nil }
+                    return (item, file)
+                }
+            } else {
+                // 不是剧集(电影等)没有下一集,省一次列目录
+                guard await watchProgress.display(forFileID: fileID)?.episodeNumber != nil else { return }
+                provider = await fileSourceProvider(for: playing, fileID: fileID)
+                guard let provider else { return }
+                let siblings = try await sortedEpisodes(
+                    in: BaiduPanPath.directory(ofFilePath: file.path), provider: provider)
+                laterInSeason = siblings
+                    .firstIndex { $0.file.fsID == file.fsID }
+                    .map { Array(siblings[($0 + 1)...]) } ?? []
+            }
+            if try await pointUpNext(toFirstUnwatchedIn: laterInSeason) { return }
+
+            let seasonFolder = BaiduPanPath.directory(ofFilePath: file.path)
+            let seriesDirectory = BaiduPanPath.seriesDirectory(ofFilePath: file.path)
+            guard seriesDirectory != seasonFolder,
+                  let season = BaiduPanMetadataSynthesizer.seasonNumber(
+                      fromDirectoryName: (seasonFolder as NSString).lastPathComponent)
+            else { return }
+            if provider == nil { provider = await fileSourceProvider(for: playing, fileID: fileID) }
+            guard let provider else { return }
+            let series = try await provider.content(directory: seriesDirectory)
+            guard let structure = BaiduPanSeriesLayout.shape(of: series.items).seriesStructure else { return }
+            let hidden = await hiddenItems.hiddenRefs(sourceID: provider.sourceID)
+            for later in structure.seasons {
+                guard let number = later.number, number > season,
+                      case .folder(let folder) = later.source,
+                      !hidden.contains(folder.ref),
+                      let fsID = UInt64(folder.ref.itemID),
+                      let path = series.filesByID[fsID]?.path else { continue }
+                let episodes = try await sortedEpisodes(in: path, provider: provider)
+                if try await pointUpNext(toFirstUnwatchedIn: episodes) { return }
+            }
+        } catch {
+            Self.watchProgressLogger.error(
+                "续播卡没指向下一集:\(String(describing: error), privacy: .public)")
         }
     }
+
+    /// 找到第一个没看的就停(它已有进度时不写,续播卡本来就会指向它)。
+    /// - Returns: 找到了没看的集
+    private func pointUpNext(
+        toFirstUnwatchedIn candidates: [(item: SourceItem, file: BaiduPanFile)]
+    ) async throws -> Bool {
+        for candidate in candidates {
+            let id = String(candidate.file.fsID)
+            guard await watchProgress.watchState(forFileID: id) != .watched else { continue }
+            try await watchProgress.setUpNext([
+                WatchProgressStore.PlayedMark(
+                    fileID: id,
+                    display: WatchProgressStore.Display(item: candidate.item, file: candidate.file))
+            ])
+            return true
+        }
+        return false
+    }
+
+    /// 目录里的分集,顺序与详情页一致。隐藏的不算。
+    private func sortedEpisodes(
+        in directory: String,
+        provider: any FileSourceBrowsing
+    ) async throws -> [(item: SourceItem, file: BaiduPanFile)] {
+        let content = try await provider.content(directory: directory)
+        let hidden = await hiddenItems.hiddenRefs(sourceID: provider.sourceID)
+        let episodes = BaiduPanSeriesLayout.sortedEpisodes(
+            content.items.filter { $0.kind == .episode && !hidden.contains($0.ref) })
+        // 卡片封面要 TMDB 剧照,与浏览页起播时记的快照一致;刮削不抛错,失败退本地图
+        let scraped = await provider.scrape(items: episodes)
+        return scraped.compactMap { item in
+            guard let fsID = UInt64(item.ref.itemID), let file = content.filesByID[fsID] else { return nil }
+            return (item, file)
+        }
+    }
+
+    /// 播放收尾时用的目录读取能力。百度的来源 id 取自续播快照(起播时记下);没有就找不到来源,返回 nil。
+    private func fileSourceProvider(
+        for playing: PlaybackSource,
+        fileID: String
+    ) async -> (any FileSourceBrowsing)? {
+        switch playing {
+        case .emby:
+            return nil
+        case .localFolder(_, let local):
+            return localFolderProvider(for: local)
+        case .baiduPan:
+            guard let sourceID = await watchProgress.display(forFileID: fileID)?.sourceID,
+                  let baidu = await baiduSources().first(where: { $0.id == sourceID }) else { return nil }
+            return BaiduPanSourceProvider(
+                connection: baiduConnection(),
+                sourceID: baidu.id,
+                folderName: baidu.folderName,
+                scraper: metadataScraper()
+            )
+        }
+    }
+
+    private static let watchProgressLogger = Logger(
+        subsystem: NetworkDiagnostics.subsystem, category: "watch-progress")
 
     /// 切到别的来源时结束 Emby 播放(否则窗口还在播上一台、上报也打到上一台,DesignTokens.swift「界面规则」)。
     /// ⛔ 文件树来源不属于任何 Emby 服务器,不打断。

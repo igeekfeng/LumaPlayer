@@ -588,7 +588,7 @@ struct PlayerWindowView: View {
 
     /// 拆播放器 + 收尾上报,发完后广播 `FinishedPlayback`(Q22)。关窗与换集共用。
     private func finish(_ viewModel: PlayerViewModel) {
-        viewModel.stop()
+        viewModel.close()
         let state = container.state
         let request = viewModel.playbackRequest
         // 关窗时清掉请求,免得下次 openWindow 重放;换集时 nowPlaying 已是新请求,不能动

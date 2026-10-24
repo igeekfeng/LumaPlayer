@@ -17,7 +17,8 @@ actor WatchProgressStore {
         /// 必须存下来:百度列表不给时长(§4),没播过的算不出比例,而「标记已看」本就与比例无关。
         var played: Bool? = nil
         /// 「下一集」占位(Emby NextUp 的对位物),位置为 0。看完一集后库里没有进行中记录,
-        /// 没有它整部剧就从「继续观看」消失;真看了一点后 `record` 把它改回普通进度。
+        /// 没有它整部剧就从「继续观看」消失;点过播放还没进度的集也记成它(`rememberDisplay`)。
+        /// 真看了一点后 `record` 把它改回普通进度。
         var upNext: Bool? = nil
         /// 渲染续播卡片的展示信息。nil 的记录照样能续播,只是不出现在「继续观看」区。
         var display: Display?
@@ -144,6 +145,11 @@ actor WatchProgressStore {
     /// 诊断 / 测试观察用
     func snapshot() -> [String: Entry] { entries() }
 
+    /// nil = 没有记录,或老记录没有快照
+    func display(forFileID id: String) -> Display? {
+        entries()[id]?.display
+    }
+
     /// 「继续观看」的记录:看到一半的 + `upNext` 占位;按 `updatedAt` 倒序。
     func resumeEntries(sourceID: UUID) -> [ResumeRecord] {
         entries()
@@ -239,16 +245,20 @@ actor WatchProgressStore {
     }
 
     /// 起播时记展示快照,保留已有的位置与状态(位置随后由上报器写入)。
+    ///
+    /// 剧集(有集号)还没进度、也没看完时顺带记成 `upNext` 占位:点过播放就该留在「继续观看」里,
+    /// 0 秒就关窗也一样(`record` 不删占位)。没有集号的(电影等)不占位,没看就不算在看。
     func rememberDisplay(fileID id: String, display: Display) throws {
         guard !forgottenIDs.contains(id) else { return }
         var current = entries()
         let existing = current[id]
+        let isUntouched = existing?.played != true && (existing?.positionSeconds ?? 0) <= 0
         current[id] = Entry(
             positionSeconds: existing?.positionSeconds ?? 0,
             durationSeconds: existing?.durationSeconds,
             updatedAt: Date(),
             played: existing?.played,
-            upNext: existing?.upNext,
+            upNext: display.episodeNumber != nil && isUntouched ? true : existing?.upNext,
             display: display
         )
         try persist(current)

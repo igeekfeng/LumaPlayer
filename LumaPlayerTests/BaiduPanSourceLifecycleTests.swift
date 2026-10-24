@@ -202,6 +202,19 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
         XCTAssertEqual(FileSourceViewModel.oneCardPerSeries(records).count, 2)
     }
 
+    /// 季文件夹里各季文件名解析出的剧名常不一致(`Show.S01E01` / `Show.Name.S02E01`),按剧目录并成一张。
+    func testOneCardPerSeriesMergesSeasonFolders() {
+        let records = [
+            makeRecord(fileID: "2", title: "Show Name",
+                       locator: "/apps/LumaPlayer/Show/Season 2/Show.Name.S02E01.mkv",
+                       episode: 1, at: Date(timeIntervalSinceNow: 0)),
+            makeRecord(fileID: "1", title: "Show", locator: "/apps/LumaPlayer/Show/Season 1/Show.S01E05.mkv",
+                       episode: 5, at: Date(timeIntervalSinceNow: -60))
+        ]
+
+        XCTAssertEqual(FileSourceViewModel.oneCardPerSeries(records).map(\.fileID), ["2"])
+    }
+
     /// 倒回去重看第 1 集时,卡片指向第 1 集,而不是更晚写入的「下一集」占位。
     func testOneCardPerSeriesPrefersProgressOverUpNextPlaceholder() throws {
         let records = [

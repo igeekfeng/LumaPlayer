@@ -1261,10 +1261,20 @@ final class FileSourceViewModel {
         if played { await advanceUpNext() }
     }
 
-    /// 续播卡对应的记录本来就有快照,不再给
+    /// 续播卡对应的记录本来就有快照,不再给。标完让卡指向下一集,否则整部剧从续播区消失。
     func markPlayed(_ card: FileSourceResumeCard) async {
-        await applyPlayed(
-            [WatchProgressStore.PlayedMark(fileID: card.fileID, display: nil)], played: true)
+        do {
+            _ = try await container.watchProgress.setPlayed(
+                [WatchProgressStore.PlayedMark(fileID: card.fileID, display: nil)], played: true)
+        } catch {
+            notice = "标记已看失败:\(error)"
+            return
+        }
+        if let file = card.reconstructedFile {
+            await container.advanceFileSourceUpNext(
+                after: file, playing: source.playbackSource(for: file), queue: nil)
+        }
+        await refreshResumeState()
     }
 
     /// 只作用于已列出的这一季,⛔ 不为整部剧去列别的季文件夹。
@@ -1283,7 +1293,7 @@ final class FileSourceViewModel {
     }
 
     /// 把续播卡指向这一季下一个没看的集(类似 Emby NextUp)。只在详情页(知道分集清单)时有效;
-    /// 网格里 `episodes` 为空,⛔ 不为此列目录,由 `AppContainer.advanceBaiduUpNext` 下次补位。
+    /// 网格里 `episodes` 为空,⛔ 不为此列目录。
     /// 季末不写,⛔ 不猜下一季。
     private func advanceUpNext() async {
         guard !episodes.isEmpty else { return }
@@ -1446,14 +1456,18 @@ final class FileSourceViewModel {
         return (progressed + upNext).sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// 剧名 + 所在目录。目录进键防止不同目录的同名内容并成一张;代价是分季目录各出一张。
+    /// 季文件夹里的集按剧目录归一部(`BaiduPanPath.seriesDirectory`):各季文件名解析出的剧名常不一致,
+    /// 剧目录本身已认定是同一部。其余按剧名 + 所在目录,防止同一目录里不同内容并成一张。
     static func seriesKey(of record: WatchProgressStore.ResumeRecord) -> String {
         seriesKey(title: record.display.title, locator: record.display.locator)
     }
 
     static func seriesKey(title: String, locator: String) -> String {
+        let directory = BaiduPanPath.directory(ofFilePath: locator)
+        let series = BaiduPanPath.seriesDirectory(ofFilePath: locator)
+        guard series == directory else { return "|\(series)" }
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return "\(name)|\(BaiduPanPath.directory(ofFilePath: locator))"
+        return "\(name)|\(directory)"
     }
 
     /// ⛔ 找不到返回 nil,不拿 `SourceItem` 反推一个假 `BaiduPanFile`

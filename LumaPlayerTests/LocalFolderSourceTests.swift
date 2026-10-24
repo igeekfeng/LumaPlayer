@@ -202,6 +202,124 @@ final class LocalFolderSourceTests: XCTestCase {
         XCTAssertEqual(again.ref, movie.ref)
     }
 
+    // MARK: - 继续观看
+
+    /// 季文件夹存法:准备好「权游/第1季、第2季」各两集,进到剧详情页(默认第 1 季)。
+    private func enterSeasonFolderSeries(
+        _ container: AppContainer
+    ) async throws -> (FileSourceViewModel, LocalFolderSource) {
+        for path in ["权游/第1季/01.mkv", "权游/第1季/02.mkv", "权游/第2季/01.mkv", "权游/第2季/02.mkv"] {
+            try touch(path)
+        }
+        let source = try await container.addLocalFolderSource(folderURL: root)
+        let viewModel = FileSourceViewModel(container: container, source: .localFolder(source))
+        await viewModel.reload()
+        let series = try XCTUnwrap(viewModel.sortedItems.first { $0.title == "权游" })
+        await viewModel.enter(series)
+        XCTAssertEqual(viewModel.episodes.count, 2)
+        return (viewModel, source)
+    }
+
+    /// 越过 90% 直接关窗(没有自然播完)也算看完:续播卡指向同季下一集,不能整部剧消失。
+    func testClosingPastFinishedThresholdPointsResumeCardToNextEpisode() async throws {
+        let container = try makeContainer()
+        let (viewModel, _) = try await enterSeasonFolderSeries(container)
+        let first = try XCTUnwrap(viewModel.episodes.first)
+        let file = try XCTUnwrap(viewModel.file(for: first))
+        viewModel.play(first)
+        let request = try XCTUnwrap(container.state.nowPlaying)
+        await container.rememberResumeCard(item: first, file: file)
+        try await container.watchProgress.record(
+            fileID: String(file.fsID), positionSeconds: 590, durationSeconds: 600)
+
+        await container.settleFileSourceEpisode(
+            request.source, queue: request.episodeQueue,
+            naturalEnd: false, endedAt: 590, durationSeconds: 600)
+        await viewModel.refreshResumeState()
+
+        XCTAssertEqual(viewModel.resumeCards.map(\.path), ["/片库/权游/第1季/02.mkv"])
+        XCTAssertEqual(viewModel.resumeCards.first?.isUpNext, true)
+    }
+
+    /// 季末看完:去列后面的季,续播卡指向第 2 季第 1 集。
+    func testFinishingSeasonFinalePointsResumeCardToNextSeason() async throws {
+        let container = try makeContainer()
+        let (viewModel, _) = try await enterSeasonFolderSeries(container)
+        let finale = try XCTUnwrap(viewModel.episodes.last)
+        let file = try XCTUnwrap(viewModel.file(for: finale))
+        viewModel.play(finale)
+        let request = try XCTUnwrap(container.state.nowPlaying)
+        await container.rememberResumeCard(item: finale, file: file)
+
+        await container.settleFileSourceEpisode(
+            request.source, queue: request.episodeQueue,
+            naturalEnd: true, endedAt: 600, durationSeconds: nil)
+        await viewModel.refreshResumeState()
+
+        XCTAssertEqual(viewModel.resumeCards.map(\.path), ["/片库/权游/第2季/01.mkv"])
+        XCTAssertEqual(viewModel.resumeCards.first?.episodeNumber, 1)
+    }
+
+    /// 整部剧最后一集看完:没有下一集,卡片该消失(不是 bug)。
+    func testFinishingLastEpisodeOfLastSeasonLeavesNoResumeCard() async throws {
+        let container = try makeContainer()
+        let (viewModel, _) = try await enterSeasonFolderSeries(container)
+        await viewModel.selectSeason(viewModel.directoryShape.seriesStructure?.seasons.last)
+        let last = try XCTUnwrap(viewModel.episodes.last)
+        let file = try XCTUnwrap(viewModel.file(for: last))
+        viewModel.play(last)
+        let request = try XCTUnwrap(container.state.nowPlaying)
+        await container.rememberResumeCard(item: last, file: file)
+
+        await container.settleFileSourceEpisode(
+            request.source, queue: request.episodeQueue,
+            naturalEnd: true, endedAt: 600, durationSeconds: 600)
+        await viewModel.refreshResumeState()
+
+        XCTAssertTrue(viewModel.resumeCards.isEmpty)
+    }
+
+    /// 在续播卡上「标记为已看」:没有播放队列,列所在目录与后面的季找下一集。
+    func testMarkingResumeCardPlayedAdvancesToNextSeason() async throws {
+        let container = try makeContainer()
+        let (viewModel, _) = try await enterSeasonFolderSeries(container)
+        let finale = try XCTUnwrap(viewModel.episodes.last)
+        let file = try XCTUnwrap(viewModel.file(for: finale))
+        await container.rememberResumeCard(item: finale, file: file)
+        try await container.watchProgress.record(
+            fileID: String(file.fsID), positionSeconds: 100, durationSeconds: 600)
+        await viewModel.refreshResumeState()
+        let card = try XCTUnwrap(viewModel.resumeCards.first)
+
+        await viewModel.markPlayed(card)
+
+        XCTAssertNil(viewModel.notice)
+        XCTAssertEqual(viewModel.resumeCards.map(\.path), ["/片库/权游/第2季/01.mkv"])
+    }
+
+    /// 点过播放、0 秒就关窗的一集也留在「继续观看」里;各季的记录并成一张卡。
+    func testPlayedEpisodesAcrossSeasonsShareOneResumeCard() async throws {
+        let container = try makeContainer()
+        let (viewModel, _) = try await enterSeasonFolderSeries(container)
+        let first = try XCTUnwrap(viewModel.episodes.first)
+        let firstFile = try XCTUnwrap(viewModel.file(for: first))
+        await container.rememberResumeCard(item: first, file: firstFile)
+        try await container.watchProgress.record(
+            fileID: String(firstFile.fsID), positionSeconds: 0, durationSeconds: nil)
+        await viewModel.refreshResumeState()
+        XCTAssertEqual(viewModel.resumeCards.map(\.path), ["/片库/权游/第1季/01.mkv"])
+
+        await viewModel.selectSeason(viewModel.directoryShape.seriesStructure?.seasons.last)
+        let later = try XCTUnwrap(viewModel.episodes.first)
+        let laterFile = try XCTUnwrap(viewModel.file(for: later))
+        await container.rememberResumeCard(item: later, file: laterFile)
+        try await container.watchProgress.record(
+            fileID: String(laterFile.fsID), positionSeconds: 120, durationSeconds: 600)
+        await viewModel.refreshResumeState()
+
+        XCTAssertEqual(viewModel.resumeCards.map(\.path), ["/片库/权游/第2季/01.mkv"])
+    }
+
     // MARK: - 删来源
 
     func testRemovingTheSourcePurgesItsLocalDataAndClosesAccess() async throws {

@@ -227,15 +227,51 @@ final class WatchProgressStoreTests: XCTestCase {
     private func display(
         sourceID: UUID,
         title: String = "电影",
-        cover: ImageDescriptor.Snapshot? = nil
+        cover: ImageDescriptor.Snapshot? = nil,
+        episodeNumber: Int? = nil
     ) -> WatchProgressStore.Display {
         WatchProgressStore.Display(
             sourceID: sourceID,
             title: title,
             locator: "/apps/LumaPlayer/\(title).mp4",
             fileName: "\(title).mp4",
-            cover: cover
+            cover: cover,
+            episodeNumber: episodeNumber
         )
+    }
+
+    /// 点过播放的剧集即使 0 秒关窗也留在「继续观看」(占位);电影没看就不算在看。
+    func testRememberDisplayKeepsUntouchedEpisodeAsUpNext() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.rememberDisplay(
+            fileID: "1", display: display(sourceID: sourceID, title: "剧", episodeNumber: 3))
+        try await store.rememberDisplay(fileID: "2", display: display(sourceID: sourceID))
+        try await store.record(fileID: "1", positionSeconds: 0, durationSeconds: nil)
+        try await store.record(fileID: "2", positionSeconds: 0, durationSeconds: nil)
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["1"])
+        XCTAssertEqual(entries.first?.isUpNext, true)
+        let state = await store.watchState(forFileID: "1")
+        XCTAssertEqual(state, .unwatched, "占位不是看过")
+    }
+
+    /// 已看过的集重播不变成占位;有进度的保持进度。
+    func testRememberDisplayDoesNotTurnWatchedOrProgressedEpisodeIntoUpNext() async throws {
+        let store = makeStore()
+        let sourceID = UUID()
+        try await store.setPlayed([.init(fileID: "1", display: nil)], played: true)
+        try await store.record(fileID: "2", positionSeconds: 100, durationSeconds: 600)
+        try await store.rememberDisplay(
+            fileID: "1", display: display(sourceID: sourceID, title: "剧", episodeNumber: 1))
+        try await store.rememberDisplay(
+            fileID: "2", display: display(sourceID: sourceID, title: "剧", episodeNumber: 2))
+
+        let entries = await store.resumeEntries(sourceID: sourceID)
+        XCTAssertEqual(entries.map(\.fileID), ["2"])
+        XCTAssertEqual(entries.first?.isUpNext, false)
+        XCTAssertEqual(entries.first?.positionSeconds, 100)
     }
 
     /// 起播时先记展示(位置 0),上报器随后写位置 —— 两者不能互相抹掉。

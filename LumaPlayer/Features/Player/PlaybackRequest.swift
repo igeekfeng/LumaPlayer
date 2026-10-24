@@ -24,7 +24,7 @@ enum PlaybackSource: Sendable, Equatable {
     }
 
     /// 文件树来源(百度 / 本地文件夹)的文件;Emby 为 nil。两者共用本地收尾
-    /// (`AppContainer.finishFileSourceEpisode`)。
+    /// (`AppContainer.settleFileSourceEpisode`)。
     var file: BaiduPanFile? {
         switch self {
         case .emby: return nil
