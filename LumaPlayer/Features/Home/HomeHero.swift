@@ -26,7 +26,11 @@ struct HomeHero: View {
     /// 轮播据此跳过这一项
     var onBackdropUnavailable: () -> Void = {}
 
-    @State private var width: CGFloat = 0
+    /// 页面量到的内容宽度。⛔ 不要退回「自己用 `onGeometryChange` 量」:状态初值只能是 0,
+    /// 高度先按 0 算(夹到 `homeHeroMinHeight`),量到真实宽度后再长高;轮播每换一张都整块重建
+    /// (`.id(item.id)`),于是每换一次就把下方内容顶上去一截,滚到底时表现为页面自己往上滚 `height(1280) - height(0)`。
+    let width: CGFloat
+
     /// Logo 取不到(或没有)时用文字标题
     @State private var isLogoUnavailable = false
 
@@ -46,7 +50,6 @@ struct HomeHero: View {
         Color.clear
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .overlay(alignment: .topTrailing) { artwork(imageHeight: imageHeight) }
             .clipped()
             .overlay { scrims(imageFraction: height > 0 ? imageHeight / height : 1) }

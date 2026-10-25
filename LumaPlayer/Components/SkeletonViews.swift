@@ -82,8 +82,13 @@ struct SkeletonShelf: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
-            Text(title)
-                .font(.title3.bold())
+            // 与真实货架同高:标题行钉到 `shelfHeaderMinHeight`,翻页按钮出现 / 消失都不再改行高
+            HStack(alignment: .firstTextBaseline, spacing: Metrics.spacingM) {
+                Text(title)
+                    .font(.title3.bold())
+                Spacer()
+            }
+            .frame(minHeight: Metrics.shelfHeaderMinHeight, alignment: .leading)
             HStack(alignment: .top, spacing: Metrics.gridSpacing) {
                 ForEach(0..<count, id: \.self) { _ in
                     VStack(alignment: .leading, spacing: Metrics.spacingS) {

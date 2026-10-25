@@ -35,6 +35,9 @@ struct MediaShelf<Content: View>: View {
                     ShelfPagingButtons(position: $position, geometry: geometry)
                 }
             }
+            // 翻页按钮只在内容可滚时出现,按自然高度排版会让标题行在 19 / 24pt 之间跳,
+            // 那一行数据到达(或货架换宽度)时整页就跟着动。钉住最小高度,见 `Metrics.shelfHeaderMinHeight`。
+            .frame(minHeight: Metrics.shelfHeaderMinHeight, alignment: .leading)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: Metrics.gridSpacing) {
                     content()

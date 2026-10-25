@@ -18,6 +18,8 @@ struct HomeHeroCarousel: View {
     /// `HomeViewModel.resolvingSeriesID`
     var resolvingItemID: String?
     let onOpenDetail: (EmbyItem) -> Void
+    /// 页面量到的宽度,交给 `HomeHero` 算高度。⛔ 不让 hero 自己量:换一张就重建,会先按 0 算高度。
+    let width: CGFloat
 
     /// 不是设计 token。短了读不完标题,长了等于没在轮。
     static let interval: Duration = .seconds(8)
@@ -49,7 +51,8 @@ struct HomeHeroCarousel: View {
                         onPlay: { onPlay(item) },
                         isResolvingPlayback: resolvingItemID == item.id,
                         onOpenDetail: { onOpenDetail(item) },
-                        onBackdropUnavailable: { backdropUnavailable.insert(item.id) }
+                        onBackdropUnavailable: { backdropUnavailable.insert(item.id) },
+                        width: width
                     )
                     // 整块重建:Logo 取不到的标记不能带到下一项
                     .id(item.id)

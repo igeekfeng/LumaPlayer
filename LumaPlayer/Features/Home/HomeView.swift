@@ -40,9 +40,13 @@ struct HomeView: View {
     /// hero 还垫在顶栏底下。滚出去之后顶栏下面是货架,栏底要换回窗口底色的压暗
     @State private var isHeroUnderChrome = true
 
-    /// hero 骨架按它算高度。用真实宽度而不是 0:hero 高度是宽度的函数,骨架若按 0 算(夹到下限 300),
-    /// 数据到达时 hero 会突然长高,整页内容被往下推。
+    /// 内容宽度。骨架 hero 与真实 hero 都用它算高度:hero 高度是宽度的函数,两边取同一个宽度,
+    /// 数据到达 / 轮播换图时才不改布局(见 `HomeHero.width`)。
     @State private var viewportWidth: CGFloat = 0
+
+    /// 最近一次的纵向滚动量。窗口尺寸变化不重放 `onScrollGeometryChange`,而 hero 高度(判定阈值)
+    /// 跟着宽度走,所以缩放窗口后要拿它重算一次,否则顶栏的压暗方式停在上一个宽度上。
+    @State private var scrolledOffset: CGFloat = 0
 
     var body: some View {
         // 只取当前服务器的那份:切服务器后、新一轮 `load` 之前也不会露出别台的内容
@@ -82,7 +86,11 @@ struct HomeView: View {
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, scrolled in
+            scrolledOffset = scrolled
             updateHeroUnderChrome(scrolled)
+        }
+        .onChange(of: viewportWidth) {
+            updateHeroUnderChrome(scrolledOffset)
         }
         .navigationTitle("首页")
         // 加载 / 刷新中整页不可点,避免对旧内容做操作
@@ -197,7 +205,8 @@ private struct HomeHeroSlot: View {
                         }
                     },
                     resolvingItemID: context.viewModel.resolvingSeriesID,
-                    onOpenDetail: { context.onOpenItem($0) }
+                    onOpenDetail: { context.onOpenItem($0) },
+                    width: viewportWidth
                 )
                 // 换了一批就整块重建(轮播回到第一张)。同一批不重建:行对象被刷新时用户停在第 3 张
                 // 不该被弹回第 1 张 —— 所以 id 取的是条目 id 列表,不是行对象。

@@ -265,14 +265,18 @@ enum Metrics {
     static let landscapeCardWidth: CGFloat = posterMinWidth * 1.6
     static let gridSpacing: CGFloat = spacingL
 
+    /// 货架标题行最小高度。翻页按钮(`ShelfPagingButtons`)在内容可滚时出现,比纯标题高 5pt;
+    /// 钉住这一行,骨架与真实货架、可滚与不可滚之间行高才一致(= 翻页按钮那一组的高度)。
+    static let shelfHeaderMinHeight: CGFloat = 24
+
     /// 卡片文字区高度(两行标题 + 一行副标题)。标题一行还是两行、有没有年份,会让卡片高矮浮动;
     /// 浮动就意味着数据到达时整个货架变高 / 变矮,把下方内容推走 —— 滚动中看起来是「自己往上滚一点」。
     /// 骨架与真实内容都按它排版,行高才恒定。数值 = 2×`body` 行高 + `spacingXS` + `caption` 行高。
     static let posterCardTextHeight: CGFloat = 50
     /// 横版卡片:一行标题 + 一行副标题
     static let landscapeCardTextHeight: CGFloat = 33
-    /// 「我的媒体」磁贴:单行名称,没有副标题
-    static let libraryTileTextHeight: CGFloat = 17
+    /// 「我的媒体」磁贴:单行名称,没有副标题(= `body` 单行高)
+    static let libraryTileTextHeight: CGFloat = 16
 
     // MARK: 详情页 hero
 
