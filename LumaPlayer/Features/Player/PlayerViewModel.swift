@@ -41,7 +41,9 @@ final class PlayerViewModel {
 
     // MARK: - 进度与轨道
 
-    private(set) var positionSeconds: Double = 0
+    private(set) var positionSeconds: Double = 0 {
+        didSet { refreshCurrentChapterID() }
+    }
     private(set) var durationSeconds: Double = 0
     /// 0–100(mpv 的 `volume`)
     private(set) var volume: Double = 100
@@ -79,7 +81,9 @@ final class PlayerViewModel {
 
     /// 内核看到的容器章节(Emby / 百度 / 本地文件夹统一由 mpv 给)。转码流通常没有。
     /// 新播放器 = 新文件,起播前清空(`prepareAndLoad`)。
-    private(set) var chapters: [MPVChapter] = []
+    private(set) var chapters: [MPVChapter] = [] {
+        didSet { refreshCurrentChapterID() }
+    }
 
     // MARK: - 画面适配(MPV_INTEGRATION.md 7.4)
 
@@ -688,6 +692,15 @@ final class PlayerViewModel {
     /// 转码流下永远追不上客户端重新起流的位置。
     var currentChapter: MPVChapter? {
         MPVChapter.current(at: positionSeconds, in: chapters)
+    }
+
+    /// 当前章节 id,只在跨章时才变。菜单内容读它而不是 `currentChapter`:后者随 `positionSeconds`
+    /// 每 0.2s 失效,会让展开 / 悬停中的菜单反复重建、一直闪。
+    private(set) var currentChapterID: Int?
+
+    private func refreshCurrentChapterID() {
+        let id = currentChapter?.id
+        if id != currentChapterID { currentChapterID = id }
     }
 
     /// 下一章:严格晚于当前位置的第一条

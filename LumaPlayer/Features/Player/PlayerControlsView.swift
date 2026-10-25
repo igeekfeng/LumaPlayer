@@ -699,7 +699,7 @@ struct PlayerOptionsMenu: View {
     private var chapterMenu: some View {
         if viewModel.hasChapters {
             Picker("章节", selection: Binding<Int?>(
-                get: { viewModel.currentChapter?.id },
+                get: { viewModel.currentChapterID },
                 set: { id in
                     guard let id, let chapter = viewModel.chapters.first(where: { $0.id == id })
                     else { return }
