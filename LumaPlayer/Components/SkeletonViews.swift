@@ -68,12 +68,17 @@ struct SkeletonGrid: View {
 }
 
 /// 首页一行货架的骨架:真实标题 + 一排卡片占位。
+///
+/// `textHeight` 必须与真实卡片的文字区高度一致(见 `Metrics.posterCardTextHeight` 等):
+/// 骨架比内容高或矮,数据到达时整行高度就变,会把下方内容推走。
 struct SkeletonShelf: View {
     let title: String
     var cardWidth: CGFloat = Metrics.posterMinWidth
     /// 宽 / 高
     var aspectRatio: Double = Metrics.posterAspectRatio
     var count = 6
+    /// 卡片下方文字占位的高度。按这一行真实卡片的文字区给(海报 / 横版 / 磁贴各不相同)
+    var textHeight: CGFloat = Metrics.posterCardTextHeight
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
@@ -85,7 +90,7 @@ struct SkeletonShelf: View {
                         SkeletonBlock()
                             .frame(width: cardWidth, height: cardHeight)
                         SkeletonBlock(cornerRadius: Radius.card)
-                            .frame(width: cardWidth * 0.8, height: Metrics.spacingM)
+                            .frame(width: cardWidth * 0.8, height: textHeight, alignment: .top)
                     }
                 }
             }

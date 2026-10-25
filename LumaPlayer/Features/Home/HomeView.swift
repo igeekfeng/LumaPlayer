@@ -40,6 +40,10 @@ struct HomeView: View {
     /// hero 还垫在顶栏底下。滚出去之后顶栏下面是货架,栏底要换回窗口底色的压暗
     @State private var isHeroUnderChrome = true
 
+    /// hero 骨架按它算高度。用真实宽度而不是 0:hero 高度是宽度的函数,骨架若按 0 算(夹到下限 300),
+    /// 数据到达时 hero 会突然长高,整页内容被往下推。
+    @State private var viewportWidth: CGFloat = 0
+
     var body: some View {
         // 只取当前服务器的那份:切服务器后、新一轮 `load` 之前也不会露出别台的内容
         let sections = viewModel.sections(for: server.id)
@@ -53,7 +57,12 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // hero 铺到窗口最上沿(压在浮动顶栏下面);没有 hero 时它只留出顶栏的高度
-                HomeHeroSlot(sections: sections, context: context, isUnderChrome: isHeroUnderChrome)
+                HomeHeroSlot(
+                    sections: sections,
+                    context: context,
+                    isUnderChrome: isHeroUnderChrome,
+                    viewportWidth: viewportWidth
+                )
                 LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
                     HomeLibrariesRow(row: sections.views, context: context)
                     HomeResumeRow(row: sections.resume, context: context)
@@ -67,13 +76,13 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .ignoresSafeArea(.container, edges: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewportWidth = $0 }
         // ⛔ 关掉顶部的系统滚动边缘效果:它会在 hero 顶上盖一条窗口底色的柔边(浅色下是白带)
         .scrollEdgeEffectHidden(true, for: .top)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            let scrolled = geometry.contentOffset.y + geometry.contentInsets.top
-            return scrolled < HomeHero.height(forWidth: geometry.containerSize.width) - Metrics.chromeBarHeight
-        } action: { _, under in
-            isHeroUnderChrome = under
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, scrolled in
+            updateHeroUnderChrome(scrolled)
         }
         .navigationTitle("首页")
         // 加载 / 刷新中整页不可点,避免对旧内容做操作
@@ -108,6 +117,21 @@ struct HomeView: View {
             Text(viewModel.seriesPlayError ?? "")
         }
     }
+
+    /// hero 是否还垫在顶栏底下。
+    ///
+    /// 阈值两侧各留 `heroChromeHysteresis`:正好停在临界高度时,行高哪怕变一两像素都会把判定翻回去,
+    /// 而判定一变顶栏底色就换一套(还连带一次整页求值),看起来是页面在那个位置来回晃。
+    private func updateHeroUnderChrome(_ scrolled: CGFloat) {
+        let threshold = HomeHero.height(forWidth: viewportWidth) - Metrics.chromeBarHeight
+        if isHeroUnderChrome {
+            if scrolled > threshold + Self.heroChromeHysteresis { isHeroUnderChrome = false }
+        } else if scrolled < threshold - Self.heroChromeHysteresis {
+            isHeroUnderChrome = true
+        }
+    }
+
+    private static let heroChromeHysteresis: CGFloat = 24
 }
 
 /// 首页各行共用的依赖与动作(MainActor:只在视图里构造与调用)
@@ -134,6 +158,7 @@ private struct HomeHeroSlot: View {
     let sections: HomeViewModel.Sections
     let context: HomeRowContext
     let isUnderChrome: Bool
+    let viewportWidth: CGFloat
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.browseChrome) private var chrome
@@ -150,8 +175,9 @@ private struct HomeHeroSlot: View {
         Group {
             switch pick {
             case .pending:
+                // 与真实 hero 同高(同一个宽度公式),数据到达时不改布局
                 SkeletonBlock(cornerRadius: 0)
-                    .frame(height: HomeHero.height(forWidth: 0))
+                    .frame(height: HomeHero.height(forWidth: viewportWidth))
             case .none:
                 Color.clear
                     .frame(height: Metrics.chromeBarHeight)
@@ -209,7 +235,8 @@ private struct HomeLibrariesRow: View {
                 title: Self.title,
                 cardWidth: Metrics.libraryTileWidth,
                 aspectRatio: Metrics.landscapeAspectRatio,
-                count: 4
+                count: 4,
+                textHeight: Metrics.libraryTileTextHeight
             )
         case .failed(let failure):
             HomeSectionError(title: Self.title, failure: failure, context: context)
@@ -258,7 +285,8 @@ private struct HomeResumeRow: View {
                 title: title,
                 cardWidth: Metrics.landscapeCardWidth,
                 aspectRatio: Metrics.landscapeAspectRatio,
-                count: 4
+                count: 4,
+                textHeight: Metrics.landscapeCardTextHeight
             )
         case .failed(let failure):
             HomeSectionError(title: title, failure: failure, context: context)

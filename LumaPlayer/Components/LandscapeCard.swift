@@ -60,6 +60,8 @@ struct LandscapeCard: View {
                 }
             }
             .frame(width: Self.width, alignment: .leading)
+            // 副标题可能有、可能没有(见 `secondaryTitle`),不占位的话卡片高度会跳。见 `Metrics.landscapeCardTextHeight`。
+            .frame(minHeight: Metrics.landscapeCardTextHeight, alignment: .topLeading)
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }

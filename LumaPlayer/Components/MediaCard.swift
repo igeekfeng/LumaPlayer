@@ -35,6 +35,9 @@ struct MediaCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            // 高度钉死:标题 1/2 行、有没有年份都会让卡片高矮不一,骨架与真实货架就对不上,
+            // 数据到达时行高变化把下方内容推走。见 `Metrics.posterCardTextHeight`。
+            .frame(minHeight: Metrics.posterCardTextHeight, alignment: .topLeading)
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
