@@ -1,13 +1,13 @@
 import Foundation
 import os
 
-/// 弹幕逐帧诊断:区分时钟跳动与掉帧。默认关闭(只多一次判空)。
+/// 弹幕逐帧诊断:区分时钟跳动与掉帧。**默认开启**,`-danmakuDiagnostics NO` 关(参数域,不落盘)。
 ///
-/// 打开:启动参数 `-danmakuDiagnostics YES`(`UserDefaults` 参数域,不落盘):
+/// 常开是因为瞬移偶现,而且重启本身就会让它消失 —— 关着等它出现等于永远抓不到。
+/// `.notice` 落盘,事后按时间回查即可:
 ///
 /// ```
-/// open -a LumaPlayer --args -danmakuDiagnostics YES
-/// log stream --style compact --predicate 'subsystem == "com.local.LumaPlayer" AND category == "danmaku.frames"'
+/// log show --last 2h --style compact --predicate 'subsystem == "com.local.LumaPlayer" AND category == "danmaku.frames"'
 /// ```
 ///
 /// 每 `reportInterval` 秒打一行 `.notice` 汇总。判定以屏幕刷新间隔(`targetTimestamp − timestamp`)
@@ -24,16 +24,22 @@ import os
 /// - 时钟跳:每帧位移残差 ≥ `jumpEpsilon` 的次数与大小(pt);≥ `DanmakuClock.snapThreshold` 秒的算 seek,单独计数。
 /// - 速度偏差:实际速度相对「倍速 × 速度」的最大偏离比例。
 /// - 耗时:回调本身耗时,不含 Core Animation 提交与 GPU 合成(只能从掉帧间接看)。
+///
+/// 汇总之外,跳变当场另打一行,⛔ 别指望从 5 秒汇总里读出单次瞬移有多大:
+/// - `弹幕跳变`:相邻两帧整层平移 ≥ `eventJumpThreshold` pt(或跨过 seek 阈值)。
+/// - `弹幕时钟对齐`:位置更新把时钟从外推值直接拽到报来的位置,带误差与「距上次位置更新」的时长 ——
+///   后者异常大说明位置不再上报(缓冲 / 长停顿),⛔ 不是弹幕算错。
 @MainActor
 final class DanmakuFrameDiagnostics {
 
-    static let isEnabled = UserDefaults.standard.bool(forKey: "danmakuDiagnostics")
+    static let isEnabled = UserDefaults.standard.object(forKey: "danmakuDiagnostics") as? Bool ?? true
     static let reportInterval = 5.0
 
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "danmaku.frames")
 
     private var stats = DanmakuFrameStats()
     private var windowStart: Double?
+    private var lastSnapLog = 0.0
 
     /// 生命周期变化时显式断开;⛔ 不靠「间隔 ≥ 250ms」猜暂停(会漏记长停顿)。
     func breakContinuity() {
@@ -41,7 +47,9 @@ final class DanmakuFrameDiagnostics {
     }
 
     func record(_ frame: DanmakuFrameStats.Frame) {
-        stats.record(frame)
+        if let jump = stats.record(frame) {
+            Self.logger.notice("\(Self.describe(jump), privacy: .public)")
+        }
         guard let start = windowStart else {
             windowStart = frame.hostTime
             return
@@ -52,6 +60,27 @@ final class DanmakuFrameDiagnostics {
         }
         stats.resetWindow()
         windowStart = frame.hostTime
+    }
+
+    /// 位置更新直接把时钟拽到报来的位置。同一秒内只留第一条:缓冲时可能连续对齐,刷屏反而看不到起点。
+    func record(snap: DanmakuClock.Snap) {
+        // 0.05 秒在 216 pt/s 下约 10 pt,再小看不出位移,只剩暂停恢复时的噪音
+        guard abs(snap.error) >= 0.05, snap.at - lastSnapLog >= 1 else { return }
+        lastSnapLog = snap.at
+        func signed(_ value: Double) -> String { String(format: "%+.2f", value) }
+        let line = "弹幕时钟对齐 误差 \(signed(snap.error))s 位置 \(signed(snap.position))"
+            + " 外推 \(signed(snap.predicted)) 距位置更新 \(String(format: "%.0f", snap.sinceUpdate * 1000))ms"
+            + (snap.resumed ? " 暂停后恢复" : "")
+        Self.logger.notice("\(line, privacy: .public)")
+    }
+
+    private static func describe(_ jump: DanmakuFrameStats.Jump) -> String {
+        func signed(_ value: Double) -> String { String(format: "%+.1f", value) }
+        return "弹幕跳变 \(jump.snapped ? "对齐" : "漂移") 平移 \(signed(jump.points))pt / \(signed(jump.seconds))s"
+            + " 时间 \(signed(jump.fromTime))→\(signed(jump.toTime))"
+            + " 间隔 \(String(format: "%.1f", jump.interval * 1000))ms 倍速 \(String(format: "%.2f", jump.rate))"
+            + " 在场 \(jump.visibleCount)"
+            + " 可见 \(jump.windowVisible ? 1 : 0)"
     }
 }
 
@@ -71,6 +100,21 @@ struct DanmakuFrameStats: Sendable {
         var workDuration: Double
         var visibleCount: Int
         var windowVisible: Bool
+    }
+
+    /// 相邻两帧之间整层弹幕平移超过肉眼可辨的量(或跨过 seek 阈值)。
+    struct Jump: Sendable {
+        /// 弹幕时间(秒);`points` 正数 = 往左跳
+        var fromTime: Double
+        var toTime: Double
+        var seconds: Double
+        var points: Double
+        var interval: Double
+        var rate: Double
+        var visibleCount: Int
+        var windowVisible: Bool
+        /// 跨过 `DanmakuClock.snapThreshold`,按 seek 计入汇总
+        var snapped: Bool
     }
 
     struct Summary: Sendable, CustomStringConvertible {
@@ -116,6 +160,8 @@ struct DanmakuFrameStats: Sendable {
     static let longStallThreshold = 0.25
     /// pt。须高于时钟微调速度的正常每帧残差(120 Hz、216 pt/s、偏差 10% 时约 0.18 pt)
     static let jumpEpsilon = 0.25
+    /// pt。单独立行的门槛:正常微调的每帧残差远达不到,两倍速长吸收窗口也只有 0.4 pt 量级
+    static let eventJumpThreshold = 8.0
 
     private var last: Frame?
     private var intervals: [Double] = []
@@ -133,7 +179,8 @@ struct DanmakuFrameStats: Sendable {
     private var visibleCounts: [Int] = []
     private var velocity = 0.0
 
-    mutating func record(_ frame: Frame) {
+    @discardableResult
+    mutating func record(_ frame: Frame) -> Jump? {
         workDurations.append(frame.workDuration)
         visibleCounts.append(frame.visibleCount)
         if frame.windowVisible { windowVisibleFrames += 1 }
@@ -141,11 +188,11 @@ struct DanmakuFrameStats: Sendable {
         if frame.refreshInterval > 0 { refreshIntervals.append(frame.refreshInterval) }
         velocity = frame.velocity
         defer { last = frame }
-        guard let last else { return }
+        guard let last else { return nil }
         // 可见性切换时不比较;两帧可见性相同时,再长的间隔也保留
-        guard frame.windowVisible == last.windowVisible else { return }
+        guard frame.windowVisible == last.windowVisible else { return nil }
         let interval = frame.targetTime - last.targetTime
-        guard interval >= 0 else { return }
+        guard interval >= 0 else { return nil }
         intervals.append(interval)
         if interval >= Self.longStallThreshold { longStallCount += 1 }
 
@@ -159,15 +206,22 @@ struct DanmakuFrameStats: Sendable {
         callbackJitters.append(abs((frame.hostTime - last.hostTime) - interval))
 
         let residualSeconds = (frame.danmakuTime - last.danmakuTime) - interval * frame.rate
-        if abs(residualSeconds) >= DanmakuClock.snapThreshold {
+        let displacement = abs(residualSeconds) * frame.velocity
+        let snapped = abs(residualSeconds) >= DanmakuClock.snapThreshold
+        if snapped {
             snapCount += 1
         } else {
-            let residualPoints = abs(residualSeconds) * frame.velocity
-            if residualPoints >= Self.jumpEpsilon { jumps.append(residualPoints) }
+            if displacement >= Self.jumpEpsilon { jumps.append(displacement) }
             if interval > 0, frame.rate > 0 {
                 speedDeviations.append(abs(residualSeconds) / (interval * frame.rate))
             }
         }
+        guard snapped || displacement >= Self.eventJumpThreshold else { return nil }
+        return Jump(
+            fromTime: last.danmakuTime, toTime: frame.danmakuTime,
+            seconds: residualSeconds, points: residualSeconds * frame.velocity,
+            interval: interval, rate: frame.rate,
+            visibleCount: frame.visibleCount, windowVisible: frame.windowVisible, snapped: snapped)
     }
 
     /// 本窗口没有帧间隔时返回 nil。

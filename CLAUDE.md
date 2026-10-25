@@ -69,6 +69,9 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' -only-tes
 - 图标源是 `Tools/app-icon/render-icon.swift`,改脚本后重跑,不手改 PNG。
 - 诊断日志(只记失败请求,已脱敏):`~/Library/Containers/com.local.LumaPlayer/Data/Library/Logs/LumaPlayer/network.log`。
   凭据文件(含 token,⛔ 不要整段贴出):同容器下 `Library/Application Support/LumaPlayer/credentials.json`。
+- 弹幕瞬移诊断走统一日志(`danmaku.frames`,默认常开),回查:
+  `log show --last 2h --style compact --predicate 'subsystem == "com.local.LumaPlayer" AND category == "danmaku.frames"'`。
+  字段含义见 `docs/DANMAKU.md` §4。
 
 ### 提交前自检(仓库根执行)
 

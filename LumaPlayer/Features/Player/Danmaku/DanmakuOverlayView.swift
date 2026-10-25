@@ -111,8 +111,9 @@ final class DanmakuLayerView: NSView {
         // 只在三项真变了时同步时钟:父视图因别的原因刷新时位置是旧值,会把时钟往回拽
         let clockInput = (position: position, isPaused: isPaused, speed: speed)
         if lastClockInput.map({ $0 != clockInput }) ?? true {
-            clock.update(position: position, isPaused: isPaused, speed: speed, now: CACurrentMediaTime())
+            let snap = clock.update(position: position, isPaused: isPaused, speed: speed, now: CACurrentMediaTime())
             lastClockInput = clockInput
+            if let diagnostics, let snap { diagnostics.record(snap: snap) }
         }
         displayLink?.isPaused = isPaused
         // 暂停时没有逐帧刷新,手动画一帧
@@ -327,11 +328,27 @@ final class DanmakuClock {
     static let slewDuration = 1.0
     static let maxSlewRatio = 0.1
 
-    func update(position: Double, isPaused paused: Bool, speed: Double, now: Double) {
+    /// 不微调、直接把锚点拽到报来位置的那一次。诊断用,⛔ 不要拿它改行为。
+    struct Snap: Sendable {
+        /// 报来的位置 − 外推值,正数 = 时钟被往前拽
+        var error: Double
+        var position: Double
+        var predicted: Double
+        /// 距上一次位置更新(秒):大说明位置不再上报(缓冲 / 长停顿),不是弹幕算错
+        var sinceUpdate: Double
+        var resumed: Bool
+        var at: Double
+    }
+
+    @discardableResult
+    func update(position: Double, isPaused paused: Bool, speed: Double, now: Double) -> Snap? {
         let predicted = time(at: now)
         let error = position - predicted
+        let sinceUpdate = anchorHostTime > 0 ? now - anchorHostTime : 0
+        let resumed = isPaused && !paused
         let newRate = speed.isFinite && speed > 0 ? speed : 1
-        if !paused, !isPaused, abs(error) < Self.snapThreshold {
+        let slews = !paused && !isPaused && abs(error) < Self.snapThreshold
+        if slews {
             anchorTime = predicted
             slewError = error
             slewWindow = max(Self.slewDuration, abs(error) / (newRate * Self.maxSlewRatio))
@@ -343,6 +360,10 @@ final class DanmakuClock {
         anchorHostTime = now
         rate = newRate
         isPaused = paused
+        guard !slews else { return nil }
+        return Snap(
+            error: error, position: position, predicted: predicted,
+            sinceUpdate: sinceUpdate, resumed: resumed, at: now)
     }
 
     func time(at hostTime: Double) -> Double {
