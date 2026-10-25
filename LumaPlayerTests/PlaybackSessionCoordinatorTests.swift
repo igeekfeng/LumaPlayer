@@ -28,7 +28,7 @@ final class PlaybackSessionCoordinatorTests: XCTestCase {
     // MARK: - 请求
 
     /// 4.3:不发 `EnableDirectPlay`(带 profile 时发 false 会连 DirectStream 一起关掉),
-    /// 另外两个开关为 true,并带最小 `DeviceProfile`。
+    /// 另外两个开关为 true,并带最小 `DeviceProfile`(直连不限 + 转码输出)。
     func testPlaybackInfoRequestSendsExpectedBody() async throws {
         stubPlaybackInfo("playback_direct_stream_synthetic.json")
 
@@ -52,6 +52,15 @@ final class PlaybackSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(direct.count, 1)
         XCTAssertEqual(direct.first?["Type"] as? String, "Video")
         XCTAssertNil(direct.first?["Container"])
+        // 转码侧明确声明输出:HLS / TS + H.264 + AAC
+        let transcoding = try XCTUnwrap(profile["TranscodingProfiles"] as? [[String: Any]])
+        XCTAssertEqual(transcoding.count, 1)
+        XCTAssertEqual(transcoding.first?["Type"] as? String, "Video")
+        XCTAssertEqual(transcoding.first?["Container"] as? String, "ts")
+        XCTAssertEqual(transcoding.first?["Protocol"] as? String, "hls")
+        XCTAssertEqual(transcoding.first?["VideoCodec"] as? String, "h264")
+        XCTAssertEqual(transcoding.first?["AudioCodec"] as? String, "aac")
+        XCTAssertEqual(transcoding.first?["Context"] as? String, "Streaming")
     }
 
     // MARK: - 起播位置(4.5)

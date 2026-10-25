@@ -82,7 +82,9 @@
 - [ ] 两台服务器之间切换不串台(进度、续播、图片)
 - [ ] token 被吊销后回登录页 / 静默重登(⛔ 不去别人后台删设备制造 401)
 
-本地实例不发 `DeviceProfile` 时对 HEVC 10bit 也给 DirectStream,所以**转码路径在本地也跑不起来**。
+`DirectPlayProfiles` 不限容器 / 编码,本地实例对 HEVC 10bit 也给 DirectStream,所以**转码路径在本地很难触发**
+(需关直连或压低码率);`TranscodingProfiles`(HLS/TS/h264/aac)的服务端行为未在任何服务器验证:
+- [ ] 触发转码后服务端按该 profile 给出 `TranscodingUrl`(m3u8),mpv 能播,seek 经 `StartTimeTicks` 重起流正常
 
 ### 百度网盘来源(本机无开发者账号,只有 mock 覆盖)
 

@@ -215,8 +215,13 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 `SubtitleStreamIndex` / `MediaSourceId` / `DeviceProfile` 等,存在但不发。
 
 - `EnableDirectPlay` 固定 **`false`**:传 true 会拿到一个打不开的服务端本地 `Path`。
-- `DeviceProfile` ⚠️:完全省略。后果是 4.9.5.0 对 HEVC 10bit 也只给 DirectStream,转码路径很难触发(Q16)。
-  要补只补必要的 `DirectPlayProfiles`;⛔ 不凭想象写几百行 profile。
+- `DeviceProfile` 🔶:字段名与枚举值已对 4.1.1.0 OpenAPI(`Dlna.DeviceProfile` / `Dlna.DirectPlayProfile` /
+  `Dlna.TranscodingProfile`)核实,**服务端行为未在任何服务器验证**(Q16)。只发两段:
+  - `DirectPlayProfiles: [{Type: "Video"}]`:容器 / 编码不限(libmpv 什么都能播),⛔ 不写白名单,写窄了能直连的会被转码;
+  - `TranscodingProfiles: [{Type: "Video", Container: "ts", Protocol: "hls", VideoCodec: "h264", AudioCodec: "aac", Context: "Streaming"}]`:
+    必须转码时的输出规格,不留给服务端猜。
+  不发:`SubtitleProfiles`(App 目前不消费服务端给的字幕交付地址,M4,声明了反而让服务端按 External 交付后没人取)、
+  `CodecProfiles` / `MaxStreamingBitrate`(没有用户可调的码率上限,凭空写一个数是产品决策)。⛔ 不凭想象写几百行 profile。
 
 响应 ✅:`MediaSources`(可空 / 缺失)、`PlaySessionId`(schema 不 required → 可选)、`ErrorCode`
 (`NotAllowed` / `NoCompatibleStream` / `RateLimitExceeded`,按普通字符串解)。

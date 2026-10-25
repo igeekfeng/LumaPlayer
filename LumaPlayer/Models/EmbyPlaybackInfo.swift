@@ -15,15 +15,36 @@ struct PlaybackInfoRequest: Encodable, Sendable, Equatable {
     /// 最小 `DeviceProfile`。不带服务端不给 `DirectStreamUrl`,部分带网关的服务器对自拼地址回 200 + JSON 错误体(issue #2)。
     let deviceProfile = DeviceProfile()
 
-    /// 只声明「视频容器 / 编码不限」(libmpv 什么都能播)。⛔ 不写容器 / 编码白名单:写窄了能直连的会被转码
+    /// 直连侧声明「视频容器 / 编码不限」(libmpv 什么都能播),转码侧声明服务端该转成什么(HLS / TS + H.264 + AAC,
+    /// mpv 原生支持)。⛔ 直连侧不写容器 / 编码白名单:写窄了能直连的会被转码;⛔ 转码侧不省略:省了容器、编码由服务端猜
     /// (API_CONTRACT.md 4.3)。
     struct DeviceProfile: Encodable, Sendable, Equatable {
         struct DirectPlayProfile: Encodable, Sendable, Equatable {
             let type = "Video"
             enum CodingKeys: String, CodingKey { case type = "Type" }
         }
+        struct TranscodingProfile: Encodable, Sendable, Equatable {
+            let type = "Video"
+            let container = "ts"
+            let videoCodec = "h264"
+            let audioCodec = "aac"
+            let protocolName = "hls"
+            let context = "Streaming"
+            enum CodingKeys: String, CodingKey {
+                case type = "Type"
+                case container = "Container"
+                case videoCodec = "VideoCodec"
+                case audioCodec = "AudioCodec"
+                case protocolName = "Protocol"
+                case context = "Context"
+            }
+        }
         let directPlayProfiles = [DirectPlayProfile()]
-        enum CodingKeys: String, CodingKey { case directPlayProfiles = "DirectPlayProfiles" }
+        let transcodingProfiles = [TranscodingProfile()]
+        enum CodingKeys: String, CodingKey {
+            case directPlayProfiles = "DirectPlayProfiles"
+            case transcodingProfiles = "TranscodingProfiles"
+        }
     }
 
     init(
