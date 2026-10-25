@@ -17,6 +17,11 @@ actor PlaybackSessionCoordinator: PlaybackSessionPreparing {
     /// - Parameter startTimeTicks: 转码起流位置(4.5)。会影响服务端决策,只在确知走转码后才传:
     ///   `PlayerViewModel` 先取一次会话,确认是转码再带它重取。
     func makeSession(startTimeTicks: Int64? = nil) async throws -> PlaybackSession {
+        try await makeSession(startTimeTicks: startTimeTicks, mediaSourceID: nil)
+    }
+
+    /// - Parameter mediaSourceID: 用户选的版本。不进请求(每个版本的地址都在同一份响应里),只影响选源。
+    func makeSession(startTimeTicks: Int64?, mediaSourceID: String?) async throws -> PlaybackSession {
         let response = try await connection.playbackInfo(
             itemID: itemID,
             startTimeTicks: startTimeTicks
@@ -31,7 +36,8 @@ actor PlaybackSessionCoordinator: PlaybackSessionPreparing {
             for: response,
             itemID: itemID,
             urlBuilder: builder,
-            headers: headers
+            headers: headers,
+            preferredSourceID: mediaSourceID
         )
         // URL 可能带 api_key(第 6 节),进日志前脱敏
         let safe = SecretRedactor.redactedDescription(of: session.plan.url)

@@ -99,8 +99,12 @@ struct PlaybackDecision: Sendable, Equatable {
 /// 照 4.4 的步骤,额外校验 `PlaySessionId`:4.5 要求它必填,但 schema 不保证出现。
 enum PlaybackDecisionEngine {
 
+    /// - Parameter preferredSourceID: 用户指定的版本。在响应里找不到(换服务器 / 版本被移除)时按默认规则选。
     /// ⛔ 不碰地址。
-    static func decision(for response: EmbyPlaybackInfoResponse) throws -> PlaybackDecision {
+    static func decision(
+        for response: EmbyPlaybackInfoResponse,
+        preferredSourceID: String? = nil
+    ) throws -> PlaybackDecision {
         if let code = response.errorCode {
             throw PlaybackError.serverRejected(code: code)
         }
@@ -114,8 +118,10 @@ enum PlaybackDecisionEngine {
             throw PlaybackError.missingRequiredField(name: "PlaySessionId")
         }
 
-        // 取第一个支持 DirectStream 的,都不支持则取第一个(4.4 第 3 步)
-        let selected = sources.first { $0.supportsDirectStream == true } ?? sources[0]
+        // 用户指定的优先;否则取第一个支持 DirectStream 的,都不支持则取第一个(4.4 第 3 步)
+        let selected = preferredSourceID.flatMap { id in sources.first { $0.id == id } }
+            ?? sources.first { $0.supportsDirectStream == true }
+            ?? sources[0]
 
         if selected.supportsDirectStream == true {
             return PlaybackDecision(
@@ -134,10 +140,12 @@ enum PlaybackDecisionEngine {
         for response: EmbyPlaybackInfoResponse,
         itemID: String,
         urlBuilder: PlaybackURLBuilder,
-        headers: [String: String]
+        headers: [String: String],
+        preferredSourceID: String? = nil
     ) throws -> PlaybackSession {
-        let decision = try decision(for: response)
+        let decision = try decision(for: response, preferredSourceID: preferredSourceID)
         let selected = decision.source
+        let alternatives = (response.mediaSources ?? []).count > 1 ? response.mediaSources ?? [] : []
 
         switch decision.method {
         case .directStream:
@@ -159,6 +167,7 @@ enum PlaybackDecisionEngine {
                     mediaSourceID: selected.id
                 ),
                 mediaSource: selected,
+                availableSources: alternatives,
                 seekStrategy: .clientSeek
             )
 
@@ -176,6 +185,7 @@ enum PlaybackDecisionEngine {
                     mediaSourceID: selected.id
                 ),
                 mediaSource: selected,
+                availableSources: alternatives,
                 seekStrategy: .restartStream
             )
         }

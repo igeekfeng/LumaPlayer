@@ -625,6 +625,7 @@ struct PlayerOptionsMenu: View {
             Divider()
             markersMenu
             chapterMenu
+            versionMenu
             Divider()
             pictureMenu
             Divider()
@@ -645,6 +646,22 @@ struct PlayerOptionsMenu: View {
         .fixedSize()
         .help("播放选项")
         .accessibilityLabel("播放选项")
+    }
+
+    /// 同一部片的多版本;只有一个版本时不出现。切换 = 从当前位置重新起流。
+    @ViewBuilder
+    private var versionMenu: some View {
+        if viewModel.versionOptions.count > 1 {
+            Picker("版本", selection: Binding<String?>(
+                get: { viewModel.session?.mediaSource.id },
+                set: { id in if let id { viewModel.selectVersion(id) } }
+            )) {
+                ForEach(viewModel.versionOptions, id: \.id) { source in
+                    Text(source.versionLabel).tag(String?.some(source.id))
+                }
+            }
+            .pickerStyle(.menu)
+        }
     }
 
     /// 手动片头 / 片尾,同一部剧共用(`ManualMarkersScope`)。

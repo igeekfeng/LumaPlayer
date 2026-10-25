@@ -11,6 +11,8 @@ struct PlaybackSession: Sendable, Equatable {
     let plan: PlaybackPlan
     /// **被决策选中**的那条源(不是响应里的第一条)
     let mediaSource: EmbyMediaSource
+    /// 响应里的全部版本(含被选中的那条),同一部片的多版本切换用;单版本与非 Emby 来源为空。
+    var availableSources: [EmbyMediaSource] = []
     /// 拖动进度的实现方式
     let seekStrategy: PlaybackSeekStrategy
     /// 随本次播放一起挂上去的**外挂字幕**(百度同目录的 `.srt` / `.ass`,见 `BaiduPanSubtitle`)——

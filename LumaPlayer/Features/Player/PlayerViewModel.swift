@@ -294,6 +294,7 @@ final class PlayerViewModel {
         self.container = container
         self.readMonitoredProperties = readMonitoredProperties
         self.request = request
+        self.preferredSourceID = request.preferredMediaSourceID
         self.carryOver = carryOver
         self.frozenPlayer = lastFramePlayer
         self.showsStatistics = carryOver?.showsStatistics ?? false
@@ -1513,14 +1514,16 @@ final class PlayerViewModel {
     private func prepareAndLoad() async {
         do {
             // 会话准备按来源装配(Emby 决策器 / 百度播放映射),⛔ 播放页不认具体来源。
-            var prepared = try await preparer.makeSession(startTimeTicks: nil)
+            var prepared = try await preparer.makeSession(
+                startTimeTicks: nil, mediaSourceID: preferredSourceID)
             try Task.checkCancellation()
             // 能重新起流的转码 + 非零起播:4.5 规定服务端从 StartTimeTicks 处起流。先取一次再带值,
             // 是因为 StartTimeTicks 也是决策输入 —— 一上来就带可能把本可 DirectStream 的文件推去转码。
             // ⛔ 判据是 `seekStrategy` 而不是 `plan.method`:拖不动的源重取也只会从头开始。
             if prepared.seekStrategy == .restartStream, startSeconds > 0 {
                 prepared = try await preparer.makeSession(
-                    startTimeTicks: TickConverter.ticks(fromSeconds: startSeconds))
+                    startTimeTicks: TickConverter.ticks(fromSeconds: startSeconds),
+                    mediaSourceID: preferredSourceID)
                 try Task.checkCancellation()
             }
             session = prepared
@@ -1602,6 +1605,20 @@ final class PlayerViewModel {
 
     /// 倍速设不回新建播放器时的排障出口(与 `DisplaySleepAssertion` 同一个子系统)。
     private static let logger = Logger(subsystem: NetworkDiagnostics.subsystem, category: "playback")
+
+    /// 用户手选的版本(`MediaSource.Id`),初值来自详情页的选择。nil = 按默认规则。只在本页本集内有效:换集是新 ViewModel。
+    private var preferredSourceID: String?
+
+    /// 同一部片的多版本;少于两个时不给选项。
+    var versionOptions: [EmbyMediaSource] { session?.availableSources ?? [] }
+
+    /// 切到另一个版本:从当前位置重新起流(与转码 seek 同一条路径,旧会话先收尾上报)。
+    func selectVersion(_ id: String) {
+        guard let session, session.mediaSource.id != id,
+              session.availableSources.contains(where: { $0.id == id }) else { return }
+        preferredSourceID = id
+        restartStream(at: positionSeconds)
+    }
 
     /// 转码 seek 的重新起流:停旧会话 → 拆 mpv(断开即停流)→ 带新 StartTimeTicks 重新准备(4.5)。
     private func restartStream(at seconds: Double) {

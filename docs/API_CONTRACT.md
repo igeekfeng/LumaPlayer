@@ -168,6 +168,9 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 `UserData`(`PlaybackPositionTicks` `Played` `PlayedPercentage` `PlayCount` `IsFavorite` `LastPlayedDate` `UnplayedItemCount`)、
 `ProviderIds`(见下)。
 
+`MediaSources` 🔶:详情页起播前选版本用(`MediaSource` 字段见 4.3,另用 `Name` `Size` `MediaStreams`)。
+字段名按 Emby `BaseItemDto` 约定,**未在真实服务器验证**;只有单项接口返回,列表接口没有,缺失 ≠ 单版本。
+
 ⚠️ 4.1.1.0 的 `BaseItemDto` 没有 `PrimaryImageTag`:两个都解,`ImageTags["Primary"]` 优先,都没有就不发请求(Q13)。
 
 #### 3.4.1 `ProviderIds` ✅
@@ -213,6 +216,7 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 
 (转码 seek 重新起流时另带 `StartTimeTicks`。)schema 里还有 `MaxStreamingBitrate` / `AudioStreamIndex` /
 `SubtitleStreamIndex` / `MediaSourceId` / `DeviceProfile` 等,存在但不发。
+多版本切换也不发 `MediaSourceId`:响应已含全部版本及各自地址,客户端按 Id 选源即可。
 
 - `EnableDirectPlay` 固定 **`false`**:传 true 会拿到一个打不开的服务端本地 `Path`。
 - `DeviceProfile` 🔶:字段名与枚举值已对 4.1.1.0 OpenAPI(`Dlna.DeviceProfile` / `Dlna.DirectPlayProfile` /
@@ -242,7 +246,8 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 ```text
 1. ErrorCode != nil              → 抛 serverRejected(code)
 2. MediaSources 为空              → 抛 noMediaSource
-3. 选源:只有 1 个用它;多个取第一个 SupportsDirectStream 的,都不支持取第一个
+3. 选源:用户在播放页指定了版本(MediaSource.Id)且响应里有 → 用它;否则只有 1 个用它;
+   多个取第一个 SupportsDirectStream 的,都不支持取第一个
 4. source.SupportsDirectStream   → .directStream
 5. source.TranscodingUrl 非空     → .transcode(baseURL + TranscodingUrl)
 6. 都不满足                        → 抛 noPlayablePath

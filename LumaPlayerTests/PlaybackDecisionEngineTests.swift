@@ -39,6 +39,41 @@ final class PlaybackDecisionEngineTests: XCTestCase {
         XCTAssertEqual(session.mediaSource.streamCount(of: "Subtitle"), 1)
     }
 
+    func testPreferredSourceOverridesDefaultSelection() throws {
+        let response = EmbyPlaybackInfoResponse(
+            mediaSources: [
+                EmbyMediaSource(id: "MS-A", name: "1080p", container: "mkv", supportsDirectStream: true,
+                                supportsTranscoding: true, transcodingUrl: nil, mediaStreams: nil),
+                EmbyMediaSource(id: "MS-B", name: "4K", container: "mkv", supportsDirectStream: true,
+                                supportsTranscoding: true, transcodingUrl: nil, mediaStreams: nil),
+            ],
+            playSessionID: "PS", errorCode: nil
+        )
+
+        let byDefault = try PlaybackDecisionEngine.session(
+            for: response, itemID: "7", urlBuilder: urlBuilder, headers: headers)
+        let chosen = try PlaybackDecisionEngine.session(
+            for: response, itemID: "7", urlBuilder: urlBuilder, headers: headers,
+            preferredSourceID: "MS-B")
+        let unknown = try PlaybackDecisionEngine.session(
+            for: response, itemID: "7", urlBuilder: urlBuilder, headers: headers,
+            preferredSourceID: "GONE")
+
+        XCTAssertEqual(byDefault.mediaSource.id, "MS-A")
+        XCTAssertEqual(chosen.mediaSource.id, "MS-B")
+        XCTAssertEqual(chosen.plan.mediaSourceID, "MS-B")
+        XCTAssertEqual(chosen.availableSources.map(\.id), ["MS-A", "MS-B"])
+        // 指定的版本找不到 → 回到默认规则
+        XCTAssertEqual(unknown.mediaSource.id, "MS-A")
+    }
+
+    func testSingleSourceHasNoAlternatives() throws {
+        let response = try decode("playback_direct_stream_synthetic.json")
+        let session = try PlaybackDecisionEngine.session(
+            for: response, itemID: "ITEM-1", urlBuilder: urlBuilder, headers: headers)
+        XCTAssertTrue(session.availableSources.isEmpty)
+    }
+
     func testDirectStreamPrefersServerProvidedURL() throws {
         let response = EmbyPlaybackInfoResponse(
             mediaSources: [

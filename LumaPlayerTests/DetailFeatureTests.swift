@@ -227,6 +227,32 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertNil(MediaFormat.rating(0))
     }
 
+    func testItemDecodesMediaSourcesAndLabelsThem() throws {
+        let item = try decode("""
+        {"Id":"1","Name":"M","MediaSources":[
+          {"Id":"A","Name":"1080p","Container":"mkv","Size":8000000000,
+           "MediaStreams":[{"Index":0,"Type":"Video","DisplayTitle":"1080p H264"}]},
+          {"Id":"B","Container":"mp4"}]}
+        """)
+
+        let sources = try XCTUnwrap(item.mediaSources)
+        XCTAssertEqual(sources.map(\.id), ["A", "B"])
+        XCTAssertTrue(sources[0].versionLabel.hasPrefix("1080p · 1080p H264 · "))
+        XCTAssertEqual(sources[1].versionLabel, "MP4")
+    }
+
+    func testPlaybackRequestCarriesPreferredSource() throws {
+        let item = try decode(#"{"Id":"1","Name":"M"}"#)
+        let server = ServerProfile(
+            displayName: "emby.test", baseURL: testURL("https://emby.test"), apiPathPrefix: "/emby",
+            userID: "u", username: "n", deviceID: "d")
+
+        XCTAssertNil(PlaybackRequest(server: server, item: item).preferredMediaSourceID)
+        XCTAssertEqual(
+            PlaybackRequest(server: server, item: item, preferredMediaSourceID: "B").preferredMediaSourceID,
+            "B")
+    }
+
     // MARK: - 辅助
 
     private func decode(_ json: String) throws -> EmbyItem {

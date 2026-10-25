@@ -467,8 +467,13 @@ final class AppContainer {
 
     /// 只写请求、不碰 AppKit:⛔ 调用方(视图)必须自己 `openWindow`,漏了就是「点播放没反应」。
     /// 替换正在播的内容时,旧播放页拆除,收尾上报照常发出(API_CONTRACT.md 5.4)。
-    func play(_ item: EmbyItem, on server: ServerProfile, fromBeginning: Bool = false) {
-        state.nowPlaying = PlaybackRequest(server: server, item: item, startFromBeginning: fromBeginning)
+    func play(
+        _ item: EmbyItem, on server: ServerProfile, fromBeginning: Bool = false,
+        mediaSourceID: String? = nil
+    ) {
+        state.nowPlaying = PlaybackRequest(
+            server: server, item: item, startFromBeginning: fromBeginning,
+            preferredMediaSourceID: mediaSourceID)
     }
 
     /// 播文件树来源(百度 / 本地文件夹)的文件;同样须调用方 `openWindow`。切 Emby 服务器不打断它。

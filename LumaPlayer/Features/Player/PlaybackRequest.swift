@@ -51,6 +51,8 @@ struct PlaybackRequest: Identifiable, Equatable {
     let source: PlaybackSource
     /// 忽略记录的续播位置(Emby 是服务端进度,百度是本地续播库)
     var startFromBeginning = false
+    /// 起播前在详情页选的版本(`MediaSource.Id`),仅 Emby;nil = 按默认规则。
+    var preferredMediaSourceID: String?
     /// 见 `EpisodeQueue`。Emby 由播放页自己查(`PlayerViewModel.loadEpisodeQueue`)。
     /// nil = 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
     var episodeQueue: EpisodeQueue?
@@ -76,8 +78,12 @@ struct PlaybackRequest: Identifiable, Equatable {
         self.subtitleFiles = subtitleFiles
     }
 
-    init(server: ServerProfile, item: EmbyItem, startFromBeginning: Bool = false) {
+    init(
+        server: ServerProfile, item: EmbyItem, startFromBeginning: Bool = false,
+        preferredMediaSourceID: String? = nil
+    ) {
         self.init(source: .emby(server: server, item: item), startFromBeginning: startFromBeginning)
+        self.preferredMediaSourceID = preferredMediaSourceID
     }
 
     init(

@@ -54,6 +54,8 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
     /// 外部元数据 id(`Tmdb` / `Tvdb` / `Imdb` …)。列表接口要 `Fields=ProviderIds` 才返回(API_CONTRACT.md 3.2);
     /// 键名大小写不统一,按小写比较。`var` + 默认值只为让逐成员构造器可省略它。
     var providerIds: [String: String]? = nil
+    /// 同一部片的多个版本(详情页起播前选版本用)。单项接口才有;列表接口不返回,不能据此判断「只有一个版本」。
+    var mediaSources: [EmbyMediaSource]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id = "Id"
@@ -89,6 +91,7 @@ struct EmbyItem: Decodable, Sendable, Equatable, Identifiable {
         case criticRating = "CriticRating"
         case mediaStreams = "MediaStreams"
         case providerIds = "ProviderIds"
+        case mediaSources = "MediaSources"
     }
 }
 

@@ -19,6 +19,8 @@ struct MediaDetailView: View {
     @State private var viewModel: MediaDetailViewModel
     @State private var isOverviewExpanded = false
     @State private var isBatchPickerPresented = false
+    /// 详情页选的版本 Id;不在当前条目的版本表里就当没选(换条目自动失效)
+    @State private var selectedSourceID: String?
     @Environment(\.openWindow) private var openWindow
 
     init(
@@ -107,7 +109,8 @@ struct MediaDetailView: View {
     }
 
     private func play(_ item: EmbyItem, fromBeginning: Bool = false) {
-        container.play(item, on: server, fromBeginning: fromBeginning)
+        let chosen = item.mediaSources?.first { $0.id == selectedSourceID }?.id
+        container.play(item, on: server, fromBeginning: fromBeginning, mediaSourceID: chosen)
         openWindow(id: PlayerSceneRoot.windowID)
     }
 
@@ -192,9 +195,36 @@ struct MediaDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let sources = playable?.mediaSources, sources.count > 1 {
+                    versionPicker(sources)
+                }
                 userDataButtons(for: detail)
             }
         }
+    }
+
+    /// 多版本才出现;默认项标「默认」,即不选时实际会播的那条。
+    private func versionPicker(_ sources: [EmbyMediaSource]) -> some View {
+        let defaultID = (sources.first { $0.supportsDirectStream == true } ?? sources[0]).id
+        let current = sources.first { $0.id == selectedSourceID }?.id ?? defaultID
+        return Menu {
+            Picker("版本", selection: Binding<String>(
+                get: { current },
+                set: { selectedSourceID = $0 }
+            )) {
+                ForEach(sources, id: \.id) { source in
+                    Text(source.id == defaultID ? "\(source.versionLabel)(默认)" : source.versionLabel)
+                        .tag(source.id)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("版本", systemImage: "film.stack")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .help("选择播放的版本")
     }
 
     private func userDataButtons(for detail: EmbyItem) -> some View {
