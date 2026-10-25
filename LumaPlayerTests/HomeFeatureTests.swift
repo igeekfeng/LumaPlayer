@@ -84,6 +84,41 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertNil(queryValue(pick.url, "ParentId"))
     }
 
+    /// 媒体库多时「最新」分两批发:首屏只发前 `firstScreenLatestCount` 行,其余等第一批回来再发。
+    /// 这里验两批都跑到、不重不漏 —— 第二批被丢掉的话,那些行会一直停在 loading。
+    func testLatestRowsPastFirstScreenAreStillLoaded() async throws {
+        let ids = (1...6).map { "V\($0)" }
+        let items = ids.map { #"{"Id":"\#($0)","Name":"\#($0)","CollectionType":"movies"}"# }
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Items":[\#(items.joined(separator: ","))],"TotalRecordCount":\#(ids.count)}"#),
+            path: "/emby/Users/USER-1/Views"
+        )
+        MockEmbyURLProtocol.stub(.json("[]"), path: "/emby/Users/USER-1/Items/Latest")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Items":[],"TotalRecordCount":0}"#),
+            path: "/emby/Users/USER-1/Items/Resume"
+        )
+        let (viewModel, server) = try await makeHomeViewModel()
+        XCTAssertGreaterThan(ids.count, HomeViewModel.firstScreenLatestCount, "这个用例要跨两批")
+
+        viewModel.load(server: server)
+        await viewModel.waitUntilIdle()
+
+        let latestParents = MockEmbyURLProtocol.recordedRequests()
+            .filter { $0.url.path.hasSuffix("/Items/Latest") }
+            .compactMap { queryValue($0.url, "ParentId") }
+        XCTAssertEqual(latestParents.count, ids.count, "每个库各请求一次")
+        XCTAssertEqual(Set(latestParents), Set(ids))
+
+        let sections = viewModel.sections(for: server.id)
+        for id in ids {
+            guard case .loaded(let rowItems)? = sections.latest[id]?.state else {
+                return XCTFail("库 \(id) 的结果没落到行上")
+            }
+            XCTAssertTrue(rowItems.isEmpty)
+        }
+    }
+
     // MARK: - hero 的随机推荐(`ServerConnection.recommendations`)
 
     func testRecommendationsFeedHero() async throws {

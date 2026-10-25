@@ -23,6 +23,10 @@ final class HomeViewModel {
     /// 「最新」同时在途上限(低频率纪律)。`URLSession` 每台主机默认 6 个连接,给其余请求留余量。
     static let latestConcurrency = 4
 
+    /// 第一批发几行「最新」。首屏通常只看得到 0~1 行,留两个余量。
+    /// ⛔ 不要为了「滚下去都已有」调成 `sectionLimit`:那等于回到一次性全发。
+    static let firstScreenLatestCount = 3
+
     private let container: AppContainer
 
     /// 每行一个独立的 `@Observable` 对象:别的行到数据时不会让它(及整个首页)重新求值。
@@ -110,7 +114,7 @@ final class HomeViewModel {
         return sections
     }
 
-    /// 媒体库列表、继续观看、推荐池三路并行;「最新」等媒体库列表回来再按库发。
+    /// 媒体库列表、继续观看、推荐池三路并行;「最新」等媒体库列表回来再按库分两批发(见 `loadLatest`)。
     func load(server: ServerProfile) {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
@@ -164,7 +168,11 @@ final class HomeViewModel {
         loadRecommendations(sections: sections, connection: container.connection(for: server))
     }
 
-    /// 每个视频类媒体库一行,已不存在的库丢掉。按页面从上到下发,同时最多 `latestConcurrency` 个。
+    /// 每个视频类媒体库一行,已不存在的库丢掉。按页面从上到下发。
+    ///
+    /// 分两批:先只发首屏看得到的 `firstScreenLatestCount` 行,剩下的等这一批回来再发。
+    /// 媒体库多时(十来个)一次性全发会让 3+N 个请求同时挤 `URLSession` 的连接,hero 的 1920 大图
+    /// 与继续观看都排在后面 —— 而首屏往往只看得到 1 个「最新」行。两批各自受 `latestConcurrency` 约束。
     private func loadLatest(views: [EmbyView], sections: Sections, connection: ServerConnection) {
         let latestViews = Self.latestViews(in: views)
         let rows = Dictionary(uniqueKeysWithValues: latestViews.map { view in
@@ -172,28 +180,47 @@ final class HomeViewModel {
         })
         sections.setLatest(rows)
         let orderedRows = latestViews.compactMap { rows[$0.id] }
+        // 第二批的行也先转加载态:请求要等第一批回来才发,中间这段时间靠骨架占位
         orderedRows.forEach { $0.markLoading() }
 
         let parentIDs = latestViews.map(\.id)
+        let head = Array(parentIDs.prefix(Self.firstScreenLatestCount))
+        let tail = Array(parentIDs.dropFirst(Self.firstScreenLatestCount))
         let limit = Self.sectionLimit
+        let maxConcurrent = Self.latestConcurrency
         let myGeneration = generation
         requestStarted()
         tasks.append(Task { [weak self] in
             defer { self?.requestFinished() }
-            await Self.runLimited(
-                count: parentIDs.count,
-                maxConcurrent: Self.latestConcurrency
-            ) { index in
-                var query = EmbyLatestQuery()
-                query.parentID = parentIDs[index]
-                query.limit = limit
-                let request = query
-                return await Self.fetchState { try await connection.latest(query: request) }
+            await Self.runLimited(count: head.count, maxConcurrent: maxConcurrent) { index in
+                await Self.latestState(parentID: head[index], limit: limit, connection: connection)
             } onResult: { index, state in
                 guard let self, let state, myGeneration == self.generation else { return }
                 orderedRows[index].receive(state)
             }
+            // 期间换了服务器 / ⌘R:剩下的不再发,新一轮会重来
+            guard !Task.isCancelled, let self, myGeneration == self.generation else { return }
+            await Self.runLimited(count: tail.count, maxConcurrent: maxConcurrent) { index in
+                await Self.latestState(parentID: tail[index], limit: limit, connection: connection)
+            } onResult: { index, state in
+                guard let state, myGeneration == self.generation else { return }
+                orderedRows[head.count + index].receive(state)
+            }
         })
+    }
+
+    /// `runLimited` 的 `operation` 是 `@Sendable`、在 MainActor 之外跑,查询构造只能放 nonisolated 静态方法里。
+    nonisolated private static func latestState(
+        parentID: String,
+        limit: Int,
+        connection: ServerConnection
+    ) async -> LoadState<[EmbyItem]>? {
+        var query = EmbyLatestQuery()
+        query.parentID = parentID
+        query.limit = limit
+        // 不可变副本:闭包并发执行,捕获可变变量会被拒
+        let request = query
+        return await fetchState { try await connection.latest(query: request) }
     }
 
     /// 按下标顺序启动,同时不超过 `maxConcurrent`,完成一个补一个;结果逐个交给 `onResult`。
