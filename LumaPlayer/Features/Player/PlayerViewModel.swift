@@ -1084,9 +1084,21 @@ final class PlayerViewModel {
             method: session.plan.method.rawValue,
             directStreamURLProvided: session.mediaSource.directStreamUrl != nil
         )
+        recordEngineLogs()
         let url = session.plan.url
         let headers = session.plan.headers
         Task { await PlaybackFailureProbe.run(url: url, headers: headers) }
+    }
+
+    /// 附上内核自己的日志(本次 open 以来 warn 及以上,内核已脱敏)。
+    /// 引擎没建起来就没有可读的日志,`PLAYBACK` 那一行已足够。
+    private func recordEngineLogs() {
+        guard let engine else { return }
+        do {
+            NetworkDiagnostics.recordEngineLogs(try engine.diagnosticLogs())
+        } catch {
+            NetworkDiagnostics.recordEngineLogsUnavailable(String(describing: error))
+        }
     }
 
     /// 位置是否已可信(见 `isPositionSettled`)。

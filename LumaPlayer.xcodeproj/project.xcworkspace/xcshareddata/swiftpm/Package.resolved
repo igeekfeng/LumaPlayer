@@ -1,13 +1,13 @@
 {
-  "originHash" : "c1adf8cc07d9e16183c8be38dcc0311538a2bca18ddd6bf6314071d25fd3fd03",
+  "originHash" : "18b54de699d5ec4f8e1e7c6c98bc02551c9f4938bdcc88ffe438b98b20d68576",
   "pins" : [
     {
-      "identity" : "erikaswift",
+      "identity" : "liberika-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/AimesSoft/ErikaSwift",
+      "location" : "https://github.com/AimesSoft/liberika-swift",
       "state" : {
-        "revision" : "08682d85e9e14285c35b7f0944e28b73b66cf65e",
-        "version" : "0.2.1"
+        "revision" : "a280209b6e74be47bc4ca573c7525a713f9f8fef",
+        "version" : "0.3.0"
       }
     }
   ],

@@ -102,8 +102,9 @@ enum NetworkDiagnostics {
     /// 记一条播放失败(内核已拿到 URL 但没播起来,如 `Unrecognized file format`)。
     ///
     /// 与 `record(_:...)` 的区别:失败发生在内核内部,App 看不到 HTTP 状态与响应体,
-    /// 只能留下内核的错误消息;响应体到底回了什么由 `PlaybackFailureProbe` 另记一条
-    /// `PROBE`(对同一个 URL 补一次只读探测)。
+    /// 只能留下内核的错误消息;内核自己的日志由 `recordEngineLogs` 跟着记 `ENGINE` 行,
+    /// 响应体到底回了什么由 `PlaybackFailureProbe` 另记一条 `PROBE`(对同一个 URL
+    /// 补一次只读探测)。
     static func recordPlaybackFailure(
         message: String,
         url: URL,
@@ -130,6 +131,41 @@ enum NetworkDiagnostics {
             + "url=\(SecretRedactor.redactedDescription(of: url)) \(flattened(SecretRedactor.redacted(summary)))"
         logger.error("\(text, privacy: .public)")
         append(text)
+    }
+
+    /// 记播放失败时内核自己的日志(`PlaybackEngine.diagnosticLogs()`),紧跟在 `PLAYBACK` 之后。
+    ///
+    /// 内核看得到 App 看不到的东西(FFmpeg 的解封装 / 解码报错、硬解初始化失败),
+    /// 一条 `PLAYBACK` 只有一句错误消息,原因往往在这里。
+    static func recordEngineLogs(_ entries: [PlayerLogEntry]) {
+        for text in engineLogLines(entries) {
+            logger.error("\(text, privacy: .public)")
+            append(text)
+        }
+    }
+
+    /// 读内核日志失败也留一行,免得「没有 ENGINE 行」被误读成「内核没报什么」。
+    static func recordEngineLogsUnavailable(_ message: String) {
+        let text = "\(Date.now.ISO8601Format()) ENGINE logs unavailable: \(describeDetail(message))"
+        logger.error("\(text, privacy: .public)")
+        append(text)
+    }
+
+    /// 内核日志的完整文本,一条一行。纯函数。
+    ///
+    /// 形如:`{时间} ENGINE warn ffmpeg ×3 [mov,mp4 @ 0x…] moov atom not found`。
+    /// 内核导出时已脱敏,这里再过一次 `SecretRedactor`(双保险),并压平、截断到 `detailLimit`。
+    /// 没有条目时也写一行,表明查过了。
+    static func engineLogLines(_ entries: [PlayerLogEntry], date: Date = .now) -> [String] {
+        guard !entries.isEmpty else {
+            return ["\(date.ISO8601Format()) ENGINE <no warn/error entries since open>"]
+        }
+        return entries.map { entry in
+            var parts = [entry.date.ISO8601Format(), "ENGINE", entry.level, entry.source]
+            if entry.count > 1 { parts.append("×\(entry.count)") }
+            parts.append(describeDetail(entry.text))
+            return parts.joined(separator: " ")
+        }
     }
 
     /// 播放失败日志的完整文本。纯函数。

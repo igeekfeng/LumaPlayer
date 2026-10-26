@@ -1,6 +1,6 @@
 # LumaPlayer
 
-一个 macOS 原生 Emby 客户端。SwiftUI 写界面，[Erika](https://github.com/AimesSoft/ErikaSwift)（Metal）负责解码播放，直接对接你自己（或朋友的）Emby 服务器。
+一个 macOS 原生 Emby 客户端。SwiftUI 写界面，[Erika](https://github.com/AimesSoft/liberika-swift)（Metal）负责解码播放，直接对接你自己（或朋友的）Emby 服务器。
 
 > **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— 这是刻意的取舍：部署目标更低会有链接器 warning 且产物跑不起来。
 
@@ -20,7 +20,7 @@
 | 系统 | macOS 27 或更高 |
 | 芯片 | Apple Silicon（arm64） |
 | Xcode | 16 或更高（工程用同步文件夹，`objectVersion = 77`） |
-| 播放内核 | [ErikaSwift](https://github.com/AimesSoft/ErikaSwift) 0.2.x（SwiftPM 依赖，构建时自动拉取并静态链接，无需额外安装） |
+| 播放内核 | [liberika-swift](https://github.com/AimesSoft/liberika-swift) 0.3.x（SwiftPM 依赖，构建时自动拉取并静态链接，无需额外安装） |
 
 首次构建（或换机）需要网络：`xcodebuild` 会自动解析 SwiftPM 依赖。也可以先手动解析：
 

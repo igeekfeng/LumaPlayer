@@ -191,4 +191,38 @@ final class NetworkDiagnosticsTests: XCTestCase {
             message: "m", url: url, method: "Transcode")
         XCTAssertFalse(line.contains("ua="))
     }
+
+    // MARK: - 内核日志(ENGINE)
+
+    /// 每条一行:时间、级别、来源、重复次数(>1 才写)、正文
+    func testEngineLogLinesFormat() {
+        let lines = NetworkDiagnostics.engineLogLines([
+            PlayerLogEntry(date: Date(timeIntervalSince1970: 0), level: "error", source: "ffmpeg",
+                           text: "[mov,mp4 @ 0x1] moov atom not found", count: 1),
+            PlayerLogEntry(date: Date(timeIntervalSince1970: 1), level: "warn", source: "erika",
+                           text: #"{"stage":"open_avcodec_to_software"}"#, count: 3),
+        ])
+        XCTAssertEqual(lines, [
+            "1970-01-01T00:00:00Z ENGINE error ffmpeg [mov,mp4 @ 0x1] moov atom not found",
+            #"1970-01-01T00:00:01Z ENGINE warn erika ×3 {"stage":"open_avcodec_to_software"}"#,
+        ])
+    }
+
+    /// 内核已脱敏,这里仍要再脱一次(双保险),并压平换行
+    func testEngineLogLinesRedactAndFlatten() {
+        let lines = NetworkDiagnostics.engineLogLines([
+            PlayerLogEntry(date: .now, level: "error", source: "ffmpeg",
+                           text: "HTTP error\nGET /Videos/1/stream?api_key=SECRET123", count: 1),
+        ])
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertFalse(lines[0].contains("SECRET123"))
+        XCTAssertFalse(lines[0].contains("\n"))
+    }
+
+    /// 没有条目也写一行,表明查过了 —— 不然分不清「内核没报」和「没去读」
+    func testEngineLogLinesWhenEmpty() {
+        XCTAssertEqual(
+            NetworkDiagnostics.engineLogLines([], date: Date(timeIntervalSince1970: 0)),
+            ["1970-01-01T00:00:00Z ENGINE <no warn/error entries since open>"])
+    }
 }

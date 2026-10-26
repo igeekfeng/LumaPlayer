@@ -61,4 +61,8 @@ protocol PlaybackEngine: AnyObject {
 
     /// 当前统计快照(读不到就是空快照,不抛错给 UI)。
     func stats() throws -> PlayerStats
+
+    /// 本次 `open` 以来内核记下的 warn 及以上日志(旧 → 新,条数有上限),
+    /// 播放失败时附进诊断日志。内核没有日志设施时返回空数组。
+    func diagnosticLogs() throws -> [PlayerLogEntry]
 }

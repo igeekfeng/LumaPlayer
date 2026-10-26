@@ -234,6 +234,9 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(PlayerStatistics.decoderText(name: nil, hardware: false), "软件解码")
         XCTAssertEqual(PlayerStatistics.decoderText(name: "videotoolbox", hardware: true), "硬件解码(videotoolbox)")
         XCTAssertEqual(PlayerStatistics.decoderText(name: "h264", hardware: nil), "h264")
+        XCTAssertEqual(
+            PlayerStatistics.decoderText(name: "software", hardware: false, fallbackReason: "hwaccel failed"),
+            "软件解码(硬解回退:hwaccel failed)")
         XCTAssertEqual(PlayerStatistics.bitrateText(8_200_000), "8.2 Mbps")
         XCTAssertEqual(PlayerStatistics.bitrateText(192_000), "192 kbps")
         XCTAssertNil(PlayerStatistics.bitrateText(0))
@@ -259,6 +262,22 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(byLabel["音频"], "aac · 44.1 kHz · 1 声道")
         XCTAssertNil(byLabel["帧"], "内核没给帧数就不显示")
         XCTAssertNil(byLabel["播放方式"], "没有会话就不显示播放方式")
+    }
+
+    /// 迟到丢帧与背压丢帧分开显示;某一项内核没给就只少那一段
+    func testStatisticsFrameLineSeparatesDropKinds() {
+        var stats = PlayerStats()
+        stats.renderedFrames = 1200
+        stats.lateDroppedFrames = 3
+        stats.backpressureDroppedFrames = 0
+        var byLabel = Dictionary(uniqueKeysWithValues:
+            PlayerStatistics(stats: stats, session: nil).lines.map { ($0.label, $0.value) })
+        XCTAssertEqual(byLabel["帧"], "已渲染 1200 · 迟到丢帧 3 · 背压丢帧 0")
+
+        stats.lateDroppedFrames = nil
+        byLabel = Dictionary(uniqueKeysWithValues:
+            PlayerStatistics(stats: stats, session: nil).lines.map { ($0.label, $0.value) })
+        XCTAssertEqual(byLabel["帧"], "已渲染 1200 · 背压丢帧 0")
     }
 
     // MARK: - 上一集

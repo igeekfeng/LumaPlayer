@@ -81,7 +81,7 @@
 | Q45 | `setVolume(0)` 是否完全静音;音量 / 倍速在 `open` 后、`play` 前设置是否被接受 | 播放中静音 / 还原、改倍速 |
 | Q46 | `setSubtitleScale` 与 `setSubtitleStyle` 的叠加关系;Erika 字幕默认值是否等于 `ErikaSubtitleStyle()` 初值 | 分别只调 scale、只调 style、两者同调 |
 | Q47 | `tracks()` 是否填 `selected`;其 id 与 `trackSelection()` 是否同一套 | 开字幕 / 音轨菜单,多切几次 |
-| Q48 | 统计语义:背压丢帧当「丢帧」、渲染器显存当「显存」、色彩枚举码映射是否完整 | 对照活动监视器与内核文档 |
+| Q48 | 统计语义:「迟到丢帧」(快照 `lateDroppedFrames`,内核渲染处计)与肉眼卡顿是否吻合、渲染器显存当「显存」、色彩枚举码映射是否完整 | 4K 高码率片源播放中开统计面板,对照活动监视器与内核文档 |
 | Q49 | `setUpscaler` 能否播放中切换(现在只在建引擎时设) | 播放中调用看是否生效 |
 | Q50 | `outputMode = .automatic` 是否合适;`edrHeadroom` 取值;HDR 片源亮度 / 色彩 | 播一部 HDR 片源 |
 | Q51 | Erika 实际是静态还是动态 framework、有无嵌入产物要签名;`disable-library-validation` 还要不要 | 检查 `.app` 内嵌二进制 + `codesign -d --entitlements` |
@@ -90,7 +90,7 @@
 
 ### Q54 起播时 `ErikaPlayer.open()` 在主线程同步探测,整个 App 卡住
 
-- `erika.h`:`open() synchronously probes streams`;`ErikaPlayer` 是 `@MainActor`,探测期间的网络往返(HEAD + 首段 Range,MP4 还要取尾部 moov)全在主线程。
+- `erika.h`:`open() synchronously probes streams`;`ErikaPlayer` 是 `@MainActor`,探测期间的网络往返(HEAD + 首段 Range,MP4 还要取尾部 moov)全在主线程。0.3.0 仍是同步 open。
 - 本机限速服务器实测(未在真实服务器验证):80 ms 往返 → 0.8–0.9 s;200 ms → 1.1–1.4 s;偶发 4.8 s。
 - 没直接修:挪出主线程要么绕过 SDK 的 `@MainActor` 隔离(违反硬规则 3),要么自己封装 C 句柄(非线程安全,渲染回调也在主线程用同一个句柄)。
 - 出路:等 / 请求上游提供异步 open;或由维护者决定是否为此开例外。
@@ -98,4 +98,5 @@
 ### Q55 进度条无法显示「已缓冲到哪里」
 
 Erika 0.2.1 只有 `bufferingChanged` 一个布尔量,`erika.h`、presenter 统计、`invoke_json` 方法表里都没有已缓冲时长 / 区间。
+0.3.0 的诊断快照 `buffers.playback` 只有包 / 帧队列深度,`playback.buffering` 只记缓冲时长,仍没有「缓冲到哪个时间点」。
 ⛔ 不用码率 × 时间估一个假缓冲条(硬规则 4)。上游提供后再接,接入点在 `ErikaPlaybackEngine` + `PlayerEvent`。

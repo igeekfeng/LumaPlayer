@@ -17,6 +17,9 @@ final class FakePlaybackEngine: PlaybackEngine {
     var openError: PlayerError?
     /// 非 nil 时 `pollEvent` 抛这个错
     var pollError: PlayerError?
+    var logsValue: [PlayerLogEntry] = []
+    /// 非 nil 时 `diagnosticLogs` 抛这个错
+    var logsError: PlayerError?
 
     // MARK: - 调用记录
 
@@ -74,4 +77,9 @@ final class FakePlaybackEngine: PlaybackEngine {
     }
 
     func stats() throws -> PlayerStats { statsValue }
+
+    func diagnosticLogs() throws -> [PlayerLogEntry] {
+        if let logsError { throw logsError }
+        return logsValue
+    }
 }

@@ -68,7 +68,12 @@ ad-hoc 下它本来不生效,换回证书签名时才会真正生效。⛔ 别�
 **HTTP 预读默认只有 2 MiB,播放基本无缓冲。** 换内核时以为 Erika 不暴露缓存调参而一直传 0;其实 `open` 有
 `httpReadAheadBytes` / `httpBackBufferBytes`,现为 128 / 64 MiB(`ERIKA_INTEGRATION.md` §6.1)。
 
-**统计字段是近似,给不了就不显示。** 「丢帧」是背压丢帧,「显存」是渲染器跟踪的;⛔ 不填「未知 / 0」占位。
+**统计字段是近似,给不了就不显示。** 「迟到丢帧」在内核渲染处计(非 vsync),「背压丢帧」是解码队列满时丢的,「显存」是渲染器跟踪的;⛔ 不填「未知 / 0」占位。
+
+**升级 0.3.0(2026-10-26)。** 仓库改名 liberika / liberika-swift,Swift 封装源码没变、只换内核二进制,不改代码即零 warning 编过。
+新能力(诊断快照、日志环、单帧导出、容器章节)Swift SDK 没有封装,走 `invoke(_:arguments:)` 的 JSON 方法表(`listMethods` 可列出)。
+接了 `getDiagnosticsSnapshot`(统计面板)与 `getLogs`(播放失败日志),见 `ERIKA_INTEGRATION.md` §9、§13。
+坑:`open()` 失败的原因**不进日志环**,只在错误消息里;旧版按硬 / 软解帧数(累计值)判断软硬解,中途退回软解时会误报硬解,现以快照 `decoder` 为准。
 
 **`@unchecked Sendable` 的例外已取消。** 旧内核 `Core/MPV/` 曾是唯一例外目录;`ErikaPlayer` 是 `@MainActor`,全项目自检应无输出。
 

@@ -158,7 +158,7 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			packageReferences = (
-				AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */,
+				AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "liberika-swift" */,
 			);
 			productRefGroup = AA0000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -401,12 +401,12 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */ = {
+		AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "liberika-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/AimesSoft/ErikaSwift";
+			repositoryURL = "https://github.com/AimesSoft/liberika-swift";
 			requirement = {
 				kind = upToNextMinorVersion;
-				minimumVersion = 0.2.1;
+				minimumVersion = 0.3.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -414,7 +414,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		AA00000000000000000000A1 /* Erika */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "ErikaSwift" */;
+			package = AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "liberika-swift" */;
 			productName = Erika;
 		};
 /* End XCSwiftPackageProductDependency section */

@@ -6,16 +6,17 @@
 
 ## 0. 来源
 
-- [ErikaSwift](https://github.com/AimesSoft/ErikaSwift)(product `Erika`),文档 <https://erika.aimes-soft.com/docs/guide/swift.html>。
-  本机参照版本 **0.2.1**。标记规则同 `API_CONTRACT.md`(✅ / 🔶 / ⚠️)。
+- [liberika-swift](https://github.com/AimesSoft/liberika-swift)(原名 ErikaSwift,0.3.0 起改名,旧地址 GitHub 重定向;product 仍是 `Erika`),
+  内核仓库 [liberika](https://github.com/AimesSoft/liberika)(C API 文档 `docs/capi_reference.md`),文档 <https://erika.aimes-soft.com/docs/guide/swift.html>。
+  本机参照版本 **0.3.0**。标记规则同 `API_CONTRACT.md`(✅ / 🔶 / ⚠️)。
 - ⛔ 旧内核 libmpv 的一切(`vo=libmpv`、`gpu-next`、`http-header-fields`、`track-list`、`MPV_EVENT_*`)都已作废,别照抄。
 
 ### 0.1 接入:SwiftPM 静态链接
 
-- `project.pbxproj` 里的 `XCRemoteSwiftPackageReference`(`ErikaSwift`,`upToNextMinorVersion` 0.2.1)→ product `Erika`,
+- `project.pbxproj` 里的 `XCRemoteSwiftPackageReference`(`liberika-swift`,`upToNextMinorVersion` 0.3.0)→ product `Erika`,
   **只挂 App target**:测试 target 不链接 Erika,靠归一化类型与假引擎测(`EofDetector` 是纯结构,可直接单测)。
 - 没有 dylib 要拷、没有 module map、没有 `OTHER_LDFLAGS`。
-- `Package.resolved`(`project.xcworkspace/xcshareddata/swiftpm/`)**入库**,当前 `0.2.1` / `08682d8`。
+- `Package.resolved`(`project.xcworkspace/xcshareddata/swiftpm/`)**入库**,当前 `0.3.0` / `a280209`。
 - ⚠️ 解析包要联网(首次 / 换机 `xcodebuild -resolvePackageDependencies` 会去 GitHub 拉 xcframework.zip)。
   报 TLS 错先 `curl -I` 直连那个 URL 确认是本机网络 / 沙箱问题。
 
@@ -54,19 +55,19 @@ PlayerViewModel (@MainActor,只认归一化类型) → PlaybackSessionCoordinato
 | 目录 | 内容 | import Erika |
 |---|---|---|
 | `Core/Playback/Engine/` | `PlaybackEngine` 协议、归一化值类型、`PlaybackEventPump` | ⛔ |
-| `Core/Erika/` | `ErikaPlaybackEngine`、`EofDetector`、`PlaybackEngineFactory`、`ErikaSubtitleMapping` | ✅(唯一) |
+| `Core/Erika/` | `ErikaPlaybackEngine`、`EofDetector`、`PlaybackEngineFactory`、`ErikaSubtitleMapping`、`ErikaDiagnostics`(诊断 JSON 解析,本身不 import) | ✅(唯一) |
 | `Features/Player/` | `PlayerViewModel`、`PlayerSurfaceView`、控制栏 | ⛔ |
 
 `PlaybackEngineFactory.make(upscaler:)` 是 `Core/Erika/` 之外**唯一提到具体内核类型名**的地方(由 `AppContainer.makePlaybackEngine` 调)。
 
 ## 3. 归一化类型
 
-`PlaybackEngine`(`open/play/pause/stop/close/seek/setRate/setVolume/setUpscaler/tracks/selectAudioTrack/selectSubtitleTrack/setSubtitleStyle/makeVideoSurface/pollEvent/stats`)、
+`PlaybackEngine`(`open/play/pause/stop/close/seek/setRate/setVolume/setUpscaler/tracks/selectAudioTrack/selectSubtitleTrack/setSubtitleStyle/makeVideoSurface/pollEvent/stats/diagnosticLogs`)、
 `PlayerPhase`(`idle / loading / playing / paused / stopped / failed / closed`)、`PlayerTrack`(`id: Int64`、kind、source、selected、title、language、codec;无 forced)、
 `PlayerEvent`(`phaseChanged / position / duration / paused / buffering / ended / tracksChanged / trackSelectionChanged / surfaceAttached / error`)、
-`PlayerEndReason`(`eof / stopped / error`)、`PlayerError`、`PlayerStats`、`PlayerUpscaler`(`off / artCNN`)、`PlayerSubtitleStyle`。
+`PlayerEndReason`(`eof / stopped / error`)、`PlayerError`、`PlayerStats`、`PlayerUpscaler`(`off / artCNN`)、`PlayerSubtitleStyle`、`PlayerLogEntry`(内核日志一条)。
 
-⛔ 刻意不进归一化事件:倍速 / 音量**读回**(内核没有)、视频参数 / 解码器 / 音频输出变化(只在适配器里缓存给 `stats()`)。
+⛔ 刻意不进归一化事件:倍速 / 音量**读回**(内核没有)、视频参数 / 解码器 / 音频输出变化(视频参数在适配器里缓存给 `stats()`,解码器由 `stats()` 从诊断快照取)。
 
 ## 4. 状态 / 事件映射(`ErikaPlaybackEngine.translate`)
 
@@ -88,7 +89,7 @@ PlayerViewModel (@MainActor,只认归一化类型) → PlaybackSessionCoordinato
 | `trackSelectionChanged` | `.trackSelectionChanged`(取 `trackSelection()` 的权威选中 id) |
 | `surfaceAttached` | `.surfaceAttached`(计时线 `surfaceReady`) |
 | `error` | `.error` + `.ended(.error)` |
-| `surfaceDetached` / `videoParamsChanged` / `videoDecoderChanged` / `audioOutputChanged` | 不上推(后两组只缓存给 `stats()`) |
+| `surfaceDetached` / `videoParamsChanged` / `videoDecoderChanged` / `audioOutputChanged` | 不上推(`videoParamsChanged` 缓存给 `stats()`;解码器改从诊断快照取,§9) |
 
 一个内核事件可翻译成多条,适配器用内部 `pending` 队列逐条吐出。
 
@@ -149,13 +150,18 @@ Erika **没有 EOF 事件,也没有「已结束」状态**。推断:位置到过
 |---|---|
 | 分辨率 / 编码 / 帧率 / 码率 | `tracks()` 视频轨 + `videoParamsChanged` 缓存 |
 | 色彩 primaries / transfer | `videoParamsChanged`(枚举码 → 人读名,未知码原样显示) |
-| 解码器 / 是否硬解 | `videoDecoderChanged` + `presenterStats()` |
+| 解码器 / 是否硬解 / 回退原因 | 诊断快照 `decoder`(`activeBackend` / `hardware` / `fellBack` + `reason`);第一次解码器切换前为 `null`,退回 `presenterStats()` 硬 / 软解帧数(累计值,只作兜底) |
 | 音频 | `tracks()` 音频轨 |
-| 已渲染 / 丢帧 | `presenterStats()`(丢帧取**背压丢帧**,非显示端丢帧) |
+| 已渲染 / 背压丢帧 | `presenterStats()`(`renderedVideoFrames` / `videoFrameBackpressureDrops`) |
+| 迟到丢帧 | 诊断快照 `timing.scheduler.lateDroppedFrames`(调度器因迟到超过容差丢弃,在内核渲染处计,非显示器 vsync) |
 | 输出模式 / EDR headroom | `outputStatus()` |
 | 显存 | `resourceStatus()`(渲染器跟踪的,非整机) |
 
 近似语义待核实(Q48、Q50)。
+
+**诊断快照**:`player.invoke("getDiagnosticsSnapshot")`(0.3.0 起;Swift SDK 没有专门封装),解析在 `ErikaDiagnostics`。
+文档带 `schema`(当前 1),同一 schema 内只增字段;未知值是 `null`,⛔ 不当 0。内核文档称单次中位数 0.3 ms,统计面板每次刷新调一次。
+本地 0.3.0 实测字段与 `ErikaDiagnosticsTests` 的样例一致(`.nfo` 当媒体打开时 `fellBack: true`、`reason` 为 VideoToolbox 不支持该编码)。
 
 ## 10. 视频表面
 
@@ -176,7 +182,14 @@ Erika **没有 EOF 事件,也没有「已结束」状态**。推断:位置到过
 ## 13. 错误
 
 `ErikaError` → 取 `message` 包成 `PlayerError`;其它错误 → `String(describing:)`。事件里的 `error` → 相位 `failed` + `.error` + `.ended(.error)`。
-播放失败后记 `NetworkDiagnostics.recordPlaybackFailure(...)`,并无条件跑一次 `PlaybackFailureProbe`。
+`open()` 同步失败时**既抛错、随后也发 `error` 事件**(本地 0.3.0 实测),所以失败统一走 `.ended(.error)` 落账,catch 里不另记。
+播放失败后记 `NetworkDiagnostics.recordPlaybackFailure(...)`,跟着记内核日志(`ENGINE` 行,见下),并无条件跑一次 `PlaybackFailureProbe`。
+
+**内核日志**:`player.invoke("getLogs")` 读进程级日志环(内核 + FFmpeg 的 warn / error,导出时已脱敏 URL 查询串、凭据、主目录)。
+`open` 前记下 `nextSeq`,失败时只取 `sinceSeq` 之后、`minLevel: warn`、最多 20 条(`PlaybackEngine.diagnosticLogs()`),
+`NetworkDiagnostics` 再脱敏一次写进 `network.log`;没有条目也写一行 `ENGINE <no warn/error entries since open>`。
+⚠️ 本地实测:**`open` 阶段的失败(401、不支持的源)不进日志环**,原因只在错误消息里;环里平时只有 info 级的流程记录。
+warn 以上的条目预期来自播放中途的失败(FFmpeg 解码错误、HTTP 重试失败、音频输出失败),这类场景**未实测**。
 ⛔ 错误消息不含完整播放 URL,经 `SecretRedactor`。`ErikaError.statusCode` 未使用(Q53)。
 
 ## 14. 待真机核实

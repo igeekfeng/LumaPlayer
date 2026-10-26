@@ -23,8 +23,9 @@ import os
 /// 5. **字幕**:`setSubtitleScale` 与 `setSubtitleStyle` 的叠加关系、Erika 字幕
 ///    默认值未确认(默认样式按「不覆盖 ASS」映射,见 `ErikaSubtitleStyle.init`);
 /// 6. **轨道**:`tracks()` 是否填 `selected`、其 id 是否与 `trackSelection()` 一致;
-/// 7. **统计字段语义**:`videoFrameBackpressureDrops` 当作「丢帧」、`rendererTrackedBytes`
-///    当作「显存占用」、色彩 primaries/transfer 的枚举码到人读名的映射都是近似。
+/// 7. **统计字段语义**:诊断快照的 `lateDroppedFrames` 当作「迟到丢帧」(内核渲染处计,
+///    非 vsync)、`rendererTrackedBytes` 当作「显存占用」、色彩 primaries/transfer 的
+///    枚举码到人读名的映射都是近似。
 ///
 /// 以上均登记在 docs/KNOWN_ISSUES.md。
 @MainActor
@@ -42,7 +43,8 @@ final class ErikaPlaybackEngine: PlaybackEngine {
 
     /// 统计来源的缓存(这些事件变化频繁且只有统计面板需要,不逐条推给上层)
     private var latestVideo: ErikaVideoParameters?
-    private var latestDecoder: ErikaVideoDecoderInfo?
+    /// `open` 前内核日志环的 `nextSeq`:失败时只取这之后的日志,不混进上一部片子的
+    private var logStartSeq: UInt64?
 
     private lazy var surface = makeSurface()
 
@@ -65,6 +67,7 @@ final class ErikaPlaybackEngine: PlaybackEngine {
     static let httpBackBufferBytes: UInt64 = 64 * 1024 * 1024
 
     func open(url: URL, headers: [String: String]) throws {
+        logStartSeq = currentLogSeq()
         do {
             try player.open(
                 url,
@@ -188,22 +191,30 @@ final class ErikaPlaybackEngine: PlaybackEngine {
             stats.colorTransfer = Self.transferName(video.transfer)
         }
 
-        // 解码器
-        if let decoder = latestDecoder, !decoder.activeBackend.isEmpty {
-            stats.decoderName = decoder.activeBackend
+        // 诊断快照(§9):实际解码后端(含硬解退回软解)与迟到丢帧
+        do {
+            let snapshot = try diagnosticsSnapshot()
+            if let decoder = snapshot.decoder {
+                stats.decoderName = decoder.activeBackend
+                stats.isHardwareDecoded = decoder.hardware
+                stats.decoderFallbackReason = ErikaDiagnostics.fallbackReason(decoder)
+            }
+            stats.lateDroppedFrames = snapshot.timing?.scheduler?.lateDroppedFrames
+        } catch {
+            Self.logger.error("读取 Erika 诊断快照失败: \(String(describing: error), privacy: .public)")
         }
 
-        // 渲染帧数与软 / 硬解(用帧数判断比后端名更直接)
+        // 渲染帧数与背压丢帧。快照里还没有解码器切换记录时,按帧数判断软 / 硬解
+        // (帧数是累计值:中途退回软解时会误报硬解,所以只作兜底)
         if let presenter = try? player.presenterStats() {
             stats.renderedFrames = Int(presenter.renderedVideoFrames)
-            stats.droppedFrames = Int(presenter.videoFrameBackpressureDrops)
-            if presenter.hardwareVideoFrames > 0 {
-                stats.isHardwareDecoded = true
-            } else if presenter.softwareVideoFrames > 0 {
-                stats.isHardwareDecoded = false
-            }
-            if stats.decoderName == nil, presenter.hardwareVideoFrames > 0 {
-                stats.decoderName = "硬件解码"
+            stats.backpressureDroppedFrames = Int(presenter.videoFrameBackpressureDrops)
+            if stats.isHardwareDecoded == nil {
+                if presenter.hardwareVideoFrames > 0 {
+                    stats.isHardwareDecoded = true
+                } else if presenter.softwareVideoFrames > 0 {
+                    stats.isHardwareDecoded = false
+                }
             }
         }
 
@@ -219,6 +230,48 @@ final class ErikaPlaybackEngine: PlaybackEngine {
         }
 
         return stats
+    }
+
+    /// 播放失败时附进诊断日志的条数上限(只取 warn 及以上,够看清原因)
+    static let diagnosticLogLimit = 20
+
+    func diagnosticLogs() throws -> [PlayerLogEntry] {
+        var arguments: [String: Any] = ["limit": Self.diagnosticLogLimit, "minLevel": "warn"]
+        // 没记到起点(open 前读日志环失败已留痕)时取整个环里最新的,可能混进上一部片子的
+        if let logStartSeq { arguments["sinceSeq"] = logStartSeq }
+        return try logPage(arguments).entries
+    }
+
+    // MARK: - 诊断 JSON(§9)
+
+    private func diagnosticsSnapshot() throws -> ErikaDiagnostics.Snapshot {
+        do {
+            let value = try player.invoke("getDiagnosticsSnapshot")
+            return try ErikaDiagnostics.snapshot(
+                from: JSONSerialization.data(withJSONObject: value))
+        } catch {
+            throw Self.playerError(error)
+        }
+    }
+
+    /// 日志环是进程级的,`player` 只负责路由这次调用。
+    private func logPage(_ arguments: [String: Any]) throws -> ErikaDiagnostics.LogPage {
+        do {
+            let value = try player.invoke("getLogs", arguments: arguments)
+            return try ErikaDiagnostics.logs(from: JSONSerialization.data(withJSONObject: value))
+        } catch {
+            throw Self.playerError(error)
+        }
+    }
+
+    private func currentLogSeq() -> UInt64? {
+        do {
+            // 只要 nextSeq;limit 1 免得把整个环(最多 512 KiB)序列化一遍
+            return try logPage(["limit": 1]).nextSeq
+        } catch {
+            Self.logger.error("读取 Erika 日志环失败: \(String(describing: error), privacy: .public)")
+            return nil
+        }
     }
 
     // MARK: - 事件翻译
@@ -286,7 +339,8 @@ final class ErikaPlaybackEngine: PlaybackEngine {
             latestVideo = raw.video
 
         case .videoDecoderChanged:
-            latestDecoder = raw.decoder
+            // 统计面板改从诊断快照的 `decoder` 取同一份「最近一次解码器切换」,不再缓存事件
+            break
 
         case .audioOutputChanged:
             // 音频输出恢复状态目前统计面板不显示,忽略(需要时再从 raw.audio 取)

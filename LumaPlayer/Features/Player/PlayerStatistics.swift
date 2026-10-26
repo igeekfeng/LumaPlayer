@@ -36,7 +36,8 @@ struct PlayerStatistics: Equatable {
             return "\(primaries) / \(transfer)"
         }()
         add("色彩", [s.pixelFormat, colour])
-        add("解码", [Self.decoderText(name: s.decoderName, hardware: s.isHardwareDecoded)])
+        add("解码", [Self.decoderText(
+            name: s.decoderName, hardware: s.isHardwareDecoded, fallbackReason: s.decoderFallbackReason)])
         add("视频码率", [s.videoBitRate.flatMap(Self.bitrateText)])
 
         let sampleRate = s.audioSampleRate.map {
@@ -46,7 +47,11 @@ struct PlayerStatistics: Equatable {
         add("音频", [s.audioCodec, sampleRate, channels, s.audioBitRate.flatMap(Self.bitrateText)])
 
         if let rendered = s.renderedFrames {
-            add("帧", ["已渲染 \(rendered)", s.droppedFrames.map { "丢帧 \($0)" }])
+            add("帧", [
+                "已渲染 \(rendered)",
+                s.lateDroppedFrames.map { "迟到丢帧 \($0)" },
+                s.backpressureDroppedFrames.map { "背压丢帧 \($0)" },
+            ])
         }
 
         let headroom = s.edrHeadroom.map {
@@ -66,13 +71,13 @@ struct PlayerStatistics: Equatable {
     }
 
     /// 解码方式:优先按「是否硬解」的布尔量,其次退回后端名。
-    /// `hardware` 为 nil(内核没给帧数)时只显示后端名。
-    static func decoderText(name: String?, hardware: Bool?) -> String? {
+    /// `hardware` 为 nil(内核没给)时只显示后端名;硬解退回软解时附上原因。
+    static func decoderText(name: String?, hardware: Bool?, fallbackReason: String? = nil) -> String? {
         switch hardware {
         case true:
             return name.map { "硬件解码(\($0))" } ?? "硬件解码"
         case false:
-            return "软件解码"
+            return fallbackReason.map { "软件解码(硬解回退:\($0))" } ?? "软件解码"
         case nil:
             return name
         }
