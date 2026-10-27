@@ -24,6 +24,8 @@ LumaPlayer 是自用的 macOS 原生 Emby 播放器,SwiftUI + **libmpv**(自编,
 引用约定:「API_CONTRACT.md 4.4」「MPV_INTEGRATION.md §8」是**章节编号**,编号稳定,改文档时不要重排;
 `Qnn` / `M2` / `M4` 是问题编号,未结案在 `KNOWN_ISSUES.md`,已结案在 `PITFALLS.md`。
 
+⛔ 提交信息 / PR 描述里引用上游 issue / PR 不写 owner/repo#N 或完整 GitHub 链接 —— 推到公开仓库后 GitHub 会在上游页面自动挂反向引用,且删不掉。写成 mpv PR 16818 这类不被识别的形式。
+
 ## 硬规则
 
 1. **不发明 Emby 接口**。只用 `API_CONTRACT.md` 里标 ✅ / 🔶 的端点、参数、字段名;没有的按其 0.2 核实

@@ -49,9 +49,13 @@ mpv 源码改动只能写成 `Vendor/mpv/patches/*.patch`(脚本 `reset --hard` 
 **FBO 不能写死 0 ——「有声音、黑屏」。** `CAOpenGLLayer` draw 时绑的是 layer 自己的 FBO,每帧
 `glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING)` 传给 mpv。mpv render 完会把绑定还原成 0,探针直接读会误判。
 
-**渲染阻塞主线程:播放时界面和弹幕被压到视频帧率。** `CAOpenGLLayer` 异步模式的 draw 跑在主线程;
-`mpv_render_context_render` 默认 `BLOCK_FOR_TARGET_TIME = 1`,画完阻塞到上屏时刻。做法:启动选项 `video-timing-offset=0`,
-每次 render 再显式传 `BLOCK_FOR_TARGET_TIME=0`(Q49)。窗口被遮挡时这个定时器不跑,采样取证要先确认窗口可见。
+**渲染阻塞主线程:播放时界面和弹幕被压到视频帧率。** `CAOpenGLLayer` 的 `isAsynchronous` 模式由主线程定时器驱动、
+draw 跑在主线程;`mpv_render_context_render` 默认 `BLOCK_FOR_TARGET_TIME = 1`,画完阻塞到上屏时刻。
+做法:⛔ 不开 `isAsynchronous`,mpv 通知时在专用队列上 display(MPV_INTEGRATION.md §2);仍设 `video-timing-offset=0`
+并每次传 `BLOCK_FOR_TARGET_TIME=0`。窗口被遮挡时 CA 不调 draw,采样取证要先确认窗口可见。
+
+**`report_swap` 报过一次就得一直报。** 之后 VO 每帧都等下一次 swap,等不到 200 ms 就丢帧(`frame-drop-count` 涨)。
+displayLink 停了没叫醒、或只在部分时候报,症状是画面一卡一卡而解码与声音正常(MPV_INTEGRATION.md §2.1)。
 
 **画面偏移。** `MPVLayerView` 走 `makeBackingLayer`,渲染尺寸取 GL viewport,别让 `layout()` 把 layer 拽到父 layer 原点。
 

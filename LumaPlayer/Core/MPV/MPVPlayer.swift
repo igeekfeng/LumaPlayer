@@ -33,6 +33,8 @@ struct MPVPlayerStatistics: Sendable, Equatable {
     /// MPV_RENDER_UPDATE_FRAME 置位次数
     var updateFrameFlags = 0
     var glAttached = false
+    /// CA 没调 draw(窗口不可见)时以 `SKIP_RENDERING` 消掉的帧数(`skipPendingFrame`)
+    var skippedRenders = 0
     /// `"gpu-next"` / `"gpu"`。这是请求并建起的后端名,后端名不被识别时 mpv 会静默退回 gpu;
     /// 确证要看 mpv 日志 `Using gpu-next backend.`。
     var renderBackend: String?
@@ -103,8 +105,8 @@ struct MPVPropertyRequests {
 /// libmpv 的薄 Swift 封装(业务代码不得直接调 C API,MPV_INTEGRATION.md §1)。
 ///
 /// `@unchecked Sendable` 的论证见 MPV_INTEGRATION.md §6.3:client API 全线程安全,本类可变状态都在
-/// `mutex` 内,句柄只在 `shutdown()` 里锁内销毁;三方并发(MainActor 调用方 / 事件线程 / draw)靠
-/// `mutex`、`renderMutex` 与 mpv 自身串行,锁序见 `renderMutex`。
+/// `mutex` 内,句柄只在 `shutdown()` 里锁内销毁;多方并发(MainActor 调用方 / 事件线程 / render 队列 /
+/// displayLink)靠 CGL context 锁、`renderMutex`、`mutex` 与 mpv 自身串行,锁序见 `renderMutex`。
 final class MPVPlayer: @unchecked Sendable {
 
     // MARK: - 内部状态
@@ -166,10 +168,19 @@ final class MPVPlayer: @unchecked Sendable {
     ///
     /// ⛔ 不能放进 `state`:update 回调由 VO 线程持有 mpv 内部锁时调用,而 `shutdown()` / 换后端
     /// 持有 `mutex` 调 `mpv_render_context_free` 要等 VO 线程退出,回调里抢 `mutex` 就互等死锁。
+    /// `frameReady` 的锁同理只在读写闭包的一瞬间持有,锁内不调 mpv、不等别的锁。
     private final class RenderRequest: Sendable {
         /// 初值为真:渲染上下文刚建好时先画一次
         private let pending = Atomic<Bool>(true)
+        private let frameReady = Synchronization.Mutex<(@Sendable () -> Void)?>(nil)
         func set() { pending.store(true, ordering: .releasing) }
+        /// mpv 送来新帧 / 重绘请求:置位并通知 layer 排一次 display
+        func setAndNotify() {
+            set()
+            let handler = frameReady.withLock { $0 }
+            handler?()
+        }
+        func setHandler(_ handler: (@Sendable () -> Void)?) { frameReady.withLock { $0 = handler } }
         var isSet: Bool { pending.load(ordering: .acquiring) }
         func take() { pending.store(false, ordering: .releasing) }
     }
@@ -181,7 +192,9 @@ final class MPVPlayer: @unchecked Sendable {
     /// 渲染上下文专用锁:只在 draw 的 render、`attachGLContext` 的 create、`shutdown()` 的 free 间互斥。
     /// 与 `mutex` 分开,整帧渲染才不会阻塞 MainActor 的 `pause()` / `seek()` 等(§6.3)。
     ///
-    /// ⛔ 锁序恒为 `renderMutex` → `mutex`,不得反向,否则死锁。
+    /// ⛔ 锁序恒为 CGL context 锁 → `renderMutex` → `mutex`,不得反向,否则死锁。CA 在 render 队列
+    /// 或主线程 display 时持有 CGL context 锁进 draw;本类在 draw 之外借用 context(free、换后端、
+    /// 跳帧)都先锁它,否则会和 CA 在另一线程同时用同一个 GL context。
     private let renderMutex = Mutex()
 
     /// 同时要两把锁时的唯一入口,把锁序固化在这里。
@@ -220,7 +233,7 @@ final class MPVPlayer: @unchecked Sendable {
         ("vo", "libmpv"),
         ("hwdec", "auto"),
         ("cache", "yes"),
-        // 默认 0.05 时 render 要阻塞到上屏时刻,而 draw 在主线程,界面与弹幕会被压到视频帧率
+        // 默认 0.05 时 render 要阻塞到上屏时刻:render 队列被卡住,改尺寸时主线程的同步 draw 也跟着等
         // (render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
         ("video-timing-offset", "0"),
     ]
@@ -366,8 +379,16 @@ final class MPVPlayer: @unchecked Sendable {
         }
 
         // 3. 释放渲染上下文(必须先于 core 销毁,render.h:119-122)。
-        //    锁序 renderMutex → mutex。render.h 66-69 要求 mpv_render* 调用时 GL context 在当前线程,
-        //    free 也不例外,所以借用挂接的 CGL context 并在结束后解绑。
+        //    render.h 66-69 要求 mpv_render* 调用时 GL context 在当前线程,free 也不例外,
+        //    所以借用挂接的 CGL context 并在结束后解绑;先锁它,render 队列此刻可能正在 display。
+        let attached = retainedAttachedCGLContext()
+        if let attached { CGLLockContext(attached.raw) }
+        defer {
+            if let attached {
+                CGLUnlockContext(attached.raw)
+                CGLReleaseContext(attached.raw)
+            }
+        }
         withRenderAndStateLock {
             if let rctx = state.renderContext {
                 let previous = CGLGetCurrentContext()
@@ -681,16 +702,17 @@ final class MPVPlayer: @unchecked Sendable {
         return built
     }
 
-    /// mpv 有新帧 / 重绘请求时置位 `renderRequest`,layer 据此决定这一 vsync 画不画(`needsRender`)。
+    /// mpv 有新帧 / 重绘请求时置位 `renderRequest` 并通知 layer(`setFrameReadyHandler`)排一次 display。
     /// 注册时 mpv 会立即调一次回调(vo_libmpv.c),等于「新上下文先画一帧」。
     ///
-    /// 回调约束(render.h「Threading」):任意 mpv 线程、持锁调用,⛔ 不得调 mpv API、不得等锁 —— 只翻原子标志。
+    /// 回调约束(render.h「Threading」):任意 mpv 线程、持锁调用,⛔ 不得调 mpv API、不得等锁 ——
+    /// 只翻原子标志、往 render 队列投一个任务。
     private func registerUpdateCallback(on renderContext: OpaquePointer) {
         mpv_render_context_set_update_callback(
             renderContext,
             { context in
                 guard let context else { return }
-                Unmanaged<RenderRequest>.fromOpaque(context).takeUnretainedValue().set()
+                Unmanaged<RenderRequest>.fromOpaque(context).takeUnretainedValue().setAndNotify()
             },
             Unmanaged.passUnretained(renderRequest).toOpaque())
     }
@@ -760,8 +782,17 @@ final class MPVPlayer: @unchecked Sendable {
     ///
     /// 可重复调用(切显示器 / 切 GPU / 换 pixel format 时 layer 会再走一次 copyCGLContext)。
     /// ⚠️ render.h:117 规定一个 core 同时只能有一个 render context,所以重挂前必须先 free 旧的。
-    /// 锁序 renderMutex → mutex。
+    /// 锁序 CGL context 锁 → `renderMutex` → `mutex`:旧 context 可能正被跳帧 / 换后端借用,先锁它再 free。
+    /// 新 context 是 CA 刚建的,此刻没有别人在用。
     func attachGLContext(_ cglContext: CGLContextObj?) {
+        let stale = retainedAttachedCGLContext()
+        if let stale { CGLLockContext(stale.raw) }
+        defer {
+            if let stale {
+                CGLUnlockContext(stale.raw)
+                CGLReleaseContext(stale.raw)
+            }
+        }
         let created: Result<OpaquePointer, MPVError> = withRenderAndStateLock {
             guard let handle = state.handle, state.phase != .destroyed, state.phase != .tearingDown else {
                 return .failure(.instanceDestroyed)
@@ -830,7 +861,7 @@ final class MPVPlayer: @unchecked Sendable {
         }
     }
 
-    /// GL draw 线程调用:把当前帧渲染到 layer 绑定的 framebuffer。
+    /// layer 的 draw 调用(render 队列,改尺寸时也可能是主线程):把当前帧渲染到 layer 绑定的 framebuffer。
     ///
     /// 官方模式(render.h 638-643、687-688):update 回调后调 update() 再**无条件** render(),
     /// render() 自己从内部队列拉帧。⚠️ 不能拿 update 返回的 flags 去 gate render —— 那样 flags 恒 0、一帧都渲不出。
@@ -861,9 +892,9 @@ final class MPVPlayer: @unchecked Sendable {
                 fbo: Int32(boundFramebuffer), w: Int32(width), h: Int32(height),
                 internal_format: 0)
             var flipY: Int32 = 1
-            // draw 与弹幕 displayLink 共用主线程:即使 timing-offset 为 0,也不能在这里
-            // 等 VO 的 present 通知。保留 video-timing-offset=0 避免提前交帧造成音画偏差,
-            // 并显式关闭 render 的等待分支(render.h MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME)。
+            // 不在 render 里等上屏时刻:render 队列持着 layer 的 displayLock,主线程改尺寸时的同步 draw
+            // 要等它。保留 video-timing-offset=0 避免提前交帧造成音画偏差,并显式关闭 render 的
+            // 等待分支(render.h MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME);上屏节奏由 `reportSwap()` 告诉 mpv。
             var blockForTargetTime: Int32 = 0
             let err: Int32 = withUnsafeMutableBytes(of: &fbo) { fboPtr in
                 withUnsafeMutableBytes(of: &flipY) { flipPtr in
@@ -933,7 +964,7 @@ final class MPVPlayer: @unchecked Sendable {
         mutex.withLock { state.initializationFailure }
     }
 
-    /// layer 这一 vsync 要不要画(`MPVGLLayer.canDraw`)。
+    /// 有没有活的渲染上下文可画(`MPVGLLayer.canDraw` 经 `needsRender` 读)。
     ///
     /// 没有活的渲染上下文(还没挂 GL / 已拆卸)时为假:layer 跳过这一帧,**保留上一次的画面**
     /// (CAOpenGLLayer 的契约,2026-10-14 用独立探针 + 截图实测,缩放窗口时也只是拉伸)。
@@ -944,16 +975,81 @@ final class MPVPlayer: @unchecked Sendable {
         mutex.withLock { state.handle != nil && state.renderContext != nil && !state.isStopping }
     }
 
-    /// layer 这一 vsync 要不要画:`canRender` 且自上次 draw 以来 mpv 送来过新帧 / 重绘请求,
+    /// layer 这次 display 要不要画:`canRender` 且自上次 draw 以来 mpv 送来过新帧 / 重绘请求,
     /// 或 layer 尺寸变了(`requestRender()`)。
     ///
-    /// 不加这道门时 `CAOpenGLLayer` 按屏幕刷新率每次都 render(120 Hz 屏上 24 fps 片源约 5 次里 4 次
-    /// 重画同一帧),而且 draw 跑在主线程(Q49)。暂停时一次都不画,layer 保留上一次的画面。
+    /// layer 只在 mpv 通知或尺寸变化时 display,这道门再挡掉「通知已被上一次 draw 消化」的空跑。
+    /// 暂停时一次都不画,layer 保留上一次的画面。
     var needsRender: Bool {
         renderRequest.isSet && canRender
     }
 
-    /// 要求下一个 vsync 重画:mpv 不知道 layer 的尺寸变化(缩放窗口、全屏、换屏),
+    /// mpv 送来新帧 / 重绘请求时调(在 mpv 的 VO 线程上,持着它的内部锁):只能投递任务,不能干活。
+    /// 由 `MPVGLLayer` 挂上,把 display 排到它的 render 队列。
+    func setFrameReadyHandler(_ handler: (@Sendable () -> Void)?) {
+        renderRequest.setHandler(handler)
+    }
+
+    /// 告诉 mpv 屏幕刚完成一次 vsync(`MPVLayerView` 的 displayLink 每帧调,主线程)。
+    ///
+    /// 调过一次之后 VO 每出一帧都等下一次 swap 再继续(vo_libmpv.c `flip_page`,等不到 200 ms 超时丢帧),
+    /// 所以要么一直报,要么从不报;displayLink 空闲停下后由 layer 在出帧时叫醒。
+    /// 只持 `mutex`:free 都在 `mutex` 内,持它即可保证上下文活着;⛔ 不拿 `renderMutex`,否则主线程
+    /// 每个 vsync 都要等 render 队列画完一整帧。render.h 要求 render 系函数互斥且 GL context current,
+    /// 但 `mpv_render_context_report_swap` 的实现只在 mpv 内部锁里加计数(vo_libmpv.c),不碰 GL,
+    /// 与并发的 render 由 mpv 自己的锁串行(IINA 同样在 displayLink 线程直接调)。
+    func reportSwap() {
+        mutex.withLock {
+            guard let renderContext = state.renderContext else { return }
+            mpv_render_context_report_swap(renderContext.raw)
+        }
+    }
+
+    /// CA 这一轮 display 没调 draw(窗口在别的桌面空间 / 被完全遮挡)但 mpv 有帧待出时,以
+    /// `MPV_RENDER_PARAM_SKIP_RENDERING` 消掉它:不消的话 VO 每帧等满 200 ms 才丢(vo_libmpv.c `flip_page`)。
+    /// 不发 `firstVideoFrameRendered`:屏上并没有画出东西。锁序 CGL context 锁 → `renderMutex` → `mutex`。
+    func skipPendingFrame() {
+        guard let attached = retainedAttachedCGLContext() else { return }
+        defer { CGLReleaseContext(attached.raw) }
+        CGLLockContext(attached.raw)
+        defer { CGLUnlockContext(attached.raw) }
+        renderMutex.withLock {
+            let renderContext: OpaquePointer? = mutex.withLock {
+                guard !state.isStopping, state.cglContext?.raw == attached.raw else { return nil }
+                return state.renderContext?.raw
+            }
+            guard let renderContext else { return }
+            let previous = CGLGetCurrentContext()
+            CGLSetCurrentContext(attached.raw)
+            defer { CGLSetCurrentContext(previous) }
+
+            renderRequest.take()
+            _ = mpv_render_context_update(renderContext)
+            var skip: Int32 = 1
+            let err: Int32 = withUnsafeMutableBytes(of: &skip) { skipPtr in
+                var params: [mpv_render_param] = [
+                    mpv_render_param(type: MPV_RENDER_PARAM_SKIP_RENDERING, data: skipPtr.baseAddress),
+                    mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
+                ]
+                return mpv_render_context_render(renderContext, &params)
+            }
+            if err < 0 {
+                logLine("[MPV] skip render 失败: \(mpvFailure(err, "mpv_render_context_render"))")
+            }
+            mutex.withLock { state.stats.skippedRenders += 1 }
+        }
+    }
+
+    /// 当前挂接的 CGL context,另持一份引用(调用方负责 `CGLReleaseContext`):锁住它之后
+    /// layer 或 shutdown 可能还掉 state 里那份。
+    private func retainedAttachedCGLContext() -> LockedPointer<CGLContextObj>? {
+        mutex.withLock {
+            guard let cgl = state.cglContext else { return nil }
+            return LockedPointer(CGLRetainContext(cgl.raw))
+        }
+    }
+
+    /// 要求下一次 display 重画:mpv 不知道 layer 的尺寸变化(缩放窗口、全屏、换屏),
     /// 新尺寸只在下一次 render 时传进去(`renderIntoBoundFramebuffer`)。任意线程可调。
     func requestRender() {
         renderRequest.set()
@@ -1123,7 +1219,7 @@ final class MPVPlayer: @unchecked Sendable {
 
     /// 把渲染上下文换成目标后端(还没挂 GL 时只记下目标,挂上时按它建)。
     ///
-    /// 锁序 CGL context 锁 → `renderMutex` → `mutex`:CAOpenGLLayer 在 draw 线程
+    /// 锁序 CGL context 锁 → `renderMutex` → `mutex`:CAOpenGLLayer 在 render 队列
     /// 持有 context 时进 `renderIntoBoundFramebuffer`,这里在事件线程借用同一个
     /// context,先锁它才不会与 draw 交叉使用、也不会与之反序死锁。
     private func switchRenderBackend(to target: MPVRenderBackend) {

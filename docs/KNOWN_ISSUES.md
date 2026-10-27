@@ -192,8 +192,12 @@
   ⛔ 未验:真实 DV 片源(DirectStream / 转码)、`CAOpenGLLayer` 上屏、DV P7/P8 与 HDR10/HLG 回归、能耗(GPU 约为 legacy 的 4–5 倍)。
   ⛔ 未修:PR 的 `map_frame` 上传失败时可能二次释放。上游合并后改回官方仓库与 sha,核对 `MPV_RENDER_PARAM_BACKEND` 编号,删掉能删的补丁。
   设置 →「播放 → 色彩」选「始终旧渲染器」是用户退回 legacy 的唯一入口。
-- **Q49 `video-timing-offset=0` + 按需 render 的副作用只验了一半。** 已验:弹幕帧率恢复(约 585 帧 / 5 s);
-  `MPVRenderGateTests` 证明暂停期间不 render、改尺寸会重画。⛔ 未验:真实能耗、缩放 / 全屏 / 换屏、60 fps 与 gpu-next、音画同步。
+- **Q49 render 队列 + `report_swap` + 按需 render 的副作用只验了一半。** 已验:弹幕帧率恢复(约 585 帧 / 5 s,主线程渲染时测的);
+  `MPVRenderGateTests` 证明暂停期间不 render、改尺寸会重画、主线程堵住时照样出帧、正常播放时 VO 不因等 swap 丢帧。
+  ⛔ 未验:真实能耗、缩放 / 全屏 / 换屏(含 displayLink 跟屏)、窗口在别的桌面空间时的跳帧路径、60 fps 与 gpu-next、
+  音画同步、主线程卡顿超 200 ms 时的丢帧程度(displayLink 在主 runloop 上)。
+  已见:第一帧刚出就暂停、再恢复,VO 丢 2–3 帧(不报 swap 时 ≤1;displayLink 常开也一样,不是唤醒问题),
+  推测是 VO 按 vsync 出帧后追不上刚起步的音频时钟;先播几十毫秒再暂停则为 0。真实片源上是否可见未验。
   用户报过弹幕偶发大步左移,未复现。逐帧诊断已默认常开,再出现回查 `danmaku.frames` 的「弹幕跳变」与
   「弹幕时钟对齐」两行(`DANMAKU.md` §4),区分掉帧、位置断报与时钟被拽回;⛔ 别去掉参数重启复现,重启后就不再出现。
 - **Q44「内核未就绪」门禁靠 `phase`,留着毫秒级竞态。** `FILE_LOADED` 与 UI 那一帧之间松手的拖动会被 mpv 拒(降级为 OSD)。

@@ -36,15 +36,32 @@ PlayerViewModel (@MainActor) → PlaybackSessionCoordinator → MPVPlayer (Core/
 
 ## 2. 渲染路径
 
-`MPVView`(`NSViewRepresentable`)承载 `MPVLayerView`,后者 `makeBackingLayer` 返回 `CAOpenGLLayer`。
-画不画由 `canDraw` 决定(`MPVPlayer.needsRender`):`mpv_render_context_set_update_callback` 的回调(VO 送来新帧 / 重绘请求)
-或 layer 尺寸 / 缩放比变化置位,draw 时清掉;回调里只翻原子标志,⛔ 不调 mpv API、不等锁(回调在 mpv 内部锁里调)。
-暂停时一次都不画,layer 保留上一次的画面。每次 draw:`mpv_render_context_update()` + **无条件** `render()`;
-FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),不写死 0;传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。
+`MPVView`(`NSViewRepresentable`)承载 `MPVLayerView`,后者 `makeBackingLayer` 返回 `CAOpenGLLayer` 子类 `MPVGLLayer`。
 
-`CAOpenGLLayer` 的异步模式由**主线程 runloop 上的定时器**驱动,draw 与 `mpv_render_context_render` 都在主线程执行。
-所以设 `video-timing-offset=0`(§3),并在每次 render 显式传 `BLOCK_FOR_TARGET_TIME=0`(只设 offset 不关闭等待分支),
-否则主线程被压到视频帧率(`PITFALLS.md`「渲染阻塞主线程」,未验证项见 Q49)。
+**出帧在专用串行队列上,不在主线程。** `isAsynchronous = false`;`mpv_render_context_set_update_callback` 的回调
+(VO 送来新帧 / 重绘请求)置位 `MPVPlayer.needsRender` 并往 layer 的 render 队列投一次 `display()`(连发只排一个);
+回调里 ⛔ 不调 mpv API、不等锁(回调在 mpv 内部锁里调)。队列上的 `display()` 包在显式 `CATransaction` 里再 `flush()`
+(非主线程的隐式事务会触发 CA 断言)。主线程只在 CA 自己要画时 display(尺寸 / 缩放比变化,`needsDisplayOnBoundsChange`),
+与窗口缩放同一个事务,画面不拉伸;两边由 layer 的递归锁串行。
+
+画不画由 `canDraw` 决定(`needsRender`),draw 时清掉。暂停时一次都不画,layer 保留上一次的画面。
+每次 draw:`mpv_render_context_update()` + **无条件** `render()`;FBO 取当前绑定(`GL_DRAW_FRAMEBUFFER_BINDING`),
+不写死 0;传 `FLIP_Y = 1`;渲染尺寸取 GL viewport。仍设 `video-timing-offset=0`(§3)并每次传
+`BLOCK_FOR_TARGET_TIME=0`:render 不等上屏时刻,否则队列被卡住、改尺寸时主线程的同步 draw 跟着等。
+
+CA 在窗口不可见时会跳过 draw(连 `canDraw` 都不问)。这时若有帧待出,layer 以 `MPV_RENDER_PARAM_SKIP_RENDERING`
+消掉它(`MPVPlayer.skipPendingFrame`),否则 VO 每帧等满 200 ms 才丢。
+
+### 2.1 上屏节奏(`report_swap`)
+
+`MPVLayerView` 持一个 `NSView.displayLink`(主 runloop、common 模式、帧率跟屏幕最高刷新率),每个 vsync 调
+`mpv_render_context_report_swap`。vo_libmpv.c 的语义:**报过一次之后**,VO 每出一帧都等下一次 swap 才继续,
+200 ms 等不到就丢帧并计入 `frame-drop-count`,所以要么一直报,要么从不报。连续 1 秒没出帧(暂停、播放器已拆)
+displayLink 就停;layer 出帧时叫醒它(VO 最多多等一次主线程跳转)。
+
+`report_swap` 只持 `mutex`(free 都在 `mutex` 内),⛔ 不拿 `renderMutex`,否则主线程每个 vsync 都要等一整帧 render。
+render.h 要求 render 系函数互斥且 GL context current,但它的实现只在 mpv 内部锁里加计数、不碰 GL。
+代价:主线程卡顿超过 200 ms 时 VO 会因等不到 swap 丢帧(未验证项见 Q49)。
 
 ## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer.startupOptions` + `MPVCacheBudget`)
 
@@ -111,7 +128,8 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 
 - 独立事件线程循环 `mpv_wait_event()`,退出条件是独立的 `isStopping` 标志;线程体每轮从 weak 提供者取一次强引用。
 - 事件经 `MPVEventBridge` 投递到 MainActor;`time-pos` 在桥里节流后再投递。
-- 两把锁,锁序恒为 `renderMutex` → `mutex`;整帧 render 不放进 `mutex`。
+- 锁序恒为 CGL context 锁 → `renderMutex` → `mutex`;整帧 render 不放进 `mutex`。CA display 时持 CGL context 锁进 draw,
+  在 draw 之外借用 context 的路径(shutdown 的 free、换后端、跳帧、重挂 context 时 free 旧的)都先锁它。
 - `Core/MPV/` 是全项目**唯一**允许 `@unchecked Sendable` 的目录(包裹 C 指针),每个类型都要注释论证线程安全。
 
 ## 7. 轨道
