@@ -1,0 +1,14 @@
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 2cc2700..e8b6e3f 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -362,6 +362,9 @@ coreaudio_error_audiounit:
+     AudioUnitUninitialize(p->audio_unit);
+ coreaudio_error_component:
+     AudioComponentInstanceDispose(p->audio_unit);
++    // init() calls uninit() when this fails, and uninit() tears down any
++    // non-NULL unit; leaving the disposed handle here would dispose it twice.
++    p->audio_unit = NULL;
+ coreaudio_error:
+     return false;
+ }

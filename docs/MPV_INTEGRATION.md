@@ -13,9 +13,11 @@
   ffmpeg / libplacebo / libass 等依赖复用 Homebrew。`Vendor/mpv/module.modulemap` 与 `OTHER_LDFLAGS` 指向那里。
   ⛔ 不覆盖 Homebrew 的 mpv(要留作参照,且 `brew upgrade` 会回退)。
 - 本地补丁在 `Vendor/mpv/patches/`,脚本按文件名顺序 `git apply`:
-  `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0002` `ao_coreaudio` 初始化失败时注销热插拔监听;
+  `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0002` 上游 #18383 原样(`ao_coreaudio` init 失败走
+  `uninit`,热插拔监听在 AudioUnit 建好后才注册;fork 基线早于它);
   `0003` gpu-next 注册 VideoToolbox 设备恢复零拷贝;`0004` `ao_coreaudio` 设 `ChannelMap` 失败只告警、重建 AudioUnit 后不设映射
-  (macOS 27 必报 `-50`,否则一律回退 avfoundation;不重建则卡首帧,见 PITFALLS.md 第 2 节)。
+  (macOS 27 必报 `-50`,否则一律回退 avfoundation;不重建则卡首帧,见 PITFALLS.md 第 2 节);
+  `0005` `init_audiounit` 失败路径释放 unit 后置空,否则 #18383 的 `uninit` 二次释放(上游 master 同样存在)。
 - 打包:`Scripts/bundle-libmpv.sh` 把 libmpv 与依赖拷进 `Frameworks/`、改写 install name、删 Homebrew `LC_RPATH`。只对 Release 产物跑。
 - **上游合并 #16818 之后**:改回官方仓库与 sha;核对 `MPV_RENDER_PARAM_BACKEND` 的编号与语义(Swift 侧一起改);能删的补丁删掉。
 

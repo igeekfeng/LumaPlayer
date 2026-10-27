@@ -77,11 +77,15 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 
 # 本地补丁（Vendor/mpv/patches/*.patch，按文件名顺序），都是修 #16818 draft 或上游自身的缺陷：
 #   0001  gpu-next 无视 FLIP_Y（画面上下颠倒）、渲染参数写死最近邻缩放且零初始化（运动画面闪烁）
-#   0002  ao_coreaudio 注册热插拔监听后 init 失败不注销监听，之后设备变化回调野指针 → 崩溃
+#   0002  上游 PR #18383 原样（已合入 master，fork 基线早于它）：init 失败走 uninit 清理，
+#         热插拔监听挪到 AudioUnit 建好之后注册 —— 否则失败后设备变化回调野指针 → 崩溃
 #   0003  gpu-next 没注册硬解设备，hwdec=auto 退成 videotoolbox-copy（4K 每帧拷回内存，能耗高）
 #   0004  macOS 27 上设 ChannelMap 一律 -50 → 全退回 ao_avfoundation（预排 2 秒音频，改倍速丢帧）；
-#         修法是只告警并重建 AudioUnit 后不设映射 —— 被拒的 unit 能 start 但永不回调，会卡首帧
-# 上游修好后删掉对应补丁。
+#         修法是只告警并重建 AudioUnit 后不设映射 —— 被拒的 unit 能 start 但永不回调，会卡首帧。
+#         上游 issue #18384 仍开着，修法在 PR #18463 / #18637 / #18679 之间未定
+#   0005  #18383 让 init 失败后调 uninit，但 init_audiounit 失败路径释放了 unit 不置空 → 二次释放
+#         （上游 master 同样存在）
+# 换到含 #18383 的上游基线后删 0002；上游修好后删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue
     echo "打补丁：$(/usr/bin/basename "${patch}")"
