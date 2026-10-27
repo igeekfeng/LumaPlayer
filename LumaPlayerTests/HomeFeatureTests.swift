@@ -429,7 +429,10 @@ final class HomeFeatureTests: XCTestCase {
         let profile = try await makeServer(host: "emby.test")
         // UserDefaults 不是 Sendable,不能在 MainActor 上构造后送进 actor 的 init,用默认参数(actor 侧求值);registry 不落库。
         let registry = ServerRegistry(profiles: [], credentials: credentials)
-        let container = AppContainer(registry: registry, credentials: credentials, session: session)
+        // 首页推荐开关读 preferences;不注入会读到宿主 App 的真实设置
+        let container = AppContainer(
+            registry: registry, credentials: credentials, session: session,
+            preferences: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
         return (HomeViewModel(container: container), profile)
     }
 

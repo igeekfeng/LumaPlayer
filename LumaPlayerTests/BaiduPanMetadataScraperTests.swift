@@ -139,7 +139,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             item(title: "Game of Thrones", year: nil, kind: .episode, origin: .filename,
                  episodeNumber: 1),
             item(title: "Game of Thrones", year: nil, kind: .episode, origin: .filename,
-                 episodeNumber: 2),
+                 episodeNumber: 2, fsID: 43),
         ]
         let enriched = await Self.makeScraper(credentials).enrich(items)
 
@@ -563,10 +563,12 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         origin: MetadataOrigin,
         episodeNumber: Int? = nil,
         seasonNumber: Int? = nil,
-        tmdbID: Int? = nil
+        tmdbID: Int? = nil,
+        fsID: UInt64 = 42
     ) -> SourceItem {
+        // `enrich` 按 fsID 并回结果,同一批里的条目须各自不同
         SourceItem(
-            ref: SourceItemRef(sourceID: sourceID, fsID: 42),
+            ref: SourceItemRef(sourceID: sourceID, fsID: fsID),
             title: title,
             kind: kind,
             overview: nil,
