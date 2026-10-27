@@ -109,14 +109,13 @@ legacy 后端不认识这些选项 → 连回退也崩。要加就 post-create �
 复现不用真插拔:同进程建一个私有聚合设备即可。0002 用的是上游 #18383:失败统一走 `uninit`,而 `init_audiounit` 的失败
 标签释放 unit 却不置空,`uninit` 会再释放一次 —— 补丁 0005 补上置空,换上游基线时要确认上游修了这里再删。
 
-**改倍速卡顿 = 实际跑的是 `ao_avfoundation`(补丁 0004,Q43)。** macOS 27 上 `ao_coreaudio` 设 `ChannelMap` 必报 `-50`
-(上游 #18384),mpv 静默回退 avfoundation;它预排约 2 秒按旧倍速拉伸的音频,改 `speed` 后音频时钟跳几秒,视频连续丢帧追。
-排查先看 `current-ao`;拿 Homebrew mpv 对照时别加 `--ao=coreaudio`(初始化失败就没声音,反而看不出问题)。上游修好 #18384 后删补丁 0004。
-上游修法未定:#18463(删掉这次调用)、#18637(改成 Output scope 的 `SInt32` 映射,已 approve)、#18679(同作者后提,删调用并修
-立体声偏好映射)。IINA 自带的补丁走的是 #18637 那条路。macOS 27.2 内建扬声器上实测这次设置不再报错(只验了这一种设备)。
-
-**补丁 0004 只把 `ChannelMap` 失败降为告警不够,必须丢掉那个 AudioUnit 重建。** 设映射被拒后的 unit `Start` 返回成功,
-但渲染回调一次都不调 → 画面停在首帧、`current-ao` 却显示 coreaudio。排查「首帧出来就不动」先看 `time-pos` 是否推进。
+**改倍速卡顿 = 实际跑的是 `ao_avfoundation`(补丁 0004,Q43)。** 上游 `ao_coreaudio` 把 `AudioChannelLayout` 传给
+`kAudioOutputUnitProperty_ChannelMap`(要的是 `SInt32` 数组),macOS 27 上这次调用报 `-50`(issue #18384,不是每台设备都报),
+mpv 静默回退 avfoundation;它预排约 2 秒按旧倍速拉伸的音频,改 `speed` 后音频时钟跳几秒,视频连续丢帧追。
+排查先看 `current-ao`;拿 Homebrew mpv 对照时别加 `--ao=coreaudio`(初始化失败就没声音,反而看不出问题)。
+0004 是上游 #18679(未合并):删掉这次误用,声道顺序交给 `ca_init_chmap` 选出的布局。同一 issue 的另一候选 #18637
+(改成 Output scope 的 `SInt32` 映射,IINA 自带补丁走这条路)没选:作者后提 #18679 作为替代,讨论与测试都转到了那边。
+上游合并后核对合入的是哪一版,再删 0004。
 
 **`NSWindow.isReleasedWhenClosed` 默认 YES。** 手动建窗口交给 ARC 时置 `false`,否则 `close()` 过度释放。
 

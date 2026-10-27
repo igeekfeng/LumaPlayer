@@ -1,0 +1,361 @@
+From 15c824366a236924c64ac1b2d273fa881dd56af8 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sat, 24 Oct 2026 14:11:20 +0200
+Subject: [PATCH 1/8] ao_coreaudio: remove misusage of audio unit channel map
+ API
+
+we are misusing the audio unit API to set properties for the
+kAudioOutputUnitProperty_ChannelMap property, by passing a
+AudioChannelLayout instead of an array of SInt32 as required. why this
+worked at all, prior to macOS 27, can only be assumed. with the release
+of macOS 27 this throws a hard error, preventing coreaudio from being
+initialised completely and falling back to av_foundation.
+
+introduced in PR #15622
+commit 06fe665b789ffca7c6716cd4ca2fec7e2d0f54be
+
+this PR fixed the problem in #15584, probably by coincidence.
+
+partially revert the changes from mentioned PR/commit on the coreaudio
+side and reintroducing #15584. this wasn't completely and properly fixed
+anyway.
+
+Fixes #18384
+---
+ audio/out/ao_coreaudio.c | 17 +++--------------
+ 1 file changed, 3 insertions(+), 14 deletions(-)
+
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 7d421390e9dc3..97eac49542582 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -136,7 +136,7 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
+     return CONTROL_UNKNOWN;
+ }
+ 
+-static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, AudioChannelLayout *layout, size_t layout_size);
++static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd);
+ static void init_physical_format(struct ao *ao);
+ static void reinit_latency(struct ao *ao);
+ static bool register_hotplug_cb(struct ao *ao);
+@@ -176,13 +176,8 @@ static int init(struct ao *ao)
+ 
+     AudioStreamBasicDescription asbd;
+     ca_fill_asbd(ao, &asbd);
+-    size_t layout_size;
+-    AudioChannelLayout *layout = ca_get_acl(ao, &layout_size);
+ 
+-    bool r = init_audiounit(ao, asbd, layout, layout_size);
+-    talloc_free(layout);
+-
+-    if (!r)
++    if (!init_audiounit(ao, asbd))
+         goto coreaudio_error;
+ 
+     if (!register_hotplug_cb(ao))
+@@ -279,7 +274,7 @@ static void init_physical_format(struct ao *ao)
+     talloc_free(tmp);
+ }
+ 
+-static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, AudioChannelLayout *layout, size_t layout_size)
++static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd)
+ {
+     OSStatus err;
+     uint32_t size;
+@@ -323,12 +318,6 @@ static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, Audi
+     CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+                      "can't link audio unit to selected device");
+ 
+-    err = AudioUnitSetProperty(p->audio_unit,
+-                               kAudioOutputUnitProperty_ChannelMap,
+-                               kAudioUnitScope_Global, 0, layout, layout_size);
+-
+-    CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+-                     "unable to set the input channel layout on the audio unit");
+ 
+     AURenderCallbackStruct render_cb = (AURenderCallbackStruct) {
+         .inputProc       = render_cb_lpcm,
+
+From fdccf19ed51b1bee8ea475d751f9a7c56c532bcf Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sat, 24 Oct 2026 15:19:44 +0200
+Subject: [PATCH 2/8] ao_coreaudio_chmap: prioritise preferred stereo layout
+ over default
+
+ca_query_layout returns the default stereo layout, whereas
+ca_query_stereo_layout returns the preferred stereo layout. both can be
+identical but in case of swapped channel in Audio Midi Setup (fr-fl),
+stereo is still preferred.
+
+prioritise the preferred stereo layout by moving it at the top of the
+channel map list.
+
+this partially fixes #15584
+---
+ audio/out/ao_coreaudio_chmap.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index 2c6131f13c6d2..3c4df3b813e13 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -473,14 +473,14 @@ static void ca_retrieve_layouts(struct ao *ao, struct mp_chmap_sel *s,
+     void *ta_ctx = talloc_new(NULL);
+     struct mp_chmap chmap;
+ 
+-    AudioChannelLayout *ml = ca_query_layout(ao, device, ta_ctx);
+-    if (ml && ca_layout_to_mp_chmap(ao, ml, &chmap))
+-        mp_chmap_sel_add_map(s, &chmap);
+-
+     AudioChannelLayout *sl = ca_query_stereo_layout(ao, device, ta_ctx);
+     if (sl && ca_layout_to_mp_chmap(ao, sl, &chmap))
+         mp_chmap_sel_add_map(s, &chmap);
+ 
++    AudioChannelLayout *ml = ca_query_layout(ao, device, ta_ctx);
++    if (ml && ca_layout_to_mp_chmap(ao, ml, &chmap))
++        mp_chmap_sel_add_map(s, &chmap);
++
+     talloc_free(ta_ctx);
+ }
+ 
+
+From 9fc84aca83b7a7dfd31f223c57b71f1ac3dc3313 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sun, 18 Oct 2026 02:12:18 +0200
+Subject: [PATCH 3/8] ao_coreaudio_chmap: add missing mono label to speaker
+ mapping
+
+put this under kAudioChannelLabel_Center > MP_SPEAKER_ID_FC, so a lookup
+by speaker id still returns kAudioChannelLabel_Center first.
+---
+ audio/out/ao_coreaudio_chmap.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index 3c4df3b813e13..3157fed223b3e 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -28,6 +28,7 @@ static const int speaker_map[][2] = {
+     { kAudioChannelLabel_Left,                 MP_SPEAKER_ID_FL   },
+     { kAudioChannelLabel_Right,                MP_SPEAKER_ID_FR   },
+     { kAudioChannelLabel_Center,               MP_SPEAKER_ID_FC   },
++    { kAudioChannelLabel_Mono,                 MP_SPEAKER_ID_FC   },
+     { kAudioChannelLabel_LFEScreen,            MP_SPEAKER_ID_LFE  },
+     { kAudioChannelLabel_LeftSurround,         MP_SPEAKER_ID_BL   },
+     { kAudioChannelLabel_RightSurround,        MP_SPEAKER_ID_BR   },
+
+From 71ad36f4455ffae03eb6ae43a28d94b7c6ab6b02 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sun, 18 Oct 2026 02:11:06 +0200
+Subject: [PATCH 4/8] ao_coreaudio_chmap: don't advertise mono support
+ unconditionally
+
+mono support was always unconditionally advertised on all devices. this
+was done to use the AudioUnit upmixing instead of our own.
+
+this could lead to mono being picked even if better stereo layouts were
+supported.
+
+reverts 302aaddc262140ef1cbd962aa3177ded670f39bb
+---
+ audio/out/ao_coreaudio_chmap.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index 3157fed223b3e..67b9e8f88cadb 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -493,8 +493,6 @@ bool ca_init_chmap(struct ao *ao, AudioDeviceID device)
+     if (!chmap_sel.num_chmaps)
+         mp_chmap_sel_add_map(&chmap_sel, &(struct mp_chmap)MP_CHMAP_INIT_STEREO);
+ 
+-    mp_chmap_sel_add_map(&chmap_sel, &(struct mp_chmap)MP_CHMAP_INIT_MONO);
+-
+     if (!ao_chmap_sel_adjust(ao, &chmap_sel, &ao->channels)) {
+         MP_ERR(ao, "could not select a suitable channel map among the "
+                    "hardware supported ones. Make sure to configure your "
+
+From d690f6bd53800ddf2a886432be5e5502f4de1509 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sat, 24 Oct 2026 18:53:12 +0200
+Subject: [PATCH 5/8] ao_coreaudio_chmap: properly map preferred stereo layout
+
+the assumption here was that channels can either be 1 or 2 and could
+be directly mapped. though on multi channel setup this assumptions is
+wrong. channels[0] represents left and channels[1] represents the right
+channel number and this number can be greater than 2.
+
+properly map this left and right to the channel number and that all
+other channels to unknown.
+
+as an example, on a quad speaker setup like bl-br-fl-fr we would end up
+as a fc-lfe preferred stereo output. now it is na-na-fl-fr, similar to
+the quad channel layout, which is expected.
+
+this partially fixes #15584
+---
+ audio/out/ao_coreaudio_chmap.c | 21 ++++++++++++++-------
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index 67b9e8f88cadb..c78d0bbdd903d 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -438,7 +438,6 @@ static AudioChannelLayout* ca_query_stereo_layout(struct ao *ao,
+ {
+     OSStatus err;
+     uint32_t channels[2];
+-    const int nch = MP_ARRAY_SIZE(channels);
+     AudioChannelLayout *r = NULL;
+ 
+     AudioObjectPropertyAddress p_addr = (AudioObjectPropertyAddress) {
+@@ -451,18 +450,26 @@ static AudioChannelLayout* ca_query_stereo_layout(struct ao *ao,
+     err = AudioObjectGetPropertyData(device, &p_addr, 0, NULL, &psize, channels);
+     CHECK_CA_ERROR("could not get device preferred stereo layout");
+ 
++    uint32_t left = channels[0], right = channels[1];
++    if (!left || !right || left == right || left > MP_NUM_CHANNELS || right > MP_NUM_CHANNELS) {
++        MP_VERBOSE(ao, "ignoring invalid preferred stereo layout [%u,%u]\n", left, right);
++        goto coreaudio_error;
++    }
++
++    MP_VERBOSE(ao, "found valid preferred stereo layout [%u,%u]\n", left, right);
++
++    uint32_t nch = MPMAX(left, right);
+     psize = sizeof(AudioChannelLayout) + nch * sizeof(AudioChannelDescription);
+     r = talloc_zero_size(talloc_ctx, psize);
+     r->mChannelLayoutTag = kAudioChannelLayoutTag_UseChannelDescriptions;
+     r->mNumberChannelDescriptions = nch;
+ 
+-    AudioChannelDescription desc = {0};
+-    desc.mChannelFlags = kAudioChannelFlags_AllOff;
+-
+-    for(int i = 0; i < nch; i++) {
+-        desc.mChannelLabel = channels[i];
+-        r->mChannelDescriptions[i] = desc;
++    for (uint32_t i = 0; i < nch; i++) {
++        r->mChannelDescriptions[i].mChannelFlags = kAudioChannelFlags_AllOff;
++        r->mChannelDescriptions[i].mChannelLabel = kAudioChannelLabel_Unknown;
+     }
++    r->mChannelDescriptions[left - 1].mChannelLabel = kAudioChannelLabel_Left;
++    r->mChannelDescriptions[right - 1].mChannelLabel = kAudioChannelLabel_Right;
+ 
+ coreaudio_error:
+     return r;
+
+From 552ea74d3865a0ef0be7515ea3237db1cd886322 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sat, 24 Oct 2026 18:59:33 +0200
+Subject: [PATCH 6/8] ao_coreaudio_chmap: fix memory leak in
+ ca_layout_to_mp_chmap
+
+free the talloc_ctx in case of too many descriptions error, like on any
+other error.
+---
+ audio/out/ao_coreaudio_chmap.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index c78d0bbdd903d..d0dd1a98444ef 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -377,7 +377,7 @@ static bool ca_layout_to_mp_chmap(struct ao *ao, AudioChannelLayout *layout,
+     if (l->mNumberChannelDescriptions > MP_NUM_CHANNELS) {
+         MP_VERBOSE(ao, "layout has too many descriptions (%u, max: %d)\n",
+                    (unsigned) l->mNumberChannelDescriptions, MP_NUM_CHANNELS);
+-        return false;
++        goto coreaudio_error;
+     }
+ 
+     chmap->num = l->mNumberChannelDescriptions;
+
+From e5f6885f71f07e30c16fa970b53ab1c25c903aa2 Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sun, 18 Oct 2026 14:55:38 +0200
+Subject: [PATCH 7/8] ao_coreaudio: reload ao on device change
+
+reload ao on device change to possibly update device output formats like
+channel layouts.
+---
+ audio/out/ao_coreaudio.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 97eac49542582..7db99a6adc047 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -457,9 +457,14 @@ static OSStatus hotplug_cb(AudioObjectID id, UInt32 naddr,
+     struct ao *ao = ctx;
+     struct priv *p = ao->priv;
+     MP_VERBOSE(ao, "Handling potential hotplug event...\n");
++    AudioDeviceID old_device = p->device;
+     reinit_device(ao);
+-    if (p->audio_unit)
+-        reinit_latency(ao);
++    if (p->audio_unit) {
++        if (p->device != old_device)
++            ao_request_reload(ao);
++        else
++            reinit_latency(ao);
++    }
+     ao_hotplug_event(ao);
+     return noErr;
+ }
+
+From ea102c9506b4e806df6169ca699ad349e5b7c74f Mon Sep 17 00:00:00 2001
+From: der richter (upstream mpv-player/mpv PR #18679)
+Date: Sat, 24 Oct 2026 19:32:54 +0200
+Subject: [PATCH 8/8] ao_coreaudio: log default channel map of audio unit
+
+this might help debugging channel mapping issues.
+---
+ audio/out/ao_coreaudio.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 7db99a6adc047..6247bbfa60ac1 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -274,6 +274,34 @@ static void init_physical_format(struct ao *ao)
+     talloc_free(tmp);
+ }
+ 
++static void log_default_channel_map(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++
++    UInt32 size = 0;
++    Boolean writable = false;
++    OSStatus err = AudioUnitGetPropertyInfo(p->audio_unit,
++                                            kAudioOutputUnitProperty_ChannelMap,
++                                            kAudioUnitScope_Output, 0, &size,
++                                            &writable);
++
++    if (!CHECK_CA_WARN("unable to query the default channel map")) {
++        return;
++    }
++
++    SInt32 *map = talloc_size(NULL, size);
++    err = AudioUnitGetProperty(p->audio_unit, kAudioOutputUnitProperty_ChannelMap,
++                               kAudioUnitScope_Output, 0, map, &size);
++
++    if (CHECK_CA_WARN("unable to read the default channel map")) {
++        char *str = talloc_strdup(map, "");
++        for (size_t i = 0; i < size / sizeof(SInt32); i++)
++            str = talloc_asprintf_append(str, "%s%d", i ? "," : "", map[i]);
++        MP_VERBOSE(ao, "default channel map of the audio unit: [%s]\n", str);
++    }
++    talloc_free(map);
++}
++
+ static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd)
+ {
+     OSStatus err;
+@@ -318,6 +346,7 @@ static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd)
+     CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+                      "can't link audio unit to selected device");
+ 
++    log_default_channel_map(ao);
+ 
+     AURenderCallbackStruct render_cb = (AURenderCallbackStruct) {
+         .inputProc       = render_cb_lpcm,
