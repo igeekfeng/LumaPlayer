@@ -170,17 +170,24 @@ final class MPVPlayer: @unchecked Sendable {
     /// 持有 `mutex` 调 `mpv_render_context_free` 要等 VO 线程退出,回调里抢 `mutex` 就互等死锁。
     /// `frameReady` 的锁同理只在读写闭包的一瞬间持有,锁内不调 mpv、不等别的锁。
     private final class RenderRequest: Sendable {
+        /// 闭包包进 struct 再进 `Mutex`:泛型 `Mutex` 里直接存函数类型时,`withLock { $0 }` 的 inout
+        /// 回写会把存着的闭包再包一层重抽象 thunk,每读一次链长一截。这里每帧读一次,
+        /// 调用链随播放时长线性变深,约十分钟撑爆 VO 线程 512 KB 栈(PITFALLS.md 第 2 节)。
+        private struct Handler: Sendable { let call: @Sendable () -> Void }
+
         /// 初值为真:渲染上下文刚建好时先画一次
         private let pending = Atomic<Bool>(true)
-        private let frameReady = Synchronization.Mutex<(@Sendable () -> Void)?>(nil)
+        private let frameReady = Synchronization.Mutex<Handler?>(nil)
         func set() { pending.store(true, ordering: .releasing) }
         /// mpv 送来新帧 / 重绘请求:置位并通知 layer 排一次 display
         func setAndNotify() {
             set()
             let handler = frameReady.withLock { $0 }
-            handler?()
+            handler?.call()
         }
-        func setHandler(_ handler: (@Sendable () -> Void)?) { frameReady.withLock { $0 = handler } }
+        func setHandler(_ handler: (@Sendable () -> Void)?) {
+            frameReady.withLock { $0 = handler.map(Handler.init) }
+        }
         var isSet: Bool { pending.load(ordering: .acquiring) }
         func take() { pending.store(false, ordering: .releasing) }
     }

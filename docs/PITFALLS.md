@@ -132,6 +132,13 @@ mpv 静默回退 avfoundation;它预排约 2 秒按旧倍速拉伸的音频,改 
 
 **沙盒 App 收不到 `open --args`,直接 exec 会 SIGTRAP。** 外部驱动只能靠 URL scheme;⛔ 不要加「播任意 URL」的 scheme(任何网页都能触发)。
 
+**闭包不要直接存进泛型 `Synchronization.Mutex`。** 现象:播放约十分钟后 VO 线程 `EXC_BAD_ACCESS (SIGBUS)`,
+`KERN_PROTECTION_FAILURE` 落在 Stack Guard,栈顶是 `MPVGLLayer.scheduleDisplay` 与一串
+`reabstraction thunk`。原因:`Mutex<(() -> Void)?>` 的 `withLock { $0 }` 在 inout 回写时把存着的闭包再包一层
+重抽象 thunk(Release 下同样),每读一次调用链长一截;mpv update 回调每帧读一次,每帧多 64 字节栈,
+512 KB 的 VO 线程栈约 8000 帧耗尽。做法:闭包先包进 `Sendable` struct 再进 `Mutex`(`RenderRequest.Handler`),
+`MPVRenderGateTests.testFrameReadyCallbackDepthStaysFlat` 守着。
+
 ## 3. Emby 接口
 
 **没有 Direct Play。** `EnableDirectPlay` 固定 false;HTTP 拉原文件叫 Direct Stream。

@@ -1,4 +1,5 @@
 import AppKit
+import Synchronization
 import XCTest
 @testable import LumaPlayer
 
@@ -122,6 +123,25 @@ final class MPVRenderGateTests: XCTestCase {
         XCTAssertLessThanOrEqual(after - before, 1, "恢复后 VO 在等 swap 超时丢帧:displayLink 没被叫醒")
     }
 
+    /// mpv 的 update 回调每帧读一次 frame-ready 闭包,调用深度不能随帧数增长
+    /// (闭包直接存进泛型 `Mutex` 时每读一次多包一层 thunk,约十分钟撑爆 VO 线程栈)。
+    func testFrameReadyCallbackDepthStaysFlat() async throws {
+        let (player, view, teardown) = try await startPlayback()
+        defer { teardown() }
+        let layer = try XCTUnwrap(view.layer as? MPVGLLayer)
+
+        let depths = StackDepthLog()
+        player.setFrameReadyHandler { [weak layer] in
+            depths.record()
+            layer?.scheduleDisplay()
+        }
+        // fixture 只有 1 s、24 fps:剩下的帧够看出趋势(每帧多 64 字节)
+        try await Task.sleep(for: .milliseconds(700))
+        let samples = depths.samples.withLock { $0 }
+        XCTAssertGreaterThanOrEqual(samples.count, 8, "回调次数太少,看不出趋势")
+        XCTAssertLessThan((samples.max() ?? 0) - (samples.min() ?? 0), 256, "frame-ready 回调的栈深度在增长:\(samples)")
+    }
+
     private func frameDropCount(_ player: MPVPlayer) async throws -> Int {
         let properties = try await player.stringPropertiesAsync(["frame-drop-count"])
         return try XCTUnwrap(properties["frame-drop-count"].flatMap(Int.init))
@@ -142,5 +162,17 @@ final class MPVRenderGateTests: XCTestCase {
             if url.lastPathComponent == name { return url }
         }
         return nil
+    }
+}
+
+/// 记录回调所在线程的栈已用深度(栈顶到当前局部变量的距离)
+private final class StackDepthLog: Sendable {
+    let samples = Synchronization.Mutex<[Int]>([])
+
+    func record() {
+        var marker = 0
+        let top = Int(bitPattern: pthread_get_stackaddr_np(pthread_self()))
+        let here = withUnsafeMutablePointer(to: &marker) { Int(bitPattern: $0) }
+        samples.withLock { $0.append(top - here) }
     }
 }

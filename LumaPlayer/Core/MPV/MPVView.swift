@@ -38,7 +38,9 @@ final class MPVGLLayer: CAOpenGLLayer, @unchecked Sendable {
     private let renderActivity = Atomic<Bool>(false)
     /// displayLink 因空闲停下了;出帧时由这里叫醒(`displayLinkWake`)
     private let displayLinkIdle = Atomic<Bool>(false)
-    private let displayLinkWake = Synchronization.Mutex<(@MainActor @Sendable () -> Void)?>(nil)
+    /// 闭包包进 struct 再进 `Mutex`,理由同 `MPVPlayer.RenderRequest.Handler`
+    private struct DisplayLinkWake: Sendable { let call: @MainActor @Sendable () -> Void }
+    private let displayLinkWake = Synchronization.Mutex<DisplayLinkWake?>(nil)
 
     init(player: MPVPlayer) {
         self.player = player
@@ -165,7 +167,7 @@ final class MPVGLLayer: CAOpenGLLayer, @unchecked Sendable {
     // MARK: displayLink 启停(`MPVLayerView.displayLinkFired`)
 
     func setDisplayLinkWake(_ wake: (@MainActor @Sendable () -> Void)?) {
-        displayLinkWake.withLock { $0 = wake }
+        displayLinkWake.withLock { $0 = wake.map(DisplayLinkWake.init) }
     }
 
     /// 出了帧:displayLink 若已空闲停下就叫醒它,VO 正等着下一次 swap
@@ -173,7 +175,7 @@ final class MPVGLLayer: CAOpenGLLayer, @unchecked Sendable {
         renderActivity.store(true, ordering: .releasing)
         guard displayLinkIdle.exchange(false, ordering: .acquiringAndReleasing) else { return }
         let wake = displayLinkWake.withLock { $0 }
-        Task { @MainActor in wake?() }
+        Task { @MainActor in wake?.call() }
     }
 
     /// 自上次调用以来有没有出帧(并清掉)
