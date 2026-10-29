@@ -10,7 +10,6 @@ import SwiftUI
 /// 每条出场时预渲染位图(`DanmakuSprite`),每帧只改图层位置,按 displayLink 的 `targetTimestamp` 算。
 ///
 /// `positionSeconds` 只有 5 Hz,由 `DanmakuClock` 外推。暂停时时间轴与 displayLink 都停。
-/// 逐帧诊断见 `DanmakuFrameDiagnostics`。
 struct DanmakuOverlayView: View {
     let controller: DanmakuController
     let settings: DanmakuDisplaySettings
@@ -60,7 +59,6 @@ final class DanmakuLayerView: NSView {
     private var controller: DanmakuController
     private var settings = DanmakuDisplaySettings.default
     private var isPaused = true
-    private var speed = 1.0
     private var lastClockInput: (position: Double, isPaused: Bool, speed: Double)?
 
     private let clock = DanmakuClock()
@@ -70,7 +68,6 @@ final class DanmakuLayerView: NSView {
     private var spriteGeneration: Int?
     private var scale: CGFloat = 2
     private var displayLink: CADisplayLink?
-    private let diagnostics = DanmakuFrameDiagnostics.isEnabled ? DanmakuFrameDiagnostics() : nil
 
     init(controller: DanmakuController) {
         self.controller = controller
@@ -103,17 +100,14 @@ final class DanmakuLayerView: NSView {
             removeAllSprites()
         }
         self.settings = settings
-        if self.isPaused != isPaused { diagnostics?.breakContinuity() }
         self.isPaused = isPaused
-        self.speed = speed.isFinite && speed > 0 ? speed : 1
         container.opacity = Float(settings.opacity)
 
         // 只在三项真变了时同步时钟:父视图因别的原因刷新时位置是旧值,会把时钟往回拽
         let clockInput = (position: position, isPaused: isPaused, speed: speed)
         if lastClockInput.map({ $0 != clockInput }) ?? true {
-            let snap = clock.update(position: position, isPaused: isPaused, speed: speed, now: CACurrentMediaTime())
+            clock.update(position: position, isPaused: isPaused, speed: speed, now: CACurrentMediaTime())
             lastClockInput = clockInput
-            if let diagnostics, let snap { diagnostics.record(snap: snap) }
         }
         displayLink?.isPaused = isPaused
         // 暂停时没有逐帧刷新,手动画一帧
@@ -130,7 +124,6 @@ final class DanmakuLayerView: NSView {
         }
         applyBackingScale(window.backingScaleFactor)
         if displayLink == nil {
-            diagnostics?.breakContinuity()
             let link = displayLink(target: self, selector: #selector(step(_:)))
             // common 模式:拖窗口 / 菜单展开时也照常刷新
             link.add(to: .main, forMode: .common)
@@ -157,7 +150,6 @@ final class DanmakuLayerView: NSView {
 
     /// displayLink 强引用 target,视图离开窗口 / 被 SwiftUI 拆掉时必须 invalidate
     func stopDisplayLink() {
-        diagnostics?.breakContinuity()
         displayLink?.invalidate()
         displayLink = nil
     }
@@ -178,26 +170,13 @@ final class DanmakuLayerView: NSView {
     // MARK: - 逐帧
 
     @objc private func step(_ link: CADisplayLink) {
-        let start = CACurrentMediaTime()
-        let frame = renderFrame(at: link.targetTimestamp)
-        guard let diagnostics, let frame else { return }
-        diagnostics.record(DanmakuFrameStats.Frame(
-            hostTime: start,
-            targetTime: link.targetTimestamp,
-            refreshInterval: link.targetTimestamp - link.timestamp,
-            danmakuTime: frame.time,
-            velocity: frame.velocity,
-            rate: speed,
-            workDuration: CACurrentMediaTime() - start,
-            visibleCount: frame.visibleCount,
-            windowVisible: window?.occlusionState.contains(.visible) ?? false))
+        renderFrame(at: link.targetTimestamp)
     }
 
-    /// `hostTime` 与 `CACurrentMediaTime` 同基。返回值给诊断用;画面尺寸为 0 时返回 nil。
-    @discardableResult
-    private func renderFrame(at hostTime: Double) -> (time: Double, velocity: Double, visibleCount: Int)? {
+    /// `hostTime` 与 `CACurrentMediaTime` 同基。
+    private func renderFrame(at hostTime: Double) {
         let size = bounds.size
-        guard size.width > 0, size.height > 0 else { return nil }
+        guard size.width > 0, size.height > 0 else { return }
         let fontSize = max(Self.minimumFontSize, CGFloat(settings.fontSize) * size.height / Self.referenceHeight)
         let parameters = DanmakuLayout.Parameters(
             viewportWidth: size.width.rounded(),
@@ -252,7 +231,6 @@ final class DanmakuLayerView: NSView {
         for index in sprites.keys where !live.contains(index) {
             if let sprite = sprites.removeValue(forKey: index) { recycle(sprite) }
         }
-        return (time, velocity, live.count)
     }
 
     // MARK: - 图层
@@ -328,24 +306,9 @@ final class DanmakuClock {
     static let slewDuration = 1.0
     static let maxSlewRatio = 0.1
 
-    /// 不微调、直接把锚点拽到报来位置的那一次。诊断用,⛔ 不要拿它改行为。
-    struct Snap: Sendable {
-        /// 报来的位置 − 外推值,正数 = 时钟被往前拽
-        var error: Double
-        var position: Double
-        var predicted: Double
-        /// 距上一次位置更新(秒):大说明位置不再上报(缓冲 / 长停顿),不是弹幕算错
-        var sinceUpdate: Double
-        var resumed: Bool
-        var at: Double
-    }
-
-    @discardableResult
-    func update(position: Double, isPaused paused: Bool, speed: Double, now: Double) -> Snap? {
+    func update(position: Double, isPaused paused: Bool, speed: Double, now: Double) {
         let predicted = time(at: now)
         let error = position - predicted
-        let sinceUpdate = anchorHostTime > 0 ? now - anchorHostTime : 0
-        let resumed = isPaused && !paused
         let newRate = speed.isFinite && speed > 0 ? speed : 1
         let slews = !paused && !isPaused && abs(error) < Self.snapThreshold
         if slews {
@@ -360,10 +323,6 @@ final class DanmakuClock {
         anchorHostTime = now
         rate = newRate
         isPaused = paused
-        guard !slews else { return nil }
-        return Snap(
-            error: error, position: position, predicted: predicted,
-            sinceUpdate: sinceUpdate, resumed: resumed, at: now)
     }
 
     func time(at hostTime: Double) -> Double {
