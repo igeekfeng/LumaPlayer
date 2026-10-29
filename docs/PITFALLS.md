@@ -79,6 +79,11 @@ displayLink 停了没叫醒、或只在部分时候报,症状是画面一卡一�
 **事件线程体不能强持有 self。** `Thread { [weak self] in self?.eventLoop() }` 会把 weak 提升为强引用一直持有;
 每轮迭代取一次强引用、用完即弃。回归测试 `testPlayerDeallocatesWhenDroppedWithoutShutdown` 要先 sleep 0.2s。
 
+**挂事件桥之前的属性变化事件不能丢。** 事件线程在 `MPVPlayer.init` 末尾就在取事件,而起播倍速 / 音量 / 字幕延迟是在
+挂桥之前设的:变化事件先于桥到达,丢掉后 mpv 不再变化就不会重发,ViewModel 的读回值一直停在默认值。症状是记过 1.5×
+的剧起播后控制栏显示 1×、弹幕每 1.2 秒往前瞬移约 0.5 秒(弹幕时钟按 1× 外推,诊断日志「倍速 1.00」而按位置算出的速率是 1.5)。
+做法:桥没挂时把事件积在 `eventsBeforeBridge`,`attach(eventBridge:)` 在锁内按序补发(`MPVEventBridgeAttachTests`)。
+
 **两把锁,锁序恒为 `renderMutex` → `mutex`。** 整帧 render 放进 `mutex` 会让主线程每次 pause/seek 都等一次 GPU 提交。
 
 **播完不回到 `idle`(Q7)。** 一个 `MPVPlayer` 只播一个 URL,换台 = 销毁重建(复用会沿用上一轮的 `http-header-fields`,跨服务器串台)。

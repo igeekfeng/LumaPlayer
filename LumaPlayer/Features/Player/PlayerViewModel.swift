@@ -560,7 +560,8 @@ final class PlayerViewModel {
     }
 
     /// 新建的 mpv 一律是 1×,把起播倍速(`startupSpeed`)设回去。
-    /// ⛔ 必须在挂事件桥**之前**调用:桥挂上后 mpv 推的就是目标倍速,不会先闪一下 1×。
+    /// 在挂事件桥之前调用:控件一出现就是目标倍速,不会先闪一下 1×。这次变化的事件由 `MPVPlayer`
+    /// 积着、挂桥时补发(`eventsBeforeBridge`),所以 `speed` 读回值照样会到。
     private func applyRememberedSpeed(to player: MPVPlayer) {
         let startup = startupSpeed
         guard startup != 1 else { return }

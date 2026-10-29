@@ -125,6 +125,10 @@ final class MPVPlayer: @unchecked Sendable {
         /// mpv_render* 都要求它在调用线程 current(render.h 66-69);shutdown free 前用它恢复 current
         var cglContext: LockedPointer<CGLContextObj>?
         var bridge: MPVEventBridge?
+        /// 挂桥之前产生的事件,`attach(eventBridge:)` 时按序补发。事件线程在 init 末尾就开始取事件,
+        /// 调用方在挂桥前设的起播值(倍速 / 音量 / 字幕延迟)的变化事件会先于桥到达;丢掉的话 mpv 之后
+        /// 不再变化就永远不会重发,读回值一直停在默认值(PITFALLS.md 第 2 节)。
+        var eventsBeforeBridge: [MPVPlayerEvent] = []
         /// 起初是策略的 `initialBackend`,`on_preloaded` 定下后改写;重挂 GL context 时按它重建
         var targetBackend: MPVRenderBackend = .legacy
         var stats = MPVPlayerStatistics()
@@ -951,9 +955,15 @@ final class MPVPlayer: @unchecked Sendable {
         return present && !redraw
     }
 
-    /// 事件出口(调用方提供;需在 load 之前挂好)
+    /// 事件出口(调用方提供;需在 load 之前挂好)。挂之前积下的事件在锁内补发,
+    /// 这样事件线程之后的新事件一定排在它们后面。
     func attach(eventBridge: MPVEventBridge) {
-        mutex.withLock { state.bridge = eventBridge }
+        mutex.withLock {
+            state.bridge = eventBridge
+            let pending = state.eventsBeforeBridge
+            state.eventsBeforeBridge = []
+            for event in pending { eventBridge.submit(event) }
+        }
     }
 
     /// 当前状态快照
@@ -1519,7 +1529,14 @@ final class MPVPlayer: @unchecked Sendable {
     }
 
     private func submitEvent(_ event: MPVPlayerEvent) {
-        mutex.withLock { state.bridge }?.submit(event)
+        let bridge = mutex.withLock { () -> MPVEventBridge? in
+            guard let bridge = state.bridge else {
+                if !state.isStopping { state.eventsBeforeBridge.append(event) }
+                return nil
+            }
+            return bridge
+        }
+        bridge?.submit(event)
     }
 
     private func logLine(_ line: String) {
