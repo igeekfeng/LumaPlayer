@@ -47,7 +47,6 @@ struct PlayerWindowView: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var isHoveringControls = false
     // 以下浮层 / 面板打开期间钉住控制栏,否则自动隐藏时会连它们一起带走
-    @State private var isSpeedPopoverPresented = false
     @State private var isEpisodePanelPresented = false
     @State private var isMarkersEditorPresented = false
     @State private var isDanmakuPickerPresented = false
@@ -149,10 +148,6 @@ struct PlayerWindowView: View {
         }
         .onChange(of: viewModel.scrubPreviewSeconds) { _, preview in
             if preview != nil { revealControls() }
-        }
-        .onChange(of: isSpeedPopoverPresented) { _, presented in
-            // 打开时钉住控制栏;关掉后重新计时
-            if presented { revealControls(autoHide: false) } else { revealControls() }
         }
         .onChange(of: isEpisodePanelPresented) { _, presented in
             if presented { revealControls(autoHide: false) } else { revealControls() }
@@ -424,7 +419,6 @@ struct PlayerWindowView: View {
         // ⛔ 不加水平 padding / 最大宽度:压暗衬底要铺到窗口边缘,缩进在 `PlayerControlsView` 内部做
         PlayerControlsView(
             viewModel: viewModel,
-            isSpeedPopoverPresented: $isSpeedPopoverPresented,
             isEpisodePanelPresented: $isEpisodePanelPresented,
             isMarkersEditorPresented: $isMarkersEditorPresented,
             isDanmakuPickerPresented: $isDanmakuPickerPresented,
@@ -493,7 +487,6 @@ struct PlayerWindowView: View {
             && viewModel.failure == nil
             && !isBusy
             && !isHoveringControls
-            && !isSpeedPopoverPresented
             && !isEpisodePanelPresented
             && !isMarkersEditorPresented
             && !isDanmakuPickerPresented

@@ -14,7 +14,6 @@ import SwiftUI
 struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
     // 以下浮层 / 面板打开期间都要钉住控制栏,否则会随控制栏自动隐藏一起消失
-    @Binding var isSpeedPopoverPresented: Bool
     @Binding var isEpisodePanelPresented: Bool
     @Binding var isMarkersEditorPresented: Bool
     @Binding var isDanmakuPickerPresented: Bool
@@ -28,7 +27,7 @@ struct PlayerControlsView: View {
                 transport
                 PlayerVolumeControl(viewModel: viewModel)
                 Spacer(minLength: Metrics.spacingL)
-                PlayerSpeedControl(viewModel: viewModel, isPresented: $isSpeedPopoverPresented)
+                PlayerSpeedControl(viewModel: viewModel)
                 PlayerSubtitleMenu(
                     viewModel: viewModel,
                     isImporterPresented: $isSubtitleImporterPresented,
@@ -333,82 +332,75 @@ struct PlayerVolumeControl: View {
     }
 }
 
-/// 倍速:连续调节(滑块 + 步进)。用 `popover` 不用 `Menu`:macOS 菜单里的滑块拖不动。
+/// 倍速菜单:常用档位 + 微调。与字幕 / 音轨 / 弹幕同一形态(`Menu`),
+/// ⛔ 不再单开浮层:控制栏这一排都是菜单,浮层一开样式就与旁边对不上。
+///
+/// 连续调节靠微调步进与 `[` `]`(`Metrics.speedStep` / `speedKeyStep`);菜单里放不了滑块。
 struct PlayerSpeedControl: View {
     let viewModel: PlayerViewModel
-    @Binding var isPresented: Bool
 
-    @State private var isHovering = false
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
 
     var body: some View {
-        Button { isPresented.toggle() } label: {
+        Menu {
+            Picker("播放速度", selection: Binding<Double>(
+                get: { PlayerViewModel.clampedSpeed(viewModel.speed) },
+                set: { viewModel.setSpeed($0) }
+            )) {
+                ForEach(presetOptions, id: \.self) { preset in
+                    Text(PlayerViewModel.speedText(preset)).tag(preset)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+
+            Section("微调:每档 \(PlayerViewModel.speedText(Metrics.speedStep))") {
+                Button("加快") { viewModel.stepSpeed(up: true, step: Metrics.speedStep) }
+                    .disabled(cannotStep(up: true))
+                Button("减慢") { viewModel.stepSpeed(up: false, step: Metrics.speedStep) }
+                    .disabled(cannotStep(up: false))
+            }
+
+            Divider()
+
+            Button("正常速度") { viewModel.setSpeed(1) }
+                .disabled(abs(viewModel.speed - 1) < 0.001)
+            Button("默认倍速…") { openPlaybackSettings() }
+        } label: {
             Text(PlayerViewModel.speedText(viewModel.speed))
                 .font(.callout)
                 .monospacedDigit()
                 .frame(minWidth: Metrics.playerButtonSize, minHeight: Metrics.playerButtonSize)
-                .background(Circle().fill(.white.opacity(isHovering ? 0.15 : 0)))
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
+        .menuStyle(.button)
         .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize()
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)
         .help("播放速度")
         .accessibilityLabel("播放速度")
         .accessibilityValue(PlayerViewModel.speedText(viewModel.speed))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) { speedPopover }
     }
 
-    private var speedPopover: some View {
-        VStack(alignment: .leading, spacing: Metrics.spacingM) {
-            HStack(spacing: Metrics.spacingS) {
-                stepButton(up: false) { viewModel.stepSpeed(up: false, step: Metrics.speedStep) }
-                Text(PlayerViewModel.speedText(viewModel.speed))
-                    .font(.title3)
-                    .monospacedDigit()
-                    .frame(minWidth: 64, alignment: .center)
-                stepButton(up: true) { viewModel.stepSpeed(up: true, step: Metrics.speedStep) }
-            }
-            Slider(
-                value: Binding(get: { viewModel.speed }, set: { viewModel.setSpeed($0) }),
-                in: Metrics.speedRange,
-                step: Metrics.speedStep
-            )
-            .help("拖动调整倍速")
-            .accessibilityLabel("播放速度")
-            .accessibilityValue(PlayerViewModel.speedText(viewModel.speed))
-            HStack {
-                Text(PlayerViewModel.speedText(Metrics.speedRange.lowerBound))
-                Spacer()
-                Button("正常速度") { viewModel.setSpeed(1) }
-                    .buttonStyle(.plain)
-                    .disabled(abs(viewModel.speed - 1) < 0.001)
-                Spacer()
-                Text(PlayerViewModel.speedText(Metrics.speedRange.upperBound))
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(Metrics.spacingL)
-        .frame(width: 240)
+    /// 档位:预设 + 当前值(用 `[` `]` 或微调调出的非整档值也要有勾选,否则列表里没有选中项)
+    private var presetOptions: [Double] {
+        let current = PlayerViewModel.clampedSpeed(viewModel.speed)
+        var options = PlayerViewModel.speedPresets
+        if !options.contains(current) { options.append(current) }
+        return options.sorted()
     }
 
-    /// 贴着区间端点时置灰
-    private func stepButton(up: Bool, action: @escaping () -> Void) -> some View {
-        let label = up ? "加快" : "减慢"
-        return Button(action: action) {
-            Image(systemName: up ? "plus" : "minus")
-                .font(.title3)
-                .frame(width: Metrics.playerButtonSize, height: Metrics.playerButtonSize)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(label)
-        .accessibilityLabel(label)
-        .disabled(
-            PlayerViewModel.steppedSpeed(from: viewModel.speed, up: up, step: Metrics.speedStep)
-                == PlayerViewModel.clampedSpeed(viewModel.speed)
-        )
+    /// 已经贴着区间端点:再点一步不会有变化
+    private func cannotStep(up: Bool) -> Bool {
+        PlayerViewModel.steppedSpeed(from: viewModel.speed, up: up, step: Metrics.speedStep)
+            == PlayerViewModel.clampedSpeed(viewModel.speed)
+    }
+
+    private func openPlaybackSettings() {
+        settingsTab = .playback
+        openSettings()
     }
 }
 

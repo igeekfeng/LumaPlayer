@@ -33,7 +33,7 @@ import Foundation
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、主窗口顶栏按钮与搜索胶囊、
-/// 字幕 / 音轨 / 倍速浮层、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 播放按钮
+/// 字幕 / 音轨菜单、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 播放按钮
 /// (不带 tint 的 `.glass`,⛔ 不用 `.glassProminent`:系统强调色的饱和蓝压在照片上突兀)。
 /// ⛔ 不用于:海报卡片、列表 / 剧集的每一行、长文本背景、全窗口背景、播放器底部控制栏
 /// (全宽横条 + 自下而上黑色渐变压暗:HIG 要求玻璃压在媒体上配 dimming,Apple TV / QuickTime / mpv OSC 都是全宽横条)。
@@ -45,7 +45,7 @@ import Foundation
 /// 播放选项 → 选集(最右端)。⛔ 控制栏不放全屏图标(F 与双击画面已够,最右让给选集)。
 /// 播放键不固定最左:没有上下集时那一簇收窄。进度条两端显示时间,右侧可点切成「预计结束时刻」(倍速参与换算,算不出退回剩余时长)。
 /// 自动隐藏两条规则都要:指针静止 `autoHideDelay`、移出窗口 `autoHidePointerExitDelay`;暂停 / 错误 / 缓冲 / 播完 /
-/// 倍速浮层打开时不隐藏。前后跳转连点累加(第 n 次跳 `seekStep × n`,上限 `seekRepeatMaxMultiple`)。
+/// 面板打开时不隐藏。前后跳转连点累加(第 n 次跳 `seekStep × n`,上限 `seekRepeatMaxMultiple`)。
 /// 正在播放时切服务器:先结束旧播放会话再切。
 ///
 /// **错误**:只显示可操作信息(「登录已过期,请重新登录」),⛔ 不显示 token、完整播放 URL、原始服务端异常;
@@ -164,14 +164,14 @@ enum Metrics {
     static let defaultVolume: Double = 100
     /// 与 `MPVPlayer.setSpeed` 的夹取一致(超出音频严重失真)
     static let speedRange: ClosedRange<Double> = 0.25...4
-    /// 倍速滑块与浮层 ± 按钮的步长(连续调节)
+    /// 倍速菜单「加快 / 减慢」的步长(连续调节)
     static let speedStep: Double = 0.05
-    /// `[` `]` 的步长,比滑块粗一档
+    /// `[` `]` 的步长,比菜单微调粗一档
     static let speedKeyStep: Double = 0.1
     /// 连续调倍速时的上报合并窗口(`PlayerViewModel.scheduleRateChangeReport`)
     static let speedReportDelay: TimeInterval = 0.5
 
-    /// 夹到倍速区间并抹到两位小数(滑块拖出的浮点尾数会让屏显与上报抖)。
+    /// 夹到倍速区间并抹到两位小数(连续调节的浮点尾数会让屏显与上报抖)。
     /// 非有限值兜在 1×:NaN 进 Slider 的 binding 会直接崩。
     static func clampedSpeed(_ value: Double) -> Double {
         guard value.isFinite else { return 1 }

@@ -246,7 +246,7 @@ final class PlayerViewModel {
     private var reportingFinishTask: Task<Void, Never>?
     /// 文件树来源收尾要落进本地续播库的东西(已看 + 下一集占位);单独存是为了关窗时能等它。
     private var fileSourceFinishTask: Task<Void, Never>?
-    /// 合并后的倍速上报任务(拖滑块时只留最后一次)
+    /// 合并后的倍速上报任务(连续调节时只留最后一次)
     private var rateReportTask: Task<Void, Never>?
     /// 转码 seek 合并后的重新起流任务(连点时只留最后一次)
     private var seekRestartTask: Task<Void, Never>?
@@ -1011,7 +1011,7 @@ final class PlayerViewModel {
             "字幕加载失败 \(fileName, privacy: .public):\(String(describing: error), privacy: .public)")
     }
 
-    /// 按步长加 / 减(`[` `]` 与倍速浮层的 ±);已经贴着区间端点就不动。
+    /// 按步长加 / 减(`[` `]` 与倍速菜单的「加快 / 减慢」);已经贴着区间端点就不动。
     func stepSpeed(up: Bool, step: Double = Metrics.speedKeyStep) {
         let next = Self.steppedSpeed(from: speed, up: up, step: step)
         guard next != Self.clampedSpeed(speed) else { return }
@@ -1707,7 +1707,7 @@ final class PlayerViewModel {
         Task { await reporter.reportNow(eventName: event) }
     }
 
-    /// 合并连续倍速变化的上报(拖滑块),见 `.speed` 事件处的说明。
+    /// 合并连续倍速变化的上报(连点微调 / 按住 `[` `]`),见 `.speed` 事件处的说明。
     private func scheduleRateChangeReport() {
         rateReportTask?.cancel()
         rateReportTask = Task { [weak self] in
@@ -1805,7 +1805,7 @@ final class PlayerViewModel {
             guard value != speed else { return }
             speed = value
             pushState()
-            // 5.2 要求改倍速立即上报,但滑块连续(0.05 一跳)会打出十几个请求,
+            // 5.2 要求改倍速立即上报,但连续调节(0.05 一跳)会打出十几个请求,
             // 所以合并成一次:停手 `Metrics.speedReportDelay` 后发最后那个值。
             // `pushState()` 每次都走,10 秒一次的 Progress 里倍速不会缺。
             scheduleRateChangeReport()

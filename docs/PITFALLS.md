@@ -184,7 +184,7 @@ mpv 静默回退 avfoundation;它预排约 2 秒按旧倍速拉伸的音频,改 
 **编辑服务器地址后浏览仍用旧地址。** 凡是按 id 缓存了档案副本的对象(如 `AppContainer.connections`),
 改档案的每条路径都要让缓存失效;地址变了要重新探测,探测不通不保存。
 
-**倍速:上报要带当前值、滑块要合并上报、新建播放器要设回去。** 连续滑块一次拖动十几个请求 → `scheduleRateChangeReport()`
+**倍速:上报要带当前值、连续调节要合并上报、新建播放器要设回去。** 连续调十几个请求 → `scheduleRateChangeReport()`
 延后 0.5s 互相取消。转码 seek、下一集、重开都会新建播放器 → `PlaybackSpeedStore` 在起事件泵之前设回去;⛔ 不落 UserDefaults。
 
 **「同一部剧沿用倍速」的键。** Emby 是「服务器 id + `SeriesId`」(电影退化成 Item Id);百度是「账号 + 剧目录」
