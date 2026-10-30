@@ -51,6 +51,37 @@ rpaths() {
     /usr/bin/otool -l "$1" | /usr/bin/awk '/cmd LC_RPATH/{r=1} r && / path /{print $2; r=0}'
 }
 
+# 列出一个 Mach-O 里 `@rpath/…` 形式的引用（跳过自己的 id）。
+rpath_refs() {
+    local id
+    id="$(/usr/bin/otool -D "$1" | /usr/bin/sed -n 2p)"
+    /usr/bin/otool -L "$1" | /usr/bin/tail -n +2 \
+        | /usr/bin/awk '{print $1}' \
+        | /usr/bin/grep '^@rpath/' \
+        | { [[ -n "${id}" ]] && /usr/bin/grep -vxF "${id}" || /bin/cat; } || true
+}
+
+# 把 `@rpath/…` 引用按**原始文件**的 rpath 解析成依赖根下的绝对路径。
+# Homebrew 有些库（如 brotli 1.2）的内部互引写成 `@rpath/libbrotlicommon.1.dylib` +
+# rpath `@loader_path/../lib`，不是绝对路径；只收绝对路径会漏掉它们，App 启动时 dyld 找不到库直接崩。
+# 必须对原始文件解析：拷进包后的副本 @loader_path 指向 Frameworks/，解析不出来。
+resolved_rpath_deps() {
+    local src="$1" dir ref name rp cand
+    dir="$(/usr/bin/dirname "${src}")"
+    while IFS= read -r ref; do
+        [[ -z "${ref}" ]] && continue
+        name="${ref#@rpath/}"
+        while IFS= read -r rp; do
+            cand="${rp/#@loader_path/${dir}}/${name}"
+            if [[ -e "${cand}" ]]; then
+                cand="$(/bin/realpath "${cand}")"
+                [[ "${cand}" == "${BREW_PREFIX}/"* || "${cand}" == "${VENDOR_PREFIX}/"* ]] && echo "${name} ${cand}"
+                break
+            fi
+        done < <(rpaths "${src}")
+    done < <(rpath_refs "${src}")
+}
+
 # --- 1. 沿依赖图收集并拷贝 ---------------------------------------------------
 # 以引用路径的文件名（即 install name 的 basename，如 libavcodec.63.dylib）命名，
 # 而不是解开符号链接后的真实文件名（libavcodec.63.1.102.dylib）—— 引用方认的是前者。
@@ -66,20 +97,24 @@ if [[ -z "$(bundled_deps "${EXE}")" ]]; then
     echo "       脚本算出的依赖根与编译时的 SRCROOT 对不上（改用物理路径调用）。" >&2
     exit 1
 fi
+# 队列里放原始文件（不是包内副本）：`@rpath` 引用要按原始位置解析，见 resolved_rpath_deps。
 queue=("${EXE}")
 while ((${#queue[@]})); do
     cur="${queue[0]}"
     queue=("${queue[@]:1}")
-    while IFS= read -r dep; do
-        [[ -z "${dep}" ]] && continue
-        name="$(/usr/bin/basename "${dep}")"
+    while IFS=' ' read -r name src; do
+        [[ -z "${name}" ]] && continue
         dst="${FW}/${name}"
         [[ -e "${dst}" ]] && continue
-        src="$(/bin/realpath "${dep}")"
         /bin/cp "${src}" "${dst}"
         /bin/chmod u+w "${dst}"
-        queue+=("${dst}")
-    done < <(bundled_deps "${cur}")
+        queue+=("${src}")
+    done < <(
+        bundled_deps "${cur}" | while IFS= read -r dep; do
+            [[ -n "${dep}" ]] && echo "$(/usr/bin/basename "${dep}") $(/bin/realpath "${dep}")"
+        done
+        resolved_rpath_deps "${cur}"
+    )
 done
 
 # --- 2. 改写 install name / 引用 / rpath ------------------------------------
@@ -126,6 +161,19 @@ for f in "${EXE}" "${FW}"/*.dylib; do
     fi
 done
 ((leaks == 0)) || exit 1
+
+# 每个 `@rpath/…` 引用都必须在 Frameworks/ 里有对应文件，否则 dyld 启动即崩（Library missing）。
+missing=0
+for f in "${EXE}" "${FW}"/*.dylib; do
+    while IFS= read -r ref; do
+        [[ -z "${ref}" ]] && continue
+        if [[ ! -e "${FW}/${ref#@rpath/}" ]]; then
+            echo "error: ${f##*/} 引用的 ${ref} 不在 Frameworks/ 里" >&2
+            missing=1
+        fi
+    done < <(rpath_refs "${f}")
+done
+((missing == 0)) || exit 1
 
 # --- 4. 重签名：先签每个 dylib，最后签 App -----------------------------------
 # App 签名时保留原有的 entitlements / DR / flags，不在这里另起一套配置。
