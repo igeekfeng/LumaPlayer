@@ -15,10 +15,8 @@ struct PlayerControlsView: View {
     let viewModel: PlayerViewModel
     // 以下浮层 / 面板打开期间都要钉住控制栏,否则会随控制栏自动隐藏一起消失
     @Binding var isEpisodePanelPresented: Bool
-    @Binding var isMarkersEditorPresented: Bool
-    @Binding var isDanmakuPickerPresented: Bool
-    @Binding var isSubtitleImporterPresented: Bool
-    @Binding var isSubtitleSearchPresented: Bool
+    /// 倍速 / 字幕 / 弹幕 / 音轨 / 播放选项面板,由播放窗口画(`PlayerPanelKind`)
+    @Binding var activePanel: PlayerPanelKind?
 
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
@@ -27,17 +25,7 @@ struct PlayerControlsView: View {
                 transport
                 PlayerVolumeControl(viewModel: viewModel)
                 Spacer(minLength: Metrics.spacingL)
-                PlayerSpeedControl(viewModel: viewModel)
-                PlayerSubtitleMenu(
-                    viewModel: viewModel,
-                    isImporterPresented: $isSubtitleImporterPresented,
-                    isSearchPresented: $isSubtitleSearchPresented)
-                PlayerDanmakuMenu(viewModel: viewModel, isPickerPresented: $isDanmakuPickerPresented)
-                PlayerAudioMenu(viewModel: viewModel)
-                PlayerOptionsMenu(
-                    viewModel: viewModel,
-                    isMarkersEditorPresented: $isMarkersEditorPresented
-                )
+                panelButtons
                 episodePanelButton
             }
             .padding(.horizontal, Metrics.controlBarSideInset)
@@ -84,6 +72,35 @@ struct PlayerControlsView: View {
                 }
             }
             PlayerRepeatSkipButton(direction: .forward, viewModel: viewModel)
+        }
+    }
+
+    private var panelButtons: some View {
+        HStack(spacing: Metrics.spacingXS) {
+            PlayerPanelButton(kind: .speed, activePanel: $activePanel, help: "播放速度") {
+                Text(PlayerViewModel.speedText(viewModel.speed))
+                    .font(.callout)
+                    .monospacedDigit()
+                    .padding(.horizontal, Metrics.spacingS)
+            }
+            .accessibilityValue(PlayerViewModel.speedText(viewModel.speed))
+            PlayerPanelButton(kind: .subtitles, activePanel: $activePanel, help: "字幕") {
+                Image(systemName: viewModel.selectedSubtitleTrackID == nil ? "captions.bubble" : "captions.bubble.fill")
+                    .font(.title3)
+            }
+            PlayerPanelButton(kind: .danmaku, activePanel: $activePanel, help: "弹幕") {
+                Image(systemName: viewModel.danmaku.isVisible ? "text.bubble.fill" : "text.bubble")
+                    .font(.title3)
+            }
+            PlayerPanelButton(kind: .audio, activePanel: $activePanel, help: "音轨") {
+                Image(systemName: "waveform")
+                    .font(.title3)
+            }
+            .disabled(viewModel.audioTracks.isEmpty)
+            PlayerPanelButton(kind: .options, activePanel: $activePanel, help: "播放选项") {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+            }
         }
     }
 
@@ -332,426 +349,6 @@ struct PlayerVolumeControl: View {
     }
 }
 
-/// 倍速菜单:常用档位 + 微调。与字幕 / 音轨 / 弹幕同一形态(`Menu`),
-/// ⛔ 不再单开浮层:控制栏这一排都是菜单,浮层一开样式就与旁边对不上。
-///
-/// 连续调节靠微调步进与 `[` `]`(`Metrics.speedStep` / `speedKeyStep`);菜单里放不了滑块。
-struct PlayerSpeedControl: View {
-    let viewModel: PlayerViewModel
-
-    @Environment(\.openSettings) private var openSettings
-    @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
-
-    var body: some View {
-        Menu {
-            Picker("播放速度", selection: Binding<Double>(
-                get: { PlayerViewModel.clampedSpeed(viewModel.speed) },
-                set: { viewModel.setSpeed($0) }
-            )) {
-                ForEach(presetOptions, id: \.self) { preset in
-                    Text(PlayerViewModel.speedText(preset)).tag(preset)
-                }
-            }
-            .pickerStyle(.inline)
-
-            Divider()
-
-            Section("微调:每档 \(PlayerViewModel.speedText(Metrics.speedStep))") {
-                Button("加快") { viewModel.stepSpeed(up: true, step: Metrics.speedStep) }
-                    .disabled(cannotStep(up: true))
-                Button("减慢") { viewModel.stepSpeed(up: false, step: Metrics.speedStep) }
-                    .disabled(cannotStep(up: false))
-            }
-
-            Divider()
-
-            Button("正常速度") { viewModel.setSpeed(1) }
-                .disabled(abs(viewModel.speed - 1) < 0.001)
-            Button("默认倍速…") { openPlaybackSettings() }
-        } label: {
-            Text(PlayerViewModel.speedText(viewModel.speed))
-                .font(.callout)
-                .monospacedDigit()
-                .frame(minWidth: Metrics.playerButtonSize, minHeight: Metrics.playerButtonSize)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("播放速度")
-        .accessibilityLabel("播放速度")
-        .accessibilityValue(PlayerViewModel.speedText(viewModel.speed))
-    }
-
-    /// 档位:预设 + 当前值(用 `[` `]` 或微调调出的非整档值也要有勾选,否则列表里没有选中项)
-    private var presetOptions: [Double] {
-        let current = PlayerViewModel.clampedSpeed(viewModel.speed)
-        var options = PlayerViewModel.speedPresets
-        if !options.contains(current) { options.append(current) }
-        return options.sorted()
-    }
-
-    /// 已经贴着区间端点:再点一步不会有变化
-    private func cannotStep(up: Bool) -> Bool {
-        PlayerViewModel.steppedSpeed(from: viewModel.speed, up: up, step: Metrics.speedStep)
-            == PlayerViewModel.clampedSpeed(viewModel.speed)
-    }
-
-    private func openPlaybackSettings() {
-        settingsTab = .playback
-        openSettings()
-    }
-}
-
-/// 字幕菜单,与音轨分成两个入口。用 `Picker` 而非手画勾:VoiceOver 能读出选中态(8.3)。
-///
-/// 字幕延迟只给步进按钮(菜单里放不了滑块);连续调靠 Z / X。外观在设置窗口「字幕」页。
-///
-/// ⛔ 菜单整体不按「有没有字幕轨」禁用:「打开本地字幕…」正是给没有字幕轨的片源用的。
-struct PlayerSubtitleMenu: View {
-    let viewModel: PlayerViewModel
-    // 面板与 sheet 挂在 `PlayerWindowView` 上:菜单点开就收起,不能在这里挂 `fileImporter`
-    @Binding var isImporterPresented: Bool
-    @Binding var isSearchPresented: Bool
-
-    @Environment(\.openSettings) private var openSettings
-    @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
-
-    var body: some View {
-        Menu {
-            if viewModel.subtitleTracks.isEmpty {
-                Text("没有字幕轨")
-            } else {
-                Picker("字幕", selection: Binding<Int?>(
-                    get: { viewModel.selectedSubtitleTrackID },
-                    set: { viewModel.selectSubtitleTrack($0) }
-                )) {
-                    Text("关闭").tag(Int?.none)
-                    ForEach(viewModel.subtitleTracks) { track in
-                        PlayerTrackLabel(track: track).tag(Int?.some(track.id))
-                    }
-                }
-                .pickerStyle(.inline)
-            }
-
-            Divider()
-
-            Button("打开本地字幕…") { isImporterPresented = true }
-            Button("搜索在线字幕…") { isSearchPresented = true }
-
-            Divider()
-
-            Section("字幕延迟:\(PlayerViewModel.subtitleDelayValueText(viewModel.subtitleDelay))") {
-                PlayerSubtitleDelayButtons(viewModel: viewModel)
-            }
-
-            Divider()
-
-            Button("字幕外观…") {
-                settingsTab = .subtitles
-                openSettings()
-            }
-        } label: {
-            Image(systemName: symbol)
-                .font(.title3)
-                .frame(width: Metrics.playerButtonSize, height: Metrics.playerButtonSize)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("字幕")
-        .accessibilityLabel("字幕")
-    }
-
-    private var symbol: String {
-        viewModel.selectedSubtitleTrackID == nil ? "captions.bubble" : "captions.bubble.fill"
-    }
-}
-
-/// 字幕延迟按钮,控制栏字幕菜单与菜单栏「Playback › Subtitle Delay」共用。
-/// 快捷键只挂在菜单栏那份上,两份都挂会注册两遍。
-struct PlayerSubtitleDelayButtons: View {
-    let viewModel: PlayerViewModel
-    /// 菜单栏那份:带快捷键、英文文案
-    var inMenuBar = false
-
-    var body: some View {
-        Group {
-            Button(earlier(Metrics.subtitleDelayStep)) {
-                viewModel.stepSubtitleDelay(later: false)
-            }
-            .keyboardShortcut(shortcut("z", []))
-            Button(later(Metrics.subtitleDelayStep)) {
-                viewModel.stepSubtitleDelay(later: true)
-            }
-            .keyboardShortcut(shortcut("x", []))
-            Button(earlier(Metrics.subtitleDelayLargeStep)) {
-                viewModel.stepSubtitleDelay(later: false, step: Metrics.subtitleDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("z", .shift))
-            Button(later(Metrics.subtitleDelayLargeStep)) {
-                viewModel.stepSubtitleDelay(later: true, step: Metrics.subtitleDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("x", .shift))
-            Button(inMenuBar ? "Reset Subtitle Delay" : "重置字幕延迟") { viewModel.resetSubtitleDelay() }
-                .disabled(viewModel.subtitleDelay == 0)
-        }
-        .disabled(!viewModel.canAdjustSubtitleDelay)
-    }
-
-    private func earlier(_ step: Double) -> String {
-        inMenuBar ? "Earlier by \(Self.seconds(step)) s" : "提前 \(Self.seconds(step)) 秒"
-    }
-
-    private func later(_ step: Double) -> String {
-        inMenuBar ? "Later by \(Self.seconds(step)) s" : "延后 \(Self.seconds(step)) 秒"
-    }
-
-    private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
-        inMenuBar ? KeyboardShortcut(key, modifiers: modifiers) : nil
-    }
-
-    private static func seconds(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...1)))
-    }
-}
-
-/// 音轨菜单:选轨 + 音频延迟。延迟放这里而不是单开一个按钮 —— 都是「听」的事,也免得控制栏挤。
-struct PlayerAudioMenu: View {
-    let viewModel: PlayerViewModel
-
-    var body: some View {
-        Menu {
-            Picker("音轨", selection: Binding<Int?>(
-                get: { viewModel.selectedAudioTrackID },
-                set: { id in if let id { viewModel.selectAudioTrack(id) } }
-            )) {
-                ForEach(viewModel.audioTracks) { track in
-                    PlayerTrackLabel(track: track).tag(Int?.some(track.id))
-                }
-            }
-            .pickerStyle(.inline)
-
-            Divider()
-
-            Section("音频延迟:\(PlayerViewModel.audioDelayValueText(viewModel.audioDelay))") {
-                PlayerAudioDelayButtons(viewModel: viewModel)
-            }
-        } label: {
-            Image(systemName: "waveform")
-                .font(.title3)
-                .frame(width: Metrics.playerButtonSize, height: Metrics.playerButtonSize)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("音轨")
-        .accessibilityLabel("音轨")
-        .disabled(viewModel.audioTracks.isEmpty)
-    }
-}
-
-/// 音频延迟按钮,控制栏音轨菜单与菜单栏「Playback › Audio Delay」共用。
-/// 快捷键只挂在菜单栏那份上(与字幕延迟同一个约定:两份都挂会注册两遍)。
-struct PlayerAudioDelayButtons: View {
-    let viewModel: PlayerViewModel
-    /// 菜单栏那份:带快捷键、英文文案
-    var inMenuBar = false
-
-    var body: some View {
-        Group {
-            Button(earlier(Metrics.audioDelayStep)) {
-                viewModel.stepAudioDelay(later: false)
-            }
-            .keyboardShortcut(shortcut("c", []))
-            Button(later(Metrics.audioDelayStep)) {
-                viewModel.stepAudioDelay(later: true)
-            }
-            .keyboardShortcut(shortcut("v", []))
-            Button(earlier(Metrics.audioDelayLargeStep)) {
-                viewModel.stepAudioDelay(later: false, step: Metrics.audioDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("c", .shift))
-            Button(later(Metrics.audioDelayLargeStep)) {
-                viewModel.stepAudioDelay(later: true, step: Metrics.audioDelayLargeStep)
-            }
-            .keyboardShortcut(shortcut("v", .shift))
-            Button(inMenuBar ? "Reset Audio Delay" : "重置音频延迟") { viewModel.resetAudioDelay() }
-                .disabled(viewModel.audioDelay == 0)
-        }
-        .disabled(!viewModel.canAdjustAudioDelay)
-    }
-
-    private func earlier(_ step: Double) -> String {
-        inMenuBar ? "Advance Audio by \(Self.seconds(step)) s" : "音频提前 \(Self.seconds(step)) 秒"
-    }
-
-    private func later(_ step: Double) -> String {
-        inMenuBar ? "Delay Audio by \(Self.seconds(step)) s" : "音频延后 \(Self.seconds(step)) 秒"
-    }
-
-    private func shortcut(_ key: KeyEquivalent, _ modifiers: EventModifiers) -> KeyboardShortcut? {
-        inMenuBar ? KeyboardShortcut(key, modifiers: modifiers) : nil
-    }
-
-    private static func seconds(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...1)))
-    }
-}
-
-/// 低频播放偏好,与菜单栏「Playback」里的对应项同一份状态。
-struct PlayerOptionsMenu: View {
-    @Bindable var viewModel: PlayerViewModel
-    /// sheet 由播放窗口呈现,这里只负责打开
-    @Binding var isMarkersEditorPresented: Bool
-
-    var body: some View {
-        Menu {
-            Toggle("自动跳过片头", isOn: $viewModel.autoSkipIntro)
-            Toggle("自动播放下一集", isOn: $viewModel.autoPlayNext)
-            Divider()
-            markersMenu
-            chapterMenu
-            versionMenu
-            Divider()
-            pictureMenu
-            Divider()
-            Toggle("窗口置顶", isOn: $viewModel.floatsOnTop)
-            Toggle("显示统计信息", isOn: Binding(
-                get: { viewModel.showsStatistics },
-                set: { _ in viewModel.toggleStatistics() }
-            ))
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.title3)
-                .frame(width: Metrics.playerButtonSize, height: Metrics.playerButtonSize)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("播放选项")
-        .accessibilityLabel("播放选项")
-    }
-
-    /// 同一部片的多版本;只有一个版本时不出现。切换 = 从当前位置重新起流。
-    @ViewBuilder
-    private var versionMenu: some View {
-        if viewModel.versionOptions.count > 1 {
-            Picker("版本", selection: Binding<String?>(
-                get: { viewModel.session?.mediaSource.id },
-                set: { id in if let id { viewModel.selectVersion(id) } }
-            )) {
-                ForEach(viewModel.versionOptions, id: \.id) { source in
-                    Text(source.versionLabel).tag(String?.some(source.id))
-                }
-            }
-            .pickerStyle(.menu)
-        }
-    }
-
-    /// 手动片头 / 片尾,同一部剧共用(`ManualMarkersScope`)。
-    ///
-    /// ⛔ 标签里不要读 `viewModel.positionSeconds`:每 0.2s 变一次,会让 Menu 按钮反复重建、
-    /// 悬停高亮一直闪。打点的秒数由点击后的屏显给出。
-    private var markersMenu: some View {
-        Menu("片头片尾") {
-            if let summary = viewModel.manualMarkerValues?.summary {
-                Text(summary)
-                Divider()
-            }
-            Button("设为片头起点(当前位置)") {
-                viewModel.setIntroStartAtCurrentPosition()
-            }
-            Button("设为片头终点(当前位置)") {
-                viewModel.setIntroEndAtCurrentPosition()
-            }
-            Button("设为片尾起点(当前位置)") {
-                viewModel.setCreditsStartAtCurrentPosition()
-            }
-            Divider()
-            Button("手动输入…") { isMarkersEditorPresented = true }
-            Button("清除本剧的片头片尾", role: .destructive) {
-                viewModel.clearManualMarkers()
-            }
-            .disabled(!viewModel.hasManualMarkers)
-        }
-    }
-
-    /// 容器章节(Emby / 百度 / 本地统一由 mpv 给)。至少两章才出现在菜单里。
-    ///
-    /// 跳转走 `viewModel.seekToChapter` 而不是 mpv 的 `chapter` 属性:转码流必须由客户端重新起流。
-    @ViewBuilder
-    private var chapterMenu: some View {
-        if viewModel.hasChapters {
-            Picker("章节", selection: Binding<Int?>(
-                get: { viewModel.currentChapterID },
-                set: { id in
-                    guard let id, let chapter = viewModel.chapters.first(where: { $0.id == id })
-                    else { return }
-                    viewModel.seekToChapter(chapter)
-                }
-            )) {
-                ForEach(viewModel.chapters) { chapter in
-                    Text("\(PlayerTime.markerText(chapter.time))  \(chapter.displayName)")
-                        .tag(Int?.some(chapter.id))
-                }
-            }
-            .pickerStyle(.inline)
-            .disabled(!viewModel.canSkipChapter)
-        }
-    }
-
-    /// 画面适配:填充 / 宽高比 / 缩放 / 旋转(MPV_INTEGRATION.md 7.4)。
-    /// 都是「针对这一集源」的临时修正,所以不给持久化,换片回到自动。
-    private var pictureMenu: some View {
-        Menu("画面") {
-            Picker("比例", selection: Binding(
-                get: { viewModel.picture.fit },
-                set: { viewModel.setPictureFit($0) }
-            )) {
-                ForEach(PictureSettings.Fit.allCases) { fit in
-                    Text(fit.displayName).tag(fit)
-                }
-            }
-            .pickerStyle(.inline)
-
-            Picker("宽高比", selection: Binding(
-                get: { viewModel.picture.aspect },
-                set: { viewModel.setPictureAspect($0) }
-            )) {
-                ForEach(PictureSettings.Aspect.allCases) { aspect in
-                    Text(aspect.displayName).tag(aspect)
-                }
-            }
-            .pickerStyle(.inline)
-
-            Divider()
-
-            Button("放大") { viewModel.stepPictureZoom(up: true) }
-            Button("缩小") { viewModel.stepPictureZoom(up: false) }
-            Button("缩放 100%") { viewModel.resetPictureZoom() }
-                .disabled(viewModel.picture.zoom == 0)
-            Button("顺时针旋转 90°") { viewModel.rotatePicture() }
-            if viewModel.picture.rotation != 0 {
-                Text("已旋转 \(viewModel.picture.rotation)°")
-            }
-
-            Divider()
-
-            Button("画面设置复位") { viewModel.resetPicture() }
-                .disabled(!viewModel.isPictureAdjusted)
-        }
-        .disabled(viewModel.session == nil)
-    }
-}
-
 // MARK: - 手动片头 / 片尾的文案
 
 extension ManualMarkers {
@@ -776,18 +373,6 @@ extension ManualMarkers {
 }
 
 // MARK: - 图标按钮
-
-struct PlayerTrackLabel: View {
-    let track: MPVTrack
-
-    var body: some View {
-        if let detail = track.detail {
-            Text("\(track.displayName)  \(Text(detail).foregroundStyle(.secondary))")
-        } else {
-            Text(track.displayName)
-        }
-    }
-}
 
 /// 连点累加的跳转倍数(纯值 + 显式时间参数,便于单测)。
 struct PlayerSkipRepeat {
@@ -872,7 +457,7 @@ struct PlayerIconButton: View {
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: Metrics.playerButtonSize, height: Metrics.playerButtonSize)
                 .background(
-                    Circle().fill(.white.opacity(isHovering ? 0.15 : 0))
+                    Circle().fill(.white.opacity(isHovering ? Metrics.playerButtonHoverOpacity : 0))
                 )
                 .contentShape(Circle())
         }

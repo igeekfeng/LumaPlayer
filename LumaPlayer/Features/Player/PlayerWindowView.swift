@@ -52,6 +52,8 @@ struct PlayerWindowView: View {
     @State private var isDanmakuPickerPresented = false
     @State private var isSubtitleImporterPresented = false
     @State private var isSubtitleSearchPresented = false
+    /// 控制栏弹出的倍速 / 字幕 / 弹幕 / 音轨面板,同一时刻至多一个
+    @State private var activePanel: PlayerPanelKind?
     /// 正在显示的屏显,`Metrics.osdDuration` 后清空(见 `showOSD`)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
@@ -150,7 +152,15 @@ struct PlayerWindowView: View {
             if preview != nil { revealControls() }
         }
         .onChange(of: isEpisodePanelPresented) { _, presented in
-            if presented { revealControls(autoHide: false) } else { revealControls() }
+            if presented {
+                activePanel = nil
+                revealControls(autoHide: false)
+            } else {
+                revealControls()
+            }
+        }
+        .onChange(of: activePanel) { _, panel in
+            if panel != nil { revealControls(autoHide: false) } else { revealControls() }
         }
         .onChange(of: isDanmakuPickerPresented) { _, presented in
             if presented { revealControls(autoHide: false) } else { revealControls() }
@@ -227,7 +237,11 @@ struct PlayerWindowView: View {
         }
         .onKeyPress("f") { toggleFullScreen(); return .handled }
         .onKeyPress(.escape) {
-            // 先收选集抽屉,再退出全屏
+            // 先收控制栏面板与选集抽屉,再退出全屏
+            if activePanel != nil {
+                activePanel = nil
+                return .handled
+            }
             if isEpisodePanelPresented {
                 isEpisodePanelPresented = false
                 return .handled
@@ -239,7 +253,7 @@ struct PlayerWindowView: View {
         // ⛔ 弹窗(sheet / 文件面板)必须挂在上面这串 `onKeyPress` 的外层:弹窗里的按键会沿呈现它的视图
         // 往上传,挂在里层时这些处理器比输入框先拿到键(在搜索框里打字会变成静音、暂停……)。
 
-        // 面板挂在窗口上:挂在字幕菜单里会随菜单收起一起消失
+        // 文件面板挂在窗口上:挂在字幕面板里会随面板收起一起消失
         .fileImporter(
             isPresented: $isSubtitleImporterPresented,
             allowedContentTypes: SubtitleFormats.contentTypes,
@@ -328,6 +342,13 @@ struct PlayerWindowView: View {
                         .padding(.leading, Metrics.spacingXL)
                 }
                 promptLayer
+                // 点画面空白处只收面板,不落到交互层(否则顺带暂停了);点控制栏别的按钮直接切换
+                if isPanelShown {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { activePanel = nil }
+                        .accessibilityHidden(true)
+                }
                 controlsLayer
                 // 选集抽屉压在最上层,见 `PlayerEpisodePanel`
                 if isEpisodePanelPresented {
@@ -344,9 +365,55 @@ struct PlayerWindowView: View {
                     .transition(.move(edge: .trailing))
                 }
             }
+            .overlayPreferenceValue(PlayerPanelAnchorKey.self) { anchors in
+                GeometryReader { proxy in
+                    if isPanelShown, let kind = activePanel, let anchor = anchors[kind] {
+                        panel(kind, buttonFrame: proxy[anchor], in: proxy.size)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                    }
+                }
+                .animation(osdAnimation, value: activePanel)
+            }
             .animation(controlsAnimation, value: controlsVisible)
             .animation(controlsAnimation, value: isEpisodePanelPresented)
             .animation(osdAnimation, value: shownOSD)
+        }
+    }
+
+    /// 控制栏收起或没有会话时按钮不在,面板也不画(`activePanel` 留着,控制栏回来时原样再现)
+    private var isPanelShown: Bool {
+        activePanel != nil && controlsVisible && viewModel.session != nil
+    }
+
+    /// 贴着按钮上方摆,左右夹在窗口内
+    private func panel(_ kind: PlayerPanelKind, buttonFrame: CGRect, in size: CGSize) -> some View {
+        let width = Metrics.playerPanelWidth
+        let inset = Metrics.playerPanelEdgeInset
+        let leading = min(max(buttonFrame.midX - width / 2, inset), max(inset, size.width - width - inset))
+        return panelContent(kind)
+            .padding(.leading, leading)
+            .padding(.bottom, size.height - buttonFrame.minY + Metrics.spacingS)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+
+    @ViewBuilder
+    private func panelContent(_ kind: PlayerPanelKind) -> some View {
+        let dismiss = { activePanel = nil }
+        switch kind {
+        case .speed:
+            PlayerSpeedPanel(viewModel: viewModel, dismiss: dismiss)
+        case .subtitles:
+            PlayerSubtitlePanel(
+                viewModel: viewModel,
+                dismiss: dismiss,
+                openImporter: { isSubtitleImporterPresented = true },
+                openSearch: { isSubtitleSearchPresented = true })
+        case .danmaku:
+            PlayerDanmakuPanel(viewModel: viewModel, dismiss: dismiss) { isDanmakuPickerPresented = true }
+        case .audio:
+            PlayerAudioPanel(viewModel: viewModel)
+        case .options:
+            PlayerOptionsPanel(viewModel: viewModel, dismiss: dismiss) { isMarkersEditorPresented = true }
         }
     }
 
@@ -420,10 +487,7 @@ struct PlayerWindowView: View {
         PlayerControlsView(
             viewModel: viewModel,
             isEpisodePanelPresented: $isEpisodePanelPresented,
-            isMarkersEditorPresented: $isMarkersEditorPresented,
-            isDanmakuPickerPresented: $isDanmakuPickerPresented,
-            isSubtitleImporterPresented: $isSubtitleImporterPresented,
-            isSubtitleSearchPresented: $isSubtitleSearchPresented
+            activePanel: $activePanel
         )
         .onHover { hovering in
             isHoveringControls = hovering
@@ -492,6 +556,7 @@ struct PlayerWindowView: View {
             && !isDanmakuPickerPresented
             && !isSubtitleImporterPresented
             && !isSubtitleSearchPresented
+            && activePanel == nil
             && viewModel.scrubPreviewSeconds == nil
     }
 

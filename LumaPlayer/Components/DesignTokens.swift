@@ -33,7 +33,7 @@ import Foundation
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。
 ///
 /// **Liquid Glass**:只用于临时、可操作、浮在内容上的元素 —— 播完卡片 / 下一集提示、主窗口顶栏按钮与搜索胶囊、
-/// 字幕 / 音轨菜单、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 播放按钮
+/// 控制栏弹出面板(倍速 / 字幕 / 弹幕 / 音轨 / 播放选项,玻璃上再压一层黑)、屏显提示胶囊、详情页播放主按钮(可带轻 tint)、首页 hero 播放按钮
 /// (不带 tint 的 `.glass`,⛔ 不用 `.glassProminent`:系统强调色的饱和蓝压在照片上突兀)。
 /// ⛔ 不用于:海报卡片、列表 / 剧集的每一行、长文本背景、全窗口背景、播放器底部控制栏
 /// (全宽横条 + 自下而上黑色渐变压暗:HIG 要求玻璃压在媒体上配 dimming,Apple TV / QuickTime / mpv OSC 都是全宽横条)。
@@ -41,8 +41,8 @@ import Foundation
 /// (大了静止时糊成一团);⛔ `.interactive()` 是 iOS-only,不写;⛔ 不从海报取色生成 tint。
 ///
 /// **播放窗口**:顶部只有一行标题(剧名 + SxEy · 集名,`HStack` 基线对齐),诊断信息(串流方式、容器)只在统计 overlay(I)里。
-/// 控制栏自左向右:播放 / 暂停(上一集、下一集紧贴左右,外侧才是 ±`seekStep` 跳转)→ 音量 → 倍速、字幕、音轨(两个独立菜单)、
-/// 播放选项 → 选集(最右端)。⛔ 控制栏不放全屏图标(F 与双击画面已够,最右让给选集)。
+/// 控制栏自左向右:播放 / 暂停(上一集、下一集紧贴左右,外侧才是 ±`seekStep` 跳转)→ 音量 → 倍速、字幕、弹幕、音轨、
+/// 播放选项(同一形态的弹出面板,见 `PlayerPanelKind`)→ 选集(最右端)。⛔ 控制栏不放全屏图标(F 与双击画面已够,最右让给选集)。
 /// 播放键不固定最左:没有上下集时那一簇收窄。进度条两端显示时间,右侧可点切成「预计结束时刻」(倍速参与换算,算不出退回剩余时长)。
 /// 自动隐藏两条规则都要:指针静止 `autoHideDelay`、移出窗口 `autoHidePointerExitDelay`;暂停 / 错误 / 缓冲 / 播完 /
 /// 面板打开时不隐藏。前后跳转连点累加(第 n 次跳 `seekStep × n`,上限 `seekRepeatMaxMultiple`)。
@@ -191,7 +191,35 @@ enum Metrics {
     /// ⇧ 加速档
     static let audioDelayLargeStep: Double = 1
     /// 播放器图标按钮的点击区域边长(统一,避免图标宽窄不一导致跳动)
-    static let playerButtonSize: CGFloat = 32
+    static let playerButtonSize: CGFloat = 36
+    /// 控制栏按钮悬停 / 面板打开时的圆底
+    static let playerButtonHoverOpacity: Double = 0.15
+    static let playerButtonActiveOpacity: Double = 0.22
+
+    // MARK: 控制栏弹出面板(`PlayerPanels.swift`)
+
+    static let playerPanelWidth: CGFloat = 272
+    /// 选轨 / 动作行高:整行可点
+    static let playerPanelRowHeight: CGFloat = 36
+    /// 倍速档位、步进按钮
+    static let playerPanelChipHeight: CGFloat = 32
+    static let playerPanelStepButtonWidth: CGFloat = 40
+    /// 图标 + 文字的入口块(打开本地字幕 / 搜索 / 外观)
+    static let playerPanelTileHeight: CGFloat = 48
+    /// 轨道超过这么多行就在面板内滚动
+    static let playerPanelMaxVisibleRows = 7
+    /// 面板离窗口左右边缘至少这么远;离按钮的距离用 `spacingS`
+    static let playerPanelEdgeInset: CGFloat = 16
+    /// 玻璃上再压一层黑:视频亮度不可控
+    static let playerPanelDimOpacity: Double = 0.45
+    /// 档位 / 入口块的常态底,行没有常态底
+    static let playerPanelItemFillOpacity: Double = 0.07
+    static let playerPanelItemHoverOpacity: Double = 0.14
+    static let playerPanelItemPressedOpacity: Double = 0.2
+    /// 当前选中行
+    static let playerPanelRowSelectedOpacity: Double = 0.1
+    /// 分组细线
+    static let playerPanelSeparatorThickness: CGFloat = 0.5
     /// 屏显提示停留时长
     static let osdDuration: TimeInterval = 1.2
     // MARK: 进度条
@@ -365,4 +393,10 @@ enum Radius {
     static let card: CGFloat = 8
     /// 浮层面板
     static let panel: CGFloat = 12
+    /// 控制栏弹出面板(`PlayerPanels.swift`)
+    static let playerPanel: CGFloat = 16
+    /// 面板里的行、档位、按钮
+    static let playerPanelItem: CGFloat = 8
+    /// 轨道编码标签
+    static let tag: CGFloat = 4
 }

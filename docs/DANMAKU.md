@@ -42,7 +42,7 @@
 | `DanmakuService`、`DanmakuBindingStore`、`DanmakuCommentCache` | `Core/Danmaku/` | `actor` |
 | `DanmakuSettingsStore` | `Core/Danmaku/` | `@MainActor @Observable`(同 `SubtitleStyleStore`) |
 | `DanmakuController` | `Features/Player/Danmaku/` | `@MainActor @Observable` |
-| `DanmakuOverlayView`、`PlayerDanmakuMenu`、`DanmakuPickerSheet` | `Features/Player/Danmaku/` | View |
+| `DanmakuOverlayView`、`PlayerDanmakuPanel`、`DanmakuPickerSheet` | `Features/Player/Danmaku/` | View |
 
 **提供方无关的边界**是 `DanmakuComment`(时间 / 模式 / 颜色 / 文本)与 `DanmakuCandidate`。
 排版与渲染只认它们;将来加别的提供方,写一个「DTO → `DanmakuComment`」转换和一个 Service 分支即可。

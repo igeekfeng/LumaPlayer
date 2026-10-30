@@ -164,7 +164,7 @@ struct PlayerCommands: Commands {
     private var subtitleDelayMenu: some View {
         if let player {
             Menu("Subtitle Delay: \(PlayerViewModel.subtitleDelayValueText(player.subtitleDelay, unit: "s"))") {
-                PlayerSubtitleDelayButtons(viewModel: player, inMenuBar: true)
+                PlayerSubtitleDelayButtons(viewModel: player)
             }
             .disabled(!player.canAdjustSubtitleDelay)
         } else {
@@ -177,7 +177,7 @@ struct PlayerCommands: Commands {
     private var audioDelayMenu: some View {
         if let player {
             Menu("Audio Delay: \(PlayerViewModel.audioDelayValueText(player.audioDelay, unit: "s"))") {
-                PlayerAudioDelayButtons(viewModel: player, inMenuBar: true)
+                PlayerAudioDelayButtons(viewModel: player)
             }
             .disabled(!player.canAdjustAudioDelay)
         } else {
@@ -199,5 +199,67 @@ struct PlayerCommands: Commands {
         } else {
             Menu("Audio") {}.disabled(true)
         }
+    }
+}
+
+/// 菜单栏「Playback › Subtitle Delay」的按钮,快捷键挂在这里(控制栏字幕面板用 `PlayerPanelStepper`)。
+struct PlayerSubtitleDelayButtons: View {
+    let viewModel: PlayerViewModel
+
+    var body: some View {
+        Group {
+            Button("Earlier by \(Self.seconds(Metrics.subtitleDelayStep)) s") {
+                viewModel.stepSubtitleDelay(later: false)
+            }
+            .keyboardShortcut("z", modifiers: [])
+            Button("Later by \(Self.seconds(Metrics.subtitleDelayStep)) s") {
+                viewModel.stepSubtitleDelay(later: true)
+            }
+            .keyboardShortcut("x", modifiers: [])
+            Button("Earlier by \(Self.seconds(Metrics.subtitleDelayLargeStep)) s") {
+                viewModel.stepSubtitleDelay(later: false, step: Metrics.subtitleDelayLargeStep)
+            }
+            .keyboardShortcut("z", modifiers: .shift)
+            Button("Later by \(Self.seconds(Metrics.subtitleDelayLargeStep)) s") {
+                viewModel.stepSubtitleDelay(later: true, step: Metrics.subtitleDelayLargeStep)
+            }
+            .keyboardShortcut("x", modifiers: .shift)
+            Button("Reset Subtitle Delay") { viewModel.resetSubtitleDelay() }
+                .disabled(viewModel.subtitleDelay == 0)
+        }
+        .disabled(!viewModel.canAdjustSubtitleDelay)
+    }
+
+    static func seconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+}
+
+/// 菜单栏「Playback › Audio Delay」的按钮(与字幕延迟对称:C / V,⇧ 为大步)。
+struct PlayerAudioDelayButtons: View {
+    let viewModel: PlayerViewModel
+
+    var body: some View {
+        Group {
+            Button("Advance Audio by \(PlayerSubtitleDelayButtons.seconds(Metrics.audioDelayStep)) s") {
+                viewModel.stepAudioDelay(later: false)
+            }
+            .keyboardShortcut("c", modifiers: [])
+            Button("Delay Audio by \(PlayerSubtitleDelayButtons.seconds(Metrics.audioDelayStep)) s") {
+                viewModel.stepAudioDelay(later: true)
+            }
+            .keyboardShortcut("v", modifiers: [])
+            Button("Advance Audio by \(PlayerSubtitleDelayButtons.seconds(Metrics.audioDelayLargeStep)) s") {
+                viewModel.stepAudioDelay(later: false, step: Metrics.audioDelayLargeStep)
+            }
+            .keyboardShortcut("c", modifiers: .shift)
+            Button("Delay Audio by \(PlayerSubtitleDelayButtons.seconds(Metrics.audioDelayLargeStep)) s") {
+                viewModel.stepAudioDelay(later: true, step: Metrics.audioDelayLargeStep)
+            }
+            .keyboardShortcut("v", modifiers: .shift)
+            Button("Reset Audio Delay") { viewModel.resetAudioDelay() }
+                .disabled(viewModel.audioDelay == 0)
+        }
+        .disabled(!viewModel.canAdjustAudioDelay)
     }
 }
