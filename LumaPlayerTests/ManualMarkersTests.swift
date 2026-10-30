@@ -37,7 +37,8 @@ final class ManualMarkersTests: XCTestCase {
         XCTAssertNil(
             PlaybackMarkers(introStart: 10, introEnd: nil, creditsStart: nil).intro, "只有起点")
         XCTAssertNil(
-            PlaybackMarkers(introStart: nil, introEnd: 20, creditsStart: nil).intro, "只有终点")
+            PlaybackMarkers(introStart: nil, introEnd: 20, creditsStart: nil).intro,
+            "只有终点的严格构造仍为 nil;手动标注的「起点留空按 00:00 计」在 ManualMarkers.asPlaybackMarkers 补")
         XCTAssertNil(
             PlaybackMarkers(introStart: 90, introEnd: 30, creditsStart: nil).intro, "终点早于起点")
     }
@@ -48,6 +49,23 @@ final class ManualMarkersTests: XCTestCase {
         XCTAssertNil(
             PlaybackMarkers(introStart: nil, introEnd: nil, creditsStart: 0).creditsStart,
             "0 当作没标(与章节构造同口径)")
+    }
+
+    // MARK: - 生效的区间(手动起点留空 = 00:00)
+
+    func testManualIntroWithOnlyEndStartsAtZero() {
+        XCTAssertEqual(
+            ManualMarkers(introEnd: 45).asPlaybackMarkers.intro, 0..<45,
+            "边看边只点了终点,起点按 00:00 计")
+    }
+
+    func testManualIntroEndAtZeroIsStillNoIntro() {
+        XCTAssertNil(ManualMarkers(introEnd: 0).asPlaybackMarkers.intro, "终点为 0 等于没标")
+    }
+
+    func testManualIntroExplicitStartWinsOverDefault() {
+        XCTAssertEqual(
+            ManualMarkers(introStart: 30, introEnd: 120).asPlaybackMarkers.intro, 30..<120)
     }
 
     // MARK: - 合并:手动覆盖服务端,按标记组
@@ -66,10 +84,17 @@ final class ManualMarkersTests: XCTestCase {
         XCTAssertEqual(merged.creditsStart, 1400)
     }
 
+    func testManualIntroEndOnlyOverridesServerIntro() {
+        let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
+        let merged = ManualMarkers(introEnd: 45).applying(to: server)
+        XCTAssertEqual(merged.intro, 0..<45, "只标终点也整组取手动,起点按 00:00 计")
+        XCTAssertEqual(merged.creditsStart, 1320)
+    }
+
     func testIncompleteManualIntroYieldsNoIntro() {
         let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
         let merged = ManualMarkers(introStart: 5).applying(to: server)
-        XCTAssertNil(merged.intro, "用户要自己标片头,只填一端就不该再混进服务端那组")
+        XCTAssertNil(merged.intro, "只填起点就没有终点可跳,也不该再混进服务端那组")
         XCTAssertEqual(merged.creditsStart, 1320)
     }
 
@@ -188,6 +213,9 @@ final class ManualMarkersTests: XCTestCase {
     func testSummaryListsWhatIsSet() {
         XCTAssertNil(ManualMarkers().summary, "什么都没设就不显示摘要行")
         XCTAssertEqual(ManualMarkers(introStart: 30, introEnd: 120).summary, "片头 00:30–02:00")
+        XCTAssertEqual(
+            ManualMarkers(introEnd: 120).summary, "片头 00:00–02:00",
+            "只填终点时摘要要写出实际生效的 00:00 起点")
         XCTAssertEqual(ManualMarkers(creditsStart: 1320).summary, "片尾 22:00")
         XCTAssertEqual(
             ManualMarkers(introStart: 0, introEnd: 85, creditsStart: 1320).summary,
@@ -195,16 +223,12 @@ final class ManualMarkersTests: XCTestCase {
             "0 要显示成 00:00,不是 --:--")
     }
 
-    /// 只填一端 / 顺序反了 / 片尾为 0。
+    /// 只填起点 / 顺序反了 / 片尾为 0。
     func testSummaryFlagsMarkersThatWillNotTakeEffect() {
         XCTAssertEqual(ManualMarkers(introStart: 30).summary, "片头未生效")
-        XCTAssertEqual(ManualMarkers(introEnd: 120).summary, "片头未生效")
+        XCTAssertEqual(ManualMarkers(introEnd: 0).summary, "片头未生效")
         XCTAssertEqual(ManualMarkers(introStart: 120, introEnd: 30).summary, "片头未生效")
         XCTAssertEqual(ManualMarkers(creditsStart: 0).summary, "片尾未生效")
-        XCTAssertEqual(
-            ManualMarkers(introStart: 30).summary,
-            ManualMarkers(introEnd: 120).summary,
-            "两种「只填一端」的写法给同一句提示")
     }
 
     // MARK: - 时间解析

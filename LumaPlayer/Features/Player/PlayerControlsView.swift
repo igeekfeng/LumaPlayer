@@ -353,16 +353,16 @@ struct PlayerVolumeControl: View {
 
 extension ManualMarkers {
     /// 例:`片头 00:30–02:00 · 片尾 22:00`;都没填时 nil。不会生效的组合明确写「未生效」。
+    /// 片头按 `asPlaybackMarkers` 的口径显示(起点留空即 `00:00`),摘要与实跳区间始终一致。
     ///
     /// 放在 Features 层:要用 `PlayerTime.markerText`,⛔ Core 不依赖 Features。
     var summary: String? {
         var parts: [String] = []
-        switch (introStart, introEnd) {
-        case let (start?, end?) where end > start:
-            parts.append("片头 \(PlayerTime.markerText(start))–\(PlayerTime.markerText(end))")
-        case (nil, nil):
-            break
-        default:
+        if let intro = asPlaybackMarkers.intro {
+            parts.append(
+                "片头 \(PlayerTime.markerText(intro.lowerBound))–"
+                    + PlayerTime.markerText(intro.upperBound))
+        } else if introStart != nil || introEnd != nil {
             parts.append("片头未生效")
         }
         if let creditsStart {

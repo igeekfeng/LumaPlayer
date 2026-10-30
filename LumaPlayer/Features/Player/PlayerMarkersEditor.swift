@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// 手动输入片头 / 片尾的表单。输入格式见 `PlayerTime.parse`,留空 = 不标这一格。
+/// 手动输入片头 / 片尾的表单。输入格式见 `PlayerTime.parse`;留空 = 不标这一格,
+/// 只有片头起点例外:留空按 00:00 计(见 `ManualMarkers.asPlaybackMarkers`)。
 ///
-/// 保存原始值:逻辑校验(两端齐全、终点晚于起点)只提示不拦保存,中间态要能存下来。
+/// 保存原始值:逻辑校验(片头终点晚于起点)只提示不拦保存,中间态要能存下来。
 ///
 /// ⛔ 表体不要读 `viewModel.positionSeconds`(每 0.2s 变一次);「用当前位置」只在点击时读。
 struct PlayerMarkersEditor: View {
@@ -33,9 +34,9 @@ struct PlayerMarkersEditor: View {
             VStack(alignment: .leading, spacing: Metrics.spacingL) {
                 section(
                     "片头",
-                    detail: "播放到片头区间时出现「跳过片头」,跳过即跳到终点。"
+                    detail: "播放到片头区间时出现「跳过片头」,跳过即跳到终点。起点留空按 00:00 计。"
                 ) {
-                    fieldRow("起点", text: $introStartText)
+                    fieldRow("起点", text: $introStartText, placeholder: "留空 = 00:00")
                     fieldRow("终点", text: $introEndText)
                 }
                 section(
@@ -109,13 +110,17 @@ struct PlayerMarkersEditor: View {
         }
     }
 
-    private func fieldRow(_ title: String, text: Binding<String>) -> some View {
+    private func fieldRow(
+        _ title: String,
+        text: Binding<String>,
+        placeholder: String = "留空 = 不标"
+    ) -> some View {
         HStack(spacing: Metrics.spacingM) {
             Text(title)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(width: 32, alignment: .trailing)
-            TextField("留空 = 不标", text: text)
+            TextField(placeholder, text: text)
                 .textFieldStyle(.roundedBorder)
                 .monospacedDigit()
                 .frame(width: 120)
@@ -165,16 +170,16 @@ struct PlayerMarkersEditor: View {
         introStart.isValid && introEnd.isValid && creditsStart.isValid
     }
 
-    /// 格式错误优先;片头不完整 / 顺序不对只提醒不拦保存。
+    /// 格式错误优先;片头只填起点 / 顺序不对只提醒不拦保存。
     private var hintText: String? {
         if !allFieldsValid { return "时间格式不对:用 hh:mm:ss、mm:ss 或秒数。" }
         let start = introStart.seconds
         let end = introEnd.seconds
-        if (start == nil) != (end == nil) {
-            return "片头需要起点与终点都填才会跳过片头。"
+        if start != nil, end == nil {
+            return "片头只填了起点:没有终点就不知道跳到哪,不会跳过片头。"
         }
-        if let start, let end, end <= start {
-            return "片头终点要晚于起点,否则不会跳过片头。"
+        if let end, end <= (start ?? 0) {
+            return "片头终点要晚于起点(起点留空按 00:00 计),否则不会跳过片头。"
         }
         return nil
     }
