@@ -98,6 +98,18 @@ if ((CLEAN)); then
     /bin/rm -rf "${BUILD_DIR}"
 fi
 
+# meson 把依赖解析成带版本号的 Cellar 绝对路径(如 Cellar/ffmpeg/9.0.2/include)且缓存查找结果,
+# --reconfigure 也不刷新;brew upgrade 清掉旧版本后旧 build.ninja 就找不到头文件,只能整个重配。
+if [[ -f "${BUILD_DIR}/build.ninja" ]]; then
+    while IFS= read -r dep_path; do
+        if [[ ! -e "${dep_path}" ]]; then
+            echo "Homebrew 依赖已升级（${dep_path} 不存在），清理 build/ 重新配置…"
+            /bin/rm -rf "${BUILD_DIR}"
+            break
+        fi
+    done < <(/usr/bin/grep -oE "${BREW_PREFIX}/Cellar/[^ :'\"]+" "${BUILD_DIR}/build.ninja" | /usr/bin/sort -u)
+fi
+
 if [[ ! -f "${BUILD_DIR}/build.ninja" ]]; then
     echo "meson setup …"
     # -Dlibmpv=true 只出库（cplayer=false 不编 mpv 可执行文件）。
