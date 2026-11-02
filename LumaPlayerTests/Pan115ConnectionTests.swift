@@ -15,7 +15,11 @@ final class Pan115ConnectionTests: XCTestCase {
         super.setUp()
         storage = CredentialFileStore(fileURL: .temporaryCredentialsFile())
         credentials = CredentialStore(storage: storage)
-        connection = Pan115Connection(credentials: credentials)
+        connection = Pan115Connection(
+            credentials: credentials,
+            client: Pan115APIClient(
+                session: MockEmbyURLProtocol.makeSession(),
+                limiter: Pan115RateLimiter(minimumInterval: .zero)))
     }
 
     override func tearDown() async throws {

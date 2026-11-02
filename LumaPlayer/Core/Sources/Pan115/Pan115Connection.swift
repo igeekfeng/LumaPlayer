@@ -25,7 +25,10 @@ actor Pan115Connection {
     /// ⛔ 不落盘:映射错一位就会列到别人的目录,进程重启重列一次目录比这个便宜。
     private var directoryIndex: [String: String] = [:]
 
-    init(credentials: CredentialStore, client: Pan115APIClient = Pan115APIClient()) {
+    /// `client` ⛔ 不给默认值:默认值会顺手造一个新的 `Pan115APIClient`,也就带一个新的
+    /// `Pan115RateLimiter` —— 两套限速器各记各的间隔,全局 500 ms 串行立刻失效。
+    /// 限速器必须全 App 共用一份,由组合根(`AppContainer`)注入。
+    init(credentials: CredentialStore, client: Pan115APIClient) {
         self.credentials = credentials
         self.client = client
     }
@@ -59,9 +62,10 @@ actor Pan115Connection {
 
     /// 扫码登录第 2-4 步:轮询状态,用户确认后换 Cookie 并落盘。
     ///
-    /// 轮询节奏由 `Pan115APIClient` 的 `Pan115RateLimiter` 兜住(每次请求前 ≥ 500 ms),
-    /// 这里**不额外 sleep**:两个库(`115driver` / `p115client`)都没在轮询上加间隔,
-    /// 是调用方自己的循环;本项目把节流放在传输层,免得两处各算一套。
+    /// 轮询间隔由两处共同兜住:传输层 `Pan115RateLimiter` 保证任意两次请求 ≥ 500 ms,
+    /// 这一层再加一个 `Pan115Policy.authorizationPollInterval` 的下限 —— 扫码接口是长轮询,
+    /// 服务端状态没变时会把请求挂住;但它提前返回时,没有这个下限就会变成每秒两次的空转,
+    /// 而 180 秒的窗口能攒出上百次请求(§6 的频控就是这么撞上的)。
     /// 超时按 `Pan115QRCodeSession.validitySeconds` 算 —— 那是**本项目自己定的**上限,
     /// 115 不给有效期(见该常量的注释)。
     func awaitAuthorization(
@@ -75,6 +79,8 @@ actor Pan115Connection {
             let status = try await client.qrCodeStatus(session)
             switch status {
             case .waiting, .scanned:
+                // 状态没变:等到下一个轮询点再问,⛔ 不立刻重发
+                try await Task.sleep(for: Pan115Policy.authorizationPollInterval)
                 continue
             case .allowed:
                 let credential = try await client.qrCodeLogin(session)
@@ -124,7 +130,25 @@ actor Pan115Connection {
     /// 列目录。目录在前、再按名字排 —— 排序在客户端做,115 自己的顺序不可靠(§3)。
     ///
     /// - Parameter path: 从网盘根算起的路径,`"/"` 是根。内部换成 `cid` 再请求。
+    ///
+    /// 同一路径的**在飞**请求合并成一次:缓存命中时前台与后台刷新会同时打到这里,
+    /// 目录选择器连点两下也是。115 按次记账(§6),两发同内容的 `files` 纯属白花预算。
+    /// ⛔ 只合并在飞的,不缓存结果 —— 缓存是上层(`FileSourceViewModel` + 落盘)的事。
     func files(in path: String) async throws -> [Pan115FileEntry] {
+        let key = Self.normalizedPath(path)
+        if let inFlight = inFlightFiles[key] {
+            return try await inFlight.value
+        }
+        let task = Task { try await self.fetchFiles(in: key) }
+        inFlightFiles[key] = task
+        defer { inFlightFiles[key] = nil }
+        return try await task.value
+    }
+
+    /// 正在列的目录(键是归一化路径)。请求一结束就摘掉。
+    private var inFlightFiles: [String: Task<[Pan115FileEntry], any Error>] = [:]
+
+    private func fetchFiles(in path: String) async throws -> [Pan115FileEntry] {
         let cid = try await directoryID(path: path)
         let credential = try await credential()
         let entries = try await client.list(cid: cid, credential: credential)
@@ -178,10 +202,27 @@ actor Pan115Connection {
     ///   那个类型是文件树来源的通用形状,只有 115 需要 `pick_code`。
     ///
     /// ⛔ 直链是**死 URL**:`t` 参数到期就 403,没有刷新机制。调用方在播放失败时要重新取一次。
+    ///
+    /// 同一个 `pickCode` 的在飞请求合并成一次:连点两集、连点重试都会并发打到这里,
+    /// 而 115 会把重复取链记成「无意义调用」(§6)。合并只作用于**同时进行中**的请求,
+    /// ⛔ 不缓存结果 —— 重试要拿到新链,复用旧链只会再 403 一次。
     func playbackLink(pickCode: String) async throws -> Pan115DownloadLink {
         guard !pickCode.isEmpty else {
             throw Pan115Error.pickCodeMissing("pick_code 为空")
         }
+        if let inFlight = inFlightLinks[pickCode] {
+            return try await inFlight.value
+        }
+        let task = Task { try await self.fetchPlaybackLink(pickCode: pickCode) }
+        inFlightLinks[pickCode] = task
+        defer { inFlightLinks[pickCode] = nil }
+        return try await task.value
+    }
+
+    /// 正在取链的 `pickCode`。值只在请求进行中存在,请求一结束就摘掉。
+    private var inFlightLinks: [String: Task<Pan115DownloadLink, any Error>] = [:]
+
+    private func fetchPlaybackLink(pickCode: String) async throws -> Pan115DownloadLink {
         let credential = try await credential()
         return try await client.downloadURL(pickCode: pickCode, credential: credential)
     }

@@ -163,6 +163,12 @@ enum Pan115Error: Error, Equatable {
     case kickedOut
     /// 直链过期或签名不符(§4.3),重取即可
     case linkExpired
+    /// 被 115 频控挡下:`590075 操作太频繁`,或 403/405/429(阿里云 WAF)。
+    ///
+    /// `retryAfter` 是**本项目自己定的**冷却剩余秒数 —— 115 不告诉你多久恢复,只回一句
+    /// 「请稍候再试」;实测恢复窗口在十几分钟到半小时之间(§6),所以这里按整轮冷却算。
+    /// ⛔ 冷却期内不要再发请求:继续打会把临时频控升级成域名级风控(§6)。
+    case rateLimited(retryAfter: TimeInterval)
     /// 115 不给这个文件在线播(文案已带原因,⛔ 不折成 `server` —— 那会显示「返回了错误码 0」)
     case playbackUnsupported(String)
     /// 找不到这个文件的 pick_code(浏览目录时没缓存到,§3)
@@ -195,6 +201,10 @@ enum Pan115Error: Error, Equatable {
             return "115 的登录已在别处失效(同一账号最多 2 台设备),请重新扫码登录。"
         case .linkExpired:
             return "播放地址已过期,重新获取一次。"
+        case .rateLimited(let retryAfter):
+            let minutes = max(1, Int((retryAfter / 60).rounded(.up)))
+            return "115 判断操作太频繁,已暂停请求。约 \(minutes) 分钟后再试,"
+                + "期间不要反复点 —— 继续请求会延长风控时间。"
         case .playbackUnsupported(let detail):
             return detail
         case .pickCodeMissing(let detail):
@@ -271,4 +281,23 @@ enum Pan115Code {
     /// 「目录不存在」的三个码。片库根被删 / 改名时 115 就回这几个(没有 HTTP 404)。
     /// 出处:`p115client client.py:252`、`:266`、`:334`。
     static let directoryMissing: Set<Int> = [800001, 10014, 20009]
+    /// 操作太频繁(`p115client` 把它归成 `EBUSY`)。这是风控的第一档,**比 WAF 早一步**:
+    /// 认出来就该停手,继续打才会升级成域名级拦截(§6)。
+    static let tooFrequent: Set<Int> = [590075, 40110000]
+}
+
+/// 115 的请求纪律(§6)。所有「多久算太频繁」的数字都在这里,⛔ 不要在调用点各写一套。
+enum Pan115Policy {
+    /// 扫码轮询的间隔。
+    ///
+    /// 官方说这接口是长轮询(状态不变时服务端会把请求挂住),但服务端提前返回时
+    /// 客户端就会变成每秒两次的空转。这里给一个下限:不论请求多快返回,两次轮询之间至少隔这么久。
+    static let authorizationPollInterval: Duration = .seconds(2)
+    /// 命中频控后的整轮冷却。
+    ///
+    /// 115 不给恢复时间(社区实测十几分钟到半小时,§6),取上限再留余量。
+    /// ⛔ 冷却期内一个请求都不发 —— 继续打会把临时频控升级成域名级 WAF 拦截。
+    static let rateLimitCoolDown: Duration = .seconds(30 * 60)
+    /// 取直链失败时最多自动补取几次。⛔ 只补一次,不循环。
+    static let linkRetryLimit = 1
 }

@@ -201,10 +201,16 @@ struct Pan115APIClient: Sendable {
                 throw Pan115Error.transport("响应不是 HTTP")
             }
             guard (200..<300).contains(http.statusCode) else {
-                // 115 的风控会回 405 HTML(阿里云 WAF),状态码本身就是全部信息
+                // 115 的风控会回 405 HTML(阿里云 WAF),状态码本身就是全部信息。
+                // 403/405/429 一律当频控:进冷却,别等 WAF 把整个域名记上(§6)。
+                if Self.rateLimitStatusCodes.contains(http.statusCode) {
+                    await limiter.noteRateLimited()
+                    throw Pan115Error.rateLimited(
+                        retryAfter: await limiter.remainingCoolDown ?? 0)
+                }
                 throw Pan115Error.transport("HTTP \(http.statusCode)")
             }
-            try validate(data, endpoint: endpoint)
+            try await validate(data, endpoint: endpoint)
             return Response(data: data, setCookieHeaders: http.value(forHTTPHeaderField: "Set-Cookie")
                 .map { [$0] } ?? [])
         } catch let error as Pan115Error {
@@ -230,13 +236,22 @@ struct Pan115APIClient: Sendable {
         }
     }
 
+    /// 115 的风控状态码。`405` 是阿里云 WAF 的 HTML 拦截页;`403`/`429` 是同一回事的不同写法。
+    /// 出处:§6 实测(`webapi.115.com/files` 无 Cookie 时回 405 HTML)。
+    static let rateLimitStatusCodes: Set<Int> = [403, 405, 429]
+
     /// `state == 0` 就是业务失败。扫码接口的 `state` 语义不同(见各自响应类型),不走这里。
-    private func validate(_ data: Data, endpoint: Pan115Endpoint) throws {
+    private func validate(_ data: Data, endpoint: Pan115Endpoint) async throws {
         guard let envelope = try? JSONDecoder().decode(Pan115Envelope.self, from: data) else {
             return
         }
         guard let state = envelope.state, state == 0 else { return }
         let code = envelope.errorCode ?? 0
+        // 频控排在错误码分派最前面:它是「现在别问了」,不是「这个请求有问题」
+        if Pan115Code.tooFrequent.contains(code) {
+            await limiter.noteRateLimited()
+            throw Pan115Error.rateLimited(retryAfter: await limiter.remainingCoolDown ?? 0)
+        }
         if code == Pan115Code.kickedOut { throw Pan115Error.kickedOut }
         if code == Pan115Code.notLoggedIn { throw Pan115Error.notAuthorized }
         // 二维码过期有两种表现:轮询响应里 `status: -1`,或 `state: 0` + 这个错误码。
@@ -346,10 +361,13 @@ struct Pan115DownloadLink: Sendable, Equatable {
     let headers: [String: String]
 }
 
-/// 串行限速器(`docs/PAN115_API.md` §6 的硬约束:两次请求间隔 ≥ 500ms)。
+/// 串行限速器 + 频控冷却(`docs/PAN115_API.md` §6 的硬约束:两次请求间隔 ≥ 500ms)。
 ///
 /// 115 对第三方客户端的频控是**硬性**的:超了先回 `590075 操作太频繁`,再超就是阿里云 WAF 拦截。
 /// ⛔ 不要并发打 115;⛔ 不要把间隔调到 500ms 以下。
+///
+/// 命中一次频控后进入冷却:冷却期内 `acquire()` 直接抛 `rateLimited`,**一个请求都不发**。
+/// 为什么必须这样:WAF 的拦截按域名记账(§6),被拦之后还继续请求只会把冷却时间越拖越长。
 actor Pan115RateLimiter {
     init(minimumInterval: Duration = .milliseconds(500)) {
         self.minimumInterval = minimumInterval
@@ -357,9 +375,20 @@ actor Pan115RateLimiter {
 
     private let minimumInterval: Duration
     private var lastRequest: ContinuousClock.Instant?
+    /// 冷却截止点。`nil` = 没在冷却。
+    private var coolDownUntil: ContinuousClock.Instant?
 
     func acquire() async throws {
         let now = ContinuousClock.now
+        if let until = coolDownUntil {
+            let remaining = now.duration(to: until)
+            if remaining > .zero {
+                throw Pan115Error.rateLimited(
+                    retryAfter: TimeInterval(remaining.components.seconds)
+                        + TimeInterval(remaining.components.attoseconds) / 1e18)
+            }
+            coolDownUntil = nil
+        }
         if let last = lastRequest {
             let elapsed = now - last
             if elapsed < minimumInterval {
@@ -367,5 +396,21 @@ actor Pan115RateLimiter {
             }
         }
         lastRequest = ContinuousClock.now
+    }
+
+    /// 记一次频控。冷却期内所有请求直接失败,不再外发。
+    func noteRateLimited(for duration: Duration = Pan115Policy.rateLimitCoolDown) {
+        let until = ContinuousClock.now.advanced(by: duration)
+        if let current = coolDownUntil, current > until { return }
+        coolDownUntil = until
+        // 冷却结束后第一发也要满足最小间隔,不趁刚恢复就连打
+        lastRequest = nil
+    }
+
+    /// 当前冷却剩余秒数,`nil` = 不在冷却中。UI 用来决定按钮要不要禁用。
+    var remainingCoolDown: TimeInterval? {
+        guard let until = coolDownUntil else { return nil }
+        let remaining = ContinuousClock.now.duration(to: until)
+        return remaining > .zero ? TimeInterval(remaining.components.seconds) : nil
     }
 }

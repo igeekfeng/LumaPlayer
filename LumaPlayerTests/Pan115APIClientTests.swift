@@ -76,28 +76,31 @@ final class Pan115APIClientTests: XCTestCase {
     }
 
     /// 其它业务错误原样带码,由 `serverMessage` 决定文案。
+    /// ⚠️ 这里不能用 `590075` / `40110000` —— 那两个已经是频控档,见 `testTooFrequentCodeEntersCoolDown`。
     func testUnknownCodeBecomesServerError() async {
-        stubFiles(#"{"state":0,"errno":590075,"error":"操作太频繁"}"#)
+        stubFiles(#"{"state":0,"errno":123456,"error":"未知错误"}"#)
         do {
             _ = try await client.list(cid: "0", credential: credential)
             XCTFail("应当抛错")
         } catch let error as Pan115Error {
-            XCTAssertEqual(error, .server(code: 590075, message: "操作太频繁"))
+            XCTAssertEqual(error, .server(code: 123456, message: "未知错误"))
             XCTAssertFalse(error.needsAuthorization)
         } catch {
             XCTFail("错误的类型:\(error)")
         }
     }
 
-    /// 115 风控回阿里云 WAF 的 405 HTML —— 不是 JSON,也不能当成功。
+    /// 非频控的 5xx 仍是传输错误。⚠️ 405/403/429 不是这一档:那三个是风控,
+    /// 归到 `.rateLimited` 并让限速器冷却(见 `testWAFStatusEntersCoolDown`)。
     func testNonSuccessStatusBecomesTransportError() async {
         MockEmbyURLProtocol.stub(
-            .json("<html>blocked</html>", statusCode: 405), host: "webapi.115.com", path: "/files")
+            .json("<html>oops</html>", statusCode: 500),
+            host: "webapi.115.com", path: "/files")
         do {
             _ = try await client.list(cid: "0", credential: credential)
             XCTFail("应当抛错")
         } catch let error as Pan115Error {
-            XCTAssertEqual(error, .transport("HTTP 405"))
+            XCTAssertEqual(error, .transport("HTTP 500"))
         } catch {
             XCTFail("错误的类型:\(error)")
         }
@@ -218,16 +221,76 @@ final class Pan115APIClientTests: XCTestCase {
 
     /// 表外的码不该被当成「目录不在了」—— 否则真出错时会被静默吞掉、回落掉片库根。
     func testOtherErrorCodesAreNotTreatedAsMissingDirectory() async {
-        stubFiles(#"{"state":0,"errno":590075,"error":"操作太频繁"}"#)
+        stubFiles(#"{"state":0,"errno":123456,"error":"未知错误"}"#)
         do {
             _ = try await client.list(cid: "0", credential: credential)
             XCTFail("应当抛错")
         } catch let error as Pan115Error {
             XCTAssertFalse(error.isDirectoryUnavailable)
-            XCTAssertEqual(error, .server(code: 590075, message: "操作太频繁"))
+            XCTAssertEqual(error, .server(code: 123456, message: "未知错误"))
         } catch {
             XCTFail("错误的类型:\(error)")
         }
+    }
+
+    // MARK: - 频控
+
+    /// `590075 操作太频繁` 是风控的第一档,必须单独成档并让限速器进入冷却 ——
+    /// 折成通用 `.server` 的话调用方只会照常重试,把临时频控拖成域名级 WAF 拦截。
+    func testTooFrequentCodeEntersCoolDown() async {
+        let limiter = Pan115RateLimiter(minimumInterval: .zero)
+        let limited = Pan115APIClient(session: session, limiter: limiter)
+        stubFiles(#"{"state":0,"errno":590075,"error":"操作太频繁"}"#)
+        do {
+            _ = try await limited.list(cid: "0", credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            guard case .rateLimited(let retryAfter) = error else {
+                return XCTFail("应当是 rateLimited,实际是 \(error)")
+            }
+            XCTAssertGreaterThan(retryAfter, 0)
+            XCTAssertFalse(error.needsAuthorization)
+            XCTAssertFalse(error.isDirectoryUnavailable)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        // 冷却期内一个请求都不发
+        let recorded = MockEmbyURLProtocol.recordedRequests().count
+        do {
+            _ = try await limited.list(cid: "0", credential: credential)
+            XCTFail("冷却期内应当直接失败")
+        } catch let error as Pan115Error {
+            guard case .rateLimited = error else {
+                return XCTFail("应当是 rateLimited,实际是 \(error)")
+            }
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().count, recorded,
+            "冷却期内不该再打 115")
+    }
+
+    /// WAF 的 405 HTML 也是频控,不是普通传输错误:认出来就该停手。
+    func testWAFStatusEntersCoolDown() async {
+        let limiter = Pan115RateLimiter(minimumInterval: .zero)
+        let limited = Pan115APIClient(session: session, limiter: limiter)
+        // 阿里云 WAF 拦下来时回的是 HTML 页面,不是 115 的 JSON
+        MockEmbyURLProtocol.stub(
+            .json("<html>blocked</html>", statusCode: 405),
+            host: "webapi.115.com", path: "/files")
+        do {
+            _ = try await limited.list(cid: "0", credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            guard case .rateLimited = error else {
+                return XCTFail("应当是 rateLimited,实际是 \(error)")
+            }
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        let coolDown = await limiter.remainingCoolDown
+        XCTAssertNotNil(coolDown, "405 之后应当还在冷却中")
     }
 
     // MARK: - downloadURL
