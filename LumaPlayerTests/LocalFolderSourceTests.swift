@@ -76,6 +76,42 @@ final class LocalFolderSourceTests: XCTestCase {
 
     // MARK: - 浏览 / 起播
 
+    /// 点进一层时要先立起占位(`navigatingDirectory`),否则上一层的网格会留在屏幕上干等 ——
+    /// 网盘进一层是 1–2 个往返,那一段看起来就像点击没生效。落定后占位必须落回 nil,
+    /// 否则失败页会被骨架盖住、真内容也进不来。
+    func testEnteringADirectoryRaisesAndClearsTheNavigationPlaceholder() async throws {
+        let container = try makeContainer()
+        let source = try await container.addLocalFolderSource(folderURL: root)
+        let viewModel = FileSourceViewModel(container: container, source: .localFolder(source))
+        await viewModel.reload()
+        XCTAssertNil(viewModel.navigatingDirectory, "读完全层就不该还立着占位")
+
+        let series = try XCTUnwrap(viewModel.sortedItems.first { $0.kind.isContainer })
+        let task = Task { await viewModel.enter(series) }
+        // 让 `enter` 跑到「等下一次读盘」那一步:占位在 `await` 之前就立起来
+        await Task.yield()
+        XCTAssertEqual(viewModel.navigatingDirectory, "/片库/琅琊榜")
+        await task.value
+
+        XCTAssertNil(viewModel.navigatingDirectory, "内容到手就落回 nil")
+        XCTAssertEqual(viewModel.currentDirectory, "/片库/琅琊榜")
+    }
+
+    /// 刷新当前位置不立占位:刷新保留旧内容(DesignTokens.swift「界面规则」),骨架会把它盖掉。
+    func testRefreshingTheCurrentDirectoryKeepsContentVisible() async throws {
+        let container = try makeContainer()
+        let source = try await container.addLocalFolderSource(folderURL: root)
+        let viewModel = FileSourceViewModel(container: container, source: .localFolder(source))
+        await viewModel.reload()
+
+        let task = Task { await viewModel.refreshFiles() }
+        await Task.yield()
+        XCTAssertNil(viewModel.navigatingDirectory, "刷新不清屏")
+        await task.value
+        XCTAssertNil(viewModel.navigatingDirectory)
+        XCTAssertEqual(viewModel.sortedItems.count, 2)
+    }
+
     func testBrowsingEnteringASeriesAndPlayingAnEpisode() async throws {
         let container = try makeContainer()
         let source = try await container.addLocalFolderSource(folderURL: root)

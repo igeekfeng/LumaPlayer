@@ -28,6 +28,9 @@ import Foundation
 /// 来源管理在设置窗口「来源」页。百度目录的「上一层」经 `BrowseChromeController.pageBackAction` 进顶栏。
 ///
 /// **加载态**:首屏无内容时用灰色骨架(`Skeleton*`)照真实布局占位;刷新、失败都保留旧内容;
+/// 唯一例外是**文件树来源换层**:目标那层要现取(网盘 `list` / 读盘)时立刻换成
+/// `FileSourceDirectorySkeleton`,不把上一层的网格留在屏幕上干等(`FileSourceViewModel.navigatingDirectory`)——
+/// 那一段是 1–2 个往返(115 还有 ≥500ms 串行间隔),看起来就像点击没生效。命中缓存则不换(零请求,换了只会闪)。
 /// 「在不在加载」只看顶栏下沿的加载线(`ChromeLoadingLine`);加载中整页不可点。
 /// 手动刷新是菜单栏 View →「Reload」(⌘R),⛔ 顶栏不放常驻刷新按钮。
 /// 加载成功但为空的首页行整行不显示;「我的媒体」的加载 / 失败态必须显示。

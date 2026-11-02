@@ -47,7 +47,8 @@ struct Pan115SourceView: View {
             case .needsAuthorization:
                 Pan115AuthorizationView(viewModel: viewModel)
             case .authorized:
-                FileSourceBrowserView(viewModel: viewModel, store: container.posters)
+                FileSourceBrowserView(
+                    viewModel: viewModel, store: container.posters, state: container.state)
             }
         } else if let failure = viewModel.loadFailure {
             failurePane(failure)

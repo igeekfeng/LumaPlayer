@@ -46,7 +46,8 @@ struct BaiduPanSourceView: View {
             case .unconfigured, .needsAuthorization:
                 BaiduPanAuthorizationView(viewModel: viewModel)
             case .authorized:
-                FileSourceBrowserView(viewModel: viewModel, store: container.posters)
+                FileSourceBrowserView(
+                    viewModel: viewModel, store: container.posters, state: container.state)
             }
         } else if let failure = viewModel.loadFailure {
             failurePane(failure)

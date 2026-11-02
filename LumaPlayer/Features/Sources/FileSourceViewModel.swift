@@ -50,6 +50,14 @@ final class FileSourceViewModel {
     /// ⛔ 别在发请求前就写 `currentDirectory`:目录换了条目还没换,按目录算的区块
     /// (如「最近添加」)会在加载途中先消失,界面剩下半新半旧的一帧。
     private var pendingDirectory: String?
+
+    /// 必须等网络的导航的目标目录:页面据此立刻换成目标目录的骨架,而不是停在上一层的网格上干等。
+    ///
+    /// 只在 `loadFiles` 真要去发请求的那条分支里、且目标不是当前位置时置位 —— 命中会话缓存 / 落盘缓存
+    /// 那两条路不等网络,置位只会闪一帧骨架;刷新当前位置必须保留旧内容(DesignTokens.swift「界面规则」)。
+    /// `commit` 与 `loadFiles` 的 `defer` 都会清掉它:失败后 `pendingDirectory` 要留着给重试,
+    /// 这格必须先落回 `nil`,否则失败页会被骨架盖住。
+    private(set) var navigatingDirectory: String?
     /// 来源返回的原始顺序,不含 `path` 等播放信息(见 `filesByID`)。⛔ 界面用 `sortedItems`。
     private(set) var items: [SourceItem] = []
     /// `fs_id` → 原始文件。播放与进目录要用的 `path` 只在这里。
@@ -112,6 +120,10 @@ final class FileSourceViewModel {
 
     private(set) var isLoadingFiles = false
     private(set) var directoryFailure: FileSourceDirectoryFailure?
+
+    /// 页面的加载态(顶栏加载线、⌘R 禁用据此判断)。⛔ 不含后台刮削 / 后台刷新:
+    /// 那两趟是旧内容之上的补全,不该让顶栏一直闪。
+    var isLoadingContent: Bool { isLoadingFiles || isLoadingEpisodes }
 
     /// ⌘R 据此决定语义,见 `refreshFromToolbar()`
     private(set) var hasLoadedOnce = false
@@ -528,8 +540,25 @@ final class FileSourceViewModel {
     }
 
     /// 导航:目标先记进 `pendingDirectory`,列完目录才与 `items` 一起提交。
+    ///
+    /// 会等网络的那一趟先立占位(`navigatingDirectory`):上一层的网格留在屏幕上干等,
+    /// 看起来就像点击没生效 —— 网盘进一层是 1–2 个往返,115 还有 ≥500ms 的串行间隔
+    /// (`docs/PAN115_API.md` §6)。⛔ 命中会话 / 落盘缓存的不立:那两条是零请求,
+    /// 立起来只会在每次点卡片时闪一帧骨架,比原地等更难受。
+    /// `loadFiles` 的 `defer` 与 `commit` 负责把它落回 nil。
     private func navigate(to directory: String) async {
+        if !(await isDirectoryCached(directory)) {
+            navigatingDirectory = directory
+        }
         await loadFiles(directory: directory, allowingLibraryRootFallback: true)
+    }
+
+    /// 这一层是否已经有内容可以立刻端出来(会话缓存,或落盘缓存)。零网络请求。
+    private func isDirectoryCached(_ directory: String) async -> Bool {
+        guard cachesDirectories else { return false }
+        if directoryCache[directory] != nil { return true }
+        return await container.baiduDirectoryCache.content(
+            sourceID: source.id, directory: directory) != nil
     }
 
     /// 播完 / 标记状态后只刷新本地观看状态。⛔ 不重列目录(2 次请求,而目录没变)。
@@ -568,7 +597,14 @@ final class FileSourceViewModel {
         // 本次读取的轮次(`cancelScrape` 刚 +1)。连着点两张卡片时只有最新那次能提交,
         // 先发后到的结果不许把界面拽回旧目录。
         let loadID = directoryGeneration
-        defer { if loadID == directoryGeneration { isLoadingFiles = false } }
+        defer {
+            if loadID == directoryGeneration {
+                isLoadingFiles = false
+                // 这一趟结束就不能再顶着骨架:失败页要能露出重试按钮(见 `navigatingDirectory`)。
+                // 被后来的导航挤掉时不清,那一趟自己会管它的占位
+                navigatingDirectory = nil
+            }
+        }
 
         // 本地数据,零请求。每轮都要读:设置页可能刚恢复了隐藏项。
         hiddenRefs = await container.hiddenItems.hiddenRefs(sourceID: source.id)
@@ -603,17 +639,17 @@ final class FileSourceViewModel {
                 ?? libraryRoot?.path ?? root
             pendingDirectory = directory
             let provider = makeProvider()
-            let content: FileSourceDirectoryContent
-            if !cachesDirectories {
-                content = try await provider.content(directory: directory)
-            } else if !forceRefresh, let cached = directoryCache[directory] {
-                content = cached
-            } else if !forceRefresh, let disk = await container.baiduDirectoryCache.content(
-                sourceID: source.id, directory: directory) {
+            let loaded: FileSourceDirectoryContent
+            // 三条路按代价排:会话缓存(零请求)→ 落盘缓存(读一次盘,后台再刷新)→ 现取。
+            // ⛔ 前两条都不立占位:进出过的目录每次点卡片都闪一帧骨架,比原地等还难受。
+            if cachesDirectories, !forceRefresh, let cached = directoryCache[directory] {
+                loaded = cached
+            } else if cachesDirectories, !forceRefresh,
+                      let disk = await container.baiduDirectoryCache.content(
+                          sourceID: source.id, directory: directory) {
                 // 冷启动首次进这一层:先端出盘上内容(无封面),封面由刮削缓存补,
                 // 真实目录交给后台刷新,不让人对着转圈等网络。
                 let restored = Self.content(from: disk, sourceID: source.id)
-                content = restored
                 directoryCache[directory] = restored
                 guard loadID == directoryGeneration else { return }
                 commit(restored, directory: directory)
@@ -622,14 +658,15 @@ final class FileSourceViewModel {
                 startBackgroundRefresh(directory: directory)
                 return
             } else {
-                content = try await provider.content(directory: directory)
-                directoryCache[directory] = content
-                await storeDirectoryCache(content, directory: directory)
+                // 这一层的内容只能现取(网盘一次 `list`,本地文件夹一次读盘)
+                loaded = try await provider.content(directory: directory)
+                directoryCache[directory] = loaded
+                await storeDirectoryCache(loaded, directory: directory)
             }
             guard loadID == directoryGeneration else { return }
-            commit(content, directory: directory)
+            commit(loaded, directory: directory)
             await applyDirectoryShape(directory: directory)
-            startScrape(items: content.items, provider: provider)
+            startScrape(items: loaded.items, provider: provider)
             return
         } catch let error as BaiduPanError {
             guard loadID == directoryGeneration else { return }
@@ -703,6 +740,8 @@ final class FileSourceViewModel {
     private func commit(_ content: FileSourceDirectoryContent, directory: String) {
         currentDirectory = directory
         pendingDirectory = nil
+        // 内容到手,骨架让位(同一帧里换,不闪)
+        navigatingDirectory = nil
         items = content.items
         // 合并而非覆盖:详情页另列的季文件夹不能把剧目录里的文件挤掉(`file(for:)` 要用)。
         // `fs_id` 全局唯一,同键覆盖无冲突。
@@ -966,6 +1005,10 @@ final class FileSourceViewModel {
     }
 
     /// 只收能播的条目,⛔ 不递归进季目录下的子目录。
+    ///
+    /// 季文件夹要先列一次目录(配额,`docs/BAIDU_PAN_API.md` §7),这一趟里 `isLoadingEpisodes`
+    /// 立刻为真,详情页当场换成 `SkeletonEpisodeStrip` —— 剧名 / 海报 / 季选择器先画出来,
+    /// ⛔ 不要等分集到手才切页(那一段白屏正是「进详情页先卡一下」)。
     private func loadEpisodes(directory: String) async {
         isLoadingEpisodes = true
         episodeFailure = nil

@@ -13,6 +13,8 @@ import SwiftUI
 struct FileSourceBrowserView: View {
     @Bindable var viewModel: FileSourceViewModel
     let store: PosterImageStore
+    /// 顶栏加载线 / ⌘R 禁用靠它上报(`AppState.isPageLoading`)
+    let state: AppState
 
     /// ⛔ 写 `AppState.nowPlaying` 与 `openWindow` 必须成对,窗口不会因请求自己出现
     @Environment(\.openWindow) private var openWindow
@@ -43,8 +45,8 @@ struct FileSourceBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 剧目录走详情页,它自己有剧名
-            if viewModel.directoryShape.seriesStructure == nil {
+            // 剧目录走详情页,它自己有剧名。导航途中由骨架自带标题占位,这里不画
+            if viewModel.directoryShape.seriesStructure == nil, viewModel.navigatingDirectory == nil {
                 PageHeader(title: viewModel.currentDirectoryName) {
                     HStack(spacing: Metrics.spacingS) {
                         sortMenu
@@ -67,6 +69,10 @@ struct FileSourceBrowserView: View {
             }
             content
         }
+        // 骨架与内容之间换得干脆一点:慢速淡入会让人以为卡住
+        .animation(.easeOut(duration: Metrics.animationFast), value: viewModel.navigatingDirectory)
+        // 顶栏加载线:换层那一段才是真的在等网络(后台刷新 / 刮削不算)
+        .reportsPageLoading(viewModel.isLoadingContent, page: .library, to: state)
         // 「窗口」菜单与调度中心里的窗口名(页上的目录名在 `PageHeader`)
         .navigationTitle(viewModel.currentDirectoryName)
         // 到了最外层就不登记,顶栏没有返回按钮
@@ -139,6 +145,11 @@ struct FileSourceBrowserView: View {
                 Text("正在读取目录…").font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.navigatingDirectory != nil {
+            // 正在等其他网的一层:先画目标目录的骨架,别让上一层的网格留在屏幕上干等
+            // (进剧集详情页就卡在这一段:上一层的卡片墙一直不动,点完像没反应)
+            FileSourceDirectorySkeleton()
+                .transition(.opacity)
         } else if let failure = viewModel.directoryFailure {
             failurePane(failure)
         } else if let structure = viewModel.directoryShape.seriesStructure {

@@ -20,7 +20,8 @@ struct LocalFolderSourceView: View {
     }
 
     var body: some View {
-        FileSourceBrowserView(viewModel: viewModel, store: container.posters)
+        FileSourceBrowserView(
+            viewModel: viewModel, store: container.posters, state: container.state)
             // 首次进入 = 从文件夹根列起;之后只重读当前所在的那一层(`refreshFromToolbar`)
             .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
             .task(id: container.state.serverListRevision) {

@@ -187,3 +187,47 @@ struct SkeletonEpisodeStrip: View {
         Metrics.landscapeCardWidth / Metrics.landscapeAspectRatio
     }
 }
+
+/// 文件树来源一层的骨架(百度 / 115 / 本地文件夹共用)。
+///
+/// 用在「点进一层、内容还在路上」那一段:上一层的网格留在屏幕上干等,看起来就像点击没生效
+/// (`FileSourceViewModel.navigatingDirectory`)。照 `FileSourceBrowserView` 的网格摆 ——
+/// 卡片结构对齐 `FileSourceCard`(海报 + 两行文字),换内容时高度不跳。
+///
+/// ⚠️ 它**不画页头**:目标可能是剧集详情页(hero,没有 `PageHeader`),那时多画一条标题占位
+/// 反而会在换页时闪掉。目录名的标题由 `FileSourceBrowserView` 自己决定画不画。
+struct FileSourceDirectorySkeleton: View {
+    var count = 12
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: Metrics.posterMinWidth), spacing: Metrics.gridSpacing)]
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
+                ForEach(0..<count, id: \.self) { _ in
+                    card
+                }
+            }
+            .padding(Metrics.spacingXL)
+        }
+        .scrollDisabled(true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // 这一层是「正在换内容」,不给点:骨架底下没有可操作的东西,命中只会误触上一层的卡片
+        .allowsHitTesting(false)
+        .accessibilityElement()
+        .accessibilityLabel("正在读取目录")
+    }
+
+    /// 同 `FileSourceCard`:海报 + 两行文字占位,文字区高度对齐 `Metrics.posterCardTextHeight`
+    private var card: some View {
+        VStack(alignment: .leading, spacing: Metrics.spacingS) {
+            Color.clear
+                .aspectRatio(Metrics.posterAspectRatio, contentMode: .fit)
+                .overlay { SkeletonBlock() }
+            SkeletonBlock(cornerRadius: Radius.card)
+                .frame(height: Metrics.posterCardTextHeight)
+        }
+    }
+}

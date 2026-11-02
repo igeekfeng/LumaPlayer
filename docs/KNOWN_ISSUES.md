@@ -108,6 +108,11 @@
       `琅琊榜 第13季` 这类认不出,退回网格。刻意的:放宽会把「电影」这类分类目录误判成剧
 - [ ] 多季剧只在单季时显示「共 N 集」
 - [ ] 进详情页为第一季多发一次列目录,待看真机配额消耗
+- [ ] 进详情页的过渡(`FileSourceViewModel.navigatingDirectory` → `FileSourceDirectorySkeleton`):
+      只有「缓存都没命中、真要发请求」时才立骨架,刷新当前位置不立。逻辑由
+      `LocalFolderSourceTests` 的 `testEnteringADirectoryRaisesAndClearsTheNavigationPlaceholder` /
+      `testRefreshingTheCurrentDirectoryKeepsContentVisible` 覆盖;**外观未视觉验证**(骨架与真实网格的
+      高度是否一致、切进 hero 详情页时有没有一闪)。结案:真实百度 / 115 进剧两次,看有没有中间帧
 - [ ] 观感(模糊海报 hero、季选择器、分集横排;单季不显示季选择器)
 - [ ] 从「继续观看」或片库根直接进剧时没有目录卡片:剧级信息用续播快照兜底,`seriesProfile` 到了换成 TMDB 剧集海报;
       仍缺简介、年份
