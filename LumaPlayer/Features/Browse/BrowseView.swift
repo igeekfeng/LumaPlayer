@@ -211,8 +211,7 @@ struct BrowseView: View {
                 Label("管理来源…", systemImage: "gearshape")
             }
         } label: {
-            Label(currentSourceName, systemImage: currentSourceSymbol)
-                .labelStyle(.iconOnly)
+            sourceMenuLabel
         }
         .menuIndicator(.hidden)
         .buttonStyle(.glass)
@@ -296,11 +295,23 @@ struct BrowseView: View {
         container.state.currentSource?.displayName ?? "未选择来源"
     }
 
-    private var currentSourceSymbol: String {
+    /// 当前来源的品牌标记:SF Symbol 走 `Label` 的无障碍语义,115 换成官方字标。
+    @ViewBuilder
+    private var sourceMenuLabel: some View {
+        if let symbol = currentSourceSymbol {
+            Label(currentSourceName, systemImage: symbol)
+                .labelStyle(.iconOnly)
+        } else {
+            Pan115LogoMark(size: Metrics.chromeSourceMarkSize)
+        }
+    }
+
+    /// `nil` = 这个来源不用 SF Symbol(115 用官方字标)。
+    private var currentSourceSymbol: String? {
         switch container.state.currentSource {
         case .some(.emby): return "server.rack"
         case .some(.baiduPan): return "cloud.fill"
-        case .some(.pan115): return "externaldrive.connected.to.line.below"
+        case .some(.pan115): return nil
         case .some(.localFolder): return "folder.fill"
         case .none: return "rectangle.stack.badge.plus"
         }

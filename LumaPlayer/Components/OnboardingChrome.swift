@@ -3,17 +3,34 @@ import SwiftUI
 // 表单外壳:添加服务器 / 重新登录 / 编辑服务器共用。
 
 /// 表单顶部:图标 + 标题 + 一行说明。
+///
+/// 图标有两种来源:SF Symbol(`systemImage:`),或带自家品牌底色的矢量标记(`pan115Title:`)——
+/// 后者⛔ 不能再套 tint 着色,否则官方配色会被强调色盖掉。
 struct OnboardingFormHeader: View {
-    let systemImage: String
+    private enum Mark {
+        case symbol(String)
+        case pan115
+    }
+
+    private let mark: Mark
     let title: String
     let subtitle: String
 
+    init(systemImage: String, title: String, subtitle: String) {
+        self.mark = .symbol(systemImage)
+        self.title = title
+        self.subtitle = subtitle
+    }
+
+    init(pan115Title title: String, subtitle: String) {
+        self.mark = .pan115
+        self.title = title
+        self.subtitle = subtitle
+    }
+
     var body: some View {
         VStack(spacing: Metrics.spacingS) {
-            Image(systemName: systemImage)
-                .font(.largeTitle)
-                .foregroundStyle(.tint)
-                .symbolRenderingMode(.hierarchical)
+            markView
                 .padding(.bottom, Metrics.spacingXS)
             Text(title)
                 .font(.title2.weight(.semibold))
@@ -25,6 +42,19 @@ struct OnboardingFormHeader: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Metrics.spacingXL)
         .padding(.top, Metrics.spacingXL)
+    }
+
+    @ViewBuilder
+    private var markView: some View {
+        switch mark {
+        case .symbol(let name):
+            Image(systemName: name)
+                .font(.largeTitle)
+                .foregroundStyle(.tint)
+                .symbolRenderingMode(.hierarchical)
+        case .pan115:
+            Pan115LogoMark(size: Metrics.onboardingLogoSize)
+        }
     }
 }
 

@@ -84,6 +84,8 @@ enum Metrics {
 
     /// 服务器列表行首图标边长
     static let serverRowIconSize: CGFloat = 36
+    /// 表单顶部品牌标记边长(比 `.largeTitle` 的 SF Symbol 略大,补齐它没有的行高)
+    static let onboardingLogoSize: CGFloat = 52
 
     // MARK: 主窗口
 
@@ -104,6 +106,8 @@ enum Metrics {
     static let chromeSearchWidth: CGFloat = 180
     /// 与 `.large` 玻璃圆形按钮等高
     static let chromeSearchHeight: CGFloat = 32
+    /// 顶栏来源切换器里品牌标记的边长(比按钮矮一圈,留下玻璃边距)
+    static let chromeSourceMarkSize: CGFloat = 22
     /// 普通页面栏底:窗口底色实色部分占栏高的比例,往下渐变到透明
     static let chromeScrimSolidFraction: Double = 0.55
     /// hero 页栏底顶端黑色的不透明度(让红绿灯与玻璃按钮读得出来)

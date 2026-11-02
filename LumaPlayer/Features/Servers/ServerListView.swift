@@ -217,22 +217,29 @@ private struct SourceRow: View {
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
     }
 
+    @ViewBuilder
     private var icon: some View {
-        Image(systemName: symbolName)
-            .font(.title3)
-            .foregroundStyle(isCurrent ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-            .frame(width: Metrics.serverRowIconSize, height: Metrics.serverRowIconSize)
-            .background(
-                isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
-                in: RoundedRectangle(cornerRadius: Radius.card)
-            )
+        if let symbolName {
+            Image(systemName: symbolName)
+                .font(.title3)
+                .foregroundStyle(isCurrent ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                .frame(width: Metrics.serverRowIconSize, height: Metrics.serverRowIconSize)
+                .background(
+                    isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
+                    in: RoundedRectangle(cornerRadius: Radius.card)
+                )
+        } else {
+            // 115 有自己的品牌底色,⛔ 不再套一层 tint / quaternary
+            Pan115LogoMark(size: Metrics.serverRowIconSize)
+        }
     }
 
-    private var symbolName: String {
+    /// `nil` = 这个来源不用 SF Symbol(115 用官方字标)。
+    private var symbolName: String? {
         switch source {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
-        case .pan115: return "externaldrive.connected.to.line.below"
+        case .pan115: return nil
         case .localFolder: return "folder.fill"
         }
     }

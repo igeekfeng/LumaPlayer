@@ -36,8 +36,7 @@ struct Pan115SourceSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             OnboardingFormHeader(
-                systemImage: "externaldrive.connected.to.line.below",
-                title: "115 网盘",
+                pan115Title: "115 网盘",
                 subtitle: "片库根决定进来时先落在哪个目录。一个来源一个 ——"
                     + "想再要一个起点,就在来源列表里再加一个 115 来源(共用同一份登录)。"
             )

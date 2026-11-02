@@ -66,10 +66,7 @@ struct AddSourceView: View {
                         selection = kind
                     } label: {
                         HStack(spacing: Metrics.spacingM) {
-                            Image(systemName: kind.symbol)
-                                .font(.title2)
-                                .foregroundStyle(.tint)
-                                .frame(width: Metrics.serverRowIconSize)
+                            kindIcon(kind)
                             VStack(alignment: .leading, spacing: Metrics.spacingXXS) {
                                 Text(kind.title)
                                     .font(.headline)
@@ -112,6 +109,19 @@ struct AddSourceView: View {
     private func onFinish() {
         dismiss()
     }
+
+    /// 品牌标记有自带底色,⛔ 不再套 tint;SF Symbol 才需要着色。
+    @ViewBuilder
+    private func kindIcon(_ kind: SourceKind) -> some View {
+        if let symbol = kind.symbol {
+            Image(systemName: symbol)
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: Metrics.serverRowIconSize)
+        } else {
+            Pan115LogoMark(size: Metrics.serverRowIconSize)
+        }
+    }
 }
 
 /// 可选来源类型。新增来源 = 加一个 case,编译器会逼你处理所有分支。
@@ -141,11 +151,12 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    var symbol: String {
+    /// `nil` = 这个来源不用 SF Symbol(115 用官方字标)。
+    var symbol: String? {
         switch self {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
-        case .pan115: return "externaldrive.connected.to.line.below"
+        case .pan115: return nil
         case .localFolder: return "folder.fill"
         }
     }
