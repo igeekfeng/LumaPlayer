@@ -34,6 +34,12 @@ struct AddSourceView: View {
                     onBack: { selection = nil },
                     onDone: onFinish
                 )
+            case .some(.pan115):
+                Pan115AddView(
+                    container: container,
+                    onBack: { selection = nil },
+                    onDone: onFinish
+                )
             case .some(.localFolder):
                 LocalFolderAddView(
                     container: container,
@@ -112,6 +118,7 @@ struct AddSourceView: View {
 enum SourceKind: String, CaseIterable, Identifiable, Hashable {
     case emby
     case baiduPan
+    case pan115
     case localFolder
 
     var id: String { rawValue }
@@ -120,6 +127,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "Emby 服务器"
         case .baiduPan: return "百度网盘"
+        case .pan115: return "115 网盘"
         case .localFolder: return "本地文件夹"
         }
     }
@@ -128,6 +136,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "连接到自建的 Emby / Jellyfin 兼容服务器。"
         case .baiduPan: return "播放开放平台应用目录下的网盘文件。"
+        case .pan115: return "扫码登录后播放整个 115 网盘里的文件。"
         case .localFolder: return "播放本机、外接盘或已挂载网络卷上某个文件夹里的视频。"
         }
     }
@@ -136,6 +145,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
+        case .pan115: return "externaldrive.connected.to.line.below"
         case .localFolder: return "folder.fill"
         }
     }

@@ -81,6 +81,9 @@ struct DanmakuMediaQuery: Sendable, Equatable {
         case .baiduPan(let file):
             // 百度的键没有来源段:一份授权下 `fs_id` 全局唯一,且已有绑定都是这个形状,⛔ 不改
             return fileQuery(file, isolation: "baidu")
+        case .pan115(let file):
+            // 同百度:一份 Cookie 对应一个网盘,`fid` 在网盘内唯一,键里不带来源段
+            return fileQuery(file, isolation: "pan115")
         case .localFolder(let file, let source):
             // 本地 id 只在本来源内唯一:来源 id 进键,删来源时按前缀清
             return fileQuery(file, isolation: "local|\(source.id.uuidString)")

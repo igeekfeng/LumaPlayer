@@ -22,8 +22,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 # ── 白名单:公开的示例域与官方域,允许出现在仓库里 ──
 # （白名单里的 shields 徽章图床是公开服务,与服务器无关。）
 # ⚠️ 这里只放「本来就是公开的」域名:示例域、Apple / Emby 官方、TMDB 与弹弹play 的
-#    官方 API 与文档站、GitHub / GNU(许可证链接)。**用户自己的服务器一律不进白名单**。
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|.*\.shields\.io|themoviedb\.org|.*\.themoviedb\.org|.*\.tmdb\.org|.*\.baidu\.com|.*\.baidupcs\.com|.*\.dandanplay\.(com|net)|assrt\.net|.*\.assrt\.net|github\.com|.*\.github\.com|gnu\.org|.*\.gnu\.org|fsf\.org|.*\.fsf\.org)$'
+#    官方 API 与文档站、百度网盘 / 115 网盘的官方接口域、GitHub / GNU(许可证链接)。
+#    **用户自己的服务器一律不进白名单**。
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|.*\.shields\.io|themoviedb\.org|.*\.themoviedb\.org|.*\.tmdb\.org|.*\.baidu\.com|.*\.baidupcs\.com|115\.com|.*\.115\.com|115cdn\.net|.*\.115cdn\.net|.*\.dandanplay\.(com|net)|assrt\.net|.*\.assrt\.net|github\.com|.*\.github\.com|gnu\.org|.*\.gnu\.org|fsf\.org|.*\.fsf\.org)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。

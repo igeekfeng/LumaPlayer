@@ -148,6 +148,43 @@
 已知边界:条目 id = 来源 id + 路径哈希(⛔ 不用 inode,exFAT 重挂会变),App 外改名会丢进度 / 已看 / 刮削缓存;
 时长只认 mkv / webm / mp4 / m4v / mov;指向文件夹外的符号链接播放会被沙盒拒;本地封面也进海报磁盘缓存。
 
+### 115 网盘来源(本机无 115 账号,全部接口未在真实服务器验证)
+
+接口事实见 `docs/PAN115_API.md`。这条链路是**模拟网页客户端的非官方接口**(开放平台已于 2026-08-09 停服),
+所以结案条件比百度更硬 —— 每一条都得在真实账号上跑通,并且观察一段时间不被风控。
+
+- [ ] **扫码登录四步**(`Pan115Connection.startAuthorization` / `awaitAuthorization`)真实走通:
+      `qrcodeapi` 取 token → 状态轮询 `0/1/2` → `passportapi` 换 Cookie 四件套
+- [ ] **列目录**(`Pan115Connection.files(in:)`)真实响应:12 个参数被接受、`fid` 空串判目录、分页 1150 上限
+- [ ] **`files/getid` 路径换 cid**(`Pan115Connection.directoryID(path:)`):中文 / 空格路径的百分号编码服务端是否照收
+- [ ] **「目录不存在」的错误码**:按 `p115client` 的注释认了 `800001` / `10014` / `20009`(片库根被删时静默回落网盘根),
+      真实响应里到底回哪个码没验过
+- [ ] **`/app/chrome/downurl` 取直链**(`Pan115APIClient.downloadURL`):m115 加密的 `data` 被接受,
+      解密后 `url.url` 是真 CDN 地址。加密层只与 p115cipher 的向量对过,没和真实服务端对过
+- [ ] **直链 `f` 参数三档**:空 / `1`(绑 UA)/ `3`(绑 UA + Cookie)。`f=3` 时用的 `Set-Cookie` 是不是取链响应里那个
+- [ ] **播放**:mpv 带 `http-header-fields` 拉 115 CDN 直链能出画面;`Range` 拖动可用
+- [ ] **直链过期后的 403**:重取一次能否恢复。现在只有「重取一次就报错」的实现,没在真实过期场景里验过
+- [ ] **风控**:串行 500 ms 是否够(§6)。未知量,只能观察
+- [ ] **Cookie 有效期**:未知,社区说法几天到几个月都有。现在**不主动探活** —— Cookie 失效会在第一次列目录
+      (`webapi.115.com/files` 回 `errno 990001` / `40101035`)时暴露,那时浏览页直接切到扫码屏
+- [ ] **网页版 m3u8 路线**(`GET https://115.com/api/video/m3u8/{pickcode}.m3u8`)完全没做。
+      多音轨没声音的问题要靠它解决(直链只有默认音轨)。p115client 说它「只支持 web 的 cookies」且内层链接绑 UA
+- [ ] **剧集详情页 / 续播卡 / 选集队列**:与百度共用同一套浏览页,但没有真实片库可验
+- [ ] **删除与改名**:115 这条链路没做(只有读)。`FileSource.supportsDeletingFiles` / `supportsRenamingSeries` 都是 false
+
+已知边界:
+
+- **片库根存路径不存 cid**,`path → cid` 的索引只在内存里(`Pan115Connection.directoryIndex`,⛔ 不落盘 ——
+  映射错一位就会列到别人的目录)。进程重启后第一次进目录要重发一次 `files/getid`。
+- **没有批量取直链**:`downurl` 虽收逗号分隔多个 `pickcode`,但响应 fileID 与请求顺序的对应关系未实测,⛔ 不猜。
+  字幕是逐条取的,失败就跳过(不影响正片)。
+- **不取封面**:`Pan115SourceProvider.content` 的 `durations` 恒为空、封面恒 nil,靠 TMDB 刮削补。
+  省请求就是少风控面。
+- **不支持从指定位置起流**:`Pan115SessionPreparer.makeSession(startTimeTicks:)` 带值即抛错(没有对位的起流参数)。
+  续播靠客户端 seek。
+- **`fs_id` 跨网盘不唯一**:`PlaybackSpeedStore.pan115Isolation` / 弹幕 / 手动标记都带 `pan115` 隔离段,
+  ⛔ 不要与百度的隔离段合并。
+
 **命名债**:被百度与本地共用的纯函数仍叫 `BaiduPan…`(合成器 / 剧集布局 / 排序 / 字幕配对 / 路径工具 / 刮削器 / 两个本地库),
 文件条目仍用 `BaiduPanFile`;`SourceProfile.emby` 仍复用 `ServerProfile`。改名是纯机械活,按需再做。
 

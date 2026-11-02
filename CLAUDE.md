@@ -11,7 +11,7 @@ LumaPlayer 是自用的 macOS 原生 Emby 播放器,SwiftUI + **libmpv**(自编,
 | `docs/MPV_INTEGRATION.md` | libmpv 对接:构建、选项、事件、线程、轨道、字幕、生命周期 |
 | `docs/PITFALLS.md` | 踩坑记录。改签名 / 构建 / 播放内核 / 接口代码前先扫一眼 |
 | `docs/KNOWN_ISSUES.md` | 未决问题、待真实服务器核实项、待人工确认项 |
-| `docs/BAIDU_PAN_API.md` / `TMDB_API.md` / `DANDANPLAY_API.md` | 百度网盘 / TMDB / 弹弹play 接口的事实来源(同硬规则 1) |
+| `docs/BAIDU_PAN_API.md` / `PAN115_API.md` / `TMDB_API.md` / `DANDANPLAY_API.md` | 百度网盘 / 115 网盘 / TMDB / 弹弹play 接口的事实来源(同硬规则 1) |
 | `docs/DANMAKU.md` | 弹幕分层、匹配流程与渲染 |
 
 其余知识写在代码的文档注释里:设计 token 与 UI 硬约束在 `Components/DesignTokens.swift`,快捷键在

@@ -104,6 +104,8 @@ final class PlayerViewModel {
             return .emby(serverID: server.id, item: item)
         case .baiduPan(let file):
             return .baiduPan(file: file, isEpisodeSeries: episodeQueue != nil)
+        case .pan115(let file):
+            return .pan115(file: file, isEpisodeSeries: episodeQueue != nil)
         case .localFolder(let file, let source):
             return .localFolder(sourceID: source.id, file: file, isEpisodeSeries: episodeQueue != nil)
         }
@@ -374,7 +376,7 @@ final class PlayerViewModel {
     var playingTitle: String {
         switch request.source {
         case .emby(_, let item): return item.name
-        case .baiduPan(let file), .localFolder(let file, _): return file.name
+        case .baiduPan(let file), .pan115(let file), .localFolder(let file, _): return file.name
         }
     }
 
@@ -425,8 +427,9 @@ final class PlayerViewModel {
         guard container.danmakuSettings.settings.usesFileFingerprint else { return nil }
         switch request.source {
         case .emby: break
-        // 百度:为一个指纹多拉 16 MiB 网盘流量不划算(`DanmakuFingerprint` 的成本说明)
-        case .baiduPan: return nil
+        // 网盘:为一个指纹多拉 16 MiB 网盘流量不划算(`DanmakuFingerprint` 的成本说明);
+        // 115 还有串行限速与风控(§6),更不值得
+        case .baiduPan, .pan115: return nil
         // 本地文件:读盘不花流量,会话就绪后直接读文件头
         case .localFolder: return await localFileFingerprint()
         }

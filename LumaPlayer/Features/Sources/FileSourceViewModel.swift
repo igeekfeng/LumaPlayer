@@ -24,6 +24,13 @@ final class FileSourceViewModel {
     /// 正在等扫码(device code 已拿到)
     private(set) var deviceCode: BaiduPanDeviceCode?
     private(set) var isWaitingForAuthorization = false
+
+    /// 115 的授权状态。与 `authorization` 并存而不合并成一个枚举:两家凭据形态与屏幕数量都不同
+    /// (百度「填密钥 → 扫码 → 浏览」,115「扫码 → 浏览」),合并只会让两边都别扭。
+    /// 页面按来源读各自的那一个。
+    private(set) var pan115Authorization: Pan115Authorization?
+    /// 115 的扫码会话,页面拿 `content` 渲染成二维码。nil = 还没拿到 / 已结束
+    private(set) var pan115QRCode: Pan115QRCodeSession?
     /// 不打断当前流程的本地提示(二维码渲染失败、片库根存不进去等)
     private(set) var notice: String?
 
@@ -33,8 +40,10 @@ final class FileSourceViewModel {
     private(set) var folderName: String?
     /// 应用根目录 `/apps/{应用目录名}`,第三方应用能访问的全部范围
     private(set) var rootDirectory: String?
-    /// 已校验的片库根(失效视同没设;nil = 用应用目录)。也是本页能退到的最外层(`canGoUp`)。
-    /// 列表在设置里维护(`BaiduPanSourceSettingsView`),这里只读。
+    /// 已校验的片库根(失效视同没设;nil = 用 `rootDirectory`)。也是本页能退到的最外层(`canGoUp`)。
+    /// 列表在设置里维护(`BaiduPanSourceSettingsView` / `Pan115SourceSettingsView`),这里只读。
+    /// 百度的根是 `/apps/{应用目录名}`,115 的根是 `/`(整个网盘)—— 但两者都只是「进来先落在哪」,
+    /// 导航仍走 `path` 字符串,不需要分派。
     private(set) var libraryRoot: BaiduPanLibraryRoot?
     private(set) var currentDirectory: String?
     /// 导航目标(进 / 退目录、进详情页),内容到手才与 `items` 一起提交给 `currentDirectory`。
@@ -194,10 +203,13 @@ final class FileSourceViewModel {
     /// 主窗口顶栏按它登记「根页有 hero」
     var sourceID: UUID { source.id }
 
-    /// 目录缓存(会话内存 + 落盘)只有百度要(配额)。本地每次重读,用户拷了新片子回来就能看到。
+    /// 目录缓存(会话内存 + 落盘)只有网盘要:百度有配额,115 有串行限速(§6),来回进出同一层
+    /// 都该零请求。本地每次重读,用户拷了新片子回来就能看到。
     private var cachesDirectories: Bool {
-        if case .baiduPan = source { return true }
-        return false
+        switch source {
+        case .baiduPan, .pan115: return true
+        case .localFolder: return false
+        }
     }
     /// 授权后是否顺带列目录。添加流程传 `false`:授权一成功就落库切页,此时列目录是白烧配额。
     private let loadsDirectory: Bool
@@ -219,8 +231,14 @@ final class FileSourceViewModel {
         self.init(container: container, source: .baiduPan(source), loadsDirectory: loadsDirectory)
     }
 
-    /// 只在百度分支里用,本地文件夹来源不发请求
+    convenience init(container: AppContainer, source: Pan115Source, loadsDirectory: Bool = true) {
+        self.init(container: container, source: .pan115(source), loadsDirectory: loadsDirectory)
+    }
+
+    /// 只在百度 / 115 分支里用,本地文件夹来源不发请求
     private var connection: BaiduPanConnection { container.baiduConnection() }
+    /// 115 的连接。Cookie 全 App 一份,多个 115 来源共用(各记各的片库根)。
+    private var pan115Connection: Pan115Connection { container.pan115Connection() }
 
     /// provider 负责列目录 → 合成 → 封面 / 时长 → 刮削
     private func makeProvider() -> any FileSourceBrowsing {
@@ -230,6 +248,14 @@ final class FileSourceViewModel {
                 connection: connection,
                 sourceID: baidu.id,
                 folderName: folderName ?? baidu.folderName,
+                scraper: container.metadataScraper()
+            )
+        case .pan115(let pan):
+            return Pan115SourceProvider(
+                connection: pan115Connection,
+                sourceID: pan.id,
+                displayName: pan.displayName,
+                pickCodes: container.pan115PickCodes,
                 scraper: container.metadataScraper()
             )
         case .localFolder(let local):
@@ -275,13 +301,19 @@ final class FileSourceViewModel {
         preferredSeasonNumber = nil
         // 结构变了,导航目标也作废(否则重试会去追赶已不存在的目录)
         pendingDirectory = nil
-        guard case .baiduPan = source else {
+        switch source {
+        case .localFolder:
             // 本地文件夹没有授权步骤,书签失效由 `loadFiles` 报
             guard loadsDirectory else { return }
             currentDirectory = nil
             await loadFiles()
             hasLoadedOnce = true
             return
+        case .pan115:
+            await performReloadPan115()
+            return
+        case .baiduPan:
+            break
         }
         do {
             authorization = try await connection.authorization()
@@ -398,6 +430,91 @@ final class FileSourceViewModel {
         await reload()
     }
 
+    // MARK: - 动作:115 扫码授权(docs/PAN115_API.md §2.2)
+
+    /// 115 只有两屏:扫码 → 浏览。没有「填密钥」那一步,凭据是网页 Cookie 四件套。
+    private func performReloadPan115() async {
+        do {
+            pan115Authorization = try await pan115Connection.authorization()
+            switch pan115Authorization {
+            case .authorized:
+                guard loadsDirectory else { break }
+                currentDirectory = nil
+                await loadFiles()
+                hasLoadedOnce = true
+            case .needsAuthorization, nil:
+                break
+            }
+        } catch let error as Pan115Error {
+            pan115Authorization = nil
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            pan115Authorization = nil
+            loadFailure = LoadFailure(message: "读取 115 网盘登录状态失败:\(error)")
+        }
+    }
+
+    /// 拿二维码内容(第 1 步),页面渲染出来给用户扫。拿到就立刻开轮询。
+    func startPan115Authorization() async {
+        guard !isWaitingForAuthorization else { return }
+        isWaitingForAuthorization = true
+        loadFailure = nil
+        notice = nil
+        pan115QRCode = nil
+        do {
+            pan115QRCode = try await pan115Connection.startAuthorization()
+        } catch let error as Pan115Error {
+            loadFailure = LoadFailure(message: error.userMessage)
+            isWaitingForAuthorization = false
+            return
+        } catch {
+            loadFailure = LoadFailure(message: "获取 115 登录二维码失败:\(error)")
+            isWaitingForAuthorization = false
+            return
+        }
+        guard let session = pan115QRCode else { return }
+        authorizationTask?.cancel()
+        authorizationTask = Task { [weak self] in await self?.pollPan115(session) }
+    }
+
+    private func pollPan115(_ session: Pan115QRCodeSession) async {
+        do {
+            // 二维码本身 2 分钟过期(§2.2),轮询上限比它长一点,留给「已扫码待确认」
+            let deadline = Date().addingTimeInterval(Pan115QRCodeSession.validitySeconds + 60)
+            _ = try await pan115Connection.awaitAuthorization(session, deadline: deadline)
+            isWaitingForAuthorization = false
+            pan115QRCode = nil
+            await reload()
+        } catch is CancellationError {
+            // 用户点了取消:回到扫码那一屏,不报错
+            isWaitingForAuthorization = false
+            pan115QRCode = nil
+        } catch let error as Pan115Error {
+            isWaitingForAuthorization = false
+            pan115QRCode = nil
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            isWaitingForAuthorization = false
+            pan115QRCode = nil
+            loadFailure = LoadFailure(message: "115 扫码登录失败:\(error)")
+        }
+    }
+
+    /// 换一张二维码。⚠️ 会踢掉同 app 已登录的会话吗:不会 —— 踢设备只在 `check/sso` 里发生,
+    /// 扫码登录本身不踢(`docs/PAN115_API.md` §2.3)。
+    func cancelPan115Authorization() {
+        authorizationTask?.cancel()
+        authorizationTask = nil
+        isWaitingForAuthorization = false
+        pan115QRCode = nil
+    }
+
+    /// 二维码过期后手动重取(轮询会自己报 `.qrCodeExpired`,这里给按钮用)
+    func restartPan115Authorization() async {
+        cancelPan115Authorization()
+        await startPan115Authorization()
+    }
+
     // MARK: - 动作:目录
 
     func loadFiles() async {
@@ -467,6 +584,14 @@ final class FileSourceViewModel {
             case .baiduPan(let baidu):
                 root = try await connection.applicationDirectory()
                 libraryRoot = try await connection.libraryRoot(for: baidu.id)
+            case .pan115(let pan):
+                // 115 没有应用目录:网页 Cookie 能读整个网盘,根就是 "/"
+                root = Pan115LibraryRoot.root.path
+                if let stored = try await pan115Connection.libraryRoot(for: pan.id) {
+                    libraryRoot = BaiduPanLibraryRoot(path: stored.path)
+                } else {
+                    libraryRoot = nil
+                }
             case .localFolder(let local):
                 // 本地没有片库根,最外层就是选的文件夹
                 root = local.rootPath
@@ -514,6 +639,31 @@ final class FileSourceViewModel {
                 return
             }
             // 片库根被删 / 改名 → 静默清掉并回落应用目录
+            if allowFallback, error.isDirectoryUnavailable,
+               let library = libraryRoot?.path, directory == library,
+               library != rootDirectory {
+                await clearLibraryRoot()
+                currentDirectory = nil
+                pendingDirectory = nil
+                await loadFiles(
+                    directory: nil,
+                    allowingLibraryRootFallback: false,
+                    forceRefresh: forceRefresh)
+                return
+            }
+            directoryFailure = FileSourceDirectoryFailure(
+                message: error.userMessage,
+                isApplicationRootUnavailable: error.isDirectoryUnavailable
+                    && directory == rootDirectory
+            )
+        } catch let error as Pan115Error {
+            guard loadID == directoryGeneration else { return }
+            // Cookie 失效 / 被踢下线 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
+            if error.needsAuthorization {
+                pan115Authorization = .needsAuthorization
+                return
+            }
+            // 片库根被删 / 改名 → 静默清掉并回落网盘根
             if allowFallback, error.isDirectoryUnavailable,
                let library = libraryRoot?.path, directory == library,
                library != rootDirectory {
@@ -849,6 +999,9 @@ final class FileSourceViewModel {
         } catch let error as BaiduPanError {
             episodes = []
             episodeFailure = error.userMessage
+        } catch let error as Pan115Error {
+            episodes = []
+            episodeFailure = error.userMessage
         } catch let error as LocalFolderError {
             episodes = []
             episodeFailure = error.userMessage
@@ -994,16 +1147,23 @@ final class FileSourceViewModel {
     // 片库根是应用目录内「进来先落在哪」,不是授权范围(授权范围固定为 `/apps/{应用目录名}`)。
     // 每个来源一个,在设置里维护(`BaiduPanSourceSettingsView`);要两个起点就加两个来源(共用 token)。
 
-    /// 设置里改过片库根后调用。来源列表任何变更都会触发,所以只在真的变了时重载(配额)。
+    /// 设置里改过片库根后调用。来源列表任何变更都会触发,所以只在真的变了时重载(配额 / 限速)。
     /// `hasLoadedOnce` 闸必需:`.task(id:)` 首次出现也会跑,那时片库根还没读进来,会误判成变了。
     func refreshLibraryRoot() async {
         guard hasLoadedOnce else { return }
-        guard case .baiduPan = source else {
+        let stored: BaiduPanLibraryRoot?
+        switch source {
+        case .baiduPan:
+            stored = try? await connection.libraryRoot(for: source.id)
+        case .pan115(let pan):
+            // 两家的片库根类型不同(115 存的是 `Pan115LibraryRoot`),这里统一成 ViewModel 用的那个
+            stored = (try? await pan115Connection.libraryRoot(for: pan.id))
+                .map { BaiduPanLibraryRoot(path: $0.path) }
+        case .localFolder:
             // 本地:多半是换了文件夹 / 改了名。重读当前层让失败页消失,⛔ 不回到起点
             await refreshFiles()
             return
         }
-        let stored = try? await connection.libraryRoot(for: source.id)
         guard stored != libraryRoot else { return }
         libraryRoot = stored
         await reload()
@@ -1027,15 +1187,22 @@ final class FileSourceViewModel {
     /// 清掉失效的片库根,不报错。写回设置,免得下次又撞上。
     private func clearLibraryRoot() async {
         libraryRoot = nil
-        guard case .baiduPan(let baidu) = source else { return }
-        try? await container.setLibraryRoot(nil, for: baidu)
+        switch source {
+        case .baiduPan(let baidu):
+            try? await container.setLibraryRoot(nil, for: baidu)
+        case .pan115(let pan):
+            try? await container.setPan115LibraryRoot(nil, for: pan)
+        case .localFolder:
+            return
+        }
     }
 
-    /// 标题栏名字:根层用应用目录名(百度)/ 来源名(本地),其余用路径最后一段。
+    /// 标题栏名字:根层用应用目录名(百度)/ 网盘名(115)/ 来源名(本地),其余用路径最后一段。
     var currentDirectoryName: String {
         let fallback: String
         switch source {
         case .baiduPan: fallback = "百度网盘"
+        case .pan115(let pan): fallback = pan.displayName
         case .localFolder(let local): fallback = local.displayName
         }
         guard let current = currentDirectory else { return fallback }
@@ -1351,7 +1518,11 @@ final class FileSourceViewModel {
             return
         }
 
-        guard case .baiduPan = source else { throw LocalFolderError.readOnly }
+        guard case .baiduPan = source else {
+            // 115 与本地文件夹都没有删除接口:115 的网页 Cookie 接口里没有可用的删除端点
+            // (`docs/PAN115_API.md` §7),⛔ 不要拿开放平台的 `/open/rb/delete` 顶上 —— 那是另一套凭据。
+            throw LocalFolderError.readOnly
+        }
         try await connection.deleteFile(at: file.path)
 
         if libraryRoot?.path == file.path {

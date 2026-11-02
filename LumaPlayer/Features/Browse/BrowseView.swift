@@ -128,6 +128,10 @@ struct BrowseView: View {
                 // 只在视图身份变化时重新初始化。百度 → 百度切换时视图类型与 `refreshToken`
                 // 都没变,两个 `.task(id:)` 不重跑,会停在**上一个来源**的目录上。
                 .id(source.id)
+        case .some(.pan115(let source)):
+            // 与百度同一个浏览页,登录方式是扫码换 Cookie(不是填密钥);按来源 id 重建的理由同上。
+            Pan115SourceView(container: container, source: source, refreshToken: refreshToken)
+                .id(source.id)
         case .some(.localFolder(let source)):
             // 与百度同一个浏览页(`FileSourceBrowserView`),没有授权那两屏;按来源 id 重建的理由同上。
             LocalFolderSourceView(container: container, source: source, refreshToken: refreshToken)
@@ -136,7 +140,7 @@ struct BrowseView: View {
             ContentUnavailableView(
                 "没有选中的来源",
                 systemImage: "rectangle.stack.badge.plus",
-                description: Text("先在设置里添加一个 Emby 服务器、百度网盘或本地文件夹。")
+                description: Text("先在设置里添加一个 Emby 服务器、网盘或本地文件夹。")
             )
         }
     }
@@ -296,6 +300,7 @@ struct BrowseView: View {
         switch container.state.currentSource {
         case .some(.emby): return "server.rack"
         case .some(.baiduPan): return "cloud.fill"
+        case .some(.pan115): return "externaldrive.connected.to.line.below"
         case .some(.localFolder): return "folder.fill"
         case .none: return "rectangle.stack.badge.plus"
         }

@@ -25,6 +25,11 @@ final class AppContainer {
     let baiduEpisodeCounts: BaiduPanEpisodeCountStore
     /// 全 App 一份:一个 App 只对应开放平台上的一个应用、一个授权。
     private var baiduConnectionInstance: BaiduPanConnection?
+    /// 115 网盘的连接:一个 App 一份 Cookie,多个 115 来源共用(各记各的片库根)。
+    private var pan115ConnectionInstance: Pan115Connection?
+    /// 115 的 `fsID → pick_code` 进程内缓存。放组合根:列目录的 provider 与起播的
+    /// `Pan115SessionPreparer` 不是同一个实例,只有共用才能省掉起播前的重列目录。
+    let pan115PickCodes = Pan115PickCodeCache()
     /// 本地文件夹的安全作用域访问权,按来源开一次、开到来源被删 / 换文件夹(见 `LocalFolderAccess`)。
     let localFolderAccess: LocalFolderAccess
     /// 本地视频时长的进程内记忆,免得每次进目录都读文件头。
@@ -147,6 +152,15 @@ final class AppContainer {
         return fresh
     }
 
+    func pan115Connection() -> Pan115Connection {
+        if let existing = pan115ConnectionInstance { return existing }
+        let fresh = Pan115Connection(
+            credentials: credentials,
+            client: Pan115APIClient(session: session))
+        pan115ConnectionInstance = fresh
+        return fresh
+    }
+
     /// 全 App 一份:刮削器带「问过的标题」缓存,每次新建就等于每次重问 TMDB。token 用时才取。
     private var metadataScraperInstance: BaiduPanMetadataScraper?
 
@@ -247,6 +261,66 @@ final class AppContainer {
     /// 清本机 token。授权共用,对所有百度来源生效;AppKey / 密钥 / 片库根保留,重新扫码即恢复。
     func signOutBaidu() async throws {
         try await baiduConnection().signOut()
+        state.serverListRevision += 1
+    }
+
+    // MARK: - 115 网盘
+
+    /// 扫码成功后的添加收尾。与百度不同,115 没有「应用配置」这一步要回读:Cookie 已经在凭据文件里,
+    /// 这里只落库 + 切过去。多个 115 来源共用同一份 Cookie,只各记各的片库根。
+    @discardableResult
+    func registerPan115Source(displayName: String = "") async throws -> Pan115Source {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = Pan115Source(
+            displayName: trimmedName.isEmpty ? await uniquePan115DisplayName() : trimmedName)
+        try await registry.add(.pan115(source))
+        state.serverListRevision += 1
+        // ⛔ 不要写 `state.currentServer = nil`:它是 currentSource 的派生访问器,会把来源一并抹掉
+        state.currentSource = .pan115(source)
+        state.route = .browse
+        return source
+    }
+
+    /// 按添加顺序。
+    func pan115Sources() async -> [Pan115Source] {
+        await registry.allSources().compactMap(\.pan115Source)
+    }
+
+    /// 已有同名时往后编号(「115 网盘 2」…)。
+    private func uniquePan115DisplayName() async -> String {
+        let existing = Set(await pan115Sources().map(\.displayName))
+        guard existing.contains("115 网盘") else { return "115 网盘" }
+        var index = 2
+        while existing.contains("115 网盘 \(index)") { index += 1 }
+        return "115 网盘 \(index)"
+    }
+
+    /// 已校验落在网盘内,失效当没设。nil = 没设,进来落在网盘根。
+    func pan115LibraryRoot(for source: Pan115Source) async throws -> Pan115LibraryRoot? {
+        try await pan115Connection().libraryRoot(for: source.id)
+    }
+
+    /// nil = 清除。
+    func setPan115LibraryRoot(_ root: Pan115LibraryRoot?, for source: Pan115Source) async throws {
+        try await pan115Connection().setLibraryRoot(root, for: source.id)
+        state.serverListRevision += 1
+    }
+
+    /// 留空则回到「115 网盘」。
+    func renamePan115Source(_ source: Pan115Source, displayName: String) async throws {
+        var updated = source
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.displayName = trimmed.isEmpty ? "115 网盘" : trimmed
+        try await registry.update(.pan115(updated))
+        state.serverListRevision += 1
+        if state.currentSource?.id == source.id {
+            state.currentSource = .pan115(updated)
+        }
+    }
+
+    /// 清本机 Cookie。Cookie 共用,对所有 115 来源生效;片库根保留,重新扫码即恢复。
+    func signOutPan115() async throws {
+        try await pan115Connection().signOut()
         state.serverListRevision += 1
     }
 
@@ -655,6 +729,16 @@ final class AppContainer {
                 folderName: baidu.folderName,
                 scraper: metadataScraper()
             )
+        case .pan115:
+            guard let sourceID = await watchProgress.display(forFileID: fileID)?.sourceID,
+                  let pan = await pan115Sources().first(where: { $0.id == sourceID }) else { return nil }
+            return Pan115SourceProvider(
+                connection: pan115Connection(),
+                sourceID: pan.id,
+                displayName: pan.displayName,
+                pickCodes: pan115PickCodes,
+                scraper: metadataScraper()
+            )
         }
     }
 
@@ -690,6 +774,13 @@ final class AppContainer {
                 file: file,
                 subtitleFiles: request.subtitleFiles
             )
+        case .pan115(let file):
+            return Pan115SessionPreparer(
+                connection: pan115Connection(),
+                file: file,
+                pickCodes: pan115PickCodes,
+                subtitleFiles: request.subtitleFiles
+            )
         case .localFolder(let file, let source):
             return LocalFileSessionPreparer(
                 file: file,
@@ -709,7 +800,7 @@ final class AppContainer {
             return PlaybackProgressReporter { endpoint in
                 try await connection.reportPlayback(endpoint)
             }
-        case .baiduPan, .localFolder:
+        case .baiduPan, .pan115, .localFolder:
             return LocalResumeReporting(store: watchProgress)
         }
     }
@@ -721,7 +812,7 @@ final class AppContainer {
         case .emby(_, let item):
             return item.userData?.playbackPositionTicks
                 .flatMap { TickConverter.seconds(fromTicks: $0) } ?? 0
-        case .baiduPan(let file), .localFolder(let file, _):
+        case .baiduPan(let file), .localFolder(let file, _), .pan115(let file):
             return await watchProgress.resumeSeconds(forFileID: String(file.fsID)) ?? 0
         }
     }
@@ -791,6 +882,18 @@ final class AppContainer {
                 try? await credentials.deleteBaiduPanToken()
                 try? await credentials.deleteBaiduPanAppConfiguration()
                 baiduConnectionInstance = nil
+            }
+        }
+        if let pan = target?.pan115Source {
+            try? await credentials.deletePan115LibraryRoot(for: pan.id)
+            await baiduScrapeCache.purge(sourceID: pan.id)
+            await baiduEpisodeCounts.purge(sourceID: pan.id)
+            // Cookie 共用:删最后一个 115 来源才清
+            let remaining = await pan115Sources().filter { $0.id != pan.id }
+            if remaining.isEmpty {
+                try? await credentials.deletePan115Credential()
+                pan115ConnectionInstance = nil
+                await pan115PickCodes.purge()
             }
         }
         try await registry.remove(id: id)

@@ -18,6 +18,12 @@ enum ManualMarkersScope {
                 return "baidu|\((file.path as NSString).deletingLastPathComponent)"
             }
             return "baidu|fsid:\(file.fsID)"
+        case .pan115(let file):
+            // 115 只有一份 Cookie(一个网盘),隔离段与百度分开即可
+            if isEpisodeLike(file) {
+                return "pan115|\((file.path as NSString).deletingLastPathComponent)"
+            }
+            return "pan115|fsid:\(file.fsID)"
         case .localFolder(let file, let source):
             // 来源 id 进键:两个来源里同名目录不是同一部剧
             let isolation = "local|\(source.id.uuidString)"

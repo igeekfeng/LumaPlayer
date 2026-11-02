@@ -46,6 +46,8 @@ struct ServerListView: View {
                 ServerSettingsView(container: container, server: server)
             case .baiduPan(let baidu):
                 BaiduPanSourceSettingsView(container: container, source: baidu)
+            case .pan115(let pan):
+                Pan115SourceSettingsView(container: container, source: pan)
             case .localFolder(let local):
                 LocalFolderSourceSettingsView(container: container, source: local)
             }
@@ -159,6 +161,9 @@ struct ServerListView: View {
             return "将删除「\(server.displayName)」及其保存在本地的访问令牌,该操作不可撤销。"
         case .baiduPan:
             return "将删除「\(source.displayName)」及其保存在本地的授权与密钥,该操作不可撤销。"
+        case .pan115:
+            return "将删除「\(source.displayName)」及它的片库根与观看记录,该操作不可撤销。"
+                + "网盘里的文件不会被删除;登录 Cookie 在删掉最后一个 115 来源时才清除。"
         case .localFolder:
             return "将删除「\(source.displayName)」及它在本机的观看记录,该操作不可撤销。"
                 + "文件夹里的文件不会被删除。"
@@ -227,6 +232,7 @@ private struct SourceRow: View {
         switch source {
         case .emby: return "server.rack"
         case .baiduPan: return "cloud.fill"
+        case .pan115: return "externaldrive.connected.to.line.below"
         case .localFolder: return "folder.fill"
         }
     }
@@ -257,6 +263,9 @@ private struct SourceRow: View {
         case .baiduPan(let baidu):
             // 应用目录名决定能访问网盘里的什么,是这一行唯一有信息量的字段
             return "/apps/\(baidu.folderName)"
+        case .pan115:
+            // 115 能读全盘,这一行只能给「整盘」这个事实
+            return "整个网盘"
         case .localFolder(let local):
             // 上一次解析书签得到的路径(展示用;访问走书签)
             return local.lastKnownPath

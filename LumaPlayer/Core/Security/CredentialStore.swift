@@ -173,6 +173,56 @@ actor CredentialStore {
         try await storage.removeValue(forAccount: BaiduAccount.token)
     }
 
+    // MARK: - 115 网盘(docs/PAN115_API.md §2)
+
+    /// 全 App 一份:115 的 Cookie 四件套就是一个账号的登录态,多来源共用同一份。
+    private enum Pan115Account {
+        static let credential = "pan115-credential"
+    }
+
+    /// 片库根:115 的 Cookie 能读整个网盘(`cid=0` 是根,§3),片库根只是某个目录的书签。
+    private static func pan115LibraryRootAccount(for sourceID: UUID) -> String {
+        "pan115-library-root:" + sourceID.uuidString
+    }
+
+    func pan115Credential() async throws -> Pan115Credential? {
+        guard let data = try await storage.value(forAccount: Pan115Account.credential) else {
+            return nil
+        }
+        return try JSONDecoder().decode(Pan115Credential.self, from: data)
+    }
+
+    func savePan115Credential(_ credential: Pan115Credential) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(credential), forAccount: Pan115Account.credential)
+    }
+
+    /// 解绑:删掉 Cookie 就等于退出登录,115 那边没有「撤销授权」接口(§2.3)。
+    func deletePan115Credential() async throws {
+        try await storage.removeValue(forAccount: Pan115Account.credential)
+    }
+
+    func pan115LibraryRoot(for sourceID: UUID) async throws -> Pan115LibraryRoot? {
+        guard let data = try await storage.value(
+            forAccount: Self.pan115LibraryRootAccount(for: sourceID)) else { return nil }
+        return try JSONDecoder().decode(StoredPan115LibraryRoot.self, from: data).root
+    }
+
+    /// nil = 明确清空:写一个「没有」而不是删键,与百度那套同语义。
+    func savePan115LibraryRoot(_ root: Pan115LibraryRoot?, for sourceID: UUID) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(StoredPan115LibraryRoot(root: root)),
+            forAccount: Self.pan115LibraryRootAccount(for: sourceID))
+    }
+
+    func deletePan115LibraryRoot(for sourceID: UUID) async throws {
+        try await storage.removeValue(forAccount: Self.pan115LibraryRootAccount(for: sourceID))
+    }
+
+    private struct StoredPan115LibraryRoot: Codable {
+        var root: Pan115LibraryRoot?
+    }
+
     // MARK: - TMDB 刮削(docs/TMDB_API.md §1)
 
     /// v4 Read Access Token,全 App 一份刮所有来源。

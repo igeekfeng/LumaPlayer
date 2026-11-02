@@ -365,7 +365,7 @@ struct FileSourceBrowserView: View {
                 )
                 Button("重新选择文件夹…") { showsFolderPicker = true }
                     .buttonStyle(.borderedProminent)
-            } else if failure.isApplicationRootUnavailable {
+            } else if failure.isApplicationRootUnavailable, case .baiduPan = viewModel.source {
                 OnboardingFormHeader(
                     systemImage: "folder.badge.questionmark",
                     title: "读不到应用目录",
@@ -403,6 +403,7 @@ struct FileSourceBrowserView: View {
                 + "设置 →「已隐藏」里可以逐条恢复。"
         }
         guard case .baiduPan = viewModel.source else {
+            // 115 / 本地文件夹:没有应用目录那层概念,只有「这层是空的」
             return "这一层没有可播的文件。把视频放进这个文件夹,再回来刷新。"
         }
         let name = viewModel.folderName ?? "应用目录"

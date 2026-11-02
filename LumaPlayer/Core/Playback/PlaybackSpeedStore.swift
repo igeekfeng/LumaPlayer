@@ -30,6 +30,18 @@ extension PlaybackSpeedScope {
 
     static let baiduIsolation = "baidu-pan"
 
+    /// 口径同百度:是剧集取剧目录,否则取 `fs_id`。
+    /// 隔离段与百度不同 —— 两家网盘的 `fs_id` 数值空间毫无关系,混用会串倍速。
+    static func pan115(file: BaiduPanFile, isEpisodeSeries: Bool) -> PlaybackSpeedScope {
+        PlaybackSpeedScope(
+            isolation: pan115Isolation,
+            content: isEpisodeSeries
+                ? BaiduPanPath.seriesDirectory(ofFilePath: file.path)
+                : String(file.fsID))
+    }
+
+    static let pan115Isolation = "pan115"
+
     /// 口径同百度,但按来源隔离(两个来源里同名剧目录不是同一部)。
     static func localFolder(
         sourceID: UUID, file: BaiduPanFile, isEpisodeSeries: Bool

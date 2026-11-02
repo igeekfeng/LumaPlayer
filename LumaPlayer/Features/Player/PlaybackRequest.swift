@@ -5,6 +5,8 @@ import Foundation
 enum PlaybackSource: Sendable, Equatable {
     case emby(server: ServerProfile, item: EmbyItem)
     case baiduPan(file: BaiduPanFile)
+    /// 115 网盘(网页 Cookie 版)。播放地址是 115 的 CDN 直链,带 `pick_code` 去换。
+    case pan115(file: BaiduPanFile)
     /// 带上来源:打开文件要它的书签(`LocalFolderAccess`),范围键(倍速 / 片头片尾 / 弹幕绑定)要它的 id 隔离。
     case localFolder(file: BaiduPanFile, source: LocalFolderSource)
 
@@ -23,12 +25,17 @@ enum PlaybackSource: Sendable, Equatable {
         return nil
     }
 
-    /// 文件树来源(百度 / 本地文件夹)的文件;Emby 为 nil。两者共用本地收尾
+    var pan115File: BaiduPanFile? {
+        if case .pan115(let file) = self { return file }
+        return nil
+    }
+
+    /// 文件树来源(百度 / 115 / 本地文件夹)的文件;Emby 为 nil。三者共用本地收尾
     /// (`AppContainer.settleFileSourceEpisode`)。
     var file: BaiduPanFile? {
         switch self {
         case .emby: return nil
-        case .baiduPan(let file), .localFolder(let file, _): return file
+        case .baiduPan(let file), .pan115(let file), .localFolder(let file, _): return file
         }
     }
 
@@ -36,7 +43,8 @@ enum PlaybackSource: Sendable, Equatable {
     var contentID: String {
         switch self {
         case .emby(_, let item): return item.id
-        case .baiduPan(let file), .localFolder(let file, _): return String(file.fsID)
+        case .baiduPan(let file), .pan115(let file), .localFolder(let file, _):
+            return String(file.fsID)
         }
     }
 }

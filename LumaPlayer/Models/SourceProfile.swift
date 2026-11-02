@@ -7,12 +7,14 @@ import Foundation
 enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
     case emby(ServerProfile)
     case baiduPan(BaiduPanSource)
+    case pan115(Pan115Source)
     case localFolder(LocalFolderSource)
 
     var id: UUID {
         switch self {
         case .emby(let profile): return profile.id
         case .baiduPan(let source): return source.id
+        case .pan115(let source): return source.id
         case .localFolder(let source): return source.id
         }
     }
@@ -21,6 +23,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         switch self {
         case .emby(let profile): return profile.displayName
         case .baiduPan(let source): return source.displayName
+        case .pan115(let source): return source.displayName
         case .localFolder(let source): return source.displayName
         }
     }
@@ -30,6 +33,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         switch self {
         case .emby(let profile): return profile.lastUsedAt
         case .baiduPan(let source): return source.lastUsedAt
+        case .pan115(let source): return source.lastUsedAt
         case .localFolder(let source): return source.lastUsedAt
         }
     }
@@ -43,6 +47,9 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .baiduPan(var source):
             source.lastUsedAt = date
             return .baiduPan(source)
+        case .pan115(var source):
+            source.lastUsedAt = date
+            return .pan115(source)
         case .localFolder(var source):
             source.lastUsedAt = date
             return .localFolder(source)
@@ -53,6 +60,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         switch self {
         case .emby: return "Emby 服务器"
         case .baiduPan: return "百度网盘"
+        case .pan115: return "115 网盘"
         case .localFolder: return "本地文件夹"
         }
     }
@@ -69,16 +77,22 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         return nil
     }
 
+    var pan115Source: Pan115Source? {
+        if case .pan115(let source) = self { return source }
+        return nil
+    }
+
     var localFolderSource: LocalFolderSource? {
         if case .localFolder(let source) = self { return source }
         return nil
     }
 
-    /// 文件树来源(百度网盘 / 本地文件夹)才有 —— 它们共用一个浏览页(`FileSourceViewModel`)。
+    /// 文件树来源(百度网盘 / 115 网盘 / 本地文件夹)才有 —— 它们共用一个浏览页(`FileSourceViewModel`)。
     var fileSource: FileSource? {
         switch self {
         case .emby: return nil
         case .baiduPan(let source): return .baiduPan(source)
+        case .pan115(let source): return .pan115(source)
         case .localFolder(let source): return .localFolder(source)
         }
     }
@@ -105,6 +119,21 @@ struct BaiduPanSource: Codable, Sendable, Equatable, Hashable {
         self.id = id
         self.displayName = displayName
         self.folderName = folderName
+        self.lastUsedAt = lastUsedAt
+    }
+}
+
+/// 115 网盘来源(网页 Cookie 版,`docs/PAN115_API.md`)。
+/// ⚠️ **不含任何凭据**:Cookie 四件套在凭据文件里,全 App 一份(不像 Emby 按服务器分)。
+/// 片库根(目录 `cid`)也按 `id` 存在凭据文件里 —— 它不是秘密,但跟着来源走才不会串。
+struct Pan115Source: Codable, Sendable, Equatable, Hashable {
+    let id: UUID
+    var displayName: String
+    var lastUsedAt: Date?
+
+    init(id: UUID = UUID(), displayName: String = "115 网盘", lastUsedAt: Date? = nil) {
+        self.id = id
+        self.displayName = displayName
         self.lastUsedAt = lastUsedAt
     }
 }
