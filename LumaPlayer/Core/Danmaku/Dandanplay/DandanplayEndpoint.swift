@@ -23,8 +23,6 @@ enum DandanplayEndpoint: Sendable, Equatable {
         case traditional = 2
     }
 
-    static let host = "api.dandanplay.net"
-
     var path: String {
         switch self {
         case .match: return "/api/v2/match"
@@ -87,14 +85,11 @@ enum DandanplayEndpoint: Sendable, Equatable {
         }
     }
 
-    var url: URL? {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = Self.host
-        components.path = path
-        let query = encodedQuery
-        components.percentEncodedQuery = query.isEmpty ? nil : query
-        return components.url
+    /// 完整地址。`base` 决定走官方还是自建兼容服务。
+    ///
+    /// 签名路径与地址无关(§1):`signaturePath` 只取 `path`,所以换 `base` 不用改签名。
+    func url(base: DandanplayBase) -> URL? {
+        base.url(path: path, percentEncodedQuery: encodedQuery)
     }
 
     /// 手拼查询串,只保留 unreserved 字符(同 `TMDBEndpoint`)。

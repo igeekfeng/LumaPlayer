@@ -6,7 +6,9 @@
 ## 1. 目标与边界
 
 - 播放时叠加弹幕:Emby 与百度网盘两路来源都有,来源无关。
-- 弹幕来自**弹弹play 开放平台**;本项目没有服务器 → **AppId / AppSecret 用户自填**(设置 › 弹幕)。
+- 弹幕来自**弹弹play 接口**(`DANDANPLAY_API.md`)。默认官方 `api.dandanplay.net`,需要
+  **AppId / AppSecret 用户自填**(设置 › 弹幕);也可以填**自建的弹弹play 兼容服务**地址
+  (dandanplay 协议的第三方实现,如 danmu_api),那种服务不看签名、不需要 AppId / AppSecret。
 - 只读:不发送弹幕、不登录弹弹play 账号、不碰任何服务端写接口。
 - 非目标:B 站等其它弹幕源(留了提供方无关的模型,但不预先写抽象协议)、高级弹幕 / 代码弹幕、
   弹幕屏蔽词。
@@ -25,7 +27,7 @@
    AppContainer.danmaku : DanmakuService          actor,全 App 一份
         ├─ DanmakuBindingStore   actor  集 / 剧 → 弹幕库 的本地绑定(Application Support)
         ├─ DanmakuCommentCache   actor  episodeId → 已解析弹幕(Caches,4 小时)
-        └─ DandanplayClient      Sendable struct  签名 + 传输 + 解码(无状态)
+        └─ DandanplayClient      Sendable struct  地址 + 签名 + 传输 + 解码(无状态)
         ▼
    LoadedDanmaku([DanmakuComment] 按时间升序)
         ▼
@@ -37,7 +39,7 @@
 
 | 类型 | 位置 | 隔离 |
 |---|---|---|
-| `DandanplayEndpoint` / `DandanplayClient` / DTO / `DandanplayError` | `Core/Danmaku/Dandanplay/` | 值类型,`Sendable` |
+| `DandanplayBase` / `DandanplayEndpoint` / `DandanplayClient` / DTO / `DandanplayError` | `Core/Danmaku/Dandanplay/` | 值类型,`Sendable` |
 | `DanmakuComment`、`DanmakuMediaQuery`、`DanmakuLayout` | `Core/Danmaku/` | 值类型 / 纯函数 |
 | `DanmakuService`、`DanmakuBindingStore`、`DanmakuCommentCache` | `Core/Danmaku/` | `actor` |
 | `DanmakuSettingsStore` | `Core/Danmaku/` | `@MainActor @Observable`(同 `SubtitleStyleStore`) |
@@ -52,7 +54,9 @@
 
 每一层都只在上一层没结果时才发请求:
 
-1. **凭据**:没填 → `DandanplayError.credentialsMissing`,⛔ 不发任何请求。
+1. **凭据**:没配 → `DandanplayError.credentialsMissing`,⛔ 不发任何请求。官方服务要求
+   AppId / AppSecret 填全;自建兼容服务只要服务地址(`usesCustomServer`)。地址解析不出来
+   (`DandanplayBase` 返回 nil)在客户端就抛 `transport`,不发请求。
 2. **集绑定**(`itemKey`):这一集手选过 / 精确匹配过 → 直接加载。
 3. **剧绑定**(`seriesKey` + 集号):这一部剧绑定过作品 → `GET /bangumi/{animeId}`(进程内记忆),
    按 `episodeNumber` 找**唯一**相等的一集 → 写集绑定并加载。对不上就落到第 4 步。
@@ -135,7 +139,7 @@
 | 控制栏「弹幕」菜单 | 字幕菜单右侧:显示开关、状态(条数 / 匹配情况 / 错误)、重试、选择弹幕…、偏移 ±0.5 秒、设置入口 |
 | 快捷键 D | 显示 / 隐藏(`PlayerCommands` 表 + `PlayerWindowView.onKeyPress`) |
 | 选择弹幕面板 | 播放窗口 sheet;打开期间钉住控制栏 |
-| 设置 › 弹幕 | AppId / AppSecret;自动加载、文件指纹、不透明度、字号、滚动时长、显示区域、三种类型开关 |
+| 设置 › 弹幕 | 服务地址、AppId / AppSecret;自动加载、文件指纹、不透明度、字号、滚动时长、显示区域、三种类型开关 |
 
 「显示弹幕」是本集的会话开关,初值取设置里的「播放时自动加载弹幕」;关着时不发任何请求,打开时才加载。
 转码 seek / 重试会重走 `PlayerViewModel.start()`,但弹幕只在第一次加载(`startIfNeeded` 判重)。

@@ -6,24 +6,22 @@
 
 ## 0. 结论
 
-**可行,但差最后一步:LumaPlayer 把弹弹play 服务地址写死了,现在连不上。**
-
-拆成三件事看:
+**可行,三步已落地两步半:部署与协议核对完成,LumaPlayer 地址可配置已实现,待真机串联验证(§7)。**
 
 | 环节 | 结论 | 依据 |
 |---|---|---|
 | Docker 本地部署 | ✅ 已跑通 | 官方镜像 `logvar/danmu-api:latest` 有 arm64,本机 Docker Desktop 起容器、接口全部通 |
 | 弹弹play 协议兼容 | ✅ 已核对 | LumaPlayer 实际调用的 4 个端点,返回体字段与 `DANDANPLAY_API.md` 一致 |
-| 接入 LumaPlayer | ⚠️ 要改代码 | `DandanplayEndpoint.host` 硬编码 `api.dandanplay.net`,不改就连不上。改动量约 5 个源文件 + 2 个测试文件 |
+| 接入 LumaPlayer | ✅ 代码已落地,⚠️ 未真机串联 | 服务地址可配置(`DandanplayBase`,存凭据文件),自建服务跳过签名头与 AppId / AppSecret(§3.3);build + 1242 单测通过,与容器的真机串联验证见 §7 |
 
-**一句话**:Docker 这边已经落地并跑起来了(`Tools/danmu-api/`),剩下 work 在 LumaPlayer 侧 —— 让弹幕服务地址可配置。
+**一句话**:两侧都已实现(`Tools/danmu-api/` + LumaPlayer 服务地址可配),剩 §7 的真机串联。
 
 ---
 
 ## 1. 为什么要做这件事
 
-现状(`docs/DANMAKU.md` §1):弹幕只能走弹弹play 开放平台,AppId / AppSecret 要用户自己去
-`dev.dandanplay.com` 注册开发者、创建应用、等审核。这是唯一的门槛。
+门槛(`docs/DANMAKU.md` §1):官方弹弹play 要 AppId / AppSecret —— 用户得自己去
+`dev.dandanplay.com` 注册开发者、创建应用、等审核。这是用官方服务唯一的门槛。
 
 danmu_api 的价值:
 
@@ -149,69 +147,51 @@ v.youku.com       HTTP 200  0.38 s
 
 ---
 
-## 3. LumaPlayer 要改什么
+## 3. LumaPlayer 侧接入设计
 
-### 3.1 核心:服务地址写死了
+### 3.1 服务地址可配,签名不受影响
 
-`DandanplayEndpoint.swift:26,90-98`:
+`DandanplayBase`:scheme + host + port + 路径前缀。空串 = 官方 `https://api.dandanplay.net`;
+自建服务填根地址,令牌在路径前缀里,如 `http://127.0.0.1:9321/87654321`。非 http/https、
+缺 host、带 query / fragment 一律 `nil`,客户端如实报错**不静默回退官方**(回退只会换来
+一串看不懂的 403)。本地是 http 且要带令牌,所以 scheme、port、路径前缀全部可配;
+80 / 443 不落进 URL。
 
-```swift
-static let host = "api.dandanplay.net"
+`DandanplayEndpoint.url(base:)` 由 base 拼 path。签名只覆盖 path、不含域名
+(`DANDANPLAY_API.md` §1),danmu_api 又整套忽略签名头(§2.5),所以 `signaturePath`
+与签名计算不受换地址影响,一行都不用动。
 
-var url: URL? {
-    var components = URLComponents()
-    components.scheme = "https"
-    components.host = Self.host      // ← 写死
-    components.path = path
-    ...
-}
-```
+### 3.2 凭据校验:自建服务放宽
 
-`components.scheme` 也写死 `https`。本地是 `http`,所以 scheme 也必须可配。
+官方服务的 `X-AppId` / `X-Signature` 缺一不可;自建服务没有 AppId / AppSecret 可言
+(dandanplay 忽略签名头,鉴权看 URL 里的令牌)。落地口径:
 
-改造方案:给 `DandanplayEndpoint` 加一个 `base`(scheme + host + port + 路径前缀),
-`url` 由 base 拼 `path`。签名路径不变 —— dandanplay 签的是 path,不含域名
-(`DandanplayEndpoint.swift:37-38`),dandanplay 的签名本来也不参与 danmu_api 的鉴权,
-所以签名逻辑一行都不用动。
+- `DandanplayCredentials.usesCustomServer`(`baseURL` 非空)→ `send` 整体跳过签名头,
+  `DanmakuService.requireCredentials` 不要求 AppId / AppSecret;
+- 空 `baseURL` = 官方 → 两者缺一不可,保持原样。
 
-### 3.2 凭据校验要放宽
-
-`DandanplayClient.swift:127`:
-
-```swift
-guard !appID.isEmpty, !secret.isEmpty else { throw DandanplayError.credentialsMissing }
-```
-
-用自建服务时没有 AppId / AppSecret 可言(dandanplay 忽略签名头)。两条路:
-
-- **(a) 保留必填,让用户填假值**。零代码改动,但设置页提示文案会撒谎
-  (「AppSecret 只用于本机计算签名」对自建服务不成立)。不推荐。
-- **(b) 加个「自建弹弹play 兼容服务」开关**。选了之后跳过凭据必填、跳过签名头,
-  改成在 base URL 里带令牌。干净,但要动 `DandanplayClient.send` 和
-  `DanmakuService.resolve` 的第 1 步(`DANMAKU.md` §3 步骤 1)。
-
-推荐 (b)。
+设置页文案与之一致:自建服务只填地址;「AppSecret 只用于在本机计算签名」只对官方服务成立。
 
 ### 3.3 改动清单
 
 | 文件 | 改动 |
 |---|---|
-| `Core/Danmaku/Dandanplay/DandanplayEndpoint.swift` | `host`/`scheme` 从常量改成 base 参数;`url` 由 base 拼 path |
-| `Core/Danmaku/Dandanplay/DandanplayClient.swift` | `init` 收 base;`send` 用 base 构造 URL;凭据必填按 §3.2(b) 放宽 |
-| `Core/Danmaku/DanmakuService.swift` | `init` 收 base;`resolve` 第 1 步的 `credentialsMissing` 分支按自建服务放行 |
-| `Core/Danmaku/DanmakuDisplaySettings.swift`(`DanmakuSettings`) | 加 `dandanplayBaseURL: String`(空 = 官方) |
-| `Features/Settings/DanmakuSettingsView.swift` | 加一个地址输入框,放在 AppId / AppSecret 上面 |
-| `App/AppContainer.swift:104` | 把 settings 里的 base URL 传进 `DanmakuService` |
-| `LumaPlayerTests/DanmakuTests.swift`、`DanmakuMatchTests.swift` | 两处 `DandanplayEndpoint.host` 引用要跟着改 |
+| `Core/Danmaku/Dandanplay/DandanplayBase.swift`(新增) | 服务地址模型:空串 = 官方;非 http/https、缺 host、带 query / fragment → `nil`,调用方如实报错不回退;80 / 443 不落 URL;路径前缀去尾 `/`;`url(path:percentEncodedQuery:)` 拼装 |
+| `Core/Danmaku/Dandanplay/DandanplayEndpoint.swift` | 删掉写死的 `host`;`url(base:)` 交给 base 拼 path;`signaturePath` 不变(签名只含 path 不含域名,换地址不影响签名) |
+| `Core/Danmaku/Dandanplay/DandanplayClient.swift` | `DandanplayCredentials.baseURL`(`""` = 官方;缺键 `decodeIfPresent` 兜底,只有 appID / appSecret 的旧凭据文件照样解码);`send` 解析 base 再拼 URL;`usesCustomServer` 时整体跳过签名头与 AppId / AppSecret 必填(§3.2) |
+| `Core/Danmaku/DanmakuService.swift` | `requireCredentials` 放行「只填了地址」的自建服务配置 |
+| `Features/Settings/DanmakuSettingsView.swift` | 地址输入框(置顶),保存 / 清除 / 状态显示覆盖三项 |
+| `LumaPlayerTests/` | 新增 `DandanplayBaseTests`(解析、拼装、旧凭据解码);`DanmakuTests` 补自建服务的客户端与整链路用例;`DanmakuTests` / `DanmakuMatchTests` 的 host 引用改 `DandanplayBase.official.host` |
 
-体量:不算大,但碰到了弹幕层唯一的外部依赖边界。**建议先写 `DandanplayEndpoint` 的
-base 拼装单测**,再动 `DanmakuService`。
+base 放 `DandanplayCredentials`(凭据文件)而不是 `DanmakuDisplaySettings`(UserDefaults):
+令牌写在地址的路径里,按「不在 UserDefaults 里存 token」处理。`AppContainer` 不用改 ——
+base 随凭据逐次传进客户端,不进 `DanmakuService` 的 init。
 
 ### 3.4 一个必须同步改的文档
 
-`docs/DANMAKU.md` §1 写「弹幕来自弹弹play 开放平台;本项目没有服务器 → AppId / AppSecret
-用户自填」。接入自建服务后这句不成立了,`docs/DANDANPLAY_API.md` §1 的主机声明也是。
-按 `CLAUDE.md` 硬规则 1 的口径,先改文档再改代码。
+`docs/DANMAKU.md` §1(弹幕来源与凭据口径)与 `docs/DANDANPLAY_API.md` §1(主机声明、
+签名与凭据来源)必须和实现一致:默认官方 `api.dandanplay.net`,地址可改自建兼容服务;
+自建服务不校验签名。按 `CLAUDE.md` 硬规则 1 的口径,文档先于 / 同步于代码。
 
 ---
 
@@ -313,11 +293,10 @@ dandanplay 官方也依赖同样的上游,但 danmu_api 更新更频繁(镜像 l
 
 ## 7. 下一步
 
-1. 先做 `DandanplayEndpoint` 的 base URL 拼装 + 单测(§3.3 第一行)。
-2. 改 `DandanplayClient` / `DanmakuService` / 设置页 / `AppContainer`。
-3. 同步改 `docs/DANMAKU.md` §1 与 `docs/DANDANPLAY_API.md` §1。
-4. 真机验证:`docker compose up -d` → 设置 › 弹幕填 `http://127.0.0.1:9321` → 播一集,
-   看 `docker compose logs -f` 里的实际请求。
-
-第 4 步的验证标准:`match` 拿到 `isMatched`,`comment` 返回的 `count` 与播放画面上的弹幕
-条数对得上。
+1. ✅ 地址可配 + 单测 + 文档同步:`DandanplayBase`(解析 / 拼装 / 旧凭据解码)、
+   `DandanplayClient` / `DanmakuService` / 设置页、`docs/DANMAKU.md` §1 与
+   `docs/DANDANPLAY_API.md` §1。build 零新增 warning,1242 单测通过。
+2. 真机串联:`cd Tools/danmu-api && docker compose up -d` → 设置 › 弹幕填
+   `http://127.0.0.1:9321/<TOKEN>`(`config/.env` 里的 `TOKEN`,当前是 `87654321`)
+   → 播一集,看 `docker compose logs -f` 里的实际请求。验证标准:`match` 拿到
+   `isMatched`,`comment` 返回的 `count` 与播放画面上的弹幕条数对得上。

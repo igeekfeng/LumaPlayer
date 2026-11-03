@@ -6,7 +6,7 @@ import XCTest
 /// ⛔ 零真实网络,全走 `MockEmbyURLProtocol`。
 final class DanmakuTests: XCTestCase {
 
-    private let host = DandanplayEndpoint.host
+    private let host = DandanplayBase.official.host
     private let credentials = DandanplayCredentials(appID: "testapp", appSecret: "testsecret")
     private var temporaryURLs: [URL] = []
 
@@ -71,16 +71,63 @@ final class DanmakuTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
+    // MARK: - 自建兼容服务(dandanplay 协议的第三方实现)
+
+    /// 自建服务:地址用它的 scheme / host / 令牌路径前缀,且不发签名头。
+    func testCustomServerUsesItsAddressAndSkipsSignature() async throws {
+        let custom = DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321/87654321")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":0,"comments":[]}"#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/123450001")
+
+        _ = try await makeClient().comments(episodeID: 123450001, conversion: .simplified, credentials: custom)
+
+        let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/comment/123450001"))
+        XCTAssertEqual(request.url.scheme, "http")
+        XCTAssertEqual(request.url.host, "127.0.0.1")
+        XCTAssertEqual(request.url.path, "/87654321/api/v2/comment/123450001")
+        XCTAssertNil(request.header("X-AppId"))
+        XCTAssertNil(request.header("X-Timestamp"))
+        XCTAssertNil(request.header("X-Signature"))
+    }
+
+    /// 自建服务不看 AppId / AppSecret,两者留空也要能发请求。
+    func testCustomServerDoesNotRequireAppCredentials() async throws {
+        let custom = DandanplayCredentials(appID: " ", appSecret: " ", baseURL: "http://127.0.0.1:9321")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"errorCode":0,"success":true,"bangumi":{"animeId":1,"animeTitle":"某番","episodes":[]}}"#),
+            scheme: "http", host: "127.0.0.1", path: "/api/v2/bangumi/1")
+
+        let bangumi = try await makeClient().bangumi(animeID: 1, credentials: custom)
+        XCTAssertEqual(bangumi.animeId, 1)
+    }
+
+    /// 地址填错要如实报错,⛔ 不能静默退回官方服务(那只会换来一串看不懂的 403)。
+    func testUnparseableBaseURLFailsBeforeAnyRequest() async {
+        let broken = DandanplayCredentials(appID: "", appSecret: "", baseURL: "127.0.0.1:9321/tok")
+        do {
+            _ = try await makeClient().bangumi(animeID: 1, credentials: broken)
+            XCTFail("应当抛错")
+        } catch let error as DandanplayError {
+            XCTAssertEqual(error, .transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的服务地址"))
+        } catch {
+            XCTFail("错误类型不对:\(error)")
+        }
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
     // MARK: - 端点(§2 - §5)
 
     func testSearchEndpointEncodesChineseAndOmitsUnknownEpisode() throws {
-        let url = try XCTUnwrap(DandanplayEndpoint.searchEpisodes(anime: "进击的巨人", episode: nil).url)
+        let url = try XCTUnwrap(
+            DandanplayEndpoint.searchEpisodes(anime: "进击的巨人", episode: nil).url(base: .official))
         XCTAssertEqual(url.path, "/api/v2/search/episodes")
         let query = try XCTUnwrap(url.query)
         XCTAssertFalse(query.contains("进击"), "中文未编码:\(query)")
         XCTAssertFalse(query.contains("episode="), "集数未知时不传:\(query)")
 
-        let withEpisode = try XCTUnwrap(DandanplayEndpoint.searchEpisodes(anime: "EVA", episode: "3").url?.query)
+        let withEpisode = try XCTUnwrap(
+            DandanplayEndpoint.searchEpisodes(anime: "EVA", episode: "3").url(base: .official)?.query)
         XCTAssertEqual(withEpisode, "anime=EVA&episode=3")
     }
 
@@ -250,6 +297,51 @@ final class DanmakuTests: XCTestCase {
             XCTAssertEqual(error as? DandanplayError, .credentialsMissing)
         }
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
+    /// 自建服务整链路:只填地址、不填 AppId / AppSecret,也要能匹配 + 拉弹幕。
+    func testServiceResolvesAgainstCustomServerWithoutAppCredentials() async throws {
+        let store = CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred-custom")))
+        try await store.saveDandanplayCredentials(
+            DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321/87654321"))
+        let service = DanmakuService(
+            credentials: store, client: makeClient(),
+            bindings: DanmakuBindingStore(fileURL: temporaryURL("b-custom")),
+            cache: DanmakuCommentCache(directory: temporaryURL("c-custom")))
+
+        MockEmbyURLProtocol.stub(.json(#"""
+            {"errorCode":0,"success":true,"isMatched":true,
+             "matches":[{"episodeId":77,"animeId":7,"animeTitle":"某番","episodeTitle":"第5话","shift":0}]}
+            """#), scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/match")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":1,"comments":[{"cid":9,"p":"1.00,1,16777215,u","m":"hi"}]}"#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/77")
+
+        let resolution = try await service.resolve(query, durationSeconds: nil)
+        guard case .loaded(let loaded) = resolution else { return XCTFail("应当直接加载:\(resolution)") }
+        XCTAssertEqual(loaded.comments.map(\.text), ["hi"])
+
+        let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/match"))
+        XCTAssertEqual(request.url.path, "/87654321/api/v2/match")
+        XCTAssertNil(request.header("X-Signature"))
+    }
+
+    /// 自建服务只填地址时,`isComplete` 为假但 `usesCustomServer` 为真 —— 不该报「没填凭据」。
+    func testCustomServerOnlyCredentialsPassTheGuard() async throws {
+        let store = CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred-guard")))
+        try await store.saveDandanplayCredentials(
+            DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321"))
+        let service = DanmakuService(
+            credentials: store, client: makeClient(),
+            bindings: DanmakuBindingStore(fileURL: temporaryURL("b-guard")),
+            cache: DanmakuCommentCache(directory: temporaryURL("c-guard")))
+        MockEmbyURLProtocol.stub(.json(#"""
+            {"success":true,"isMatched":false,"matches":[]}
+            """#), scheme: "http", host: "127.0.0.1", path: "/api/v2/match")
+
+        // 走到 /match 说明没被 credentialsMissing 拦住(地址校验由客户端做,这里只要不抛那个错)
+        _ = try await service.resolve(query, durationSeconds: nil)
+        XCTAssertFalse(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
     /// 精确关联(`isMatched`)直接采用,并记住这一集与这一部剧。

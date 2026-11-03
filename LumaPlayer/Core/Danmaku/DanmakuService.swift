@@ -213,8 +213,12 @@ actor DanmakuService {
 
     // MARK: - 内部
 
+    /// 自建兼容服务只要服务地址,AppId / AppSecret 可以不填(`DANMAKU.md` §3 步骤 1)。
     private func requireCredentials() async throws -> DandanplayCredentials {
-        guard let credentials = try await credentialStore.dandanplayCredentials(), credentials.isComplete else {
+        guard let credentials = try await credentialStore.dandanplayCredentials() else {
+            throw DandanplayError.credentialsMissing
+        }
+        guard credentials.usesCustomServer || credentials.isComplete else {
             throw DandanplayError.credentialsMissing
         }
         return credentials

@@ -61,11 +61,12 @@ struct DanmakuSettingsView: View {
     }
 }
 
-/// AppId / AppSecret 输入:保存才落盘、两项都留空 = 清除、读不出来如实报错。
+/// 弹弹play 服务地址 + 应用凭据输入:保存才落盘、三项都留空 = 清除、读不出来如实报错。
 /// ⛔ 不做「测试连接」:接口有滥用检测,验证留给第一次播放的真实请求。
 private struct DandanplayCredentialsSection: View {
     let credentials: CredentialStore
 
+    @State private var baseURL = ""
     @State private var appID = ""
     @State private var appSecret = ""
     @State private var saved = DandanplayCredentials(appID: "", appSecret: "")
@@ -80,11 +81,15 @@ private struct DandanplayCredentialsSection: View {
     private var edited: DandanplayCredentials {
         DandanplayCredentials(
             appID: appID.trimmingCharacters(in: .whitespacesAndNewlines),
-            appSecret: appSecret.trimmingCharacters(in: .whitespacesAndNewlines))
+            appSecret: appSecret.trimmingCharacters(in: .whitespacesAndNewlines),
+            baseURL: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     var body: some View {
         Section {
+            TextField("弹弹play 服务地址", text: $baseURL,
+                      prompt: Text("留空 = 官方 api.dandanplay.net"))
+                .autocorrectionDisabled()
             TextField("AppId", text: $appID, prompt: Text("弹弹play 开放平台的 AppId"))
                 .autocorrectionDisabled()
             SecureField("AppSecret", text: $appSecret, prompt: Text("对应的 AppSecret"))
@@ -93,14 +98,22 @@ private struct DandanplayCredentialsSection: View {
                 statusLabel
                 Spacer()
                 Button("清除") { Task { await clear() } }
-                    .disabled(saved.appID.isEmpty && saved.appSecret.isEmpty && appID.isEmpty && appSecret.isEmpty)
+                    .disabled(saved.isEmpty && edited.isEmpty)
                 Button("保存") { Task { await save() } }
-                    .disabled(edited == saved || (edited.appID.isEmpty != edited.appSecret.isEmpty))
+                    .disabled(edited == saved
+                        || (!edited.usesCustomServer && edited.appID.isEmpty != edited.appSecret.isEmpty))
             }
         } header: {
-            Text("弹弹play 凭据")
+            Text("弹弹play")
         } footer: {
-            Text("在 dev.dandanplay.com 注册开发者、创建应用并通过审核后获得。只写在本机凭据文件里;AppSecret 只用于在本机计算请求签名,不会被发送出去。")
+            Text("""
+            留空 = 官方服务,需要 AppId / AppSecret(在 dev.dandanplay.com 注册开发者、\
+            创建应用并通过审核后获得)。
+            填自建的弹弹play 兼容服务根地址(如 danmu_api)时 AppId / AppSecret 可以不填;\
+            这类服务的令牌写在 URL 路径里,所以地址要带路径前缀,如 \
+            http://127.0.0.1:9321/87654321。
+            三项都只写在本机凭据文件里;AppSecret 只用于在本机计算请求签名,不会被发送出去。
+            """)
         }
         .task { await load() }
     }
@@ -109,7 +122,7 @@ private struct DandanplayCredentialsSection: View {
     private var statusLabel: some View {
         switch status {
         case .idle:
-            Text(saved.isComplete ? "已配置" : "未配置,不加载弹幕").foregroundStyle(.secondary)
+            Text(saved.isEmpty ? "未配置,不加载弹幕" : "已配置").foregroundStyle(.secondary)
         case .saved:
             Text("已保存").foregroundStyle(.secondary)
         case .error(let message):
@@ -121,6 +134,7 @@ private struct DandanplayCredentialsSection: View {
         do {
             let existing = try await credentials.dandanplayCredentials()
                 ?? DandanplayCredentials(appID: "", appSecret: "")
+            baseURL = existing.baseURL
             appID = existing.appID
             appSecret = existing.appSecret
             saved = existing
@@ -134,11 +148,12 @@ private struct DandanplayCredentialsSection: View {
     private func save() async {
         let value = edited
         do {
-            if value.appID.isEmpty && value.appSecret.isEmpty {
+            if value.isEmpty {
                 try await credentials.deleteDandanplayCredentials()
             } else {
                 try await credentials.saveDandanplayCredentials(value)
             }
+            baseURL = value.baseURL
             appID = value.appID
             appSecret = value.appSecret
             saved = value
@@ -151,6 +166,7 @@ private struct DandanplayCredentialsSection: View {
     private func clear() async {
         do {
             try await credentials.deleteDandanplayCredentials()
+            baseURL = ""
             appID = ""
             appSecret = ""
             saved = DandanplayCredentials(appID: "", appSecret: "")

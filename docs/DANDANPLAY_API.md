@@ -8,17 +8,23 @@
 >   端点、参数、请求体 / 响应 schema 由 `paths` 与 `components.schemas` 直接读出;
 > - 官方文档站 `https://doc.dandanplay.com/open/`:认证方式、状态码、缓存与使用约定。
 >
-> ⚠️ **本机没有弹弹play 应用凭据,下列接口全部只有 mock 覆盖,未在真实服务验证**(`KNOWN_ISSUES.md` Q45 - Q47)。
+> ⚠️ **本机没有弹弹play 应用凭据,官方服务下列接口全部只有 mock 覆盖,未在真实服务验证**(`KNOWN_ISSUES.md` Q45 - Q47)。
+> 自建兼容服务(dandanplay 协议的第三方实现)一侧已在本地 danmu_api 上实测过四个端点,见 `DANMU_API_FEASIBILITY.md` §2.3。
 
 ## 1. 主机与认证
 
-主机:`https://api.dandanplay.net`。
+主机:**默认** `https://api.dandanplay.net`,可在「设置 › 弹幕」的「弹弹play 服务地址」里改成
+自建的弹弹play 兼容服务(dandanplay 协议的第三方实现,如 danmu_api)。留空 = 官方。
 
-**签名模式**(官方推荐客户端应用使用,本项目只用这一种):
+地址是完整根地址,含令牌路径前缀,例如 `http://127.0.0.1:9321/87654321`。
+解析规则见 `DandanplayBase`:空串 = 官方;非 http/https、缺 host、带查询串或 fragment → 解析失败,
+客户端如实报错(`DandanplayError.transport`),**不静默回退到官方**。
+
+**签名模式**(官方服务用,本项目只用这一种):
 
 ```
 X-AppId:     {AppId}
-X-Timestamp: {Unix 时间戳,秒,UTC}
+X-Timestamp: {Unix 时间秒,UTC}
 X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 ```
 
@@ -26,12 +32,21 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
   官方建议「路径全部使用小写字母,不需要经过 URL 编码」。
 - 拼接区分大小写、无分隔符;SHA-256 后 Base64。
 - 时间戳与服务器偏差过大会 403。
+- ⛔ 签名只覆盖 `path`,不含域名 → 换主机地址不用改签名。
 
 ⛔ **不用凭证模式**(`X-AppId` + `X-AppSecret` 头直接带密钥):官方说那是给能保护密钥的服务端用的。
+
+**自建兼容服务不校验这套签名**:它鉴权看的是 URL 路径里的令牌,不是请求头
+(`docs/DANMU_API_FEASIBILITY.md` §2.5 实测)。所以 `DandanplayClient` 在
+`credentials.usesCustomServer` 时整体跳过签名头,也不要求 AppId / AppSecret;
+官方服务两者缺一不可。
 
 **凭据来源**:开发者在 `dev.dandanplay.com` 注册、创建应用、审核通过后获得 1 个 AppId 与 2 个 AppSecret。
 官方要求不要把 AppSecret 硬编码进客户端。本项目没有服务器可代签名 →
 **由用户在「设置 › 弹幕」自填**,存凭据文件(`CredentialStore`,0600、不进备份),⛔ 不进 UserDefaults、不进仓库。
+
+自建服务的地址同样存凭据文件:令牌写在 URL 路径里,那是凭据,按同一套规则处理。
+`DandanplayCredentials.baseURL` 带默认值 `""`,旧凭据文件(只有 appID / appSecret)仍能解码。
 
 **状态码**:
 

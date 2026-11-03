@@ -5,7 +5,7 @@ import XCTest
 /// 弹幕匹配精度(`docs/DANMAKU.md` §3):媒体指纹、TMDB 降级层、唯一候选采用。⛔ 零真实网络:全走 `MockEmbyURLProtocol`。
 final class DanmakuMatchTests: XCTestCase {
 
-    private let host = DandanplayEndpoint.host
+    private let host = DandanplayBase.official.host
     private let credentials = DandanplayCredentials(appID: "testapp", appSecret: "testsecret")
     private var temporaryURLs: [URL] = []
 

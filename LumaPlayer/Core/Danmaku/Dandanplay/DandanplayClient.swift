@@ -5,10 +5,44 @@ import Foundation
 struct DandanplayCredentials: Codable, Sendable, Equatable {
     var appID: String
     var appSecret: String
+    /// 自建弹弹play 兼容服务根地址(含令牌路径前缀)。空 = 官方 `api.dandanplay.net`。
+    ///
+    /// 放凭据文件而不是 `DanmakuDisplaySettings`(UserDefaults):自建服务的令牌写在 URL 路径里,
+    /// 那是凭据,按「不在 UserDefaults 里存 token」处理。
+    /// 默认值 `""` 让旧凭据文件(只有 appID / appSecret)仍能解码。
+    var baseURL: String = ""
 
     var isComplete: Bool {
         !appID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !appSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 指向自建服务时不校验弹弹play 签名,AppId / AppSecret 可以不填。
+    var usesCustomServer: Bool {
+        !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 三项都空 = 什么都没配。
+    var isEmpty: Bool {
+        appID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && appSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 声明了自定义解码器后成员初始化器不再合成,这里补回。
+    init(appID: String, appSecret: String, baseURL: String = "") {
+        self.appID = appID
+        self.appSecret = appSecret
+        self.baseURL = baseURL
+    }
+
+    /// 合成的解码不认默认值,缺 `baseURL` 键(旧凭据文件)会抛 `keyNotFound`,
+    /// 逼用户重填 AppId / AppSecret —— 这里显式兜底。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        appID = try container.decode(String.self, forKey: .appID)
+        appSecret = try container.decode(String.self, forKey: .appSecret)
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
     }
 }
 
@@ -16,6 +50,9 @@ struct DandanplayCredentials: Codable, Sendable, Equatable {
 ///
 /// 认证用签名模式(§1):`X-AppId` / `X-Timestamp`(Unix 秒)/ `X-Signature`,AppSecret 不上网。
 /// ⛔ 不用凭证模式(`X-AppSecret` 头直接带密钥),那是给服务端用的。
+///
+/// 地址从凭据的 `baseURL` 读(空 = 官方)。自建兼容服务不校验签名,签名头整体跳过 ——
+/// 它鉴权看的是 URL 路径里的令牌,不是这套头(见 `docs/DANMU_API_FEASIBILITY.md` §2.5)。
 struct DandanplayClient: Sendable {
 
     /// 可注入:签名测试要固定时间戳。
@@ -121,22 +158,31 @@ struct DandanplayClient: Sendable {
         return decoded
     }
 
+    /// 发一个请求。地址由凭据里的 `baseURL` 决定:空 = 官方,非空 = 自建兼容服务。
+    ///
+    /// 自建服务不校验弹弹play 签名(它只看 URL 里的令牌),⛔ 不发签名头也不要求 AppId / AppSecret;
+    /// 官方服务两者都缺一不可。
     func send(_ endpoint: DandanplayEndpoint, credentials: DandanplayCredentials) async throws -> Data {
-        let appID = credentials.appID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let secret = credentials.appSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !appID.isEmpty, !secret.isEmpty else { throw DandanplayError.credentialsMissing }
-        guard let url = endpoint.url else {
+        guard let base = DandanplayBase(urlString: credentials.baseURL) else {
+            throw DandanplayError.transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的服务地址")
+        }
+        guard let url = endpoint.url(base: base) else {
             throw DandanplayError.transport("接口地址构造失败(\(endpoint.name))")
         }
-        let timestamp = Int64(now().timeIntervalSince1970)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(appID, forHTTPHeaderField: "X-AppId")
-        request.setValue(String(timestamp), forHTTPHeaderField: "X-Timestamp")
-        request.setValue(
-            Self.signature(appID: appID, timestamp: timestamp, path: endpoint.signaturePath, appSecret: secret),
-            forHTTPHeaderField: "X-Signature")
+        if !credentials.usesCustomServer {
+            let appID = credentials.appID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let secret = credentials.appSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !appID.isEmpty, !secret.isEmpty else { throw DandanplayError.credentialsMissing }
+            let timestamp = Int64(now().timeIntervalSince1970)
+            request.setValue(appID, forHTTPHeaderField: "X-AppId")
+            request.setValue(String(timestamp), forHTTPHeaderField: "X-Timestamp")
+            request.setValue(
+                Self.signature(appID: appID, timestamp: timestamp, path: endpoint.signaturePath, appSecret: secret),
+                forHTTPHeaderField: "X-Signature")
+        }
         if let body = try endpoint.body() {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

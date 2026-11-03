@@ -3,7 +3,7 @@ import Foundation
 /// 弹弹play 请求失败。「没匹配上」「搜索无结果」不是错误,是合法空结果。
 enum DandanplayError: Error, Equatable {
 
-    /// 还没填 AppId / AppSecret(要用户去填;`forbidden` 是要用户去查)。
+    /// 官方服务的 AppId / AppSecret 没填全,或压根没配弹幕服务(要用户去填;`forbidden` 是要用户去查)。
     case credentialsMissing
     /// 只调公开接口,出现即说明签名头没带上(§1)。
     case unauthorized
@@ -20,7 +20,8 @@ enum DandanplayError: Error, Equatable {
     var userMessage: String {
         switch self {
         case .credentialsMissing:
-            return "还没有填写弹弹play 的 AppId / AppSecret。去「设置 → 弹幕」填一下。"
+            return "还没有配置弹幕服务。去「设置 → 弹幕」填弹弹play 的 AppId / AppSecret,"
+                + "或填自建兼容服务的地址。"
         case .unauthorized:
             return "弹弹play 要求身份验证(HTTP 401)。"
         case .forbidden(let reason):
