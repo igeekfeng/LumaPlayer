@@ -48,3 +48,12 @@ Tools/emby-dev/.bulk-manifest.json
 Vendor/mpv/src/
 Vendor/mpv/build/
 Vendor/mpv/prefix/
+
+# ── 本地弹幕服务 danmu_api（Tools/danmu-api/）──
+# config/ 里是 .env（含本机令牌），.cache/ 是运行时缓存（收藏、Bangumi Data、
+# 剧集索引、本地弹幕）—— 都是本机产物，不入库。
+# 配置模板是 env.example（故意不带前导点：根 `.*` 规则会把所有 dotfile 排除，
+# 放 config/.env.example 就进不了仓库）。首次启动前 cp 一份：
+#     cp env.example config/.env
+Tools/danmu-api/config/
+Tools/danmu-api/.cache/

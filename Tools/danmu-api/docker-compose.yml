@@ -1,0 +1,31 @@
+# danmu_api 本地弹幕服务
+#
+# 用法:
+#   cd Tools/danmu-api
+#   docker compose up -d          # 启动 / 更新配置
+#   docker compose logs -f        # 看日志
+#   docker compose down          # 停止
+#
+# 改 config/.env 不需要重启,danmu_api 会热重载。
+# 改这个 compose 文件或镜像版本才需要 docker compose up -d 重建。
+
+services:
+  danmu-api:
+    image: logvar/danmu-api:latest
+    container_name: danmu-api
+    restart: unless-stopped
+
+    # 只绑回环地址。LumaPlayer 跑在同一台 Mac 上,够用。
+    # 要让局域网设备(电视 / 手机 / FengMi)访问,改成 "9321:9321"。
+    ports:
+      - "127.0.0.1:9321:9321"
+
+    volumes:
+      # 挂 config/ 才能热重载 .env
+      - ./config:/app/config
+      # 挂 .cache 才能持久化:收藏、Bangumi Data、本地弹幕、剧集 ID 索引
+      - ./.cache:/app/.cache
+
+    # 时区只影响日志里的时间戳
+    environment:
+      - TZ=Asia/Shanghai
