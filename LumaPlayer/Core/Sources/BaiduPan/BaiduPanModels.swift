@@ -153,10 +153,14 @@ extension BaiduPanAuthorization {
 enum BaiduPanPath {
 
     /// `path` 在应用目录内或就是它。用 `root + "/"` 前缀,避免 `/apps/LumaPlayerXX` 被算进 `/apps/LumaPlayer`。
+    ///
+    /// 115 没有应用目录,片库根可以就是网盘根 `"/"`(`Pan115LibraryRoot.root`)。那时 `root + "/"`
+    /// 会拼成 `"//"`,一级子目录全被判成在外面 —— 浏览页退一层会直接跳回网盘根。所以根本身
+    /// 已经以 `/` 结尾时直接拿它当前缀。
     static func isInside(_ path: String, applicationRoot root: String) -> Bool {
         guard !path.isEmpty, !root.isEmpty else { return false }
         if path == root { return true }
-        return path.hasPrefix(root + "/")
+        return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     static func directory(ofFilePath path: String) -> String {

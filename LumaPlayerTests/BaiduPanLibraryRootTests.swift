@@ -34,4 +34,28 @@ final class BaiduPanLibraryRootTests: XCTestCase {
         XCTAssertFalse(BaiduPanPath.isInside("", applicationRoot: root))
         XCTAssertFalse(BaiduPanPath.isInside("/apps/LumaPlayer/电影", applicationRoot: ""))
     }
+
+    // MARK: - 115:片库根可以就是网盘根
+
+    /// 115 没有应用目录,片库根可以直接是网盘根 `"/"`(`Pan115LibraryRoot.root`)。
+    /// 修之前 `root + "/"` 拼成 `"//"`,一级子目录被判成在外面,浏览页退一层会被
+    /// `FileSourceViewModel.goUp` 的越界兜底直接跳回网盘根。
+    func testNetdiskRootTreatsTopLevelDirectoriesAsInside() {
+        XCTAssertTrue(BaiduPanPath.isInside("/", applicationRoot: "/"))
+        XCTAssertTrue(BaiduPanPath.isInside("/影视", applicationRoot: "/"))
+        XCTAssertTrue(BaiduPanPath.isInside("/影视/琅琊榜", applicationRoot: "/"))
+        XCTAssertTrue(BaiduPanPath.isInside("/影视/琅琊榜/第1季", applicationRoot: "/"))
+    }
+
+    /// 从第二层退一层的父目录必须判在网盘根内,否则会兜底到网盘根。
+    func testParentOfSecondLevelStaysInsideNetdiskRoot() {
+        let parent = BaiduPanPath.directory(ofFilePath: "/影视/琅琊榜")
+        XCTAssertEqual(parent, "/影视")
+        XCTAssertTrue(BaiduPanPath.isInside(parent, applicationRoot: "/"))
+    }
+
+    /// 相对路径(不带前导 `/`)不是网盘里的绝对路径,⛔ 不算在网盘根里。
+    func testRelativePathIsNotInsideNetdiskRoot() {
+        XCTAssertFalse(BaiduPanPath.isInside("影视", applicationRoot: "/"))
+    }
 }
