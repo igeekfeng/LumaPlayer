@@ -3,6 +3,9 @@ import os
 
 /// 弹幕磁盘缓存,每个弹幕库一个文件。官方要求客户端缓存,弹幕建议 2 - 6 小时(`docs/DANDANPLAY_API.md` §6),取 4 小时。
 ///
+/// 按弹幕来源分文件(各来源 episodeId 各自编号,同号不同片):官方 `{episodeId}.json`,
+/// 自建来源 `{来源 id}-{episodeId}.json`。
+///
 /// 放 `Caches/`,⛔ 不放应用支持目录。存的是已解析的 `DanmakuComment`,解析规则改了要换 `formatVersion`。
 ///
 /// `cleanUp` 启动时调一次,删过期 / 读不出 / 损坏 / 版本不对的文件(过期即重新请求,⛔ 不拿旧弹幕兜底)。
@@ -35,8 +38,8 @@ actor DanmakuCommentCache {
     }
 
     /// 没有 / 过期 / 读不出都返回 nil(= 重新请求,不是错误)。
-    func comments(forEpisode episodeID: Int64) -> [DanmakuComment]? {
-        let url = fileURL(episodeID)
+    func comments(forEpisode episodeID: Int64, source: String) -> [DanmakuComment]? {
+        let url = fileURL(episodeID, source: source)
         guard let data = try? Data(contentsOf: url) else { return nil }
         do {
             let entry = try JSONDecoder().decode(Entry.self, from: data)
@@ -50,12 +53,12 @@ actor DanmakuCommentCache {
     }
 
     /// 失败只记日志,不影响这一次显示弹幕。
-    func store(_ comments: [DanmakuComment], forEpisode episodeID: Int64) {
+    func store(_ comments: [DanmakuComment], forEpisode episodeID: Int64, source: String) {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(
                 Entry(version: Self.formatVersion, fetchedAt: now(), comments: comments))
-            try data.write(to: fileURL(episodeID), options: .atomic)
+            try data.write(to: fileURL(episodeID, source: source), options: .atomic)
         } catch {
             Self.logger.error("弹幕缓存写入失败 \(String(describing: error), privacy: .public)")
         }
@@ -97,7 +100,8 @@ actor DanmakuCommentCache {
         }
     }
 
-    private func fileURL(_ episodeID: Int64) -> URL {
-        directory.appending(path: "\(episodeID).json", directoryHint: .notDirectory)
+    private func fileURL(_ episodeID: Int64, source: String) -> URL {
+        let name = source == DanmakuSource.officialID ? "\(episodeID).json" : "\(source)-\(episodeID).json"
+        return directory.appending(path: name, directoryHint: .notDirectory)
     }
 }

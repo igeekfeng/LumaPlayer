@@ -211,12 +211,12 @@
 - **Q48 `/match` 的 `fileHash` 必须是 32 位串**(结论来自第三方客户端,未用本项目凭据复验)。没有指纹时填 32 个 `0`
   (`DandanplayMatchRequest.placeholderFileHash`)。结案:真实凭据下确认 `/match` 不再回 `errorCode 2`。
 - **Q54 自建弹弹play 兼容服务的 `isMatched` 判定与官方是否一致,未在真实播放中验证。**
-  地址可配(`DandanplayBase` / `DandanplayCredentials.baseURL`,默认仍是官方)。已验:本地 danmu_api 上
+  自建服务作为弹幕来源与官方并列(`DanmakuSource`,默认官方)。已验:本地 danmu_api 与 Vercel 部署上
   `match` / `bangumi` / `search/episodes` / `comment` 四个端点按 dandanplay 规范返回,签名头被忽略、
   鉴权看 URL 路径里的令牌(`docs/DANMU_API_FEASIBILITY.md` §2)。⛔ 未验:`isMatched` 的判定口径 ——
   实测 `火影忍者 S01E05` 命中《疾风传(2007)》第 5 话而非 2002 版,`遮天` 命中《手遮天(2026)》。
   LumaPlayer 对 `isMatched` 是直接采用并写集 / 剧绑定,错配会被缓存 4 小时。
-  结案:设置里填自建地址,播几部不同类型的番剧,确认 `/match` 返回的 `animeTitle` 就是正在播的那一部。
+  结案:设置里添加自建服务并设为默认,播几部不同类型的番剧,确认 `/match` 返回的 `animeTitle` 就是正在播的那一部。
 
 ## D. 工程与播放内核
 

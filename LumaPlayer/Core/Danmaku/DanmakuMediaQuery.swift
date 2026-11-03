@@ -15,7 +15,7 @@ struct DanmakuMediaQuery: Sendable, Equatable {
     let seriesKey: String?
     let episodeNumber: Int?
     let seasonNumber: Int?
-    /// 作品名(标题软校验 + 手动搜索框初始值)
+    /// 作品名(标题软校验;去掉年份后作手动搜索框初始值)
     let title: String
     let isMovie: Bool
     let tmdbID: Int?
@@ -24,7 +24,7 @@ struct DanmakuMediaQuery: Sendable, Equatable {
     /// 字节
     let fileSize: Int64?
 
-    var searchKeyword: String { title }
+    var searchKeyword: String { DanmakuSearchKeyword.removingYear(title) }
 
     var matcherTarget: DanmakuCandidateMatcher.Target {
         DanmakuCandidateMatcher.Target(

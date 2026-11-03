@@ -27,13 +27,30 @@ struct PlayerDanmakuPanel: View {
                 .padding(.vertical, Metrics.spacingXS)
 
             if case .failed(_, let needsCredentials) = danmaku.status, needsCredentials {
-                PlayerPanelRow(title: "填写弹弹play 凭据…", systemImage: "key") { openDanmakuSettings() }
+                PlayerPanelRow(title: "填写弹幕服务设置…", systemImage: "key") { openDanmakuSettings() }
             } else if case .failed = danmaku.status {
                 PlayerPanelRow(title: "重试", systemImage: "arrow.clockwise") { danmaku.reload() }
             }
             PlayerPanelRow(title: "选择弹幕…", systemImage: "list.bullet") {
                 dismiss()
                 openPicker()
+            }
+
+            if danmaku.sources.count > 1 {
+                PlayerPanelSeparator()
+                PlayerPanelHeader(title: "来源")
+                ForEach(danmaku.sources) { source in
+                    PlayerPanelRow(title: source.name, isSelected: source.id == danmaku.displayedSourceID) {
+                        guard source.id != danmaku.source?.id else { return }
+                        danmaku.selectSource(source)
+                    }
+                }
+            }
+            if let error = danmaku.sourceListError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, Metrics.spacingS)
             }
 
             PlayerPanelSeparator()
@@ -53,8 +70,9 @@ struct PlayerDanmakuPanel: View {
 
             PlayerPanelSeparator()
 
-            PlayerPanelRow(title: "弹幕外观与凭据…", systemImage: "gearshape") { openDanmakuSettings() }
+            PlayerPanelRow(title: "弹幕来源与外观…", systemImage: "gearshape") { openDanmakuSettings() }
         }
+        .task { await danmaku.refreshSourceList() }
     }
 
     private func openDanmakuSettings() {

@@ -45,10 +45,11 @@ final class DanmakuCacheTests: XCTestCase {
         let directory = temporaryURL("danmaku-cache")
         let cleanupTime = start.addingTimeInterval(DanmakuCommentCache.freshness + 3600)
         // 1:有效期外;2:刚好满有效期(读取已当作没有,清理也删);3:有效期内
-        await cache(directory, at: start).store(sample, forEpisode: 1)
+        await cache(directory, at: start).store(sample, forEpisode: 1, source: DanmakuSource.officialID)
         await cache(directory, at: cleanupTime.addingTimeInterval(-DanmakuCommentCache.freshness))
-            .store(sample, forEpisode: 2)
-        await cache(directory, at: cleanupTime.addingTimeInterval(-60)).store(sample, forEpisode: 3)
+            .store(sample, forEpisode: 2, source: DanmakuSource.officialID)
+        await cache(directory, at: cleanupTime.addingTimeInterval(-60))
+            .store(sample, forEpisode: 3, source: DanmakuSource.officialID)
         // 4:损坏;5:版本不对(时间是新的)
         let corrupt = directory.appending(path: "4.json")
         try Data("not json".utf8).write(to: corrupt)
@@ -69,7 +70,7 @@ final class DanmakuCacheTests: XCTestCase {
         XCTAssertEqual(report.removedBytes, expectedBytes)
         let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path(percentEncoded: false))
         XCTAssertEqual(Set(remaining), ["3.json", "nested"])
-        let kept = await store.comments(forEpisode: 3)
+        let kept = await store.comments(forEpisode: 3, source: DanmakuSource.officialID)
         XCTAssertEqual(kept, sample, "留下的文件读取时应仍然有效")
     }
 
@@ -87,23 +88,27 @@ final class DanmakuCacheTests: XCTestCase {
     func testBindingPurgeRemovesEpisodesAndSeriesOfThatServerOnly() async throws {
         let fileURL = temporaryURL("danmaku-bindings")
         let store = DanmakuBindingStore(fileURL: fileURL)
-        try await store.bind(binding(1), itemKey: "emby|SERVER-A|1", seriesKey: "emby|SERVER-A|series:9")
-        try await store.bind(binding(2), itemKey: "emby|SERVER-A|2", seriesKey: nil)
-        try await store.bind(binding(3), itemKey: "emby|SERVER-AB|1", seriesKey: "emby|SERVER-AB|series:9")
-        try await store.bind(binding(4), itemKey: "baidu|fsid:1", seriesKey: "baidu|dir:/x")
+        try await store.bind(binding(1), itemKey: "emby|SERVER-A|1", seriesKey: "emby|SERVER-A|series:9",
+            source: DanmakuSource.officialID)
+        try await store.bind(binding(2), itemKey: "emby|SERVER-A|2", seriesKey: nil,
+            source: DanmakuSource.officialID)
+        try await store.bind(binding(3), itemKey: "emby|SERVER-AB|1", seriesKey: "emby|SERVER-AB|series:9",
+            source: DanmakuSource.officialID)
+        try await store.bind(binding(4), itemKey: "baidu|fsid:1", seriesKey: "baidu|dir:/x",
+            source: DanmakuSource.officialID)
 
         let removed = try await store.purge(keyPrefix: "emby|SERVER-A|")
         XCTAssertEqual(removed, 3)
 
         // 换实例读盘:确认落了盘
         let reopened = DanmakuBindingStore(fileURL: fileURL)
-        let a1 = await reopened.episode(for: "emby|SERVER-A|1")
-        let a2 = await reopened.episode(for: "emby|SERVER-A|2")
-        let aSeries = await reopened.series(for: "emby|SERVER-A|series:9")
-        let ab1 = await reopened.episode(for: "emby|SERVER-AB|1")
-        let abSeries = await reopened.series(for: "emby|SERVER-AB|series:9")
-        let baidu = await reopened.episode(for: "baidu|fsid:1")
-        let baiduSeries = await reopened.series(for: "baidu|dir:/x")
+        let a1 = await reopened.episode(for: "emby|SERVER-A|1", source: DanmakuSource.officialID)
+        let a2 = await reopened.episode(for: "emby|SERVER-A|2", source: DanmakuSource.officialID)
+        let aSeries = await reopened.series(for: "emby|SERVER-A|series:9", source: DanmakuSource.officialID)
+        let ab1 = await reopened.episode(for: "emby|SERVER-AB|1", source: DanmakuSource.officialID)
+        let abSeries = await reopened.series(for: "emby|SERVER-AB|series:9", source: DanmakuSource.officialID)
+        let baidu = await reopened.episode(for: "baidu|fsid:1", source: DanmakuSource.officialID)
+        let baiduSeries = await reopened.series(for: "baidu|dir:/x", source: DanmakuSource.officialID)
         XCTAssertNil(a1)
         XCTAssertNil(a2)
         XCTAssertNil(aSeries)
@@ -114,6 +119,41 @@ final class DanmakuCacheTests: XCTestCase {
 
         let again = try await reopened.purge(keyPrefix: "emby|SERVER-A|")
         XCTAssertEqual(again, 0)
+    }
+
+    /// 删媒体服务器时自建弹幕来源下的绑定也要清;旧文件(没有 `sources` 键)照常读出官方绑定。
+    func testBindingPurgeCoversCustomSourcesAndReadsLegacyFile() async throws {
+        let fileURL = temporaryURL("danmaku-bindings-legacy")
+        try Data(#"""
+            {"episodes":{"emby|SERVER-A|1":{"episodeID":10,"animeID":1}},"series":{}}
+            """#.utf8).write(to: fileURL)
+        let store = DanmakuBindingStore(fileURL: fileURL)
+        let legacy = await store.episode(for: "emby|SERVER-A|1", source: DanmakuSource.officialID)
+        XCTAssertEqual(legacy?.episodeID, 10)
+
+        try await store.bind(binding(5), itemKey: "emby|SERVER-A|2", seriesKey: nil, source: "custom-1")
+        try await store.bind(binding(6), itemKey: "baidu|fsid:1", seriesKey: nil, source: "custom-1")
+        let removed = try await store.purge(keyPrefix: "emby|SERVER-A|")
+        XCTAssertEqual(removed, 2)
+
+        let reopened = DanmakuBindingStore(fileURL: fileURL)
+        let customGone = await reopened.episode(for: "emby|SERVER-A|2", source: "custom-1")
+        let customKept = await reopened.episode(for: "baidu|fsid:1", source: "custom-1")
+        let notOfficial = await reopened.episode(for: "baidu|fsid:1", source: DanmakuSource.officialID)
+        XCTAssertNil(customGone)
+        XCTAssertEqual(customKept, binding(6))
+        XCTAssertNil(notOfficial)
+    }
+
+    /// 同一个 episodeId 在不同来源是不同的弹幕库。
+    func testCacheIsSeparatedPerSource() async {
+        let directory = temporaryURL("danmaku-cache-sources")
+        let store = cache(directory, at: Date(timeIntervalSince1970: 1_000_000))
+        await store.store(sample, forEpisode: 7, source: DanmakuSource.officialID)
+        let custom = await store.comments(forEpisode: 7, source: "custom-1")
+        let official = await store.comments(forEpisode: 7, source: DanmakuSource.officialID)
+        XCTAssertNil(custom)
+        XCTAssertEqual(official, sample)
     }
 
     /// 按 `emby|<id>|` 前缀清,别的服务器不动。
@@ -139,15 +179,17 @@ final class DanmakuCacheTests: XCTestCase {
         try await registry.add(keptServer)
         let removedKey = "emby|\(removedServer.id.uuidString)|"
         let keptKey = "emby|\(keptServer.id.uuidString)|"
-        try await bindings.bind(binding(1), itemKey: removedKey + "1", seriesKey: removedKey + "series:9")
-        try await bindings.bind(binding(2), itemKey: keptKey + "1", seriesKey: keptKey + "series:9")
+        try await bindings.bind(binding(1), itemKey: removedKey + "1", seriesKey: removedKey + "series:9",
+            source: DanmakuSource.officialID)
+        try await bindings.bind(binding(2), itemKey: keptKey + "1", seriesKey: keptKey + "series:9",
+            source: DanmakuSource.officialID)
 
         try await container.removeServer(id: removedServer.id)
 
-        let gone = await bindings.episode(for: removedKey + "1")
-        let goneSeries = await bindings.series(for: removedKey + "series:9")
-        let kept = await bindings.episode(for: keptKey + "1")
-        let keptSeries = await bindings.series(for: keptKey + "series:9")
+        let gone = await bindings.episode(for: removedKey + "1", source: DanmakuSource.officialID)
+        let goneSeries = await bindings.series(for: removedKey + "series:9", source: DanmakuSource.officialID)
+        let kept = await bindings.episode(for: keptKey + "1", source: DanmakuSource.officialID)
+        let keptSeries = await bindings.series(for: keptKey + "series:9", source: DanmakuSource.officialID)
         XCTAssertNil(gone)
         XCTAssertNil(goneSeries)
         XCTAssertEqual(kept, binding(2))

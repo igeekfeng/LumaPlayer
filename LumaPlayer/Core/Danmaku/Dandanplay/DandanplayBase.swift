@@ -1,12 +1,9 @@
 import Foundation
 
-/// 弹弹play 服务地址。
+/// 弹弹play 服务地址:官方 `https://api.dandanplay.net`,或自建兼容服务(第三方实现的 dandanplay 协议)
+/// 的根地址 —— 这类服务的令牌写在 URL 路径里,所以要带路径前缀,例如 `http://127.0.0.1:9321/87654321`。
 ///
-/// 默认官方 `https://api.dandanplay.net`。自建的弹弹play 兼容服务(第三方实现的 dandanplay 协议)
-/// 填它的根地址 —— 这类服务的令牌写在 URL 路径里,所以要带路径前缀,
-/// 例如 `http://127.0.0.1:9321/87654321`。
-///
-/// ⛔ 空串 = 官方服务;非空但解析不出来 = `nil`,调用方如实报错。
+/// ⛔ 自建地址解析不出来(含空串)= `nil`,调用方如实报错,不回退官方:
 /// 把用户填错的地址静默换成官方服务,只会换来一串看不懂的 403。
 struct DandanplayBase: Sendable, Equatable {
 
@@ -27,13 +24,9 @@ struct DandanplayBase: Sendable, Equatable {
         self.pathPrefix = pathPrefix
     }
 
-    /// 空串 = 官方服务;非空但解析不出来 = nil。
+    /// 自建服务地址;解析不出来 = nil。
     init?(urlString: String) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            self = .official
-            return
-        }
         guard let url = URL(string: trimmed),
               let scheme = url.scheme?.lowercased(),
               (scheme == "http" || scheme == "https"),

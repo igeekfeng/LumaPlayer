@@ -265,6 +265,21 @@ actor CredentialStore {
         try await storage.removeValue(forAccount: Self.dandanplayCredentialsAccount)
     }
 
+    /// 自建弹幕服务列表 + 默认来源。地址里带令牌,所以放这里不放 UserDefaults。
+    private static let danmakuSourcesAccount = "danmaku-sources"
+
+    /// 没存过 = 只有官方、默认官方。
+    func danmakuSourceSettings() async throws -> DanmakuSourceSettings {
+        guard let data = try await storage.value(forAccount: Self.danmakuSourcesAccount) else {
+            return DanmakuSourceSettings()
+        }
+        return try JSONDecoder().decode(DanmakuSourceSettings.self, from: data)
+    }
+
+    func saveDanmakuSourceSettings(_ settings: DanmakuSourceSettings) async throws {
+        try await storage.setValue(JSONEncoder().encode(settings), forAccount: Self.danmakuSourcesAccount)
+    }
+
     // MARK: - assrt(伪射手)在线字幕
 
     /// assrt API 密钥(32 位),全 App 一份(接口事实见 `AssrtEndpoint`)。

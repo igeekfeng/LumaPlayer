@@ -3,7 +3,7 @@ import Foundation
 /// 弹弹play 请求失败。「没匹配上」「搜索无结果」不是错误,是合法空结果。
 enum DandanplayError: Error, Equatable {
 
-    /// 官方服务的 AppId / AppSecret 没填全,或压根没配弹幕服务(要用户去填;`forbidden` 是要用户去查)。
+    /// 选的是官方服务但 AppId / AppSecret 没填全(要用户去填;`forbidden` 是要用户去查)。
     case credentialsMissing
     /// 只调公开接口,出现即说明签名头没带上(§1)。
     case unauthorized
@@ -20,10 +20,10 @@ enum DandanplayError: Error, Equatable {
     var userMessage: String {
         switch self {
         case .credentialsMissing:
-            return "还没有配置弹幕服务。去「设置 → 弹幕」填弹弹play 的 AppId / AppSecret,"
-                + "或填自建兼容服务的地址。"
+            return "官方弹弹play 需要 AppId / AppSecret。去「设置 → 弹幕」填写,"
+                + "或在这里换成自建的弹幕服务。"
         case .unauthorized:
-            return "弹弹play 要求身份验证(HTTP 401)。"
+            return "弹幕服务要求身份验证(HTTP 401)。"
         case .forbidden(let reason):
             let hint: String
             switch reason {
@@ -32,17 +32,17 @@ enum DandanplayError: Error, Equatable {
             case let reason?: hint = ":\(reason)"
             case nil: hint = ""
             }
-            return "弹弹play 拒绝了请求(HTTP 403)\(hint)。"
+            return "弹幕服务拒绝了请求(HTTP 403)\(hint)。"
         case .server(let statusCode):
-            return "弹弹play 返回了错误(HTTP \(statusCode))。"
+            return "弹幕服务返回了错误(HTTP \(statusCode))。"
         case .api(let code, let message, let detail):
             let reason = [message, detail].compactMap { $0 }.joined(separator: " · ")
             let parts = [code.map { "错误码 \($0)" }, reason.isEmpty ? nil : reason].compactMap { $0 }
-            return "弹弹play 返回失败\(parts.isEmpty ? "" : "(\(parts.joined(separator: ":")))")。"
+            return "弹幕服务返回失败\(parts.isEmpty ? "" : "(\(parts.joined(separator: ":")))")。"
         case .transport(let detail):
-            return "连接弹弹play 失败:\(detail)"
+            return "连接弹幕服务失败:\(detail)"
         case .decoding(let detail):
-            return "解析弹弹play 的响应失败:\(detail)"
+            return "解析弹幕服务的响应失败:\(detail)"
         }
     }
 

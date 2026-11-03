@@ -34,7 +34,8 @@ struct AppSettingsView: View {
             SubtitleSettingsView(store: container.subtitleStyles, credentials: container.credentials)
                 .tabItem { Label("字幕", systemImage: "captions.bubble") }
                 .tag(SettingsTab.subtitles)
-            DanmakuSettingsView(credentials: container.credentials, store: container.danmakuSettings)
+            DanmakuSettingsView(
+                credentials: container.credentials, danmaku: container.danmaku, store: container.danmakuSettings)
                 .tabItem { Label("弹幕", systemImage: "text.bubble") }
                 .tag(SettingsTab.danmaku)
             ServerListView(container: container)

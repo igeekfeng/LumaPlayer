@@ -47,7 +47,7 @@ final class DanmakuTests: XCTestCase {
     /// ⛔ AppSecret 本身绝不出现在请求里(不用凭证模式)。
     func testRequestCarriesSignatureHeadersButNeverTheSecret() async throws {
         MockEmbyURLProtocol.stub(.json(#"{"count":0,"comments":[]}"#), host: host, path: "/api/v2/comment/123450001")
-        _ = try await makeClient().comments(episodeID: 123450001, conversion: .simplified, credentials: credentials)
+        _ = try await makeClient().comments(episodeID: 123450001, conversion: .simplified, server: .official(credentials))
 
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/comment/123450001"))
         XCTAssertEqual(request.header("X-AppId"), "testapp")
@@ -63,7 +63,7 @@ final class DanmakuTests: XCTestCase {
     func testMissingCredentialsDoNotSendAnyRequest() async {
         do {
             _ = try await makeClient().searchEpisodes(
-                anime: "测试", episode: nil, credentials: DandanplayCredentials(appID: " ", appSecret: "x"))
+                anime: "测试", episode: nil, server: .official(DandanplayCredentials(appID: " ", appSecret: "x")))
             XCTFail("应当抛 credentialsMissing")
         } catch {
             XCTAssertEqual(error as? DandanplayError, .credentialsMissing)
@@ -75,12 +75,13 @@ final class DanmakuTests: XCTestCase {
 
     /// 自建服务:地址用它的 scheme / host / 令牌路径前缀,且不发签名头。
     func testCustomServerUsesItsAddressAndSkipsSignature() async throws {
-        let custom = DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321/87654321")
         MockEmbyURLProtocol.stub(
             .json(#"{"count":0,"comments":[]}"#),
             scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/123450001")
 
-        _ = try await makeClient().comments(episodeID: 123450001, conversion: .simplified, credentials: custom)
+        _ = try await makeClient().comments(
+            episodeID: 123450001, conversion: .simplified,
+            server: .custom(baseURL: "http://127.0.0.1:9321/87654321"))
 
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/comment/123450001"))
         XCTAssertEqual(request.url.scheme, "http")
@@ -91,27 +92,17 @@ final class DanmakuTests: XCTestCase {
         XCTAssertNil(request.header("X-Signature"))
     }
 
-    /// 自建服务不看 AppId / AppSecret,两者留空也要能发请求。
-    func testCustomServerDoesNotRequireAppCredentials() async throws {
-        let custom = DandanplayCredentials(appID: " ", appSecret: " ", baseURL: "http://127.0.0.1:9321")
-        MockEmbyURLProtocol.stub(
-            .json(#"{"errorCode":0,"success":true,"bangumi":{"animeId":1,"animeTitle":"某番","episodes":[]}}"#),
-            scheme: "http", host: "127.0.0.1", path: "/api/v2/bangumi/1")
-
-        let bangumi = try await makeClient().bangumi(animeID: 1, credentials: custom)
-        XCTAssertEqual(bangumi.animeId, 1)
-    }
-
     /// 地址填错要如实报错,⛔ 不能静默退回官方服务(那只会换来一串看不懂的 403)。
     func testUnparseableBaseURLFailsBeforeAnyRequest() async {
-        let broken = DandanplayCredentials(appID: "", appSecret: "", baseURL: "127.0.0.1:9321/tok")
-        do {
-            _ = try await makeClient().bangumi(animeID: 1, credentials: broken)
-            XCTFail("应当抛错")
-        } catch let error as DandanplayError {
-            XCTAssertEqual(error, .transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的服务地址"))
-        } catch {
-            XCTFail("错误类型不对:\(error)")
+        for broken in ["127.0.0.1:9321/tok", ""] {
+            do {
+                _ = try await makeClient().bangumi(animeID: 1, server: .custom(baseURL: broken))
+                XCTFail("应当抛错:\(broken)")
+            } catch let error as DandanplayError {
+                XCTAssertEqual(error, .transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的地址"))
+            } catch {
+                XCTFail("错误类型不对:\(error)")
+            }
         }
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
@@ -155,7 +146,7 @@ final class DanmakuTests: XCTestCase {
     func testForbiddenMapsToCredentialError() async {
         MockEmbyURLProtocol.stub(.status(403), host: host, path: "/api/v2/bangumi/1")
         do {
-            _ = try await makeClient().bangumi(animeID: 1, credentials: credentials)
+            _ = try await makeClient().bangumi(animeID: 1, server: .official(credentials))
             XCTFail("应当抛错")
         } catch let error as DandanplayError {
             XCTAssertEqual(error, .forbidden(reason: nil))
@@ -170,7 +161,7 @@ final class DanmakuTests: XCTestCase {
             .json(#"{"errorCode":1001,"success":false,"errorMessage":"参数错误","animes":null}"#),
             host: host, path: "/api/v2/search/episodes")
         do {
-            _ = try await makeClient().searchEpisodes(anime: "ab", episode: nil, credentials: credentials)
+            _ = try await makeClient().searchEpisodes(anime: "ab", episode: nil, server: .official(credentials))
             XCTFail("应当抛错")
         } catch {
             XCTAssertEqual(error as? DandanplayError, .api(code: 1001, message: "参数错误", detail: nil))
@@ -190,7 +181,7 @@ final class DanmakuTests: XCTestCase {
                 DandanplayMatchRequest(
                     fileName: "某番 01", fileHash: nil, fileSize: nil, videoDuration: nil,
                     matchMode: DandanplayMatchRequest.fileNameOnly),
-                credentials: credentials)
+                server: .official(credentials))
             XCTFail("应当抛错")
         } catch let error as DandanplayError {
             XCTAssertEqual(error, .api(code: 2, message: "一个或多个参数不符合规则", detail: "fileHash"))
@@ -274,6 +265,9 @@ final class DanmakuTests: XCTestCase {
         return (service, bindings)
     }
 
+    private let customSource = DanmakuSource(
+        id: "custom-1", name: "自建", kind: .custom(baseURL: "http://127.0.0.1:9321/87654321"))
+
     private let query = DanmakuMediaQuery(
         itemKey: "item-5", seriesKey: "series-x", episodeNumber: 5, seasonNumber: 1,
         title: "某番", matchFileName: "某番 05", fileSize: nil)
@@ -291,7 +285,7 @@ final class DanmakuTests: XCTestCase {
             bindings: DanmakuBindingStore(fileURL: temporaryURL("b")),
             cache: DanmakuCommentCache(directory: temporaryURL("c")))
         do {
-            _ = try await service.resolve(query, durationSeconds: nil)
+            _ = try await service.resolve(query, source: .official, durationSeconds: nil)
             XCTFail("应当抛错")
         } catch {
             XCTAssertEqual(error as? DandanplayError, .credentialsMissing)
@@ -299,13 +293,11 @@ final class DanmakuTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
-    /// 自建服务整链路:只填地址、不填 AppId / AppSecret,也要能匹配 + 拉弹幕。
+    /// 自建服务整链路:不填 AppId / AppSecret,也要能匹配 + 拉弹幕。
     func testServiceResolvesAgainstCustomServerWithoutAppCredentials() async throws {
-        let store = CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred-custom")))
-        try await store.saveDandanplayCredentials(
-            DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321/87654321"))
         let service = DanmakuService(
-            credentials: store, client: makeClient(),
+            credentials: CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred-custom"))),
+            client: makeClient(),
             bindings: DanmakuBindingStore(fileURL: temporaryURL("b-custom")),
             cache: DanmakuCommentCache(directory: temporaryURL("c-custom")))
 
@@ -317,7 +309,7 @@ final class DanmakuTests: XCTestCase {
             .json(#"{"count":1,"comments":[{"cid":9,"p":"1.00,1,16777215,u","m":"hi"}]}"#),
             scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/77")
 
-        let resolution = try await service.resolve(query, durationSeconds: nil)
+        let resolution = try await service.resolve(query, source: customSource, durationSeconds: nil)
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当直接加载:\(resolution)") }
         XCTAssertEqual(loaded.comments.map(\.text), ["hi"])
 
@@ -326,22 +318,97 @@ final class DanmakuTests: XCTestCase {
         XCTAssertNil(request.header("X-Signature"))
     }
 
-    /// 自建服务只填地址时,`isComplete` 为假但 `usesCustomServer` 为真 —— 不该报「没填凭据」。
-    func testCustomServerOnlyCredentialsPassTheGuard() async throws {
-        let store = CredentialStore(storage: CredentialFileStore(fileURL: temporaryURL("cred-guard")))
-        try await store.saveDandanplayCredentials(
-            DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://127.0.0.1:9321"))
-        let service = DanmakuService(
-            credentials: store, client: makeClient(),
-            bindings: DanmakuBindingStore(fileURL: temporaryURL("b-guard")),
-            cache: DanmakuCommentCache(directory: temporaryURL("c-guard")))
-        MockEmbyURLProtocol.stub(.json(#"""
-            {"success":true,"isMatched":false,"matches":[]}
-            """#), scheme: "http", host: "127.0.0.1", path: "/api/v2/match")
+    /// 各来源的 ID 各自编号:官方绑定过的集,换到自建来源时 ⛔ 不能拿官方的 episodeId 去问自建服务
+    /// (danmu_api 对不认识的 ID 回 404),也不能读到官方那份缓存。
+    func testBindingsAndCacheAreIsolatedPerSource() async throws {
+        let (service, bindings) = try await makeService()
+        try await bindings.bind(
+            .init(episodeID: 77, animeID: 1, animeTitle: nil, episodeTitle: nil, shift: nil),
+            itemKey: "item-5", seriesKey: "series-x", source: DanmakuSource.officialID)
+        stubComments(77)
+        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
 
-        // 走到 /match 说明没被 credentialsMissing 拦住(地址校验由客户端做,这里只要不抛那个错)
-        _ = try await service.resolve(query, durationSeconds: nil)
-        XCTAssertFalse(MockEmbyURLProtocol.recordedRequests().isEmpty)
+        MockEmbyURLProtocol.stub(.json(#"""
+            {"success":true,"isMatched":true,
+             "matches":[{"episodeId":77,"animeId":9,"animeTitle":"另一部","episodeTitle":"第5话"}]}
+            """#), scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/match")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":1,"comments":[{"cid":1,"p":"2.00,1,16777215","m":"custom"}]}"#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/77")
+
+        let resolution = try await service.resolve(query, source: customSource, durationSeconds: nil)
+        guard case .loaded(let loaded) = resolution else { return XCTFail("应当加载:\(resolution)") }
+        XCTAssertEqual(loaded.comments.map(\.text), ["custom"], "同号 episodeId 不能串到官方缓存")
+        XCTAssertNotNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/87654321/api/v2/match"))
+        let customBinding = await bindings.episode(for: "item-5", source: customSource.id)
+        let officialBinding = await bindings.episode(for: "item-5", source: DanmakuSource.officialID)
+        XCTAssertEqual(customBinding?.animeID, 9)
+        XCTAssertEqual(officialBinding?.animeID, 1, "自建来源的匹配不能覆盖官方绑定")
+    }
+
+    /// 记住的 ID 被服务端回 404(自建服务重启后丢了 ID 映射)= 绑定失效:删掉、重新匹配,⛔ 不报错停住。
+    func testStaleEpisodeBindingIsDroppedAndRematched() async throws {
+        let (service, bindings) = try await makeService()
+        try await bindings.bind(
+            .init(episodeID: 13625, animeID: 41837, animeTitle: nil, episodeTitle: nil, shift: nil),
+            itemKey: "item-5", seriesKey: nil, source: customSource.id)
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":0,"comments":[]}"#, statusCode: 404),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/13625")
+        MockEmbyURLProtocol.stub(.json(#"""
+            {"success":true,"isMatched":true,
+             "matches":[{"episodeId":20001,"animeId":200,"animeTitle":"某番","episodeTitle":"第5话"}]}
+            """#), scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/match")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":1,"comments":[{"cid":1,"p":"2.00,1,16777215","m":"fresh"}]}"#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/20001")
+
+        let resolution = try await service.resolve(query, source: customSource, durationSeconds: nil)
+        guard case .loaded(let loaded) = resolution else { return XCTFail("应当重新匹配并加载:\(resolution)") }
+        XCTAssertEqual(loaded.comments.map(\.text), ["fresh"])
+        let rebound = await bindings.episode(for: "item-5", source: customSource.id)
+        XCTAssertEqual(rebound?.episodeID, 20001)
+    }
+
+    /// 非 404 的失败(如 500)不是绑定失效,如实抛出,⛔ 不删用户手选的绑定。
+    func testServerErrorOnBoundEpisodeKeepsBinding() async throws {
+        let (service, bindings) = try await makeService()
+        try await bindings.bind(
+            .init(episodeID: 77, animeID: 1, animeTitle: nil, episodeTitle: nil, shift: nil),
+            itemKey: "item-5", seriesKey: nil, source: DanmakuSource.officialID)
+        MockEmbyURLProtocol.stub(.status(500), host: host, path: "/api/v2/comment/77")
+        do {
+            _ = try await service.resolve(query, source: .official, durationSeconds: nil)
+            XCTFail("应当抛错")
+        } catch {
+            XCTAssertEqual(error as? DandanplayError, .server(statusCode: 500))
+        }
+        let kept = await bindings.episode(for: "item-5", source: DanmakuSource.officialID)
+        XCTAssertEqual(kept?.episodeID, 77)
+    }
+
+    /// 删除自建来源时连同它的绑定一起清,官方的不动;默认来源指向被删的回到官方。
+    func testRemovingCustomSourcePurgesItsBindingsOnly() async throws {
+        let (service, bindings) = try await makeService()
+        let custom = DanmakuCustomSource(id: customSource.id, name: "自建", baseURL: "http://127.0.0.1:9321/87654321")
+        try await service.saveSourceSettings(
+            DanmakuSourceSettings(customSources: [custom], defaultSourceID: custom.id))
+        let binding = DanmakuBindingStore.EpisodeBinding(
+            episodeID: 1, animeID: 1, animeTitle: nil, episodeTitle: nil, shift: nil)
+        try await bindings.bind(binding, itemKey: "item-5", seriesKey: "series-x", source: custom.id)
+        try await bindings.bind(binding, itemKey: "item-5", seriesKey: "series-x", source: DanmakuSource.officialID)
+
+        try await service.saveSourceSettings(DanmakuSourceSettings(customSources: [], defaultSourceID: custom.id))
+
+        let settings = try await service.sourceSettings()
+        XCTAssertNil(settings.defaultSourceID)
+        XCTAssertEqual(settings.defaultSource, .official)
+        let customEpisode = await bindings.episode(for: "item-5", source: custom.id)
+        let customSeries = await bindings.series(for: "series-x", source: custom.id)
+        let officialEpisode = await bindings.episode(for: "item-5", source: DanmakuSource.officialID)
+        XCTAssertNil(customEpisode)
+        XCTAssertNil(customSeries)
+        XCTAssertNotNil(officialEpisode)
     }
 
     /// 精确关联(`isMatched`)直接采用,并记住这一集与这一部剧。
@@ -353,12 +420,12 @@ final class DanmakuTests: XCTestCase {
             """#), host: host, path: "/api/v2/match")
         stubComments(1000105)
 
-        let resolution = try await service.resolve(query, durationSeconds: 1420.4)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: 1420.4)
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当直接加载:\(resolution)") }
         XCTAssertEqual(loaded.comments.map(\.text), ["hi"])
         XCTAssertEqual(loaded.binding.shift, 1.5)
-        let episodeBinding = await bindings.episode(for: "item-5")
-        let seriesBinding = await bindings.series(for: "series-x")
+        let episodeBinding = await bindings.episode(for: "item-5", source: DanmakuSource.officialID)
+        let seriesBinding = await bindings.series(for: "series-x", source: DanmakuSource.officialID)
         XCTAssertEqual(episodeBinding?.episodeID, 1000105)
         XCTAssertEqual(seriesBinding?.animeID, 10001)
 
@@ -376,7 +443,7 @@ final class DanmakuTests: XCTestCase {
              "matches":[{"episodeId":1,"animeId":1,"animeTitle":"A"},{"episodeId":2,"animeId":2,"animeTitle":"B"}]}
             """#), host: host, path: "/api/v2/match")
 
-        let resolution = try await service.resolve(query, durationSeconds: nil)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: nil)
         guard case .needsSelection(let candidates) = resolution else { return XCTFail("应当让用户挑") }
         XCTAssertEqual(candidates.map(\.episodeID), [1, 2])
         XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/comment/1"))
@@ -387,7 +454,7 @@ final class DanmakuTests: XCTestCase {
         let (service, bindings) = try await makeService()
         try await bindings.bind(
             .init(episodeID: 1000101, animeID: 10001, animeTitle: "某番", episodeTitle: "第1话", shift: nil),
-            itemKey: "item-1", seriesKey: "series-x")
+            itemKey: "item-1", seriesKey: "series-x", source: DanmakuSource.officialID)
         MockEmbyURLProtocol.stub(.json(#"""
             {"success":true,"bangumi":{"animeId":10001,"animeTitle":"某番","episodes":[
               {"episodeId":1000101,"episodeTitle":"第1话","episodeNumber":"1"},
@@ -396,7 +463,7 @@ final class DanmakuTests: XCTestCase {
             """#), host: host, path: "/api/v2/bangumi/10001")
         stubComments(1000105)
 
-        let resolution = try await service.resolve(query, durationSeconds: nil)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: nil)
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当按集号对上:\(resolution)") }
         XCTAssertEqual(loaded.binding.episodeID, 1000105)
         XCTAssertNil(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/match"))
@@ -416,10 +483,10 @@ final class DanmakuTests: XCTestCase {
         let (service, bindings) = try await makeService()
         try await bindings.bind(
             .init(episodeID: 77, animeID: 1, animeTitle: nil, episodeTitle: nil, shift: nil),
-            itemKey: "item-5", seriesKey: nil)
+            itemKey: "item-5", seriesKey: nil, source: DanmakuSource.officialID)
         stubComments(77)
-        _ = try await service.resolve(query, durationSeconds: nil)
-        _ = try await service.resolve(query, durationSeconds: nil)
+        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
+        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
         let fetches = MockEmbyURLProtocol.recordedRequests().filter { $0.url.path == "/api/v2/comment/77" }
         XCTAssertEqual(fetches.count, 1)
     }

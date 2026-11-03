@@ -25,6 +25,12 @@ final class DanmakuController {
     private(set) var isVisible: Bool
     /// 秒,本集有效
     var userOffset: Double = 0
+    /// 全部可选来源(官方在前),每次加载时从设置重读
+    private(set) var sources: [DanmakuSource] = []
+    /// 本集正在用的来源。初值跟随设置里的默认来源,面板里换了只影响本集
+    private(set) var source: DanmakuSource?
+    /// 面板里手动换过的来源;nil = 跟随默认。被删掉了也回到默认
+    @ObservationIgnored private var chosenSourceID: String?
 
     let query: DanmakuMediaQuery
     @ObservationIgnored private let service: DanmakuService
@@ -61,6 +67,36 @@ final class DanmakuController {
         if visible { startIfNeeded() }
     }
 
+    /// 读来源列表失败的原因(面板如实显示);成功读到一次就清掉
+    private(set) var sourceListError: String?
+
+    /// 面板打开时刷新来源列表(弹幕没开时还没读过);不动正在用的来源与加载状态。
+    func refreshSourceList() async {
+        do {
+            let settings = try await service.sourceSettings()
+            sources = settings.sources
+            defaultSourceID = settings.defaultSource.id
+            sourceListError = nil
+        } catch {
+            sourceListError = "读取弹幕来源失败:\(error.localizedDescription)"
+        }
+    }
+
+    /// 面板里标勾用:已经定下的来源,或还没加载时将要用的那个。
+    var displayedSourceID: String? {
+        source?.id ?? chosenSourceID ?? defaultSourceID
+    }
+
+    private var defaultSourceID: String?
+
+    /// 本集换一个弹幕来源,按新来源重新匹配(各来源的绑定互不影响)。
+    func selectSource(_ source: DanmakuSource) {
+        chosenSourceID = source.id
+        isVisible = true
+        clearLoaded()
+        reload()
+    }
+
     /// 重新自动匹配。指纹在这里取(要等播放源就绪);取不到就退回文件名匹配,⛔ 指纹不是匹配前提。
     func reload() {
         loadTask?.cancel()
@@ -71,6 +107,7 @@ final class DanmakuController {
         let fingerprintProvider = self.fingerprintProvider
         loadTask = Task { [weak self, service] in
             do {
+                guard let source = try await self?.refreshSource() else { return }
                 let fingerprint = await fingerprintProvider()
                 guard !Task.isCancelled else { return }
                 let context = DanmakuMatchContext(
@@ -78,7 +115,7 @@ final class DanmakuController {
                     isMovie: hints.isMovie ?? query.isMovie,
                     fileHash: fingerprint)
                 let resolution = try await service.resolve(
-                    query, durationSeconds: duration, matchContext: context)
+                    query, source: source, durationSeconds: duration, matchContext: context)
                 guard !Task.isCancelled else { return }
                 switch resolution {
                 case .loaded(let danmaku): await self?.apply(danmaku)
@@ -98,7 +135,8 @@ final class DanmakuController {
         let query = query
         loadTask = Task { [weak self, service] in
             do {
-                let danmaku = try await service.select(candidate, for: query)
+                guard let source = try await self?.currentSource() else { return }
+                let danmaku = try await service.select(candidate, for: query, source: source)
                 guard !Task.isCancelled else { return }
                 await self?.apply(danmaku)
             } catch {
@@ -109,16 +147,14 @@ final class DanmakuController {
     }
 
     func search(keyword: String, episode: Int?) async throws -> (groups: [DanmakuSearchGroup], hasMore: Bool) {
-        try await service.search(keyword: keyword, episode: episode)
+        try await service.search(keyword: keyword, episode: episode, source: currentSource())
     }
 
-    /// 「匹配错了」:忘掉绑定、清空弹幕,回到等用户挑。
+    /// 「匹配错了」:忘掉这个来源下的绑定、清空弹幕,回到等用户挑。
     func unbind() async throws {
         loadTask?.cancel()
-        try await service.unbind(query)
-        loaded = nil
-        widthPerPoint = []
-        layoutMemo = nil
+        try await service.unbind(query, source: currentSource())
+        clearLoaded()
         status = .needsSelection(candidates: [])
     }
 
@@ -148,6 +184,29 @@ final class DanmakuController {
     }
 
     // MARK: - 内部
+
+    /// 重读来源列表,定下本集用哪个。
+    private func refreshSource() async throws -> DanmakuSource {
+        let settings = try await service.sourceSettings()
+        let resolved = chosenSourceID.flatMap(settings.source(id:)) ?? settings.defaultSource
+        sources = settings.sources
+        defaultSourceID = settings.defaultSource.id
+        sourceListError = nil
+        source = resolved
+        return resolved
+    }
+
+    /// 搜索 / 手选 / 解绑跟着已加载时定下的来源走,结果才和候选对得上。
+    private func currentSource() async throws -> DanmakuSource {
+        if let source { return source }
+        return try await refreshSource()
+    }
+
+    private func clearLoaded() {
+        loaded = nil
+        widthPerPoint = []
+        layoutMemo = nil
+    }
 
     private func apply(_ danmaku: LoadedDanmaku) async {
         let texts = danmaku.comments.map(\.text)

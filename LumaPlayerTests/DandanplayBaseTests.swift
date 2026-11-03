@@ -1,22 +1,17 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `DandanplayBase` 地址解析 + `DandanplayCredentials` 的自建服务判定。
+/// `DandanplayBase` 地址解析 + 弹幕来源配置。
 ///
 /// 地址是从设置页进来的字符串,解析错一位(尾 `/`、默认端口、带查询串)就会让请求打到
 /// 另一个地方 —— 这些分支全部要覆盖。
 final class DandanplayBaseTests: XCTestCase {
 
-    // MARK: - 空值 = 官方
-
-    func testEmptyStringMeansOfficial() throws {
-        XCTAssertEqual(DandanplayBase(urlString: ""), .official)
-        XCTAssertEqual(DandanplayBase(urlString: "   "), .official)
-        let official = try XCTUnwrap(DandanplayBase(urlString: ""))
-        XCTAssertEqual(official.host, "api.dandanplay.net")
-        XCTAssertEqual(official.scheme, "https")
-        XCTAssertNil(official.port)
-        XCTAssertEqual(official.pathPrefix, "")
+    func testOfficialBase() {
+        XCTAssertEqual(DandanplayBase.official.host, "api.dandanplay.net")
+        XCTAssertEqual(DandanplayBase.official.scheme, "https")
+        XCTAssertNil(DandanplayBase.official.port)
+        XCTAssertEqual(DandanplayBase.official.pathPrefix, "")
     }
 
     // MARK: - 自建服务解析
@@ -54,7 +49,7 @@ final class DandanplayBaseTests: XCTestCase {
     func testUnparseableStringsAreRejected() {
         for bad in [
             "ftp://h/t", "http://", "https:///path", "not a url",
-            "http://h/t?x=1", "http://h/t#frag", "127.0.0.1:9321/tok",
+            "http://h/t?x=1", "http://h/t#frag", "127.0.0.1:9321/tok", "", "   ",
         ] {
             XCTAssertNil(DandanplayBase(urlString: bad), "应当拒绝:\(bad)")
         }
@@ -86,35 +81,39 @@ final class DandanplayBaseTests: XCTestCase {
         XCTAssertEqual(url.path, "/api/v2/match")
     }
 
-    // MARK: - 凭据
+    // MARK: - 来源配置
 
-    func testCredentialsDetectCustomServer() {
-        XCTAssertFalse(DandanplayCredentials(appID: "a", appSecret: "b").usesCustomServer)
-        XCTAssertFalse(DandanplayCredentials(appID: "a", appSecret: "b", baseURL: " ").usesCustomServer)
-        XCTAssertTrue(DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://h/t").usesCustomServer)
+    func testSourceSettingsDefaultToOfficial() {
+        let empty = DanmakuSourceSettings()
+        XCTAssertEqual(empty.sources, [.official])
+        XCTAssertEqual(empty.defaultSource, .official)
     }
 
-    func testCredentialsEmptyRequiresAllThreeBlank() {
-        XCTAssertTrue(DandanplayCredentials(appID: "", appSecret: "").isEmpty)
-        XCTAssertTrue(DandanplayCredentials(appID: "", appSecret: "", baseURL: " ").isEmpty)
-        XCTAssertFalse(DandanplayCredentials(appID: "", appSecret: "", baseURL: "http://h/t").isEmpty)
-        XCTAssertFalse(DandanplayCredentials(appID: "a", appSecret: "", baseURL: "").isEmpty)
-        XCTAssertFalse(DandanplayCredentials(appID: "", appSecret: "b", baseURL: "").isEmpty)
+    func testSourceSettingsListOfficialFirstAndHonorDefault() {
+        let custom = DanmakuCustomSource(id: "c1", name: "自建", baseURL: "http://h/t")
+        let settings = DanmakuSourceSettings(customSources: [custom], defaultSourceID: "c1")
+        XCTAssertEqual(settings.sources.map(\.id), [DanmakuSource.officialID, "c1"])
+        XCTAssertEqual(settings.defaultSource, custom.source)
+        XCTAssertEqual(custom.source.kind, .custom(baseURL: "http://h/t"))
     }
 
-    /// 旧凭据文件只有 appID / appSecret,加字段后必须还能解码(⛔ 不能逼用户重填)。
-    func testDecodesLegacyCredentialsWithoutBaseURL() throws {
-        let data = Data(#"{"appID":"a","appSecret":"b"}"#.utf8)
-        let credentials = try JSONDecoder().decode(DandanplayCredentials.self, from: data)
-        XCTAssertEqual(credentials.appID, "a")
-        XCTAssertEqual(credentials.appSecret, "b")
-        XCTAssertEqual(credentials.baseURL, "")
-        XCTAssertFalse(credentials.usesCustomServer)
+    /// 默认来源被删后回到官方,⛔ 不能变成「没有来源」。
+    func testDanglingDefaultFallsBackToOfficial() {
+        XCTAssertEqual(DanmakuSourceSettings(customSources: [], defaultSourceID: "gone").defaultSource, .official)
     }
 
-    func testEncodeRoundTripKeepsBaseURL() throws {
-        let credentials = DandanplayCredentials(appID: "a", appSecret: "b", baseURL: "http://h/t")
-        let data = try JSONEncoder().encode(credentials)
-        XCTAssertEqual(try JSONDecoder().decode(DandanplayCredentials.self, from: data), credentials)
+    func testSourceSettingsRoundTrip() throws {
+        let settings = DanmakuSourceSettings(
+            customSources: [DanmakuCustomSource(id: "c1", name: "自建", baseURL: "http://h/t")],
+            defaultSourceID: "c1")
+        let data = try JSONEncoder().encode(settings)
+        XCTAssertEqual(try JSONDecoder().decode(DanmakuSourceSettings.self, from: data), settings)
+    }
+
+    func testCredentialsEmptyAndComplete() {
+        XCTAssertTrue(DandanplayCredentials(appID: " ", appSecret: "").isEmpty)
+        XCTAssertFalse(DandanplayCredentials(appID: "a", appSecret: "").isEmpty)
+        XCTAssertFalse(DandanplayCredentials(appID: "a", appSecret: " ").isComplete)
+        XCTAssertTrue(DandanplayCredentials(appID: "a", appSecret: "b").isComplete)
     }
 }

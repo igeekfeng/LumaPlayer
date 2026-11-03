@@ -6,15 +6,15 @@
 
 ## 0. 结论
 
-**可行,三步已落地两步半:部署与协议核对完成,LumaPlayer 地址可配置已实现,待真机串联验证(§7)。**
+**可行,三步已落地两步半:部署与协议核对完成,LumaPlayer 已支持自建服务作为弹幕来源,待真机串联验证(§7)。**
 
 | 环节 | 结论 | 依据 |
 |---|---|---|
 | Docker 本地部署 | ✅ 已跑通 | 官方镜像 `logvar/danmu-api:latest` 有 arm64,本机 Docker Desktop 起容器、接口全部通 |
 | 弹弹play 协议兼容 | ✅ 已核对 | LumaPlayer 实际调用的 4 个端点,返回体字段与 `DANDANPLAY_API.md` 一致 |
-| 接入 LumaPlayer | ✅ 代码已落地,⚠️ 未真机串联 | 服务地址可配置(`DandanplayBase`,存凭据文件),自建服务跳过签名头与 AppId / AppSecret(§3.3);build + 1242 单测通过,与容器的真机串联验证见 §7 |
+| 接入 LumaPlayer | ✅ 代码已落地,⚠️ 未真机串联 | 自建服务与官方并列为弹幕来源、默认官方(§3.1),自建跳过签名头与 AppId / AppSecret(§3.2),绑定 / 缓存按来源隔离(§3.3);真机串联验证见 §7 |
 
-**一句话**:两侧都已实现(`Tools/danmu-api/` + LumaPlayer 服务地址可配),剩 §7 的真机串联。
+**一句话**:两侧都已实现(`Tools/danmu-api/` + LumaPlayer 多弹幕来源),剩 §7 的真机串联。
 
 ---
 
@@ -149,43 +149,29 @@ v.youku.com       HTTP 200  0.38 s
 
 ## 3. LumaPlayer 侧接入设计
 
-### 3.1 服务地址可配,签名不受影响
+### 3.1 多来源并列,默认官方
 
-`DandanplayBase`:scheme + host + port + 路径前缀。空串 = 官方 `https://api.dandanplay.net`;
-自建服务填根地址,令牌在路径前缀里,如 `http://127.0.0.1:9321/87654321`。非 http/https、
-缺 host、带 query / fragment 一律 `nil`,客户端如实报错**不静默回退官方**(回退只会换来
-一串看不懂的 403)。本地是 http 且要带令牌,所以 scheme、port、路径前缀全部可配;
-80 / 443 不落进 URL。
+自建服务不替换官方,而是作为另一个弹幕来源(`DanmakuSource`)与官方并列:设置 › 弹幕里添加任意个
+自建服务(名称 + 带令牌的地址),选一个默认来源(缺省官方);播放页「弹幕」面板可以为本集临时换来源。
+来源配置(`DanmakuSourceSettings`)放凭据文件,不放 UserDefaults:令牌写在地址路径里。
 
-`DandanplayEndpoint.url(base:)` 由 base 拼 path。签名只覆盖 path、不含域名
-(`DANDANPLAY_API.md` §1),danmu_api 又整套忽略签名头(§2.5),所以 `signaturePath`
-与签名计算不受换地址影响,一行都不用动。
+`DandanplayBase`:scheme + host + port + 路径前缀,如 `http://127.0.0.1:9321/87654321`。空串、非 http/https、
+缺 host、带 query / fragment 一律 `nil`,客户端如实报错**不静默回退官方**(回退只会换来一串看不懂的 403)。
+80 / 443 不落进 URL。签名只覆盖 path、不含域名(`DANDANPLAY_API.md` §1),所以 `signaturePath` 不受地址影响。
 
-### 3.2 凭据校验:自建服务放宽
+### 3.2 鉴权:按来源分
 
-官方服务的 `X-AppId` / `X-Signature` 缺一不可;自建服务没有 AppId / AppSecret 可言
-(dandanplay 忽略签名头,鉴权看 URL 里的令牌)。落地口径:
+`DandanplayClient` 每次请求带 `DandanplayServer`:
 
-- `DandanplayCredentials.usesCustomServer`(`baseURL` 非空)→ `send` 整体跳过签名头,
-  `DanmakuService.requireCredentials` 不要求 AppId / AppSecret;
-- 空 `baseURL` = 官方 → 两者缺一不可,保持原样。
+- `.official(DandanplayCredentials)` → 签名头,AppId / AppSecret 缺一不可;
+- `.custom(baseURL:)` → 不发签名头(danmu_api 忽略它们,§2.5),也不要 AppId / AppSecret。
 
-设置页文案与之一致:自建服务只填地址;「AppSecret 只用于在本机计算签名」只对官方服务成立。
+### 3.3 ID 按来源隔离
 
-### 3.3 改动清单
-
-| 文件 | 改动 |
-|---|---|
-| `Core/Danmaku/Dandanplay/DandanplayBase.swift`(新增) | 服务地址模型:空串 = 官方;非 http/https、缺 host、带 query / fragment → `nil`,调用方如实报错不回退;80 / 443 不落 URL;路径前缀去尾 `/`;`url(path:percentEncodedQuery:)` 拼装 |
-| `Core/Danmaku/Dandanplay/DandanplayEndpoint.swift` | 删掉写死的 `host`;`url(base:)` 交给 base 拼 path;`signaturePath` 不变(签名只含 path 不含域名,换地址不影响签名) |
-| `Core/Danmaku/Dandanplay/DandanplayClient.swift` | `DandanplayCredentials.baseURL`(`""` = 官方;缺键 `decodeIfPresent` 兜底,只有 appID / appSecret 的旧凭据文件照样解码);`send` 解析 base 再拼 URL;`usesCustomServer` 时整体跳过签名头与 AppId / AppSecret 必填(§3.2) |
-| `Core/Danmaku/DanmakuService.swift` | `requireCredentials` 放行「只填了地址」的自建服务配置 |
-| `Features/Settings/DanmakuSettingsView.swift` | 地址输入框(置顶),保存 / 清除 / 状态显示覆盖三项 |
-| `LumaPlayerTests/` | 新增 `DandanplayBaseTests`(解析、拼装、旧凭据解码);`DanmakuTests` 补自建服务的客户端与整链路用例;`DanmakuTests` / `DanmakuMatchTests` 的 host 引用改 `DandanplayBase.official.host` |
-
-base 放 `DandanplayCredentials`(凭据文件)而不是 `DanmakuDisplaySettings`(UserDefaults):
-令牌写在地址的路径里,按「不在 UserDefaults 里存 token」处理。`AppContainer` 不用改 ——
-base 随凭据逐次传进客户端,不进 `DanmakuService` 的 init。
+danmu_api 的 `episodeId` / `animeId` 是它自己的编号,与官方弹弹play 的同号不同片;对不认识的 ID,
+`/comment` 与 `/bangumi` 回 HTTP 404。所以绑定、弹幕缓存、剧集列表记忆都按来源 id 分开(`DANMAKU.md` §3),
+⛔ 不能拿官方记住的 ID 去问自建服务。danmu_api 的 ID 映射在进程内,重启 / 无服务器部署换实例后旧 ID 也会 404:
+`DanmakuService.resolve` 把绑定 ID 的 404 当绑定失效,删掉后重新匹配。
 
 ### 3.4 一个必须同步改的文档
 
@@ -293,9 +279,8 @@ dandanplay 官方也依赖同样的上游,但 danmu_api 更新更频繁(镜像 l
 
 ## 7. 下一步
 
-1. ✅ 地址可配 + 单测 + 文档同步:`DandanplayBase`(解析 / 拼装 / 旧凭据解码)、
-   `DandanplayClient` / `DanmakuService` / 设置页、`docs/DANMAKU.md` §1 与
-   `docs/DANDANPLAY_API.md` §1。build 零新增 warning,1242 单测通过。
+1. ✅ 地址可配 + 单测 + 文档同步:`DandanplayBase`、多来源(`DanmakuSource`,默认官方)、
+   按来源隔离的绑定 / 缓存、失效绑定重新匹配,`docs/DANMAKU.md` §1 / §3 与 `docs/DANDANPLAY_API.md` §1。
 2. 真机串联:`cd Tools/danmu-api && docker compose up -d` → 设置 › 弹幕填
    `http://127.0.0.1:9321/<TOKEN>`(`config/.env` 里的 `TOKEN`,当前是 `87654321`)
    → 播一集,看 `docker compose logs -f` 里的实际请求。验证标准:`match` 拿到

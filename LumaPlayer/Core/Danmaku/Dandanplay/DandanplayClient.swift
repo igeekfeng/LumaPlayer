@@ -1,58 +1,36 @@
 import CryptoKit
 import Foundation
 
-/// 弹弹play 应用凭据(`docs/DANDANPLAY_API.md` §1)。用户在设置页自填,存凭据文件,⛔ 不进仓库、不进 UserDefaults。
+/// 弹弹play 应用凭据(`docs/DANDANPLAY_API.md` §1),只给官方服务用。用户在设置页自填,存凭据文件,
+/// ⛔ 不进仓库、不进 UserDefaults。
 struct DandanplayCredentials: Codable, Sendable, Equatable {
     var appID: String
     var appSecret: String
-    /// 自建弹弹play 兼容服务根地址(含令牌路径前缀)。空 = 官方 `api.dandanplay.net`。
-    ///
-    /// 放凭据文件而不是 `DanmakuDisplaySettings`(UserDefaults):自建服务的令牌写在 URL 路径里,
-    /// 那是凭据,按「不在 UserDefaults 里存 token」处理。
-    /// 默认值 `""` 让旧凭据文件(只有 appID / appSecret)仍能解码。
-    var baseURL: String = ""
 
     var isComplete: Bool {
         !appID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !appSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 指向自建服务时不校验弹弹play 签名,AppId / AppSecret 可以不填。
-    var usesCustomServer: Bool {
-        !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// 三项都空 = 什么都没配。
     var isEmpty: Bool {
         appID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && appSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// 声明了自定义解码器后成员初始化器不再合成,这里补回。
-    init(appID: String, appSecret: String, baseURL: String = "") {
-        self.appID = appID
-        self.appSecret = appSecret
-        self.baseURL = baseURL
-    }
-
-    /// 合成的解码不认默认值,缺 `baseURL` 键(旧凭据文件)会抛 `keyNotFound`,
-    /// 逼用户重填 AppId / AppSecret —— 这里显式兜底。
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        appID = try container.decode(String.self, forKey: .appID)
-        appSecret = try container.decode(String.self, forKey: .appSecret)
-        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
     }
 }
 
-/// 弹弹play HTTP 客户端:传输 + 签名 + 解码,无状态,凭据由调用方逐次传入(⛔ 不碰凭据存储)。
+/// 请求发往哪、怎么鉴权。
+enum DandanplayServer: Sendable, Equatable {
+    /// 官方服务,签名模式
+    case official(DandanplayCredentials)
+    /// 自建兼容服务:不校验签名,鉴权看 URL 路径里的令牌(见 `docs/DANMU_API_FEASIBILITY.md` §2.5)
+    case custom(baseURL: String)
+}
+
+/// 弹弹play HTTP 客户端:传输 + 签名 + 解码,无状态,服务地址与凭据由调用方逐次传入(⛔ 不碰凭据存储)。
 ///
 /// 认证用签名模式(§1):`X-AppId` / `X-Timestamp`(Unix 秒)/ `X-Signature`,AppSecret 不上网。
 /// ⛔ 不用凭证模式(`X-AppSecret` 头直接带密钥),那是给服务端用的。
-///
-/// 地址从凭据的 `baseURL` 读(空 = 官方)。自建兼容服务不校验签名,签名头整体跳过 ——
-/// 它鉴权看的是 URL 路径里的令牌,不是这套头(见 `docs/DANMU_API_FEASIBILITY.md` §2.5)。
+/// 自建兼容服务(`DandanplayServer.custom`)不校验签名,签名头整体跳过。
 struct DandanplayClient: Sendable {
 
     /// 可注入:签名测试要固定时间戳。
@@ -79,10 +57,10 @@ struct DandanplayClient: Sendable {
     // MARK: - 接口
 
     /// §2
-    func match(_ request: DandanplayMatchRequest, credentials: DandanplayCredentials) async throws
+    func match(_ request: DandanplayMatchRequest, server: DandanplayServer) async throws
         -> DandanplayMatchResponse
     {
-        try await fetch(.match(request), credentials: credentials)
+        try await fetch(.match(request), server: server)
     }
 
     /// §3。`anime` 至少 2 个字符;`episode` 是正整数或 `C1` / `S1` / `O1`;`tmdbIDType` 0 = 电视剧,1 = 电影。
@@ -91,7 +69,7 @@ struct DandanplayClient: Sendable {
         episode: String?,
         tmdbID: Int? = nil,
         tmdbIDType: Int? = nil,
-        credentials: DandanplayCredentials
+        server: DandanplayServer
     ) async throws -> DandanplaySearchEpisodesResponse {
         // `anime` 与 `tmdbId` 至少给一个(§3),⛔ 不发注定失败的请求
         guard anime?.isEmpty == false || tmdbID != nil else {
@@ -99,13 +77,13 @@ struct DandanplayClient: Sendable {
         }
         return try await fetch(
             .searchEpisodes(anime: anime, episode: episode, tmdbID: tmdbID, tmdbIDType: tmdbIDType),
-            credentials: credentials)
+            server: server)
     }
 
     /// §4
-    func bangumi(animeID: Int64, credentials: DandanplayCredentials) async throws -> DandanplayBangumi {
+    func bangumi(animeID: Int64, server: DandanplayServer) async throws -> DandanplayBangumi {
         let response: DandanplayBangumiResponse =
-            try await fetch(.bangumi(animeID: animeID), credentials: credentials)
+            try await fetch(.bangumi(animeID: animeID), server: server)
         guard let bangumi = response.bangumi else {
             throw DandanplayError.api(
                 code: response.errorCode, message: response.errorMessage ?? "作品不存在",
@@ -118,11 +96,11 @@ struct DandanplayClient: Sendable {
     func comments(
         episodeID: Int64,
         conversion: DandanplayEndpoint.ChineseConversion,
-        credentials: DandanplayCredentials
+        server: DandanplayServer
     ) async throws -> [DandanplayComment] {
         let response: DandanplayCommentResponse = try await fetch(
             .comments(episodeID: episodeID, withRelated: true, chineseConversion: conversion),
-            credentials: credentials)
+            server: server)
         // 空库服务端给 `[]`;缺字段说明响应形状不对,不当 0 条
         guard let comments = response.comments else {
             throw DandanplayError.decoding(detail: "comment:缺少字段 comments")
@@ -142,9 +120,9 @@ struct DandanplayClient: Sendable {
 
     private func fetch<T: Decodable & Sendable>(
         _ endpoint: DandanplayEndpoint,
-        credentials: DandanplayCredentials
+        server: DandanplayServer
     ) async throws -> T {
-        let data = try await send(endpoint, credentials: credentials)
+        let data = try await send(endpoint, server: server)
         let decoded: T
         do {
             decoded = try JSONDecoder().decode(T.self, from: data)
@@ -158,13 +136,18 @@ struct DandanplayClient: Sendable {
         return decoded
     }
 
-    /// 发一个请求。地址由凭据里的 `baseURL` 决定:空 = 官方,非空 = 自建兼容服务。
-    ///
-    /// 自建服务不校验弹弹play 签名(它只看 URL 里的令牌),⛔ 不发签名头也不要求 AppId / AppSecret;
-    /// 官方服务两者都缺一不可。
-    func send(_ endpoint: DandanplayEndpoint, credentials: DandanplayCredentials) async throws -> Data {
-        guard let base = DandanplayBase(urlString: credentials.baseURL) else {
-            throw DandanplayError.transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的服务地址")
+    /// 发一个请求。自建服务不校验弹弹play 签名(它只看 URL 里的令牌),⛔ 不发签名头;
+    /// 官方服务 AppId / AppSecret 缺一不可。
+    func send(_ endpoint: DandanplayEndpoint, server: DandanplayServer) async throws -> Data {
+        let base: DandanplayBase
+        switch server {
+        case .official:
+            base = .official
+        case .custom(let baseURL):
+            guard let parsed = DandanplayBase(urlString: baseURL) else {
+                throw DandanplayError.transport("弹幕服务地址无法解析,检查「设置 → 弹幕」里的地址")
+            }
+            base = parsed
         }
         guard let url = endpoint.url(base: base) else {
             throw DandanplayError.transport("接口地址构造失败(\(endpoint.name))")
@@ -172,7 +155,7 @@ struct DandanplayClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if !credentials.usesCustomServer {
+        if case .official(let credentials) = server {
             let appID = credentials.appID.trimmingCharacters(in: .whitespacesAndNewlines)
             let secret = credentials.appSecret.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !appID.isEmpty, !secret.isEmpty else { throw DandanplayError.credentialsMissing }

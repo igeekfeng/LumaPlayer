@@ -6,9 +6,12 @@
 ## 1. 目标与边界
 
 - 播放时叠加弹幕:Emby 与百度网盘两路来源都有,来源无关。
-- 弹幕来自**弹弹play 接口**(`DANDANPLAY_API.md`)。默认官方 `api.dandanplay.net`,需要
-  **AppId / AppSecret 用户自填**(设置 › 弹幕);也可以填**自建的弹弹play 兼容服务**地址
-  (dandanplay 协议的第三方实现,如 danmu_api),那种服务不看签名、不需要 AppId / AppSecret。
+- 弹幕来自**弹弹play 接口**(`DANDANPLAY_API.md`),来源(`DanmakuSource`)可以有多个、按需选:
+  - **官方弹弹play**(内置,`api.dandanplay.net`),需要 **AppId / AppSecret 用户自填**;
+  - **自建兼容服务**(dandanplay 协议的第三方实现,如 danmu_api),用户在设置 › 弹幕里添加任意个
+    (名称 + 带令牌的地址),不看签名、不需要 AppId / AppSecret。
+  - 设置里选**默认来源**,缺省 = 官方;播放页「弹幕」面板可以为本集临时换来源(只影响这一集这一次播放)。
+  - 一次只用一个来源,⛔ 不把多个来源的弹幕合并显示(各服务的弹幕本来就从同一批上游平台抓,合并只会重复)。
 - 只读:不发送弹幕、不登录弹弹play 账号、不碰任何服务端写接口。
 - 非目标:B 站等其它弹幕源(留了提供方无关的模型,但不预先写抽象协议)、高级弹幕 / 代码弹幕、
   弹幕屏蔽词。
@@ -17,7 +20,7 @@
 
 ```
 设置 › 弹幕(DanmakuSettingsView)
-   ├─ AppId / AppSecret ──→ CredentialStore(凭据文件)
+   ├─ AppId / AppSecret、自建服务列表 + 默认来源 ──→ CredentialStore(凭据文件)
    └─ 外观偏好 ─────────→ DanmakuSettingsStore(UserDefaults,全 App 一份)
 
 播放页(每集一个 PlayerViewModel)
@@ -25,8 +28,8 @@
         │  query = DanmakuMediaQuery.make(for: PlaybackSource)   ← 来源差异只在这里
         ▼
    AppContainer.danmaku : DanmakuService          actor,全 App 一份
-        ├─ DanmakuBindingStore   actor  集 / 剧 → 弹幕库 的本地绑定(Application Support)
-        ├─ DanmakuCommentCache   actor  episodeId → 已解析弹幕(Caches,4 小时)
+        ├─ DanmakuBindingStore   actor  (来源, 集 / 剧) → 弹幕库 的本地绑定(Application Support)
+        ├─ DanmakuCommentCache   actor  (来源, episodeId) → 已解析弹幕(Caches,4 小时)
         └─ DandanplayClient      Sendable struct  地址 + 签名 + 传输 + 解码(无状态)
         ▼
    LoadedDanmaku([DanmakuComment] 按时间升序)
@@ -40,7 +43,7 @@
 | 类型 | 位置 | 隔离 |
 |---|---|---|
 | `DandanplayBase` / `DandanplayEndpoint` / `DandanplayClient` / DTO / `DandanplayError` | `Core/Danmaku/Dandanplay/` | 值类型,`Sendable` |
-| `DanmakuComment`、`DanmakuMediaQuery`、`DanmakuLayout` | `Core/Danmaku/` | 值类型 / 纯函数 |
+| `DanmakuSource`、`DanmakuSourceSettings`、`DanmakuComment`、`DanmakuMediaQuery`、`DanmakuLayout` | `Core/Danmaku/` | 值类型 / 纯函数 |
 | `DanmakuService`、`DanmakuBindingStore`、`DanmakuCommentCache` | `Core/Danmaku/` | `actor` |
 | `DanmakuSettingsStore` | `Core/Danmaku/` | `@MainActor @Observable`(同 `SubtitleStyleStore`) |
 | `DanmakuController` | `Features/Player/Danmaku/` | `@MainActor @Observable` |
@@ -54,12 +57,15 @@
 
 每一层都只在上一层没结果时才发请求:
 
-1. **凭据**:没配 → `DandanplayError.credentialsMissing`,⛔ 不发任何请求。官方服务要求
-   AppId / AppSecret 填全;自建兼容服务只要服务地址(`usesCustomServer`)。地址解析不出来
-   (`DandanplayBase` 返回 nil)在客户端就抛 `transport`,不发请求。
-2. **集绑定**(`itemKey`):这一集手选过 / 精确匹配过 → 直接加载。
-3. **剧绑定**(`seriesKey` + 集号):这一部剧绑定过作品 → `GET /bangumi/{animeId}`(进程内记忆),
+1. **来源**:`DanmakuController` 定下本集用哪个来源(面板里换过的,否则设置里的默认)。官方要求
+   AppId / AppSecret 填全,否则 `DandanplayError.credentialsMissing`,⛔ 不发任何请求;自建服务只要地址,
+   解析不出来(`DandanplayBase` 返回 nil)在客户端就抛 `transport`,不发请求。
+2. **集绑定**(`itemKey`):这一集在**这个来源**下手选过 / 精确匹配过 → 直接加载。
+3. **剧绑定**(`seriesKey` + 集号):这一部剧在这个来源下绑定过作品 → `GET /bangumi/{animeId}`(进程内记忆),
    按 `episodeNumber` 找**唯一**相等的一集 → 写集绑定并加载。对不上就落到第 4 步。
+
+   第 2、3 步记住的 ID 被服务端回 **404** = 绑定失效(自建服务重启 / 换实例后丢了 ID 映射,
+   `DANDANPLAY_API.md` §1):删掉那一层绑定,往下重新匹配。其它错误如实抛出,⛔ 不删用户手选的绑定。
 4. **`POST /match`**:有真实指纹就带 `hashAndFileName`(见 3.1),否则 `fileNameOnly` + 32 位占位串。
    `isMatched` → 采用并写集 + 剧绑定。
 5. **TMDB 降级层**:有 `ProviderIds.Tmdb` → `GET /search/episodes?tmdbId=&tmdbIdType=&episode=`,
@@ -75,6 +81,10 @@
 **集号 token**(`DanmakuEpisodeToken`):`episodeTitle` 是模糊候选里唯一带集数语义的字段,
 形状很杂(`第5话 …` / `05` / `EP06` / `第十二话` / `S2 …` / `C1 …`)。只认这几种形态,
 认不出返回 nil —— ⛔ 不做「标题里出现过这个数字就算」的宽松兜底(`S5 聖地巡礼` 里的 5 不是第 5 话)。
+
+**按来源隔离**:各来源的 `episodeId` / `animeId` 各自编号,同号不同片。绑定(文件顶层 = 官方,
+`sources[来源 id]` = 自建)、弹幕缓存(官方 `{id}.json`,自建 `{来源 id}-{id}.json`)、剧集列表记忆
+都按来源分开;⛔ 不能拿一个来源记住的 ID 去问另一个来源。删除自建来源时连同它的绑定一起清。
 
 **加载**:先查 `DanmakuCommentCache`(4 小时内有效),否则 `GET /comment/{id}?withRelated=true&chConvert=1`,
 解析(丢弃无法解析的并计数)→ 排序 → 写缓存。过期的缓存文件启动时删掉(`DanmakuCommentCache.cleanUp`)。
@@ -136,10 +146,10 @@
 
 | 入口 | 位置 |
 |---|---|
-| 控制栏「弹幕」菜单 | 字幕菜单右侧:显示开关、状态(条数 / 匹配情况 / 错误)、重试、选择弹幕…、偏移 ±0.5 秒、设置入口 |
+| 控制栏「弹幕」菜单 | 字幕菜单右侧:显示开关、状态(条数 / 匹配情况 / 错误)、重试、选择弹幕…、来源(多于一个时)、偏移 ±0.5 秒、设置入口 |
 | 快捷键 D | 显示 / 隐藏(`PlayerCommands` 表 + `PlayerWindowView.onKeyPress`) |
-| 选择弹幕面板 | 播放窗口 sheet;打开期间钉住控制栏 |
-| 设置 › 弹幕 | 服务地址、AppId / AppSecret;自动加载、文件指纹、不透明度、字号、滚动时长、显示区域、三种类型开关 |
+| 选择弹幕面板 | 播放窗口 sheet;打开期间钉住控制栏。搜索框:作品名(预填去年份)、季、集;关键词末尾的 `S02E05` / `E05` / `第5集` 拆进季 / 集。季号只在本地按 `animeTitle` 筛(没写季 = 第 1 季),留空不筛,第 2 季起才预填 |
+| 设置 › 弹幕 | 默认来源、官方 AppId / AppSecret、自建服务列表(添加 / 删除,地址列表里打码);自动加载、文件指纹、不透明度、字号、滚动时长、显示区域、三种类型开关 |
 
 「显示弹幕」是本集的会话开关,初值取设置里的「播放时自动加载弹幕」;关着时不发任何请求,打开时才加载。
 转码 seek / 重试会重走 `PlayerViewModel.start()`,但弹幕只在第一次加载(`startIfNeeded` 判重)。

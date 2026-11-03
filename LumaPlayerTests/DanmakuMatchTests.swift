@@ -171,12 +171,12 @@ final class DanmakuMatchTests: XCTestCase {
         let query = DanmakuMediaQuery(
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, seasonNumber: 1,
             title: "某番", matchFileName: "某番 05", fileSize: nil)
-        let resolution = try await service.resolve(query, durationSeconds: nil)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: nil)
 
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当自动采用唯一候选:\(resolution)") }
         XCTAssertEqual(loaded.binding.episodeID, 105)
         // 采用后要写绑定:下一集不再重新匹配
-        let binding = await bindings.episode(for: "item-5")
+        let binding = await bindings.episode(for: "item-5", source: DanmakuSource.officialID)
         XCTAssertEqual(binding?.episodeID, 105)
     }
 
@@ -192,7 +192,7 @@ final class DanmakuMatchTests: XCTestCase {
         let query = DanmakuMediaQuery(
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, seasonNumber: nil,
             title: "某番", matchFileName: "某番 05", fileSize: nil)
-        let resolution = try await service.resolve(query, durationSeconds: nil)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: nil)
         guard case .needsSelection(let candidates) = resolution else {
             return XCTFail("歧义时应当让用户挑:\(resolution)")
         }
@@ -214,7 +214,7 @@ final class DanmakuMatchTests: XCTestCase {
             matchFileName: "某番 05", fileSize: 12_345)
         let hash = String(repeating: "a", count: 32)
         _ = try await service.resolve(
-            query, durationSeconds: 1420,
+            query, source: .official, durationSeconds: 1420,
             matchContext: DanmakuMatchContext(tmdbID: nil, isMovie: false, fileHash: hash))
 
         let body = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/match")?.body)
@@ -235,7 +235,7 @@ final class DanmakuMatchTests: XCTestCase {
         let query = DanmakuMediaQuery(
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, title: "某番",
             matchFileName: "某番 05", fileSize: nil)
-        _ = try await service.resolve(query, durationSeconds: nil)
+        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
 
         let body = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/match")?.body)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -262,7 +262,7 @@ final class DanmakuMatchTests: XCTestCase {
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, title: "某番",
             matchFileName: "某番 05", fileSize: nil)
         let resolution = try await service.resolve(
-            query, durationSeconds: nil,
+            query, source: .official, durationSeconds: nil,
             matchContext: DanmakuMatchContext(tmdbID: 63926, isMovie: false, fileHash: nil))
 
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当由 TMDB 层命中:\(resolution)") }
@@ -297,7 +297,7 @@ final class DanmakuMatchTests: XCTestCase {
             itemKey: "movie-1", seriesKey: nil, episodeNumber: nil, title: "某剧场版",
             isMovie: true, matchFileName: "某剧场版", fileSize: nil)
         let resolution = try await service.resolve(
-            query, durationSeconds: nil,
+            query, source: .official, durationSeconds: nil,
             matchContext: DanmakuMatchContext(tmdbID: 777, isMovie: true, fileHash: nil))
 
         guard case .loaded(let loaded) = resolution else { return XCTFail("应当命中:\(resolution)") }
@@ -322,7 +322,7 @@ final class DanmakuMatchTests: XCTestCase {
         let query = DanmakuMediaQuery(
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, title: "某番",
             matchFileName: "某番 05", fileSize: nil)
-        _ = try await service.resolve(query, durationSeconds: nil)
+        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
 
         XCTAssertTrue(
             MockEmbyURLProtocol.recordedRequests()
