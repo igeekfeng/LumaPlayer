@@ -550,19 +550,23 @@ final class AppContainer {
             preferredMediaSourceID: mediaSourceID)
     }
 
-    /// 播文件树来源(百度 / 本地文件夹)的文件;同样须调用方 `openWindow`。切 Emby 服务器不打断它。
+    /// 播文件树来源(百度 / 115 / 本地文件夹)的文件;同样须调用方 `openWindow`。切 Emby 服务器不打断它。
     /// `episodeQueue`:同剧兄弟集(起播时用当前目录已列条目装配);nil = 播放页不显示换集入口。
+    /// `libraryItem`:这一条的作品身份(剧名 / 集号),弹幕与字幕搜作品只认它
+    /// (`PlaybackRequest.libraryItem`)。nil = 调用方没有条目信息,播放页退回按文件名解析。
     func play(
         _ file: BaiduPanFile,
         in source: FileSource,
         subtitleFiles: [BaiduPanFile] = [],
         episodeQueue: EpisodeQueue? = nil,
+        libraryItem: LibraryItemIdentity? = nil,
         fromBeginning: Bool = false
     ) {
         state.nowPlaying = PlaybackRequest(
             source: source.playbackSource(for: file),
             startFromBeginning: fromBeginning,
             episodeQueue: episodeQueue,
+            libraryItem: libraryItem,
             subtitleFiles: subtitleFiles)
     }
 

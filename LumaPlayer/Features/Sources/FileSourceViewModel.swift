@@ -1269,17 +1269,34 @@ final class FileSourceViewModel {
             in: source,
             subtitleFiles: BaiduPanSubtitle.files(for: file, in: Array(filesByID.values)),
             episodeQueue: Self.episodeQueue(
-                selecting: item, in: queueItems, filesByID: filesByID, source: source),
+                selecting: item, in: queueItems, filesByID: filesByID, source: source,
+                seriesTitle: knownSeriesTitle),
+            libraryItem: libraryIdentity(for: item),
             fromBeginning: fromBeginning)
+    }
+
+    /// 剧集详情页顶上的剧名(弹幕 / 字幕搜作品就认它)。nil = 没进详情页(网格里直接点播)。
+    private var knownSeriesTitle: String? {
+        directoryShape.isSeries ? seriesItem?.title : nil
+    }
+
+    /// 这一条的作品身份(`PlaybackRequest.libraryItem`)。条目拿不到标题时返回 nil,
+    /// 播放页退回按文件名解析 —— 那是降级,⛔ 不是等价路径。
+    private func libraryIdentity(for item: SourceItem) -> LibraryItemIdentity? {
+        LibraryItemIdentity(item: item, seriesTitle: knownSeriesTitle)
     }
 
     /// 用已列出的条目装配剧集队列,零请求;顺序即传入的 `items`(与界面一致)。纯函数,便于测试。
     /// 只收 `.episode`(合成器认定为剧集序列才给),不足两集返回 nil。
+    ///
+    /// - Parameter seriesTitle: 详情页确认的剧名。同一部剧各集共用 —— 换集时靠它把剧名带进新请求,
+    ///   否则新一集的弹幕只能按单集文件名搜(`PlaybackRequest.libraryItem`)。
     static func episodeQueue(
         selecting item: SourceItem,
         in items: [SourceItem],
         filesByID: [UInt64: BaiduPanFile],
-        source: FileSource
+        source: FileSource,
+        seriesTitle: String? = nil
     ) -> EpisodeQueue? {
         guard item.kind == .episode else { return nil }
         let episodes = items.filter { $0.kind == .episode }
@@ -1293,7 +1310,8 @@ final class FileSourceViewModel {
                 source: source.playbackSource(for: file),
                 resumeItem: entry,
                 poster: entry.poster,
-                subtitleFiles: BaiduPanSubtitle.files(for: file, in: Array(filesByID.values))
+                subtitleFiles: BaiduPanSubtitle.files(for: file, in: Array(filesByID.values)),
+                libraryItem: LibraryItemIdentity(item: entry, seriesTitle: seriesTitle)
             )
         }
         guard let index = entries.firstIndex(where: { $0.id == item.ref.itemID }) else { return nil }
@@ -1313,8 +1331,11 @@ final class FileSourceViewModel {
         defer { preparingPlaybackFileID = nil }
 
         let content = await directoryContent(for: BaiduPanPath.directory(ofFilePath: file.path))
+        let current = content.flatMap { content in
+            content.items.first { $0.ref.itemID == String(file.fsID) }
+        }
         let queue = content.flatMap { content in
-            content.items.first { $0.ref.itemID == String(file.fsID) }.flatMap { item in
+            current.flatMap { item in
                 Self.episodeQueue(
                     selecting: item, in: content.items, filesByID: content.filesByID, source: source)
             }
@@ -1323,7 +1344,13 @@ final class FileSourceViewModel {
         let subtitles = content.map {
             BaiduPanSubtitle.files(for: file, in: Array($0.filesByID.values))
         } ?? []
-        container.play(file, in: source, subtitleFiles: subtitles, episodeQueue: queue)
+        container.play(
+            file,
+            in: source,
+            subtitleFiles: subtitles,
+            episodeQueue: queue,
+            // 补列到了条目就带上作品身份;拿不到目录时为 nil,播放页退回按文件名解析
+            libraryItem: current.flatMap { LibraryItemIdentity(item: $0) })
         return true
     }
 

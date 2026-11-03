@@ -311,7 +311,9 @@ final class PlayerViewModel {
         // 显示器休眠断言:App 用真的 IOKit 断言,单测注入替身。
         self.displaySleep = displaySleep ?? DisplaySleepAssertion()
         self.danmaku = DanmakuController(
-            query: DanmakuMediaQuery.make(for: request.source),
+            // 文件树来源的作品名取片库条目里的剧名,⛔ 不用单集文件名(`DanmakuMediaQuery`)
+            query: DanmakuMediaQuery.make(
+                for: request.source, libraryItem: request.libraryItem),
             service: container.danmaku,
             enabledByDefault: container.danmakuSettings.settings.isEnabled)
         // 起播位置:Emby 的进度在响应里,init 时同步算好(UI 与测试依赖这一点);
@@ -1211,6 +1213,8 @@ final class PlayerViewModel {
         container.play(PlaybackRequest(
             source: episode.source,
             episodeQueue: carried,
+            // 作品身份随队列带过来:新一集的弹幕要按剧名 + 集号搜,⛔ 不能退回单集文件名
+            libraryItem: episode.libraryItem,
             // 这一集的外挂字幕随队列带过来 —— 换集时文件列表已经不在手上
             subtitleFiles: episode.subtitleFiles,
             continuingPage: request.pageID))

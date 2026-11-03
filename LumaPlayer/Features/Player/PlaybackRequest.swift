@@ -65,6 +65,14 @@ struct PlaybackRequest: Identifiable, Equatable {
     /// nil = 没有兄弟集(电影、单条视频、百度「继续观看」卡片)。
     var episodeQueue: EpisodeQueue?
 
+    /// 文件树来源的作品身份(剧名 / 集号 / 季号 / TMDB id),由浏览页从片库条目带上。
+    ///
+    /// 弹幕与在线字幕**只认它搜作品**,⛔ 不从单集文件名反推(`docs/DANMAKU.md` §3):
+    /// 同一部剧的各集文件名跟剧名常常不是一回事(发布组命名、另一种语言、纯集号)。
+    /// nil = 调用方没有条目信息(如续播卡片重建的请求),那时只能降级按文件名解析。
+    /// Emby 恒为 nil —— 服务端字段已经够用。
+    var libraryItem: LibraryItemIdentity?
+
     /// 同目录外挂字幕(百度侧;Emby 恒为空)。装文件而非地址:换 `dlink` 是
     /// `BaiduPanSessionPreparer` 的活,配对只需文件名。
     var subtitleFiles: [BaiduPanFile] = []
@@ -74,6 +82,7 @@ struct PlaybackRequest: Identifiable, Equatable {
         source: PlaybackSource,
         startFromBeginning: Bool = false,
         episodeQueue: EpisodeQueue? = nil,
+        libraryItem: LibraryItemIdentity? = nil,
         subtitleFiles: [BaiduPanFile] = [],
         continuingPage: UUID? = nil
     ) {
@@ -83,6 +92,7 @@ struct PlaybackRequest: Identifiable, Equatable {
         self.source = source
         self.startFromBeginning = startFromBeginning
         self.episodeQueue = episodeQueue
+        self.libraryItem = libraryItem
         self.subtitleFiles = subtitleFiles
     }
 

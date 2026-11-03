@@ -18,6 +18,9 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
     /// 同目录外挂字幕(百度侧;Emby 恒为空)。装配队列那一刻才有兄弟文件列表,
     /// 不随队列带过去就得每集重列网盘。
     let subtitleFiles: [BaiduPanFile]
+    /// 这一集的作品身份(剧名 / 集号 / 季号 / TMDB id)。换集时随队列带进新请求,
+    /// 否则新一集的弹幕只能按单集文件名搜(`PlaybackRequest.libraryItem`)。Emby 恒为 nil。
+    let libraryItem: LibraryItemIdentity?
 
     init(
         id: String,
@@ -26,7 +29,8 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
         source: PlaybackSource,
         resumeItem: SourceItem? = nil,
         poster: ImageDescriptor? = nil,
-        subtitleFiles: [BaiduPanFile] = []
+        subtitleFiles: [BaiduPanFile] = [],
+        libraryItem: LibraryItemIdentity? = nil
     ) {
         self.id = id
         self.label = label
@@ -35,6 +39,7 @@ struct PlaybackEpisode: Sendable, Equatable, Identifiable {
         self.resumeItem = resumeItem
         self.poster = poster
         self.subtitleFiles = subtitleFiles
+        self.libraryItem = libraryItem
     }
 }
 
