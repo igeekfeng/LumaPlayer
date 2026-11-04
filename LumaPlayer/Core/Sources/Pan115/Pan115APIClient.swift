@@ -62,10 +62,14 @@ struct Pan115APIClient: Sendable {
     /// 换 Cookie 四件套。
     ///
     /// ⚠️ `account` 用的是 **token 响应里的 `uid`**,不是 Cookie 里的 `UID`(§2.2 第 4 步)。
-    func qrCodeLogin(_ session: Pan115QRCodeSession, app: String = "web") async throws
-        -> Pan115Credential
-    {
-        let endpoint = Pan115Endpoint.qrCodeLogin(app: app, account: session.uid)
+    /// ⚠️ 渠道只在这一步绑定:二维码 token / 图片 / 状态轮询仍走 `web`(§2.2)。
+    /// `app` 决定 Cookie 的 `ssoent`,同渠道内最近一次登录会踢掉其它 Cookie ——
+    /// 本项目用 `tv`,与用户常用的浏览器 `web` 端不同组。
+    func qrCodeLogin(
+        _ session: Pan115QRCodeSession,
+        app: Pan115AuthorizationApp = .default
+    ) async throws -> Pan115Credential {
+        let endpoint = Pan115Endpoint.qrCodeLogin(app: app.rawValue, account: session.uid)
         let data = try await send(endpoint).data
         let response: Pan115QRCodeLoginResponse = try decode(data, endpoint: endpoint)
         guard let credential = response.data?.credential else {
@@ -312,12 +316,17 @@ struct Pan115APIClient: Sendable {
     /// 出处:§6 实测(`webapi.115.com/files` 无 Cookie 时回 405 HTML)。
     static let rateLimitStatusCodes: Set<Int> = [403, 405, 429]
 
-    /// `state == 0` 就是业务失败。扫码接口的 `state` 语义不同(见各自响应类型),不走这里。
+    /// `state` 显式失败(`false` / `0` / `"0"`)就是业务失败。扫码接口的 `state` 语义不同
+    /// (见各自响应类型),不走这里。
+    ///
+    /// ⚠️ 必须认得**布尔 `false`**:Cookie 失效时 `files` 系列回
+    /// `{"state":false,"error":"请先登录"}`(§3),只解 `Int` 会让它被当成「没有 state」静默放过,
+    /// 错误响应随后落到业务解码 —— 表现是「响应里没有 cid」而不是「请重新登录」。
     private func validate(_ data: Data, endpoint: Pan115Endpoint) async throws {
         guard let envelope = try? JSONDecoder().decode(Pan115Envelope.self, from: data) else {
             return
         }
-        guard let state = envelope.state, state == 0 else { return }
+        guard envelope.isFailure else { return }
         let code = envelope.errorCode ?? 0
         // 频控排在错误码分派最前面:它是「现在别问了」,不是「这个请求有问题」
         if Pan115Code.tooFrequent.contains(code) {
@@ -330,6 +339,13 @@ struct Pan115APIClient: Sendable {
         // 后一种在 `send` 阶段就被这里拦下,⛔ 不折成通用 server 错误 —— 否则用户看到的是
         // 「115 返回 40199002」而不是「二维码过期,请重新获取」。
         if code == Pan115Code.qrCodeExpired { throw Pan115Error.qrCodeExpired }
+        // `state: false` 但**不带错误码**:§3 的「请先登录」就是这种。⛔ 不能折成
+        // `.server(code: 0)` —— 那会显示「115 返回了错误码 0」且不会跳扫码屏(needsAuthorization 为 false)。
+        // 认登录相关的文案,映射成「要重新授权」;认不出的仍原样带出,不猜。
+        if code == 0, let message = envelope.errorMessage,
+           Pan115Code.notLoggedInMessages.contains(where: message.contains) {
+            throw Pan115Error.notAuthorized
+        }
         throw Pan115Error.server(code: code, message: envelope.errorMessage)
     }
 

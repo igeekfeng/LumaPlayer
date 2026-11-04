@@ -42,6 +42,52 @@ final class Pan115APIClientTests: XCTestCase {
         }
     }
 
+    /// `state: false` + 「请先登录」(§3 无 Cookie 时的实测形态)必须映射到「要重新授权」。
+    /// ⚠️ 回归:曾经只把 `state` 解成 `Int`,布尔 false 变 nil 被静默放过,最终报成
+    /// 「响应里没有 cid」而不是跳扫码屏。
+    func testBooleanFalseStateBecomesNotAuthorized() async {
+        stubFiles(#"{"state":false,"error":"请先登录","request":"/natsort/files.php"}"#)
+        do {
+            _ = try await client.list(cid: "0", credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .notAuthorized)
+            XCTAssertTrue(error.needsAuthorization)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
+    /// `state: false` 但文案认不出时⛔ 不猜,原样带码(且不能折成 notAuthorized)。
+    func testBooleanFalseStateWithUnknownMessageStaysServerError() async {
+        stubFiles(#"{"state":false,"error":"未知业务失败"}"#)
+        do {
+            _ = try await client.list(cid: "0", credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .server(code: 0, message: "未知业务失败"))
+            XCTAssertFalse(error.needsAuthorization)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
+    /// getid 也必须认 `state:false`:这正是「缺少 cid」那次的实际路径。
+    func testGetIDBooleanFalseStateBecomesNotAuthorized() async {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":false,"error":"请先登录"}"#),
+            host: "webapi.115.com", path: "/files/getid")
+        do {
+            _ = try await client.directoryID(path: "/", credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .notAuthorized)
+            XCTAssertTrue(error.needsAuthorization)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
     /// `990001` = 登录超时,归到「要重新授权」。
     func testNotLoggedInCodeBecomesNotAuthorized() async {
         stubFiles(#"{"state":0,"errno":990001,"error":"请重新登录"}"#)
@@ -346,6 +392,24 @@ final class Pan115APIClientTests: XCTestCase {
         }
         let coolDown = await limiter.remainingCoolDown
         XCTAssertNotNil(coolDown, "405 之后应当还在冷却中")
+    }
+
+    // MARK: - 扫码渠道(§2.2 第 4 步)
+
+    /// 默认渠道 `tv` 必须真的出现在第 4 步的 path 与 form 里(不是只在类型上「默认」)。
+    /// ⚠️ 这是防止误改回 `web` 的回归闸:`web` 与用户常用浏览器同 ssoent 组,会互踢。
+    func testQRCodeLoginSendsDefaultTVChannelOnTheWire() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":1,"data":{"cookie":{"UID":"u","CID":"c","SEID":"s"}}}"#),
+            host: "passportapi.115.com", path: "/app/1.0/tv/1.0/login/qrcode")
+        let credential = try await client.qrCodeLogin(
+            Pan115QRCodeSession(uid: "TOKEN-UID", time: 1, sign: "s", content: "c"))
+        XCTAssertEqual(credential.uid, "u")
+        let request = try XCTUnwrap(
+            MockEmbyURLProtocol.recordedRequests().first { $0.url.path.contains("login/qrcode") })
+        XCTAssertTrue(request.url.path.hasSuffix("/app/1.0/tv/1.0/login/qrcode"), request.url.path)
+        let body = String(decoding: try XCTUnwrap(request.body), as: UTF8.self)
+        XCTAssertEqual(body, "account=TOKEN-UID&app=tv")
     }
 
     // MARK: - downloadURL

@@ -52,6 +52,21 @@ final class Pan115EndpointTests: XCTestCase {
         XCTAssertEqual(body, "account=TOKEN-UID&app=web")
     }
 
+    /// 渠道绑定只在**换 Cookie 那一步**:token / 二维码图片 / 状态轮询仍走 `web`(§2.2),
+    /// 而第 4 步的 path 与 form 都用 `tv`。两者不同是刻意的,⛔ 不要「统一」成同一个 app。
+    func testQRCodeLoginBindsTVChannel() throws {
+        let endpoint = Pan115Endpoint.qrCodeLogin(
+            app: Pan115AuthorizationApp.default.rawValue, account: "TOKEN-UID")
+        XCTAssertEqual(try XCTUnwrap(endpoint.url).path, "/app/1.0/tv/1.0/login/qrcode")
+        let body = String(decoding: try XCTUnwrap(endpoint.httpBody), as: UTF8.self)
+        XCTAssertEqual(body, "account=TOKEN-UID&app=tv")
+
+        // 第 1 步仍是 web
+        XCTAssertEqual(
+            try XCTUnwrap(Pan115Endpoint.qrCodeToken(app: "web").url).path,
+            "/api/1.0/web/1.0/token")
+    }
+
     // MARK: - 登录态(§2.3)
 
     /// 登录态只打 `my.115.com/?ct=ajax&ac=nav`;⛔ 不要加 `check/sso` 那种探活(会踢掉同设备其它 Cookie)。

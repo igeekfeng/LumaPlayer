@@ -3,8 +3,10 @@ import Foundation
 /// 115 网盘源的连接:登录态 + 内容读取 + 取直链。
 ///
 /// 与 `BaiduPanConnection` 的差别:
-/// - **没有 token / 刷新**:115 的网页 Cookie 是长期凭据,没有刷新接口(`docs/PAN115_API.md` §2)。
+/// - **没有 token / 刷新**:115 的 Cookie 是长期凭据,没有刷新接口(`docs/PAN115_API.md` §2)。
 ///   Cookie 失效只有一个表现 —— 被踢下线或过期,那时只能重新扫码。
+/// - **渠道**:换 Cookie 绑定在 `Pan115AuthorizationApp.default`(`tv`),与浏览器 Web 端分属不同
+///   `ssoent` 组,避免互踢(§2.1.1)。前三步扫码仍走 `web`。
 /// - **没有应用目录**:Cookie 能读整个网盘,片库根只是书签(见 `Pan115LibraryRoot`)。
 /// - **限速是硬约束**:串行、间隔 ≥ 500ms(§6),由 `Pan115APIClient` 的 `Pan115RateLimiter` 保证。
 /// - ⛔ **不主动探活**。`passportapi.115.com/.../check/sso` 会让同设备其它 Cookie 失效(§2.3),
@@ -50,6 +52,19 @@ actor Pan115Connection {
         return credential
     }
 
+    /// 已存 Cookie 的渠道名(从 UID 中段 `ssoent` 反查,§2.1)。
+    /// 只读凭据文件,不发请求;认不出 / 还没登录 / 读凭据失败都返回 nil。
+    func authorizationChannel() async -> String? {
+        let credential: Pan115Credential?
+        do {
+            credential = try await credentials.pan115Credential()
+        } catch {
+            return nil
+        }
+        guard let credential, let ssoent = credential.ssoent else { return nil }
+        return Pan115AuthorizationApp.displayName(forSSOEnt: ssoent)
+    }
+
     /// 扫码登录第 1 步:拿二维码内容。调用方把它渲染成二维码给用户扫。
     func startAuthorization() async throws -> Pan115QRCodeSession {
         guard !isAuthorizing else {
@@ -70,7 +85,8 @@ actor Pan115Connection {
     /// 115 不给有效期(见该常量的注释)。
     func awaitAuthorization(
         _ session: Pan115QRCodeSession,
-        deadline: Date = Date().addingTimeInterval(Pan115QRCodeSession.validitySeconds)
+        deadline: Date = Date().addingTimeInterval(Pan115QRCodeSession.validitySeconds),
+        app: Pan115AuthorizationApp = .default
     ) async throws -> Pan115Account {
         while true {
             try Task.checkCancellation()
@@ -83,7 +99,7 @@ actor Pan115Connection {
                 try await Task.sleep(for: Pan115Policy.authorizationPollInterval)
                 continue
             case .allowed:
-                let credential = try await client.qrCodeLogin(session)
+                let credential = try await client.qrCodeLogin(session, app: app)
                 try await credentials.savePan115Credential(credential)
                 // 换了账号,旧的路径 → cid 映射全部作废
                 resetDirectoryIndex()

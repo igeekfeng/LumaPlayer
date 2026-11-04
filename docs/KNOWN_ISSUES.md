@@ -179,6 +179,18 @@
 
 - [ ] **扫码登录四步**(`Pan115Connection.startAuthorization` / `awaitAuthorization`)真实走通:
       `qrcodeapi` 取 token → 状态轮询 `0/1/2` → `passportapi` 换 Cookie 四件套
+- [ ] ❗ **`tv` 渠道的 Cookie 能不能调本项目这三个接口**:第 4 步绑定 `app=tv`(I1)后拿到的 Cookie,
+      是否照样被 `webapi/files`、`files/getid`、`proapi/app/chrome/downurl`(含 `f=3` 的 CDN Cookie)接受。
+      AList 用 tv / 小程序 Cookie 挂载 115 Cloud 并走 302 下载是**强旁证**,p115client 也是一份 Cookie 打所有端点,
+      但本项目**没在真实账号上验过**。结案:用 tv 扫码后依次(只读、单次、低频)列一次根目录、
+      取一次直链、播一集。失败就退回 `web` 渠道并登记。
+- [ ] ❗ **tv 与 Web 端是否真能长期共存**:2026-11-04 已实测「同渠道(`web`/A1)内重新扫码会互踢」,
+      按 ssoent 换到 I1 是解法,但 §6 记了「设备数量上限 2 台」与社区反馈的跨端互踢,
+      ⛔ 不能保证 100% 不互踢。结案:tv 与浏览器 Web 端同时登录,观察一段时间不再互相顶下线。
+- [ ] ❗ **`state: false` 的真实响应形态**:`Pan115Envelope` 已能解 Bool false 并映射成「请重新登录」,
+      但这是按 §3 的 aps 实测形态写的;真实账号被顶下线时 `webapi/files` 到底回
+      `{"state":false,...}` 还是 `errno 990001` / `40101035`,未验。结案:故意在别处登录一次,
+      看 App 是否直接跳扫码屏(而不是报「响应里没有 cid」)。
 - [ ] **列目录**(`Pan115Connection.files(in:)`)真实响应:12 个参数被接受、`fid` 空串判目录、分页 1150 上限
 - [ ] **`count` 是不是目录总条目数**:源码侧四路证据一致(`115-sdk-go` 的官方注释、
       `115driver` / `OpenList` / `p115client` 的终止条件、`get_file_count` 用 `page_size=1` 取总数),

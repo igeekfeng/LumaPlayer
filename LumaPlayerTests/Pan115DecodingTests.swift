@@ -20,6 +20,26 @@ final class Pan115DecodingTests: XCTestCase {
         XCTAssertEqual(string.errorMessage, "请重新登录")
     }
 
+    /// `state` 还有**布尔**形态:Cookie 失效时 `files` 系列回
+    /// `{"state":false,"error":"请先登录"}`(§3 实测)。只解 `Int` 会把它当 nil 静默放过,
+    /// 错误响应随后落到业务解码 —— 表现是「响应里没有 cid」而不是「请重新登录」。
+    func testEnvelopeAcceptsBooleanFalseState() throws {
+        let boolean = try decode(Pan115Envelope.self, #"{"state":false,"error":"请先登录"}"#)
+        XCTAssertFalse(boolean.isSuccess)
+        XCTAssertTrue(boolean.isFailure)
+        XCTAssertNil(boolean.errorCode)
+        XCTAssertEqual(boolean.errorMessage, "请先登录")
+
+        let booleanTrue = try decode(Pan115Envelope.self, #"{"state":true}"#)
+        XCTAssertTrue(booleanTrue.isSuccess)
+        XCTAssertFalse(booleanTrue.isFailure)
+
+        // 没有 state 字段 = 不当失败(扫码接口自己的响应外壳不走信封判定)
+        let absent = try decode(Pan115Envelope.self, #"{"data":{}}"#)
+        XCTAssertFalse(absent.isSuccess)
+        XCTAssertFalse(absent.isFailure)
+    }
+
     /// 三种错误码字段的优先级:`errno` → `errNo` → `code`(`115driver pkg/driver/response.go:33-40`)。
     func testEnvelopeErrorCodePrecedence() throws {
         let all = try decode(
@@ -31,6 +51,37 @@ final class Pan115DecodingTests: XCTestCase {
 
         let codeOnly = try decode(Pan115Envelope.self, #"{"state":0,"code":40101017}"#)
         XCTAssertEqual(codeOnly.errorCode, 40101017)
+    }
+
+    // MARK: - 登录渠道(§2.1)
+
+    /// 默认渠道必须是 `tv`(I1):与用户常用的网页端 `web`(A1)不同 ssoent 组,才不会互踢。
+    func testDefaultAuthorizationChannelIsTV() {
+        XCTAssertEqual(Pan115AuthorizationApp.default, .tv)
+        XCTAssertEqual(Pan115AuthorizationApp.default.rawValue, "tv")
+        XCTAssertEqual(Pan115AuthorizationApp.default.ssoent, "I1")
+    }
+
+    /// 设置页按 ssoent 反查渠道名;`A1` 是改用 tv 之前留下的老 Cookie,要能单独认出来。
+    func testChannelDisplayNameBySSOEnt() {
+        XCTAssertEqual(Pan115AuthorizationApp.displayName(forSSOEnt: "I1"), "电视端")
+        XCTAssertEqual(Pan115AuthorizationApp.displayName(forSSOEnt: "R1"), "微信小程序")
+        XCTAssertEqual(Pan115AuthorizationApp.displayName(forSSOEnt: "A1"), "网页端(旧登录)")
+        XCTAssertNil(Pan115AuthorizationApp.displayName(forSSOEnt: "ZZ"))
+    }
+
+    /// UID 三段的中段是 ssoent;形状不对返回 nil,⛔ 不猜。
+    func testCredentialSSOEntExtraction() {
+        XCTAssertEqual(
+            Pan115Credential(uid: "123_I1_1793603418", cid: "c", seid: "s", kid: nil).ssoent,
+            "I1")
+        XCTAssertEqual(
+            Pan115Credential(uid: "123_A1_1793603418", cid: "c", seid: "s", kid: nil).ssoent,
+            "A1")
+        XCTAssertNil(
+            Pan115Credential(uid: "123", cid: "c", seid: "s", kid: nil).ssoent)
+        XCTAssertNil(
+            Pan115Credential(uid: "123__1793603418", cid: "c", seid: "s", kid: nil).ssoent)
     }
 
     // MARK: - 扫码登录(§2.2)

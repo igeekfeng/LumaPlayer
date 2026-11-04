@@ -24,6 +24,8 @@ struct Pan115SourceSettingsView: View {
     @State private var errorMessage: String?
     @State private var showsDirectoryPicker = false
     @State private var showsSignOutConfirmation = false
+    /// 已存 Cookie 的渠道名(从 UID 中段 `ssoent` 反查)。nil = 认不出 / 还没登录。
+    @State private var authorizationChannel: String?
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
@@ -147,13 +149,19 @@ struct Pan115SourceSettingsView: View {
 
     private var authorizationSection: some View {
         Section {
+            LabeledContent("登录渠道") {
+                Text(authorizationChannel ?? "无法识别")
+                    .foregroundStyle(authorizationChannel == nil ? .secondary : .primary)
+            }
             Button("退出登录", role: .destructive) {
                 showsSignOutConfirmation = true
             }
         } header: {
             Text("登录")
         } footer: {
-            Text("登录是**所有 115 来源共用**的:退出之后,每个 115 来源都会回到扫码那一屏。")
+            Text("登录是**所有 115 来源共用**的:退出之后,每个 115 来源都会回到扫码那一屏。"
+                + "重新扫码会用「\(Pan115AuthorizationApp.default.displayName)」渠道,与网页端分属不同组、通常不再互顶;"
+                + "若上面仍显示「网页端(旧登录)」,退出登录再扫一次即可切换。")
         }
     }
 
@@ -167,6 +175,8 @@ struct Pan115SourceSettingsView: View {
         } catch {
             errorMessage = "读取片库根失败:\(error)"
         }
+        // 只读凭据文件,不发请求:渠道名从 UID 中段的 `ssoent` 反查(§2.1)。
+        authorizationChannel = await container.pan115AuthorizationChannel()
         savedDisplayName = source.displayName
         displayName = source.displayName
         isLoading = false

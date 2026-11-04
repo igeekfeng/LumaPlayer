@@ -3,7 +3,8 @@ import SwiftUI
 /// 115 网盘来源的内容页:按登录状态切两屏(扫码 → 浏览目录)。
 ///
 /// 与百度同一个浏览页(`FileSourceBrowserView`),差别在登录:115 没有开放平台应用,
-/// 凭据是网页 Cookie 四件套,靠扫码拿(`docs/PAN115_API.md` §2.2)。
+/// 凭据是扫码换来的 Cookie 四件套(`docs/PAN115_API.md` §2.2),渠道见
+/// `Pan115AuthorizationApp.default`。
 /// ⚠️ 它是**主窗口导航栈的根页**,不是独立 sheet。
 struct Pan115SourceView: View {
     let container: AppContainer

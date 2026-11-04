@@ -23,7 +23,9 @@ struct Pan115AuthorizationView: View {
                     qrPane
 
                     OnboardingNotice(
-                        text: "115 的开放平台 API 已暂停服务,这里是模拟网页客户端直连。"
+                        text: "115 的开放平台 API 已暂停服务,这里是非官方的 Cookie 直连接口。"
+                            + "扫码会以「\(Pan115AuthorizationApp.default.displayName)」渠道拿 Cookie,"
+                            + "与网页端分属不同组、通常不再互顶(二维码仍用手机 115 App 扫)。"
                             + "115 用户协议禁止使用非授权客户端或接口调用平台资源,"
                             + "存在被限流甚至封禁账号的风险 —— 请自行判断是否继续。",
                         style: .warning

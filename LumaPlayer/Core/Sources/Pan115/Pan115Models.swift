@@ -1,9 +1,58 @@
 import Foundation
 
+/// 扫码换 Cookie 时绑定的客户端渠道(`docs/PAN115_API.md` §2.1 / §2.2 第 4 步)。
+///
+/// 115 按 `ssoent`(UID 中段)给 Cookie 分组:**同一次渠道内的最近一次登录会踢掉该渠道下其它 Cookie**。
+/// 所以 App 要用一个用户日常不碰的渠道,才能和常用的 Web 端(`web`/A1)共存。
+/// `tv` 是 AList 115 驱动的官方推荐值;`os_*` / `windows` / `mac` / `linux` 的客户端已下架且
+/// 走另一套 ECDH P-224 加密(§2.1 / §4.2),⛔ 不列进来。
+///
+/// ⚠️ 只有**第 4 步**(换 Cookie)带这个值;二维码 token / 图片 / 状态轮询仍走 `web`
+/// (AList 官方脚本与 p115client 都这样,§2.2)。
+enum Pan115AuthorizationApp: String, Sendable {
+    case tv = "tv"
+    case wechatmini = "wechatmini"
+    case alipaymini = "alipaymini"
+    case qandroid = "qandroid"
+
+    /// 扫码默认渠道。⛔ 不要改回 `web`:它和用户常用的浏览器 Web 端同一个 `ssoent`,会互踢。
+    static let `default`: Pan115AuthorizationApp = .tv
+
+    var ssoent: String {
+        switch self {
+        case .tv: return "I1"
+        case .wechatmini: return "R1"
+        case .alipaymini: return "R2"
+        case .qandroid: return "M1"
+        }
+    }
+
+    /// 按 `ssoent` 反查渠道名,给设置页显示**已存凭据**用。
+    /// `A1` 是本项目改用 `tv` 之前留下的老 Cookie(与浏览器 Web 端同组),单独标出来提醒。
+    /// - Returns: nil = 认不出的 ssoent,⛔ 不猜。
+    static func displayName(forSSOEnt ssoent: String) -> String? {
+        if let app = allApps.first(where: { $0.ssoent == ssoent }) { return app.displayName }
+        if ssoent == "A1" { return "网页端(旧登录)" }
+        return nil
+    }
+
+    private static let allApps: [Pan115AuthorizationApp] = [.tv, .wechatmini, .alipaymini, .qandroid]
+
+    /// 渠道在 UI 上的名字。⛔ 不写「设备」—— 这是渠道分组,不是物理机器。
+    var displayName: String {
+        switch self {
+        case .tv: return "电视端"
+        case .wechatmini: return "微信小程序"
+        case .alipaymini: return "支付宝小程序"
+        case .qandroid: return "115 管理安卓端"
+        }
+    }
+}
+
 /// 115 网盘的凭据:Cookie 四件套(`docs/PAN115_API.md` §2)。
 ///
 /// `UID` 不是纯数字,是 `user_id_ssoent_timestamp` 三段拼接,中间的 `ssoent` 决定 115 把请求当成哪个客户端
-/// (§2.1)。本项目只用 `web`(`A1`),因为 `os_mac` 那套走 ECDH P-224,而 CryptoKit 没有 P-224。
+/// (§2.1)。本项目按 `Pan115AuthorizationApp` 绑定渠道。
 struct Pan115Credential: Codable, Sendable, Equatable {
     let uid: String
     let cid: String
@@ -16,6 +65,16 @@ struct Pan115Credential: Codable, Sendable, Equatable {
         self.cid = cid
         self.seid = seid
         self.kid = kid
+    }
+
+    /// `UID` 中段 = `ssoent`,决定这份 Cookie 属于哪个渠道(§2.1)。
+    /// `p115client type.py` 的 `P115UID` 按 `user_id_ssoent_timestamp` 正好拆三段;
+    /// 其它形状返回 nil —— ⛔ 不猜,设置页就只显示「无法识别」。
+    var ssoent: String? {
+        let parts = uid.split(separator: "_", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        let middle = String(parts[1])
+        return middle.isEmpty ? nil : middle
     }
 
     /// 解析浏览器复制出来的 Cookie 串。`115driver` 的做法:按 `;` 切、key 转大写,
@@ -242,7 +301,8 @@ enum Pan115Error: Error, Equatable {
         case .server(let code, let message):
             return Pan115Error.serverMessage(code: code, serverMessage: message)
         case .kickedOut:
-            return "115 的登录已在别处失效(同一账号最多 2 台设备),请重新扫码登录。"
+            return "115 的登录已在别处失效(同一渠道内重复登录会顶掉旧 Cookie),请重新扫码登录。"
+                + "想让 App 与网页端共存,退出登录再扫一次即可切到「\(Pan115AuthorizationApp.default.displayName)」渠道。"
         case .linkExpired:
             return "播放地址已过期,重新获取一次。"
         case .rateLimited(let retryAfter):
@@ -298,7 +358,7 @@ enum Pan115Error: Error, Equatable {
         case Pan115Code.notLoggedIn:
             base = "115 的登录已失效"
         case Pan115Code.kickedOut:
-            base = "登录已在别处失效(同一账号最多 2 台设备)"
+            base = "登录已在别处失效(同一渠道内重复登录)"
         case Pan115Code.invalidSignature:
             base = "请求签名无效"
         default:
@@ -328,6 +388,9 @@ enum Pan115Code {
     /// 操作太频繁(`p115client` 把它归成 `EBUSY`)。这是风控的第一档,**比 WAF 早一步**:
     /// 认出来就该停手,继续打才会升级成域名级拦截(§6)。
     static let tooFrequent: Set<Int> = [590075, 40110000]
+    /// `state: false` 且**没有错误码**时,靠文案认「登录已失效」(§3 的「请先登录」、
+    /// §2.3 的 `990001` 文案)。只列文档里出现过的一手形状,认不出就原样带出,⛔ 不猜。
+    static let notLoggedInMessages: [String] = ["请先登录", "请重新登录", "登录超时", "登陆超时"]
 }
 
 /// 115 的请求纪律(§6)。所有「多久算太频繁」的数字都在这里,⛔ 不要在调用点各写一套。

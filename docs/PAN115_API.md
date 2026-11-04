@@ -85,7 +85,28 @@ type Credential struct {
 | `apple_tv` | `I2` | `qandroid` | `M1` |
 | `qios` | `N1` | | |
 
-⚠️ 本项目**只用 `web`(A1)**。`os_windows` / `os_mac` / `os_linux` 的 Cookie 走的是另一套加密(§4.2),
+#### 2.1.1 渠道选择:本项目用 `tv`(I1)
+
+**同一次渠道内的最近一次扫码登录会踢掉该渠道下其它 Cookie**(§2.3 的 `check/sso` 只是把这个机制
+显式触发了一次)。浏览器 Web 端是 `web`(A1),若 App 也用 `web`,两边就会互相顶 ——
+【实测】2026-11-04:App 重新扫码后浏览器 Web 端被顶下线,反之亦然。
+
+AList 115 驱动文档【原文】明确给出同一建议:可选渠道
+`Web` / `android` / `ios` / `tv` / `alipaymini` / `wechatmini` / `qandroid`,
+**推荐 `tv`**,并说明「`Web`, `android`, and `ios` are not recommended because logging in with a
+commonly used device may sign out the existing session」;「It is recommended to use some devices
+that you do not commonly use」。
+`p115client client.py` `login_qrcode_scan_result()` 的注释还提到「IP 登录异常」里
+**`app="web"` 最容易遇到** —— 换掉 web 顺带少踩一类风控。
+
+⇒ 本项目默认渠道取 `tv`(I1),见 `Pan115AuthorizationApp.default`。二维码仍用手机 115 App 扫,
+与渠道无关。⛔ 不要改回 `web`。
+
+⚠️ 账号整体可能还有「设备数量上限 2 台」(§6,Infuse 员工 2026-09-18 口径),且
+[115 社区帖子 T832538](https://q.115.com/115/T832538.html) 有用户反馈跨端也会互踢。
+按 ssoent 分组是主要维度,但**不能保证 100% 不互踢**,需观察。
+
+⚠️ `os_windows` / `os_mac` / `os_linux` 的 Cookie 走的是另一套加密(§4.2),
 而且 **115 已下架 Windows/Mac/Linux 三端客户端**,用这三端 Cookie 会返回
 `{"state":0,"error":"登录失败，系统已下架！…"}`【源码:OpenList `drivers/115` 文档】。
 
@@ -110,8 +131,14 @@ type Credential struct {
 `:68-83`(login)、`:120-137`;`pkg/driver/api.go:55-59`;四件套解包在 `response.go:315-338`。
 
 ⚠️ **第 4 步的 `account` 用的是第 1 步 token 响应里的 `uid`,不是 Cookie 里的 UID。** 两者不同。
-⚠️ 第 1、2、4 步的 `{app}` 必须一致;`web` / `android` / `ios` / `tv` / `alipaymini` / `wechatmini` / `qandroid` 可用,
-`mac` / `windows` / `linux` 在源码里被注释掉(disabled)。本项目用 `web`。
+⚠️ **渠道绑定只发生在第 4 步**。第 1 步取 token、第 2 步取二维码图片、第 3 步轮询状态
+始终走 `web`,只有换 Cookie 的第 4 步 `{app}` 决定 Cookie 的 `ssoent`(§2.1.1)。
+两个独立上游实现都这样:AList 官方 `get-115-cookie.py` 的 `get_qrcode_token()` 写死
+`/api/1.0/web/1.0/token/`,只有 `post_qrcode_result(uid, app)` 带渠道;`p115client` 的
+`login_qrcode_token(app="web")` 与 `login_qrcode_scan_result(app="alipaymini")` 是两个独立参数、
+默认值都不同。⛔ 不要「统一」成同一个 app —— 本项目第 4 步用 `tv`,前三步仍 `web`。
+⚠️ 第 4 步可用值:`web` / `android` / `ios` / `tv` / `alipaymini` / `wechatmini` / `qandroid`;
+`mac` / `windows` / `linux` 在源码里被注释掉(disabled)。
 ⚠️ 第 2 步路径里的 `mac` 是**写死的**,与 `{app}` 无关(`115driver` 就是这样,`api.go:59`)。
 
 【实测】2026-11-02 第 1 步(无凭据)返回:
@@ -139,6 +166,12 @@ type Credential struct {
 **本项目⛔ 两个都不调**:Cookie 失效会在第一次真正读盘时暴露(`webapi.115.com/files` 回
 `errno 990001` / `40101035`),那时浏览页直接切到扫码屏即可。少一次请求就少一分风控面(§6),
 而「主动探活」换不来任何用户可见的收益。错误码 `40101035` 文案:`you have been kicked out by multi-device login management`。
+
+⚠️ **登录失效还有第三种形态**:`webapi` / `aps` 的「请先登录」回的是
+`{"state":false,"error":"请先登录"}` —— `state` 是**布尔 false**、且**没有 errno**(§3 实测)。
+客户端的信封必须把 `state` 解成 Bool,否则这份响应会被当成「没有 state」静默放过,
+落到业务解码时表现为「响应里没有 cid」而不是「请重新登录」。`p115client check_response()`
+用 `resp.get("state", True)` 的 truthy 判定同时吃 `false` / `0` / 字符串,可作参考。
 
 登录态唯一的请求是 `GET https://my.115.com/?ct=ajax&ac=nav&_=<ms>`(扫码成功后取一次昵称 / VIP,
 `115driver pkg/driver/login.go:126-133`、`response.go:235-254`)【源码】。

@@ -324,6 +324,11 @@ final class AppContainer {
         state.serverListRevision += 1
     }
 
+    /// 已存 Cookie 的渠道名,设置页展示用。只读凭据文件,不发请求。
+    func pan115AuthorizationChannel() async -> String? {
+        await pan115Connection().authorizationChannel()
+    }
+
     // MARK: - 本地文件夹
 
     /// 做书签 → 落库 → 切过去。`folderURL` 须是打开面板给的(本次运行带访问权);`displayName` 留空用文件夹名。

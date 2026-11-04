@@ -55,17 +55,25 @@ enum Pan115Decoding {
 
 /// 115 所有响应的公共外壳。
 ///
-/// `state` 是 `1`/`0` 的数字(`115driver pkg/driver/response.go:292-298` 的 `QRCodeBasicResp`
-/// 与 `:33-40` 的 `BasicResp` 都按 `int` / `bool` 收)。
+/// `state` 在响应里三种形态都出现过:`1`/`0` 的数字、`"1"`/`"0"` 的字符串、
+/// 以及**布尔 `true`/`false`**。`115driver pkg/driver/response.go:292-298` 的 `QRCodeBasicResp`
+/// 与 `:33-40` 的 `BasicResp` 都按 `int` / `bool` 收;本项目走 `Pan115Decoding.bool` 一次兜住。
+///
+/// ⚠️ **必须认得布尔 `false`**:`webapi.115.com/files` 系列在 Cookie 失效时会回
+/// `{"state":false,"error":"请先登录"}`(§3 实测)。只解 `Int` 会让它变成 `nil` 被 `validate()` 静默放过,
+/// 错误响应随后被当成正常响应交给业务解码 —— 表现就是「响应里没有 cid」而不是「请重新登录」。
 struct Pan115Envelope: Decodable, Sendable {
-    let state: Int?
+    /// true = 成功,false = 业务失败,nil = 响应里没有这个字段(不当失败)。
+    let state: Bool?
     let code: Int?
     let errno: Int?
     let errNo: Int?
     let message: String?
     let error: String?
 
-    var isSuccess: Bool { state == 1 }
+    var isSuccess: Bool { state == true }
+    /// 显式失败(`state` 出现且为 false)。nil / true 都不算。
+    var isFailure: Bool { state == false }
 
     /// 错误码按 `115driver` 的取值顺序:`errno` → `errNo` → `code`。
     var errorCode: Int? { errno ?? errNo ?? code }
@@ -82,7 +90,7 @@ struct Pan115Envelope: Decodable, Sendable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        state = Pan115Decoding.int(container, .state)
+        state = Pan115Decoding.bool(container, .state)
         code = Pan115Decoding.int(container, .code)
         errno = Pan115Decoding.int(container, .errno)
         errNo = Pan115Decoding.int(container, .errNo)
