@@ -68,7 +68,8 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' -only-tes
 - 安装到本机:`./Scripts/deploy-to-applications.sh`(Release 构建 → 打包 libmpv → 拷到 `/Applications` → 校验签名 → 启动;
   `--no-build` 只拷,`--no-open` 不启动)。打 DMG:`./Scripts/make-dmg.sh`(`build/LumaPlayer-{版本}-{构建号}.dmg`)。
   两者都调 `Scripts/bundle-libmpv.sh` 把 libmpv 及依赖打进 `Frameworks/`。ad-hoc 签名、未公证,只在自己的 Mac 上用。
-- 图标源是 `Tools/app-icon/render-icon.swift`,改脚本后重跑,不手改 PNG。
+- 图标源是 `Tools/app-icon/render-icon.swift`,生成 Icon Composer 文档 `LumaPlayer/Resources/AppIcon.icon`(SVG 图层 + `icon.json`,
+  玻璃与深色 / 着色外观由系统渲染);改脚本后重跑,不手改 `.icon` 里的文件。
 - 诊断日志(只记失败请求,已脱敏):`~/Library/Containers/com.local.LumaPlayer/Data/Library/Logs/LumaPlayer/network.log`。
   凭据文件(含 token,⛔ 不要整段贴出):同容器下 `Library/Application Support/LumaPlayer/credentials.json`。
 

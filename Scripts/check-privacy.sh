@@ -25,7 +25,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 #    官方 API 与文档站、百度网盘 / 115 官方接口域、GitHub / GNU(许可证链接)、
 #    弹幕源站(腾讯视频 / 优酷 / 爱奇艺,公开官网域,见 DANMU_API_FEASIBILITY.md §2.8)。
 #    **用户自己的服务器一律不进白名单**。
-ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|.*\.shields\.io|themoviedb\.org|.*\.themoviedb\.org|.*\.tmdb\.org|.*\.baidu\.com|.*\.baidupcs\.com|115\.com|.*\.115\.com|115cdn\.net|.*\.115cdn\.net|.*\.dandanplay\.(com|net)|assrt\.net|.*\.assrt\.net|github\.com|.*\.github\.com|gnu\.org|.*\.gnu\.org|fsf\.org|.*\.fsf\.org|.*\.qq\.com|.*\.youku\.com|.*\.iqiyi\.com)$'
+ALLOWED_DOMAINS='^(example\.com|.*\.example\.com|.*\.emby\.media|.*\.apple\.com|com\.apple\..*|.*\.test|.*\.foo|.*\.local|localhost|.*\.invalid|.*\.example|.*\.shields\.io|themoviedb\.org|.*\.themoviedb\.org|.*\.tmdb\.org|.*\.baidu\.com|.*\.baidupcs\.com|115\.com|.*\.115\.com|115cdn\.net|.*\.115cdn\.net|.*\.dandanplay\.(com|net)|assrt\.net|.*\.assrt\.net|github\.com|.*\.github\.com|gnu\.org|.*\.gnu\.org|fsf\.org|.*\.fsf\.org|w3\.org|.*\.w3\.org|.*\.qq\.com|.*\.youku\.com|.*\.iqiyi\.com)$'
 
 # ── 个人身份信息模式,base64 存放 ──
 # 之所以编码:明文写在这里等于把要防的东西又写进仓库一遍。

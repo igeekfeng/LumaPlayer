@@ -1,182 +1,93 @@
-// render-icon.swift —— App 图标的唯一源文件:用 CoreGraphics 直接画,输出 AppIcon.appiconset 需要的 10 张 PNG。
-// 本机没有 SVG 渲染工具,脚本绘制可复现且不引入依赖。
+// render-icon.swift —— App 图标的唯一源文件:生成 Icon Composer 文档 AppIcon.icon(icon.json + SVG 图层)。
+// 玻璃质感、高光、阴影以及深色 / 清透 / 着色外观都由系统渲染,这里只描述图层几何与颜色;
+// ⛔ 不手改 AppIcon.icon 里的文件,也不在 SVG 里画阴影 / 高光(会和系统渲染叠加成脏边)。
 //
-// 用法(仓库根执行):swift Tools/app-icon/render-icon.swift LumaPlayer/Resources/Assets.xcassets/AppIcon.appiconset
+// 用法(仓库根执行):swift Tools/app-icon/render-icon.swift LumaPlayer/Resources/AppIcon.icon
+// 预览(不进仓库):
+//   "/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool" \
+//     LumaPlayer/Resources/AppIcon.icon --export-image --output-file <png> --platform macOS \
+//     --rendition Default|Dark|ClearLight|TintedDark --width 512 --height 512 --scale 1
 //
 // 放 Tools/ 而不是 LumaPlayer/ 下:后者是同步文件夹,放进去会被编进 App。
 //
-// 几何按 macOS 图标网格:1024 画布、主体 824×824 居中(四周留 100 给阴影)、圆角约 185。
-// 主体不贴合这个形状时,macOS 26 起会把图标塞进灰色底板。
+// 构图:玻璃播放键 + 身后飞过的三条弹幕胶囊,夜色底。图层坐标系 1024×1024,y 向下;
+// 系统按 macOS 圆角矩形裁切整张画布,主体保持在中央约 800 内,小尺寸(16 / 32)才不糊。
 
-import AppKit
-import CoreGraphics
 import Foundation
 
-let canvas: CGFloat = 1024
-let bodyRect = CGRect(x: 100, y: 100, width: 824, height: 824)
-let cornerRadius: CGFloat = 185.4
+let canvas = 1024
 
-func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
-    CGColor(
-        srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-        green: CGFloat((hex >> 8) & 0xFF) / 255,
-        blue: CGFloat(hex & 0xFF) / 255,
-        alpha: alpha
-    )
-}
-
-func gradient(_ colors: [CGColor], _ locations: [CGFloat]) -> CGGradient {
-    guard let g = CGGradient(
-        colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
-        colors: colors as CFArray,
-        locations: locations
-    ) else { fatalError("无法创建渐变") }
-    return g
-}
-
-/// 圆角播放三角形:以 (cx, cy) 为视觉中心,高 h。
-func playTriangle(cx: CGFloat, cy: CGFloat, h: CGFloat, radius: CGFloat) -> CGPath {
+/// 圆角播放三角形的 SVG path,(cx, cy) 为视觉中心(重心),h 为高,r 为圆角半径。
+func playTrianglePath(cx: Double, cy: Double, h: Double, r: Double) -> String {
     let w = h * 0.866
-    // 三角形重心在底边 1/3 处,向右偏移让视觉居中
-    let left = cx - w / 3
-    let right = cx + w * 2 / 3
-    let a = CGPoint(x: left, y: cy + h / 2)
-    let b = CGPoint(x: right, y: cy)
-    let c = CGPoint(x: left, y: cy - h / 2)
-    let path = CGMutablePath()
-    path.move(to: CGPoint(x: (a.x + c.x) / 2, y: (a.y + c.y) / 2))
-    path.addArc(tangent1End: a, tangent2End: b, radius: radius)
-    path.addArc(tangent1End: b, tangent2End: c, radius: radius)
-    path.addArc(tangent1End: c, tangent2End: a, radius: radius)
-    path.closeSubpath()
-    return path
+    let left = cx - w / 3, right = cx + w * 2 / 3
+    let pts = [(left, cy - h / 2), (right, cy), (left, cy + h / 2)]
+    func lerp(_ p: (Double, Double), _ q: (Double, Double), _ t: Double) -> (Double, Double) {
+        (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t)
+    }
+    func dist(_ p: (Double, Double), _ q: (Double, Double)) -> Double { hypot(q.0 - p.0, q.1 - p.1) }
+    func f(_ v: Double) -> String { String(format: "%.1f", v) }
+    // 60° 顶角:切点距顶点 r·√3
+    let k = r * 3.0.squareRoot()
+    var d = ""
+    for i in 0..<3 {
+        let p = pts[(i + 2) % 3], q = pts[i], n = pts[(i + 1) % 3]
+        let a = lerp(q, p, k / dist(q, p)), b = lerp(q, n, k / dist(q, n))
+        d += "\(i == 0 ? "M" : "L")\(f(a.0)) \(f(a.1)) Q\(f(q.0)) \(f(q.1)) \(f(b.0)) \(f(b.1)) "
+    }
+    return d + "Z"
 }
 
-func drawIcon(in ctx: CGContext) {
-    let body = CGPath(
-        roundedRect: bodyRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil
-    )
-    let center = CGPoint(x: bodyRect.midX, y: bodyRect.midY)
-
-    // 投影
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: rgb(0x000000, 0.35))
-    ctx.addPath(body)
-    ctx.setFillColor(rgb(0x14163A))
-    ctx.fillPath()
-    ctx.restoreGState()
-
-    ctx.saveGState()
-    ctx.addPath(body)
-    ctx.clip()
-
-    // 背景:深夜蓝 → 靛紫(CoreGraphics 坐标 y 向上,start 在顶部)
-    ctx.drawLinearGradient(
-        gradient([rgb(0x2A2F7A), rgb(0x161A4A), rgb(0x0B0D26)], [0, 0.55, 1]),
-        start: CGPoint(x: bodyRect.minX, y: bodyRect.maxY),
-        end: CGPoint(x: bodyRect.maxX, y: bodyRect.minY),
-        options: []
-    )
-
-    // 中央辉光(Luma = 亮度)
-    ctx.drawRadialGradient(
-        gradient([rgb(0x8FB4FF, 0.55), rgb(0x6A5CFF, 0.18), rgb(0x6A5CFF, 0)], [0, 0.45, 1]),
-        startCenter: center, startRadius: 0,
-        endCenter: center, endRadius: 400,
-        options: []
-    )
-
-    // 光环
-    let ringRadius: CGFloat = 292
-    ctx.addEllipse(in: CGRect(
-        x: center.x - ringRadius, y: center.y - ringRadius, width: ringRadius * 2, height: ringRadius * 2
-    ))
-    ctx.setLineWidth(22)
-    ctx.replacePathWithStrokedPath()
-    ctx.clip()
-    ctx.drawLinearGradient(
-        gradient([rgb(0xFFE3A8, 0.95), rgb(0xFF9AD5, 0.7), rgb(0x7FA8FF, 0.25)], [0, 0.5, 1]),
-        start: CGPoint(x: center.x - ringRadius, y: center.y + ringRadius),
-        end: CGPoint(x: center.x + ringRadius, y: center.y - ringRadius),
-        options: []
-    )
-    ctx.restoreGState()
-
-    // 播放键
-    let play = playTriangle(cx: center.x + 8, cy: center.y, h: 330, radius: 44)
-    ctx.saveGState()
-    ctx.addPath(body)
-    ctx.clip()
-    ctx.setShadow(offset: .zero, blur: 60, color: rgb(0xA9C4FF, 0.9))
-    ctx.addPath(play)
-    ctx.setFillColor(rgb(0xFFFFFF))
-    ctx.fillPath()
-    ctx.restoreGState()
-
-    ctx.saveGState()
-    ctx.addPath(play)
-    ctx.clip()
-    ctx.drawLinearGradient(
-        gradient([rgb(0xFFFFFF), rgb(0xE4ECFF)], [0, 1]),
-        start: CGPoint(x: center.x, y: center.y + 165),
-        end: CGPoint(x: center.x, y: center.y - 165),
-        options: []
-    )
-    ctx.restoreGState()
-
-    // 顶部细高光描边,模拟玻璃边缘
-    ctx.saveGState()
-    ctx.addPath(CGPath(
-        roundedRect: bodyRect.insetBy(dx: 2, dy: 2),
-        cornerWidth: cornerRadius - 2, cornerHeight: cornerRadius - 2, transform: nil
-    ))
-    ctx.setLineWidth(4)
-    ctx.replacePathWithStrokedPath()
-    ctx.clip()
-    ctx.drawLinearGradient(
-        gradient([rgb(0xFFFFFF, 0.35), rgb(0xFFFFFF, 0)], [0, 1]),
-        start: CGPoint(x: center.x, y: bodyRect.maxY),
-        end: CGPoint(x: center.x, y: bodyRect.midY),
-        options: []
-    )
-    ctx.restoreGState()
+func svg(_ body: String) -> String {
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"\(canvas)\" height=\"\(canvas)\" viewBox=\"0 0 \(canvas) \(canvas)\">\(body)</svg>\n"
 }
 
-func renderPNG(pixels: Int, to url: URL) throws {
-    guard let ctx = CGContext(
-        data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else { throw CocoaError(.fileWriteUnknown) }
-    ctx.interpolationQuality = .high
-    let scale = CGFloat(pixels) / canvas
-    ctx.scaleBy(x: scale, y: scale)
-    drawIcon(in: ctx)
-    guard let image = ctx.makeImage(),
-          let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
-    else { throw CocoaError(.fileWriteUnknown) }
-    try data.write(to: url)
+/// 弹幕胶囊:(左端 x, 中心 y, 宽, 颜色, 不透明度)。最长那条贴着播放键左缘,三条错开像在飞。
+let pills: [(x: Int, y: Int, width: Int, color: String, opacity: Double)] = [
+    (196, 388, 290, "#FF6F91", 0.95),
+    (130, 512, 330, "#FFC56B", 1),
+    (236, 636, 230, "#5CE1E6", 0.95),
+]
+let pillHeight = 56
+
+let playSVG = svg("<path d=\"\(playTrianglePath(cx: 612, cy: 512, h: 420, r: 46))\" fill=\"#FFFFFF\"/>")
+let pillsSVG = svg(pills.map {
+    "<rect x=\"\($0.x)\" y=\"\($0.y - pillHeight / 2)\" width=\"\($0.width)\" height=\"\(pillHeight)\" "
+        + "rx=\"\(pillHeight / 2)\" fill=\"\($0.color)\" fill-opacity=\"\($0.opacity)\"/>"
+}.joined())
+
+func p3(_ hex: UInt32) -> String {
+    let c = [(hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF].map { String(format: "%.5f", Double($0) / 255) }
+    return "display-p3:\(c[0]),\(c[1]),\(c[2]),1.00000"
 }
+
+func group(_ imageName: String, _ name: String) -> [String: Any] {
+    [
+        "layers": [["image-name": imageName, "name": name, "glass": true]],
+        "shadow": ["kind": "neutral", "opacity": 0.5],
+        "translucency": ["enabled": true, "value": 0.4],
+    ]
+}
+
+// groups 顺序即叠放顺序,第一个在最上层
+let iconJSON: [String: Any] = [
+    "fill": ["linear-gradient": [p3(0x2A2E45), p3(0x0B0C14)]],
+    "groups": [group("play.svg", "play"), group("pills.svg", "danmaku")],
+    "supported-platforms": ["squares": ["macOS"]],
+]
 
 let args = CommandLine.arguments
-guard args.count == 2 else {
-    FileHandle.standardError.write(Data("用法: swift render-icon.swift <AppIcon.appiconset 目录>\n".utf8))
+guard args.count == 2, args[1].hasSuffix(".icon") else {
+    FileHandle.standardError.write(Data("用法: swift render-icon.swift <输出路径/AppIcon.icon>\n".utf8))
     exit(2)
 }
+let fm = FileManager.default
 let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
-try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
-
-var images: [[String: String]] = []
-for size in [16, 32, 128, 256, 512] {
-    for scale in [1, 2] {
-        let name = scale == 1 ? "icon_\(size)x\(size).png" : "icon_\(size)x\(size)@2x.png"
-        try renderPNG(pixels: size * scale, to: outDir.appendingPathComponent(name))
-        images.append([
-            "filename": name, "idiom": "mac", "scale": "\(scale)x", "size": "\(size)x\(size)",
-        ])
-    }
-}
-let contents: [String: Any] = ["images": images, "info": ["author": "xcode", "version": 1]]
-let json = try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
-try json.write(to: outDir.appendingPathComponent("Contents.json"))
-print("已生成 \(images.count) 张图标到 \(outDir.path)")
+let assets = outDir.appendingPathComponent("Assets", isDirectory: true)
+if fm.fileExists(atPath: outDir.path) { try fm.removeItem(at: outDir) }
+try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+try Data(playSVG.utf8).write(to: assets.appendingPathComponent("play.svg"))
+try Data(pillsSVG.utf8).write(to: assets.appendingPathComponent("pills.svg"))
+let json = try JSONSerialization.data(withJSONObject: iconJSON, options: [.prettyPrinted, .sortedKeys])
+try json.write(to: outDir.appendingPathComponent("icon.json"))
+print("已生成 \(outDir.path)")
