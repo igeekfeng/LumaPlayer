@@ -110,8 +110,9 @@ final class Pan115APIClientTests: XCTestCase {
 
     /// 满页就继续要下一页,直到不满页为止。`pageSize` 是 1000(硬上限 1150,§3)。
     func testListFollowsPagesUntilShortPage() async throws {
-        let first = pageJSON(count: Pan115APIClient.pageSize, start: 0)
-        let second = pageJSON(count: 3, start: Pan115APIClient.pageSize)
+        // `count` 是**目录总数**:两页加起来 1003 条
+        let first = Self.pageJSON(count: Pan115APIClient.pageSize, start: 0, total: 1003)
+        let second = Self.pageJSON(count: 3, start: Pan115APIClient.pageSize, total: 1003)
         MockEmbyURLProtocol.stub(sequence: [.json(first), .json(second)],
                                  host: "webapi.115.com", path: "/files")
 
@@ -126,7 +127,7 @@ final class Pan115APIClientTests: XCTestCase {
 
     /// 一页没满就不再发请求。
     func testListStopsAfterSingleShortPage() async throws {
-        MockEmbyURLProtocol.stub(.json(pageJSON(count: 5, start: 0)),
+        MockEmbyURLProtocol.stub(.json(Self.pageJSON(count: 5, start: 0)),
                                  host: "webapi.115.com", path: "/files")
         let entries = try await client.list(cid: "0", credential: credential)
         XCTAssertEqual(entries.count, 5)
@@ -135,11 +136,65 @@ final class Pan115APIClientTests: XCTestCase {
 
     /// 翻页有上限(§6:⛔ 不自动翻超过 5 页)。
     func testListStopsAtMaxPages() async throws {
-        MockEmbyURLProtocol.stub(.json(pageJSON(count: Pan115APIClient.pageSize, start: 0)),
-                                 host: "webapi.115.com", path: "/files")
+        // 总数说「还有 100 万条」→ 每页都满,只能靠 maxPages 兜住。
+        // 服务端正常回显请求的 offset(§3),所以会一直翻到 maxPages。
+        MockEmbyURLProtocol.stub(
+            .dynamic { url in Self.pageJSON(count: Pan115APIClient.pageSize, start: Self.offset(of: url), total: 1_000_000) },
+            host: "webapi.115.com", path: "/files")
         _ = try await client.list(cid: "0", credential: credential)
         let requests = MockEmbyURLProtocol.recordedRequests().filter { $0.url.path == "/files" }
         XCTAssertEqual(requests.count, Pan115APIClient.maxPages)
+    }
+
+    /// 服务端不认我们请求的 offset(它悄悄从头开始算了)→ 必须停。
+    ///
+    /// ⚠️ aps 接口的文档明写 offset 越界会「相当于 offset=0,从头开始」(§3),
+    /// 服务端不报错,继续翻就会把同一页反复取。
+    ///
+    /// 第一页正常(offset 本来就是 0,服务端认);第二页请求 offset=1000,
+    /// 服务端却回 offset=0 → 认出来了,停。
+    func testListStopsWhenOffsetIsNotHonored() async throws {
+        // 每次都回 offset=0(从头开始),但 `count` 说还有更多
+        let wrapped = Self.pageJSON(count: Pan115APIClient.pageSize, start: 0, total: 1_000_000)
+        MockEmbyURLProtocol.stub(sequence: [.json(wrapped), .json(wrapped), .json(wrapped)],
+                                 host: "webapi.115.com", path: "/files")
+        _ = try await client.list(cid: "0", credential: credential)
+        let requests = MockEmbyURLProtocol.recordedRequests().filter { $0.url.path == "/files" }
+        XCTAssertEqual(requests.count, 2, "第二页发现 offset 不认就得停,⛔ 不能继续取同一页")
+    }
+
+    // MARK: - `count` 的语义(目录总条目数)
+
+    /// `count` 是目录总数 → 「还有没有下一页」可以精确判断,⛔ 不必靠「不满页」猜。
+    func testHasMoreUsesTheDirectoryTotal() {
+        // 取满了,但总数还有剩 → 还有
+        XCTAssertTrue(Pan115APIClient.hasMore(
+            fetched: 1000, offset: 0, limit: 1000, totalCount: 1500))
+        // 取完了,总数正好取完 → 到底
+        XCTAssertFalse(Pan115APIClient.hasMore(
+            fetched: 500, offset: 1000, limit: 1000, totalCount: 1500))
+        // ⚠️ 目录比一页还小 → 到底(总数说了算,⛔ 不是「本页满不满」)
+        XCTAssertFalse(Pan115APIClient.hasMore(
+            fetched: 2, offset: 0, limit: 1000, totalCount: 10))
+    }
+
+    /// 推进量用**服务端口径**(`offset + limit`),⛔ 不用解码后的条数 ——
+    /// 缺 `cid` 的条目被丢掉会让它少于服务端实际推进的条数 ⇒ 多发一次空请求。
+    func testHasMoreUsesTheServerStride() {
+        // 服务端推进了 1000 条(其中 3 条缺 cid 被丢掉),总数 1000 → 到底
+        XCTAssertFalse(Pan115APIClient.hasMore(
+            fetched: 997, offset: 0, limit: 1000, totalCount: 1000))
+        // 总数还有剩 → 还有下一页
+        XCTAssertTrue(Pan115APIClient.hasMore(
+            fetched: 997, offset: 0, limit: 1000, totalCount: 2000))
+    }
+
+    /// 服务端没给总数时退回「不满页即到底」(与 OpenList 一致)。
+    func testHasMoreFallsBackToShortPageWithoutTotal() {
+        XCTAssertTrue(Pan115APIClient.hasMore(
+            fetched: 1000, offset: 0, limit: 1000, totalCount: nil))
+        XCTAssertFalse(Pan115APIClient.hasMore(
+            fetched: 999, offset: 1000, limit: 1000, totalCount: nil))
     }
 
     // MARK: - 直链请求头(§4.3)
@@ -342,8 +397,21 @@ final class Pan115APIClientTests: XCTestCase {
             .value
     }
 
+    /// 请求里的 `offset`(给动态 mock 用)。
+    private static func offset(of url: URL) -> Int {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first { $0.name == "offset" }?
+            .value
+            .flatMap(Int.init) ?? 0
+    }
+
     /// 造一页 `count` 条(全是视频文件),`fid` 从 `start` 起递增。
-    private func pageJSON(count: Int, start: Int) -> String {
+    ///
+    /// ⚠️ `count` 是**目录总条目数**(官方 SDK 的注释是「当前目录文件数量」;
+    /// `get_file_count` 更是用 `page_size=1` 只取一条却从 `count` 读出总数),
+    /// ⛔ 不是本页条数。`total` 为 nil 时按「总数 = 本页条数」处理(到头了)。
+    private static func pageJSON(count: Int, start: Int, total: Int? = nil) -> String {
         let entries = (0..<count).map { index -> String in
             let id = start + index
             return """
@@ -351,6 +419,7 @@ final class Pan115APIClientTests: XCTestCase {
              "te":1767319445,"iv":"1"}
             """
         }
-        return #"{"state":1,"cid":"0","count":\#(count),"data":[\#(entries.joined(separator: ","))]}"#
+        let totalCount = total ?? count
+        return #"{"state":1,"cid":"0","count":\#(totalCount),"offset":\#(start),"data":[\#(entries.joined(separator: ","))]}"#
     }
 }

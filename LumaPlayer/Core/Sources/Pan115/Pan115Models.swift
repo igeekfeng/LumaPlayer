@@ -143,6 +143,50 @@ struct Pan115FileEntry: Sendable, Equatable {
     }
 }
 
+/// 列目录的一页(`GET webapi.115.com/files`,§3)。
+///
+/// `count` 是**该目录的总条目数**,所以这一页能精确回答「还有没有下一页」——
+/// 这是 115 与百度的关键差别(百度的 `list` 没有总数字段,只能靠「不满页」推断)。
+struct Pan115DirectoryPage: Sendable, Equatable {
+    let entries: [Pan115FileEntry]
+    /// 服务端确认的偏移量。用它推进,⛔ 不自行累加步长(防 offset 越界静默回绕)
+    let offset: Int
+    /// 服务端有没有认我们请求的那个 offset。
+    ///
+    /// ⚠️ aps 接口的文档明写 offset 越界会「相当于 offset=0,从头开始」——
+    /// 服务端**不报错**,只是悄悄从头数。不认的时候必须停,否则会无限循环。
+    let isOffsetHonored: Bool
+    /// 这一页请求的条数上限
+    let limit: Int
+    /// 目录总条目数。nil = 服务端没给,只能靠「不满页」推断还有没有
+    let totalCount: Int?
+    /// 还有没有下一页
+    let hasMore: Bool
+
+    /// 下一页的偏移量。
+    ///
+    /// ⚠️ 是 `offset + limit`(**服务端口径**),⛔ 不是 `offset + entries.count`:
+    /// 解码时丢掉缺 `cid` 的条目会让 `entries.count` 少于服务端实际推进的条数,
+    /// 用它推进会**漏项**。服务端按 `limit` 切页。
+    var nextOffset: Int { offset + limit }
+
+    init(
+        entries: [Pan115FileEntry],
+        offset: Int,
+        isOffsetHonored: Bool,
+        limit: Int,
+        totalCount: Int?,
+        hasMore: Bool
+    ) {
+        self.entries = entries
+        self.offset = offset
+        self.isOffsetHonored = isOffsetHonored
+        self.limit = limit
+        self.totalCount = totalCount
+        self.hasMore = hasMore
+    }
+}
+
 /// 115 源的失败,全部折成一句可解释的中文文案,与 `BaiduPanError` 同口径。
 enum Pan115Error: Error, Equatable {
     /// 还没有 Cookie

@@ -191,6 +191,29 @@ enum BaiduPanPath {
 
 // MARK: - 线格式(Decodable)
 
+/// `method=list` 的一页(`BaiduPanEndpoint.fileList`)。
+///
+/// ⚠️ 百度这一侧**拿不到目录总数**:`list` 的响应参数表里既无 `total` 也无 `has_more`
+/// (那两个是 `method=listall` 的字段,§2.2)。所以「还有没有下一页」只能靠
+/// 「这一页不满 `limit`」推断 —— 与 OpenList 的做法一致。
+struct BaiduPanDirectoryPage: Sendable, Equatable {
+    let files: [BaiduPanFile]
+    /// 这一页是满的,可能还有下一页(⛔ 不代表一定还有:见 `BaiduPanDirectoryPage.truncated` 的用法)
+    let hasMore: Bool
+    /// 下一页的 `start`。
+    ///
+    /// ⚠️ 必须是 `start + limit`(官方推荐的 `list` 翻页方式),⛔ 不能用 `start + files.count`:
+    /// `list` 的条目里可能有缺 `path` / `fs_id` 的(解码时会被丢掉),那种情况下
+    /// `files.count` 比服务端实际推进的条数少 → 用它推进会**漏项**。
+    let nextOffset: Int
+
+    init(files: [BaiduPanFile], hasMore: Bool, nextOffset: Int) {
+        self.files = files
+        self.hasMore = hasMore
+        self.nextOffset = nextOffset
+    }
+}
+
 /// `method=list` 的响应。
 struct BaiduPanListResponse: Decodable, Sendable {
     let errno: Int

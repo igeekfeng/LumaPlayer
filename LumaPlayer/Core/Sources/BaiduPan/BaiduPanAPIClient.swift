@@ -23,9 +23,12 @@ struct BaiduPanAPIClient: Sendable {
 
     private let session: URLSession
 
-    /// ⛔ 别调大:应用频率限制极低(§7)。
-    static let pageSize = 200
-    /// 防御服务端忽略 `start` 一直返满页导致死循环。
+    /// `list()` 自动翻页时的一页条数。官方建议上限 1000(`docs/BAIDU_PAN_API.md` §7.1),⛔ 别调大。
+    /// ⚠️ 只服务「必须一次拿整层」的 `list()`:配额按次记,一次多拿能少发几次请求。
+    /// 浏览页走 `listPage(...,limit:)`,条数由 `FileSourceViewModel.browsePageSize` 给,⛔ 不用这个值。
+    static let pageSize = 1000
+    /// `list()` 最多翻几页。⛔ 这是**本项目自定的预算**(配额极低,§7),不是接口上限;
+    /// 到上限就停,`list()` 返回的可能是目录的前面一截。
     static let maxPages = 5
 
     // MARK: - 授权
@@ -83,22 +86,56 @@ struct BaiduPanAPIClient: Sendable {
 
     // MARK: - 目录与元信息
 
-    /// 自动翻页,直到不满一页或到 `maxPages`。
+    /// 列一页。`start` 是偏移量(`start += limit` 翻页,官方推荐的分页方式)。
+    ///
+    /// ⛔ **单页**返回,不做自动翻页:浏览页要按需取(滚到底再取下一页),
+    /// 一次把整个目录拉完在配额下不划算(`docs/BAIDU_PAN_API.md` §7)。
+    ///
+    /// `method=list` 的响应**没有**总数字段(既无 `total` 也无 `has_more` —— 那两个是
+    /// `method=listall` 的字段,见 §2.2),所以「还有没有下一页」只能靠
+    /// 「这一页不满」推断(与 OpenList 的做法一致)。
+    func listPage(
+        directory: String,
+        accessToken: String,
+        start: Int,
+        limit: Int
+    ) async throws -> BaiduPanDirectoryPage {
+        let endpoint = BaiduPanEndpoint.fileList(
+            accessToken: accessToken,
+            directory: directory,
+            start: start,
+            limit: limit
+        )
+        let data = try await send(endpoint)
+        let response: BaiduPanListResponse = try decode(data, endpoint: endpoint)
+        let rawEntries = response.list ?? []
+        let entries = rawEntries.compactMap(\.file)
+        // ⚠️ 判据用**原始条数**(`rawEntries`),⛔ 不用 `entries.count`:
+        // 解码时丢掉缺 `path` / `fs_id` 的条目会让 `entries.count` 少于服务端实际返回的条数,
+        // 用它判「满不满」会误判成到底。
+        let fetched = rawEntries.count
+        return BaiduPanDirectoryPage(
+            files: entries,
+            // 不满一页 = 到底了(`has_more` 是 `listall` 的字段,`list` 没有)
+            hasMore: fetched >= limit,
+            // 官方推荐的翻页方式是 `start + limit`,⛔ 不能用 `files.count`(会漏项)
+            nextOffset: start + limit
+        )
+    }
+
+    /// 一次列完整个目录(自动翻页)。⛔ 只给「必须拿到全部内容」的场景用
+    /// (如取直链前的 `pick_code` 补齐),浏览页走 `listPage` 按需翻。
     func list(directory: String, accessToken: String) async throws -> [BaiduPanFile] {
         var files: [BaiduPanFile] = []
-        for page in 0..<Self.maxPages {
-            let endpoint = BaiduPanEndpoint.fileList(
-                accessToken: accessToken,
-                directory: directory,
-                start: page * Self.pageSize,
-                limit: Self.pageSize
-            )
-            let data = try await send(endpoint)
-            let response: BaiduPanListResponse = try decode(data, endpoint: endpoint)
-            let entries = (response.list ?? []).compactMap(\.file)
-            files.append(contentsOf: entries)
-            // 不满一页 = 到底了(`has_more` 是 `listall` 的字段,`list` 没有)
-            if entries.count < Self.pageSize { break }
+        var start = 0
+        for _ in 0..<Self.maxPages {
+            let result = try await listPage(
+                directory: directory, accessToken: accessToken,
+                start: start, limit: Self.pageSize)
+            files.append(contentsOf: result.files)
+            guard result.hasMore else { break }
+            // 用服务端口径的下一页起点(=`start + limit`),⛔ 不自行累加
+            start = result.nextOffset
         }
         return files
     }

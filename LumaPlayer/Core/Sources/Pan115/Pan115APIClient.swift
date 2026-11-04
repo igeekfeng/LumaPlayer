@@ -25,9 +25,11 @@ struct Pan115APIClient: Sendable {
     private let session: URLSession
     private let limiter: Pan115RateLimiter
 
-    /// 一页上限。115 的硬上限是 1150(`docs/PAN115_API.md` §3),取 1000 留余量。
+    /// `list()` 自动翻页时的一页条数。115 的硬上限是 1150(`docs/PAN115_API.md` §3),取 1000 留余量。
+    /// ⚠️ 只服务「必须一次拿整层」的 `list()`;浏览页走 `listPage(...,limit:)`,
+    /// 条数由 `FileSourceViewModel.browsePageSize` 给,⛔ 不用这个值。
     static let pageSize = 1000
-    /// 防御服务端忽略 `offset` 一直返满页导致死循环。
+    /// `list()` 最多翻几页:防御服务端忽略 `offset` 一直返满页导致死循环。
     static let maxPages = 5
 
     // MARK: - 扫码登录(§2.2)
@@ -88,20 +90,90 @@ struct Pan115APIClient: Sendable {
 
     // MARK: - 目录(§3)
 
-    /// 自动翻页。`cid` 传 `"0"` 是根目录。
+    /// 列一页。`cid` 传 `"0"` 是根目录。
+    ///
+    /// ⛔ **单页**返回,不做自动翻页:浏览页要按需取(滚到底再取下一页),
+    /// 而 115 的请求是串行的、两次之间至少隔 500 ms(§6),一次把整个目录拉完既慢又烧风控面。
+    ///
+    /// `count` 是**该目录的总条目数**(官方 SDK 的注释是「当前目录文件数量」;
+    /// `get_file_count` 更是用 `page_size=1` 只取一条却从 `count` 读出总数),
+    /// 所以「还有没有下一页」可以精确判断,⛔ 不必靠「不满页」猜。
+    func listPage(
+        cid: String,
+        credential: Pan115Credential,
+        offset: Int,
+        limit: Int
+    ) async throws -> Pan115DirectoryPage {
+        let endpoint = Pan115Endpoint.fileList(cid: cid, offset: offset, limit: limit)
+        let data = try await send(endpoint, credential: credential).data
+        let response: Pan115FileListResponse = try decode(data, endpoint: endpoint)
+        let entries = response.entries
+        // 服务端回显的 `offset` 是它认的位置(§3):aps 接口的文档明写 offset 越界会
+        // 「相当于 offset=0,从头开始」,自行累加步长会静默回绕成死循环。
+        //
+        // ⚠️ **服务端没回显 `offset` 时,⛔ 不能当成「它不认」**:
+        // 那是「无法证伪」而不是「证伪」,当成不认会让浏览页永远停在第一页
+        // (目录明明有 3000 条,界面只显示 1000 条,⛔ 还不报错)。
+        // ⇒ 回绕的防护靠**内容重复**那道闸(见 `FileSourceDirectoryState` 的累计去重),
+        // 这里只判「回显了但与请求不符」这一种确凿的情况。
+        let acknowledgedOffset = response.offset ?? offset
+        let isOffsetHonored = response.offset == nil || acknowledgedOffset == offset
+        let totalCount = response.count
+        return Pan115DirectoryPage(
+            entries: entries,
+            offset: acknowledgedOffset,
+            isOffsetHonored: isOffsetHonored,
+            limit: limit,
+            totalCount: totalCount,
+            // 总数明确且已取满 → 到底了;总数没给才退回「不满页即到底」
+            hasMore: Self.hasMore(
+                fetched: entries.count,
+                offset: acknowledgedOffset,
+                limit: limit,
+                totalCount: totalCount)
+        )
+    }
+
+    /// 一次列完整个目录(自动翻页)。⛔ 只给「必须拿到全部内容」的场景用
+    /// (如取直链前的 `pick_code` 补齐),浏览页走 `listPage` 按需翻。
     func list(cid: String, credential: Pan115Credential) async throws -> [Pan115FileEntry] {
         var entries: [Pan115FileEntry] = []
-        for page in 0..<Self.maxPages {
-            let endpoint = Pan115Endpoint.fileList(
-                cid: cid, offset: page * Self.pageSize, limit: Self.pageSize)
-            let data = try await send(endpoint, credential: credential).data
-            let response: Pan115FileListResponse = try decode(data, endpoint: endpoint)
-            let pageEntries = response.entries
-            entries.append(contentsOf: pageEntries)
-            // 不满一页 = 到底了
-            if pageEntries.count < Self.pageSize { break }
+        var offset = 0
+        for _ in 0..<Self.maxPages {
+            let page = try await listPage(
+                cid: cid, credential: credential, offset: offset, limit: Self.pageSize)
+            entries.append(contentsOf: page.entries)
+            guard page.hasMore else { break }
+            // 服务端不认我们请求的 offset(它悄悄从头开始算了)→ 停,
+            // ⛔ 不继续累加(否则同一个页面会被反复取,直到 maxPages)
+            guard page.isOffsetHonored else { break }
+            // 用服务端回显的 offset 推进,⛔ 不自行累加(防回绕)
+            offset = page.nextOffset
         }
         return entries
+    }
+
+    /// 「还有没有下一页」的判据。
+    ///
+    /// - `totalCount` 给了就用它(准):目录总数减**已推进的条数**,还有剩就是还有下一页。
+    ///   ⚠️ **不能**先看「本页满不满」:115 的 `limit` 可以远大于目录实际条目数
+    ///   (目录只有 2 条而 `limit=1000`),不满页 ≠ 到底,总数说了算。
+    /// - `totalCount` 没给才退回「本页不满 = 到底」(与 OpenList 一致)。
+    ///
+    /// ⚠️ 推进量用**服务端口径**(`offset + limit`),⛔ 不用 `fetched`:
+    /// `fetched` 是解码**之后**的条数(缺 `cid` 的条目被丢掉),它少于服务端实际推进的条数
+    /// ⇒ 用它算会误判「还有下一页」,多发一次空请求(115 按次记账,§6)。
+    /// 两处口径必须一致:`nextOffset` 也是 `offset + limit`。
+    static func hasMore(
+        fetched: Int,
+        offset: Int,
+        limit: Int,
+        totalCount: Int?
+    ) -> Bool {
+        if let totalCount {
+            return offset + limit < totalCount
+        }
+        return fetched >= limit
     }
 
     func directoryID(path: String, credential: Pan115Credential) async throws -> String {

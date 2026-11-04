@@ -243,15 +243,23 @@ struct Pan115UserInfoResponse: Decodable, Sendable {
 /// ⚠️ 文件数组在 `data` 上,而 `cid` / `count` 在外层。
 struct Pan115FileListResponse: Decodable, Sendable {
     let cid: String?
+    /// 该目录的**总条目数**(官方 SDK 的注释是「当前目录文件数量」;`get_file_count`
+    /// 更是用 `page_size=1` 只取一条却从 `count` 读出总数)。⛔ 它是**当前查询条件下**的总数,
+    /// 过滤参数(`show_dir` / `nf` / `type`…)一变它就变 —— 翻页时要与翻页请求用同一套参数。
     let count: Int?
+    /// 服务端确认的偏移量(`115driver` 的 `FileListResp.Offset` / `115-sdk-go` 的 `GetFilesResp.Offset`)。
+    /// ⚠️ 要用它推进而不是自行累加:aps 接口的文档明写 offset 越界会「相当于 offset=0,从头开始」,
+    /// 自行累加会静默回绕成死循环。
+    let offset: Int?
     let data: [Entry]?
 
-    private enum CodingKeys: String, CodingKey { case cid, count, data }
+    private enum CodingKeys: String, CodingKey { case cid, count, offset, data }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         cid = Pan115Decoding.string(container, .cid)
         count = Pan115Decoding.int(container, .count)
+        offset = Pan115Decoding.int(container, .offset)
         data = try? container.decodeIfPresent([Entry].self, forKey: .data)
     }
 

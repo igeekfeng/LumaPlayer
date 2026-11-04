@@ -131,6 +131,9 @@ actor Pan115Connection {
     ///
     /// - Parameter path: 从网盘根算起的路径,`"/"` 是根。内部换成 `cid` 再请求。
     ///
+    /// ⚠️ 这是**列完整个目录**的版本(自动翻页,最多 `Pan115APIClient.maxPages` 页)。
+    /// 浏览页按需翻页走 `listPage(in:offset:limit:)`。
+    ///
     /// 同一路径的**在飞**请求合并成一次:缓存命中时前台与后台刷新会同时打到这里,
     /// 目录选择器连点两下也是。115 按次记账(§6),两发同内容的 `files` 纯属白花预算。
     /// ⛔ 只合并在飞的,不缓存结果 —— 缓存是上层(`FileSourceViewModel` + 落盘)的事。
@@ -148,16 +151,53 @@ actor Pan115Connection {
     /// 正在列的目录(键是归一化路径)。请求一结束就摘掉。
     private var inFlightFiles: [String: Task<[Pan115FileEntry], any Error>] = [:]
 
+    /// 列完整个目录(自动翻页)。
     private func fetchFiles(in path: String) async throws -> [Pan115FileEntry] {
-        let cid = try await directoryID(path: path)
         let credential = try await credential()
+        let cid = try await directoryID(path: path)
         let entries = try await client.list(cid: cid, credential: credential)
         // 顺手记住这一层子目录的映射:进子目录时就不用再发 getid
         for entry in entries where entry.isDirectory {
             guard let id = entry.numericID.map(String.init) else { continue }
             directoryIndex[Self.childPath(entry.name, of: path)] = id
         }
-        return entries.sorted { lhs, rhs in
+        return entries
+    }
+
+    /// 列一页。浏览页按需翻页用这个,⛔ 不一次把整个目录拉完
+    /// (115 的请求串行且两次之间至少隔 500 ms,§6)。
+    ///
+    /// - Parameter offset: 偏移量。⚠️ 必须用上一页返回的 `offset` + 本页条数推进,
+    ///   ⛔ 不自行累加固定步长:服务端确认过的 offset 才是它认的位置
+    ///   (aps 接口的文档明写 offset 越界会「相当于 offset=0,从头开始」,自行累加会静默回绕)。
+    func listPage(
+        in path: String,
+        offset: Int,
+        limit: Int
+    ) async throws -> Pan115DirectoryPage {
+        let normalized = Self.normalizedPath(path)
+        let cid = try await directoryID(path: normalized)
+        let credential = try await credential()
+        let page = try await client.listPage(
+            cid: cid, credential: credential, offset: offset, limit: limit)
+        // 顺手记住这一层子目录的映射:进子目录时就不用再发 getid
+        for entry in page.entries where entry.isDirectory {
+            guard let id = entry.numericID.map(String.init) else { continue }
+            directoryIndex[Self.childPath(entry.name, of: normalized)] = id
+        }
+        return Pan115DirectoryPage(
+            entries: Self.sorted(page.entries),
+            offset: page.offset,
+            isOffsetHonored: page.isOffsetHonored,
+            limit: page.limit,
+            totalCount: page.totalCount,
+            hasMore: page.hasMore
+        )
+    }
+
+    /// 目录在前、再按名字排 —— 排序在客户端做,115 自己的顺序不可靠(§3)。
+    private static func sorted(_ entries: [Pan115FileEntry]) -> [Pan115FileEntry] {
+        entries.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }

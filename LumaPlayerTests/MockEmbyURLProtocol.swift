@@ -8,6 +8,9 @@ final class MockEmbyURLProtocol: URLProtocol {
         enum Outcome: Sendable {
             case response(statusCode: Int, body: Data?)
             case failure(URLError.Code)
+            /// 按请求算出响应体。给「服务端回显请求参数」的接口用
+            /// (115 的 `files` 会回显 `offset`,`docs/PAN115_API.md` §3)。
+            case dynamic(@Sendable (URL) -> String)
         }
 
         let outcome: Outcome
@@ -16,6 +19,11 @@ final class MockEmbyURLProtocol: URLProtocol {
 
         static func json(_ body: String, statusCode: Int = 200) -> Stub {
             Stub(outcome: .response(statusCode: statusCode, body: Data(body.utf8)))
+        }
+
+        /// 响应体按请求算出来。闭包拿到请求 URL(可读查询串里的 `offset` 等)。
+        static func dynamic(_ body: @escaping @Sendable (URL) -> String) -> Stub {
+            Stub(outcome: .dynamic(body))
         }
 
         /// 如 401:Emby 的鉴权失败响应通常没有 body
@@ -143,6 +151,8 @@ final class MockEmbyURLProtocol: URLProtocol {
         switch stub.outcome {
         case .response(let statusCode, let body):
             respond(statusCode: statusCode, body: body, headers: stub.headers)
+        case .dynamic(let body):
+            respond(statusCode: 200, body: Data(body(url).utf8), headers: stub.headers)
         case .failure(let code):
             fail(with: URLError(code))
         }

@@ -16,9 +16,30 @@ actor BaiduPanDirectoryCache {
         /// 键用 `String`:`UInt64` 键会被编码成数组。
         let durations: [String: Double]
         let fetchedAt: Date
+        /// 这一份是不是**整层**。false = 翻页没列完就存了(配额预算用尽或用户没滚到底),
+        /// 冷启动显示它时要提示「还有更多」,⛔ 别让用户以为目录就这么大。
+        ///
+        /// ⛔ 缺这个字段的老缓存一律当**不完整**:宁可多提示一句,也不能把截断当完整。
+        let isComplete: Bool
 
         func duration(for fsID: UInt64) -> Double? {
             durations[String(fsID)]
+        }
+
+        init(files: [BaiduPanFile], durations: [String: Double], fetchedAt: Date, isComplete: Bool) {
+            self.files = files
+            self.durations = durations
+            self.fetchedAt = fetchedAt
+            self.isComplete = isComplete
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            files = try container.decode([BaiduPanFile].self, forKey: .files)
+            durations = try container.decode([String: Double].self, forKey: .durations)
+            fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+            // 老缓存没有这一格 → 当不完整
+            isComplete = try container.decodeIfPresent(Bool.self, forKey: .isComplete) ?? false
         }
     }
 
@@ -69,11 +90,15 @@ actor BaiduPanDirectoryCache {
     // MARK: - 写
 
     /// 整层替换。失败只记原因,⛔ 不抛给浏览链路。
+    ///
+    /// - Parameter isComplete: 这一份是不是整层。false = 翻页没列完就存了,
+    ///   冷启动时要提示「还有更多」(见 `Entry.isComplete`)。
     func store(
         sourceID: UUID,
         directory: String,
         files: [BaiduPanFile],
         durations: [UInt64: Double],
+        isComplete: Bool = true,
         now: Date = Date()
     ) {
         var all = state()
@@ -81,8 +106,10 @@ actor BaiduPanDirectoryCache {
         perSource[directory] = Entry(
             files: files,
             durations: Dictionary(
-                uniqueKeysWithValues: durations.map { (String($0.key), $0.value) }),
-            fetchedAt: now
+                durations.map { (String($0.key), $0.value) },
+                uniquingKeysWith: { first, _ in first }),
+            fetchedAt: now,
+            isComplete: isComplete
         )
         if perSource.count > Self.maxDirectoriesPerSource {
             let overflow = perSource.count - Self.maxDirectoriesPerSource

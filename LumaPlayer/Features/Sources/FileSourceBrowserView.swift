@@ -193,8 +193,41 @@ struct FileSourceBrowserView: View {
                             }
                         }
                     }
+                    loadMoreFooter
                 }
                 .padding(Metrics.spacingXL)
+            }
+        }
+    }
+
+    /// 页脚:还有下一页就显示,出现即加载下一页。
+    ///
+    /// 与 `LibraryView` 的同款脚注(`PagedItemList`)。⛔ 翻页失败只在这里提示,
+    /// 不清空已显示的内容。
+    @ViewBuilder
+    private var loadMoreFooter: some View {
+        if viewModel.hasMoreItems {
+            HStack(spacing: Metrics.spacingM) {
+                if viewModel.isLoadingMoreItems {
+                    ProgressView()
+                    Text("加载更多…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let failure = viewModel.loadMoreFailure {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                    Text(failure)
+                        .font(.caption)
+                    Button("重试") {
+                        Task { await viewModel.loadMoreItems() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(Metrics.spacingXL)
+            .onAppear {
+                // 页脚出现即加载下一页;`loadMoreItems()` 内部有并发与「没有更多」保护
+                Task { await viewModel.loadMoreItems() }
             }
         }
     }

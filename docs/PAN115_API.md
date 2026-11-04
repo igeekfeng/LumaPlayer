@@ -176,6 +176,52 @@ GET https://webapi.115.com/files
 `https://aps.115.com/natsort/files.php?aid=1&cid=0&limit=3` 返回
 `{"state":false,"error":"请先登录","request":"/natsort/files.php?aid=1&cid=0&limit=3"}`。
 
+### 3.1 `count` 是目录总条目数(不是本页条数)
+
+响应外层还有 `count` / `offset` / `limit` 三个回显字段(`115driver` 的 `FileListResp`、
+`115-sdk-go` 的 `GetFilesResp` 都有)。**`count` 的语义是「该目录的总条目数」**,四路独立证据:
+
+1. **官方开放平台 Go SDK** `115-sdk-go` `fs.go:86-91` 带官方中文注释:
+   ```go
+   Count int64 `json:"count"`     // 当前目录文件数量
+   ```
+2. `115driver pkg/driver/dir.go` `ListWithLimit()` 用 `result.Count` 当终止条件:
+   `offset = int64(result.Offset) + limit; if offset >= int64(result.Count) { break }`
+3. `OpenList drivers/115_open/driver.go:103-131`:`if len(res) >= int(resp.Count) { break }`
+4. `p115client tool/attr.py` `get_file_count()` —— 专门取目录内文件总数:
+   用 `page_size=1` **只取一条**却从 `count` 读出总数。⇒ `count` 不可能是「本次返回条数」。
+
+⇒ **本项目用 `count` 精确判断「还有没有下一页」**,⛔ 不必靠「不满页」猜。
+⚠️ 与百度的关键差别:百度的 `method=list` **没有**任何总数字段(`BAIDU_PAN_API.md` §7.2)。
+
+⚠️ 两条边界:
+- `count` 是**当前查询条件下**的总数。`show_dir` / `nf` / `type` / `suffix` 等过滤参数
+  会改变它(`get_file_count` 用 `{"nf":1,"show_dir":0}` 取到的是**纯文件数**,不含子目录)
+  ⇒ 翻页时必须与总数那次用**完全相同**的查询参数。
+- `count` 在翻页期间**会变**(目录内容变了)。p115client 为此专门加了
+  `raise_for_changed_count` 参数,变化时默认只 warn。
+
+### 3.2 `offset` 要用服务端回显的,不能自行累加
+
+服务端会回显 `offset`(它认的位置)。`p115client` 的终止条件里有一条
+`offset != resp["offset"]` —— 服务端给的位置与自己请求的不一致就停。
+
+⚠️ **offset 越界会静默回绕**:p115client 对 **aps** 接口的 caution 原文
+「当 `offset >= 1200 + n`,则相当于 `offset=0&fc_mix=1`,即从头开始」——
+服务端**不报错**,只是悄悄从头数 ⇒ 自行累加步长会陷入死循环。
+⚠️ 这段原文的主语是 aps 接口,web 端 `files` 是否有同样行为**查不到确凿证据**,
+但两者是同一个 `files` 协议族(都返回 `count` / `offset`),风险不能排除。
+
+⇒ 本项目:用服务端回显的 `offset` 推进;**回显了但与请求不符时停止**
+(`Pan115DirectoryPage.isOffsetHonored`)。
+⚠️ **服务端没回显 `offset` 时不算异常** —— 「没回显」是「无法证伪」而不是「证伪」,
+当成异常会让浏览页永远停在第一页(目录明明有 3000 条,界面只显示 1000 条,⛔ 还不报错)。
+⇒ 回绕的兜底是**内容重复**那道闸:累计时按 `fs_id` 去重,同一页被反复取时不会堆出重复条目。
+
+⚠️ **下一页的起点是 `offset + limit`(服务端口径),⛔ 不是 `offset + 本页条数`**:
+响应里可能有缺 `cid` 的条目(解码时丢掉),那些条目**服务端照样推进了页**,用本页条数推进会漏项。
+「还有没有下一页」也按这个口径算(`offset + limit < count`),⛔ 不用解码后的条数 —— 两处必须一致。
+
 ## 4. 取播放地址
 
 ### 4.1 路径 A:chrome downurl(原文件 302 直链)—— 本项目用这条
@@ -283,9 +329,13 @@ from p115cipher.util import rsa_gen_key, xor, rsa_decrypt_with_pubkey
 
 **本项目采取的限制**:
 - 所有 115 请求**串行**,两次之间至少 500 ms(≈2 req/s,与 OpenList `LimitRate: 2` 同口径)。
-- 列目录一页 1150 条,不自动翻页超过 5 页。
+- 列目录**按需翻页**:浏览页滚到底才取下一页,一页 100 条
+  (`FileSourceViewModel.browsePageSize`,与百度共用)。「必须一次拿整层」的 `list()` 才用
+  1000 条一页(硬上限 1150,取 1000 留余量),⛔ 不自动翻超过 5 页。
+  ⚠️ 一页大小不取接口上限:115 两次请求至少隔 500 ms,且每页都会对累计整套重跑合成 / 刮削。
 - ⛔ 不做后台预取、不做并发批量元信息。
 - 403 一律当「直链过期」处理:重取一次;再失败就报错给用户,⛔ 不循环重试。
+- 翻页用服务端回显的 `offset` 推进,⛔ 不自行累加(防越界静默回绕,§3.2)。
 
 ## 7. 未核实 / 待办
 

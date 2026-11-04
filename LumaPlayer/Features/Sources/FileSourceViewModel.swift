@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// 文件树来源(百度网盘 / 本地文件夹)页的 ViewModel。两个来源共用:列目录 → 合成 → TMDB 刮削 →
 /// 剧集详情 → 本地续播 / 已看。差别按 `source` 分派:
@@ -68,7 +69,25 @@ final class FileSourceViewModel {
     /// 会话级目录缓存:目录路径 → 完整读取结果。来回进出同一目录零请求(配额见
     /// `docs/BAIDU_PAN_API.md` §7);网盘里的变化要用户点刷新(`refreshFiles()`)才反映,
     /// `reload()` 清空它。封面 `dlink` 8 小时过期,会话远短于此且有磁盘缓存兜底,不另处理。
-    private var directoryCache: [String: FileSourceDirectoryContent] = [:]
+    ///
+    /// ⚠️ 存的是**带翻页游标的状态**,⛔ 不是只存内容:只存内容的话从会话缓存回来就
+    /// 不知道「还有没有下一页」,会停在半截目录上。
+    private var directoryCache: [String: FileSourceDirectoryState] = [:]
+
+    /// 当前目录的**分页状态**:已列出的内容 + 翻页游标。
+    ///
+    /// ⛔ 与 `items` 的区别:`items` 是「当前这一份合成结果」,而这里是「这一层目录读到了哪」——
+    /// 翻页会替换 `items`,但游标要留着,否则第二页取不到。
+    private var directoryState: FileSourceDirectoryState?
+
+    /// 还有没有下一页。false = 整层列完了(或者这个来源不支持翻页)。
+    var hasMoreItems: Bool { directoryState?.hasMore ?? false }
+
+    /// 正在取下一页。翻页失败**不清空**已显示的内容(同 `PagedItemList` 的语义)。
+    private(set) var isLoadingMoreItems = false
+
+    /// 翻页失败的原因。只在页脚显示,⛔ 不把整页换成错误态。
+    private(set) var loadMoreFailure: String?
 
     /// 命中落盘缓存后在后台拉真实目录。换目录时要取消,否则旧目录的结果会写进新目录。
     private var backgroundRefreshTask: Task<Void, Never>?
@@ -233,6 +252,9 @@ final class FileSourceViewModel {
     /// nil = 没失败 / 没配 token。与 `notice` 分开,不盖掉目录本身的提示。
     private(set) var scrapeFailure: String?
 
+    private static let seriesListingLogger = Logger(
+        subsystem: NetworkDiagnostics.subsystem, category: "file-source-series-listing")
+
     init(container: AppContainer, source: FileSource, loadsDirectory: Bool = true) {
         self.container = container
         self.source = source
@@ -254,6 +276,8 @@ final class FileSourceViewModel {
 
     /// provider 负责列目录 → 合成 → 封面 / 时长 → 刮削
     private func makeProvider() -> any FileSourceBrowsing {
+        // 测试钩子:让单测能控制分页的每一页(⛔ 正式路径永远是 nil)
+        if let stub { return stub }
         switch source {
         case .baiduPan(let baidu):
             return BaiduPanSourceProvider(
@@ -273,6 +297,16 @@ final class FileSourceViewModel {
         case .localFolder(let local):
             return container.localFolderProvider(for: local)
         }
+    }
+
+    /// 测试钩子:替掉 `makeProvider()` 的结果。nil = 走正常路径。
+    ///
+    /// ⛔ 只给单测用:浏览页的翻页状态机要能精确控制「每一页有几条、还有没有下一页」。
+    private var stub: (any FileSourceBrowsing)?
+
+    /// 设测试钩子。⛔ 只能在测试里用。
+    func setBrowsingProviderOverride(_ provider: (any FileSourceBrowsing)?) {
+        stub = provider
     }
 
     /// 设置里改了本来源时接过新值。⛔ 不接别的来源:换来源时主窗口按 id 重建整页(`BrowseView.rootPage`)。
@@ -306,6 +340,9 @@ final class FileSourceViewModel {
         // 结构性变化:会话缓存作废,从片库根重列。放在 `case .authorized` 之外,
         // 因为解绑 / 换密钥后走「需要授权」那条路也得清。`filesByID` 是合并写入的,也要清。
         directoryCache.removeAll()
+        // ⛔ 翻页状态也要清:它记着上一轮的游标与条目,带着它翻页会串到别的目录
+        directoryState = nil
+        loadMoreFailure = nil
         filesByID.removeAll()
         enteredSeriesItem = nil
         resumeSnapshotPoster = nil
@@ -594,6 +631,10 @@ final class FileSourceViewModel {
         isLoadingFiles = true
         directoryFailure = nil
         cancelScrape()
+        // ⚠️ 换目录时清掉翻页的痕迹:在飞的翻页会被 generation 检查丢弃,
+        // 但它的状态(转圈 / 错误文案)得跟着新目录重置,⛔ 不留上一页的残留
+        isLoadingMoreItems = false
+        loadMoreFailure = nil
         // 本次读取的轮次(`cancelScrape` 刚 +1)。连着点两张卡片时只有最新那次能提交,
         // 先发后到的结果不许把界面拽回旧目录。
         let loadID = directoryGeneration
@@ -639,35 +680,43 @@ final class FileSourceViewModel {
                 ?? libraryRoot?.path ?? root
             pendingDirectory = directory
             let provider = makeProvider()
-            let loaded: FileSourceDirectoryContent
             // 三条路按代价排:会话缓存(零请求)→ 落盘缓存(读一次盘,后台再刷新)→ 现取。
             // ⛔ 前两条都不立占位:进出过的目录每次点卡片都闪一帧骨架,比原地等还难受。
             if cachesDirectories, !forceRefresh, let cached = directoryCache[directory] {
-                loaded = cached
+                // 会话缓存里带着翻页游标,⛔ 别丢:丢了就停在半截目录上
+                directoryState = cached
+                guard loadID == directoryGeneration else { return }
+                commit(cached.content, directory: directory)
+                await applyDirectoryShape(directory: directory)
+                startScrape(items: cached.content.items, provider: provider)
             } else if cachesDirectories, !forceRefresh,
                       let disk = await container.baiduDirectoryCache.content(
                           sourceID: source.id, directory: directory) {
                 // 冷启动首次进这一层:先端出盘上内容(无封面),封面由刮削缓存补,
                 // 真实目录交给后台刷新,不让人对着转圈等网络。
                 let restored = Self.content(from: disk, sourceID: source.id)
-                directoryCache[directory] = restored
+                // 盘上那份可能是**不完整**的(翻页没列完就缓存了),标记出来让 UI 能提示
+                let state = FileSourceDirectoryState.restoring(
+                    restored, isComplete: disk.isComplete)
+                directoryCache[directory] = state
+                directoryState = state
                 guard loadID == directoryGeneration else { return }
                 commit(restored, directory: directory)
                 await applyDirectoryShape(directory: directory)
                 startScrape(items: restored.items, provider: provider)
                 startBackgroundRefresh(directory: directory)
-                return
             } else {
                 // 这一层的内容只能现取(网盘一次 `list`,本地文件夹一次读盘)
-                loaded = try await provider.content(directory: directory)
-                directoryCache[directory] = loaded
-                await storeDirectoryCache(loaded, directory: directory)
+                let state = try await loadFirstPage(directory: directory, provider: provider)
+                guard loadID == directoryGeneration else { return }
+                directoryState = state
+                directoryCache[directory] = state
+                await storeDirectoryCache(
+                    state.content, directory: directory, isComplete: !state.hasMore)
+                commit(state.content, directory: directory)
+                await applyDirectoryShape(directory: directory)
+                startScrape(items: state.content.items, provider: provider)
             }
-            guard loadID == directoryGeneration else { return }
-            commit(loaded, directory: directory)
-            await applyDirectoryShape(directory: directory)
-            startScrape(items: loaded.items, provider: provider)
-            return
         } catch let error as BaiduPanError {
             guard loadID == directoryGeneration else { return }
             // token 没了 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
@@ -733,6 +782,119 @@ final class FileSourceViewModel {
         }
     }
 
+    // MARK: - 分页
+
+    /// 列第一页。
+    ///
+    /// ⛔ 只取一页,⛔ 不一次把整个目录拉完:网盘的配额极低(`docs/BAIDU_PAN_API.md` §7)、
+    /// 115 两次请求之间至少隔 500 ms(§6)。剩下的交给 `loadMore()`。
+    private func loadFirstPage(
+        directory: String,
+        provider: any FileSourceBrowsing
+    ) async throws -> FileSourceDirectoryState {
+        let page = try await provider.page(
+            directory: directory, offset: 0, limit: Self.browsePageSize)
+        let composed = provider.compose(files: page.files)
+        let enriched = await provider.enrich(composed, newFiles: page.files, known: nil)
+        let content = FileSourceDirectoryContent(
+            items: enriched.items,
+            filesByID: composed.filesByID,
+            durations: enriched.durations
+        )
+        return FileSourceDirectoryState(
+            content: content,
+            files: page.files,
+            hasMore: page.hasMore,
+            nextOffset: page.nextOffset,
+            totalCount: page.totalCount
+        )
+    }
+
+    /// 取下一页,追加到当前内容。
+    ///
+    /// 失败**不清空**已显示的内容(同 `PagedItemList`):页脚给「重试」,网格照旧。
+    func loadMoreItems() async {
+        guard hasMoreItems, !isLoadingMoreItems, !isLoadingFiles else { return }
+        guard let state = directoryState, let directory = currentDirectory else { return }
+        // ⛔ 先作废在飞的刮削:它回来时会 `self.items = enriched`(只有**第一页**的条目),
+        // 把刚加载完的第二页顶掉。作废之后本轮会重新刮一遍累计的整套。
+        cancelScrape()
+        isLoadingMoreItems = true
+        loadMoreFailure = nil
+        // `cancelScrape` 刚 +1,本轮的编号取在它之后
+        let myGeneration = directoryGeneration
+        defer {
+            // ⚠️ **无条件**复位:这一格只表示「这一轮在飞」。
+            // 按 generation 条件复位的话,翻页途中切了目录(`loadFiles` 会 +1)
+            // 就会永远停在 true —— 那一格再也不会被清,整个来源从此翻不了页
+            // (重载也不救:换目录时新的 `loadFiles` 会重来,但这一格还卡着)。
+            isLoadingMoreItems = false
+        }
+        do {
+            let provider = makeProvider()
+            let page = try await provider.page(
+                directory: directory, offset: state.nextOffset, limit: Self.browsePageSize)
+            guard myGeneration == directoryGeneration else { return }
+            // 累计:合成器要拿整套文件(成串集号的判定与封面配对都靠整套),
+            // ⛔ 只合成新一页会把旧条目的封面配掉、把 `01.mp4` 判成电影。
+            // ⚠️ 按 `fs_id` 去重:游标不可信时(老落盘缓存复原的偏移量是 0)
+            // 这一页可能与已有内容重叠,直接相加会出现重复条目。
+            let accumulated = mergingFileSources(state.files, page.files)
+            let composed = provider.compose(files: accumulated)
+            // 把上一轮的结果交回去:旧条目的封面 / 时长已经在手上,⛔ 不重复取;
+            // 而「封面文件在后面的页」这种情形要靠它才能补上
+            let enriched = await provider.enrich(
+                composed, newFiles: page.files, known: state.content)
+            guard myGeneration == directoryGeneration else { return }
+            let content = FileSourceDirectoryContent(
+                items: enriched.items,
+                filesByID: composed.filesByID,
+                // 时长是累计的:旧条目的时长还在,⛔ 不清掉
+                durations: state.content.durations.merging(enriched.durations) { _, new in new }
+            )
+            directoryState = FileSourceDirectoryState(
+                content: content,
+                files: accumulated,
+                hasMore: page.hasMore,
+                nextOffset: page.nextOffset,
+                totalCount: page.totalCount ?? state.totalCount
+            )
+            directoryCache[directory] = directoryState
+            await storeDirectoryCache(
+                content, directory: directory, isComplete: !page.hasMore)
+            commit(content, directory: directory)
+            // ⚠️ 形态要**跟着重判**:判定靠整套文件(「成串的集号」要同目录 ≥2 个),
+            // 第一页可能不足以判定 —— 前 1000 个是电影、后 200 个是集号型文件时,
+            // 第一页判成「普通目录」,第二页到了就该改成「剧」。
+            // 不重判就会出现「形态是普通目录、卡片却是剧集样式」的矛盾。
+            let newShape = BaiduPanSeriesLayout.shape(of: content.items)
+            if newShape != directoryShape {
+                directoryShape = newShape
+                await applyDirectoryShape(directory: directory)
+            } else {
+                startScrape(items: content.items, provider: provider)
+            }
+        } catch let error as BaiduPanError {
+            loadMoreFailure = error.userMessage
+        } catch let error as Pan115Error {
+            loadMoreFailure = error.userMessage
+        } catch let error as LocalFolderError {
+            loadMoreFailure = error.userMessage
+        } catch {
+            loadMoreFailure = "加载更多失败:\(error)"
+        }
+    }
+
+    /// 浏览页一页多少条。⚠️ 与接口侧 `limit` 上限(`BaiduPanAPIClient.pageSize`)是两回事:
+    /// 那个 1000 是「必须一次拿整层」时按次计费少发请求的口径,⛔ 不能拿来当一屏给多少条。
+    ///
+    /// 100 条约 3–4 屏。⛔ 别调大:每一页都会连带
+    /// ① `filemetas` 按 100 个 `fs_id` 一批串行打(配额,§7)、
+    /// ② 对累计整套重跑 TMDB 刮削、
+    /// ③ 每次 body 重算 `sortedItems` 的排序 / 筛选,且翻页要按累计整套重新 `compose`。
+    /// 一页 1000 条 = 首屏就打 10 次 `filemetas`,用户却只看得到头几屏。
+    static let browsePageSize = 100
+
     // MARK: - 落盘缓存
 
     /// 目录与条目一起提交。⛔ 别拆成两处写:中间那一帧目录已换、条目还是旧的,
@@ -747,11 +909,16 @@ final class FileSourceViewModel {
         // `fs_id` 全局唯一,同键覆盖无冲突。
         filesByID.merge(content.filesByID) { _, new in new }
     }
-
     /// 写失败不影响本次浏览,原因记在 store 的 `lastWriteFailureDescription`。
     /// 不存封面地址(`dlink` 会过期,见 `BaiduPanDirectoryCache`)。
+    ///
+    /// - Parameter isComplete: 这一份是不是**整层**。⛔ 显式传,⛔ 不从 `directoryState` 读 ——
+    ///   读的话就得保证「先设 `directoryState` 再调这里」的顺序,漏一处就会把
+    ///   完整的一层标成不完整(或反过来)。
     private func storeDirectoryCache(
-        _ content: FileSourceDirectoryContent, directory: String
+        _ content: FileSourceDirectoryContent,
+        directory: String,
+        isComplete: Bool
     ) async {
         guard cachesDirectories else { return }
         await container.baiduDirectoryCache.store(
@@ -759,7 +926,8 @@ final class FileSourceViewModel {
             directory: directory,
             // 排序让落盘 JSON 稳定,便于比对
             files: content.filesByID.values.sorted { $0.fsID < $1.fsID },
-            durations: content.durations
+            durations: content.durations,
+            isComplete: isComplete
         )
     }
 
@@ -803,22 +971,34 @@ final class FileSourceViewModel {
         let provider = makeProvider()
         backgroundRefreshTask = Task { [weak self] in
             guard let self else { return }
-            let fresh: FileSourceDirectoryContent
-            do {
-                fresh = try await provider.content(directory: directory)
-            } catch {
-                // 不报错:缓存内容已显示,真正的失败会在下次前台读取时报出
-                return
+            switch target {
+            case .directory:
+                // 网格走分页:⛔ 后台刷新也只取第一页,⛔ 不把整个目录拉完(配额 §7 / 115 限速 §6)
+                guard let state = try? await self.loadFirstPage(
+                    directory: directory, provider: provider) else { return }
+                guard !Task.isCancelled else { return }
+                await self.applyBackgroundRefresh(
+                    state, provider: provider, directory: directory, target: target)
+            case .episodes:
+                // 分集清单要**整季**:集数统计与换集队列都要全的(一季不会超过一页,
+                // 所以这里保持全量读取)
+                let fresh: FileSourceDirectoryContent
+                do {
+                    fresh = try await provider.content(directory: directory)
+                } catch {
+                    // 不报错:缓存内容已显示,真正的失败会在下次前台读取时报出
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await self.applyBackgroundRefresh(
+                    fresh, provider: provider, directory: directory, target: target)
             }
-            guard !Task.isCancelled else { return }
-            await self.applyBackgroundRefresh(
-                fresh, provider: provider, directory: directory, target: target)
         }
     }
 
     /// 先校验结果仍有效(目录看 `currentDirectory`,分集看 `episodeGeneration`)再写回。
     private func applyBackgroundRefresh(
-        _ content: FileSourceDirectoryContent,
+        _ state: FileSourceDirectoryState,
         provider: any FileSourceBrowsing,
         directory: String,
         target: BackgroundRefreshTarget
@@ -826,19 +1006,94 @@ final class FileSourceViewModel {
         switch target {
         case .directory:
             guard currentDirectory == directory else { return }
-            directoryCache[directory] = content
+            // ⚠️ 后台刷新只取**第一页**。用户若已经翻到第 N 页,直接覆盖会把
+            // 已加载的页丢掉(条目凭空消失、页脚重新出现、来回抖动)。
+            // ⇒ 只在「当前还停在第一页」时才整体替换;否则只补封面 / 时长。
+            let current = directoryState
+            let userPagedFurther = current.map { $0.nextOffset > state.nextOffset } ?? false
+            if userPagedFurther {
+                // 只把新的封面 / 时长补到已有条目上,⛔ 不动条目集合
+                mergeEnrichment(of: state, into: current)
+                return
+            }
+            let content = state.content
+            directoryState = state
+            directoryCache[directory] = state
             items = content.items
             filesByID.merge(content.filesByID) { _, new in new }
-            await storeDirectoryCache(content, directory: directory)
+            await storeDirectoryCache(
+                content, directory: directory, isComplete: !state.hasMore)
             await applyDirectoryShape(directory: directory)
             startScrape(items: content.items, provider: provider)
         case .episodes(let generation):
             guard generation == episodeGeneration else { return }
-            directoryCache[directory] = content
-            await storeDirectoryCache(content, directory: directory)
+            let content = state.content
+            directoryCache[directory] = FileSourceDirectoryState.restoring(
+                content, isComplete: true)
+            await storeDirectoryCache(content, directory: directory, isComplete: true)
             await applyEpisodeContent(
                 content, provider: provider, generation: generation, directory: directory)
         }
+    }
+
+    /// 把后台刷新拿到的封面 / 时长补到**已有**条目上,⛔ 不增删条目、不动翻页游标。
+    ///
+    /// 用于「用户已经翻过页,后台刷新才回来」的情形:盘上那份没有封面地址,
+    /// 后台这一趟有 → 补上;条目集合与游标保持用户看到的样子。
+    private func mergeEnrichment(
+        of state: FileSourceDirectoryState,
+        into current: FileSourceDirectoryState?
+    ) {
+        guard let current else { return }
+        var byID: [String: SourceItem] = [:]
+        for item in current.content.items { byID[item.ref.itemID] = item }
+        var changed = false
+        for item in state.content.items {
+            guard let existing = byID[item.ref.itemID] else { continue }
+            var updated = existing
+            if updated.poster == nil, let poster = item.poster {
+                updated = updated.withPoster(poster)
+            }
+            if updated.durationSeconds == nil, let duration = item.durationSeconds {
+                updated = updated.withDuration(duration)
+            }
+            if updated != existing {
+                byID[item.ref.itemID] = updated
+                changed = true
+            }
+        }
+        guard changed else { return }
+        // 按原顺序写回(⛔ 不改顺序:排序是用户选定的)
+        let merged = current.content.items.map { byID[$0.ref.itemID] ?? $0 }
+        directoryState = FileSourceDirectoryState(
+            content: FileSourceDirectoryContent(
+                items: merged,
+                filesByID: current.content.filesByID,
+                durations: current.content.durations.merging(state.content.durations) { _, new in new }
+            ),
+            files: current.files,
+            hasMore: current.hasMore,
+            nextOffset: current.nextOffset,
+            totalCount: current.totalCount
+        )
+        items = merged
+    }
+
+    /// 分集那一趟的后台刷新用:整季全量(见 `startBackgroundRefresh`)。
+    private func applyBackgroundRefresh(
+        _ content: FileSourceDirectoryContent,
+        provider: any FileSourceBrowsing,
+        directory: String,
+        target: BackgroundRefreshTarget
+    ) async {
+        await applyBackgroundRefresh(
+            FileSourceDirectoryState(
+                content: content,
+                files: content.filesByID.values.sorted { $0.fsID < $1.fsID },
+                hasMore: false,
+                nextOffset: content.filesByID.count,
+                totalCount: nil),
+            provider: provider, directory: directory, target: target)
     }
 
     /// 列表出来后再在后台问 TMDB 补封面(`docs/TMDB_API.md`),TMDB 连不上不能让片库打不开。
@@ -906,6 +1161,10 @@ final class FileSourceViewModel {
         // 同一部剧刷新要保住当前季,换了剧才回第一季
         let isSameSeries = shapeDirectory == directory
         shapeDirectory = directory
+        // ⚠️ 判定为剧之后要**列全这一层**:平铺存法的分集清单就是这一层的内容,
+        // 只列第一页的话「共 N 集」不准、第 N+1 集之后根本列不出来(剧详情页没有翻页入口)。
+        // 剧集目录的条目数通常远小于普通目录,这一次全量读取换来的准确性值得。
+        await completeSeriesListingIfNeeded(directory: directory, structure: structure)
         // 平铺存法此刻就知道总数;季文件夹要等各季列完。⛔ 不为这个数字去列子目录。
         await recordEpisodeTotal(structure: structure, directory: directory)
         // 片库根直接就是一部剧时没有点进来的卡片,用只有目录名的兜底条目
@@ -997,6 +1256,50 @@ final class FileSourceViewModel {
         applySeriesPosterFallback()
     }
 
+    /// 判定为剧之后把这一层**列全**,并按整套内容重判形态。
+    ///
+    /// ⚠️ 为什么剧集要列全(而普通目录分页就行):
+    /// 平铺存法的分集清单就是这一层的内容 —— 只列第一页的话「共 N 集」不准,
+    /// 第 N+1 集之后列不出来(剧详情页没有翻页入口,分集横排要一次给全)。
+    /// 季文件夹那套本来就另列一次(`loadEpisodes`),不受影响。
+    ///
+    /// 已经列全了(没有下一页)就什么都不做,⛔ 不发多余请求。
+    private func completeSeriesListingIfNeeded(
+        directory: String,
+        structure: BaiduPanSeriesStructure
+    ) async {
+        // 平铺存法才需要:季文件夹的分集是另列的
+        guard structure.seasons.contains(where: { if case .flatFiles = $0.source { return true } else { return false } }),
+              let state = directoryState, state.hasMore
+        else { return }
+        let myGeneration = directoryGeneration
+        do {
+            let provider = makeProvider()
+            let content = try await provider.content(directory: directory)
+            guard myGeneration == directoryGeneration else { return }
+            directoryState = FileSourceDirectoryState(
+                content: content,
+                files: mergingFileSources(
+                    state.files, content.filesByID.values.sorted { $0.fsID < $1.fsID }),
+                hasMore: false,
+                nextOffset: content.filesByID.count,
+                totalCount: state.totalCount
+            )
+            directoryCache[directory] = directoryState
+            await storeDirectoryCache(
+                content, directory: directory, isComplete: true)
+            commit(content, directory: directory)
+            // ⚠️ 必须按**整套**重判形态:第一页可能不足以判定
+            // (比如前 1000 个是电影、后 200 个是集号型文件),
+            // 只按第一页判会把「剧」误判成「普通目录」,反过来也会让形态与条目对不上
+            directoryShape = BaiduPanSeriesLayout.shape(of: content.items)
+            startScrape(items: content.items, provider: provider)
+        } catch {
+            // 列不全就列不全:分集清单少一截,但页面照常能用(⛔ 不把整页换成错误态)
+            Self.seriesListingLogger.error(
+                "剧集目录列全失败: \(String(describing: error), privacy: .public)")        }
+    }
+
     /// 剧级条目没有封面时,用刚列出的分集封面顶上。⛔ 不为找剧级封面去列父目录(配额)。
     private func applySeriesPosterFallback() {
         guard let item = seriesItem, item.poster == nil,
@@ -1021,12 +1324,13 @@ final class FileSourceViewModel {
             if !cachesDirectories {
                 content = try await provider.content(directory: directory)
             } else if let cached = directoryCache[directory] {
-                content = cached
+                content = cached.content
             } else if let disk = await container.baiduDirectoryCache.content(
                 sourceID: source.id, directory: directory) {
                 // 同 `loadFiles`:盘上那份先出,真实分集交给后台刷新
                 content = Self.content(from: disk, sourceID: source.id)
-                directoryCache[directory] = content
+                directoryCache[directory] = FileSourceDirectoryState.restoring(
+                    content, isComplete: disk.isComplete)
                 await applyEpisodeContent(
                     content, provider: provider, generation: myGeneration, directory: directory)
                 startBackgroundRefresh(
@@ -1034,8 +1338,10 @@ final class FileSourceViewModel {
                 return
             } else {
                 content = try await provider.content(directory: directory)
-                directoryCache[directory] = content
-                await storeDirectoryCache(content, directory: directory)
+                // 分集清单是**整季**,一季不会超过一页 ⇒ 视为列完
+                directoryCache[directory] = FileSourceDirectoryState.restoring(
+                    content, isComplete: true)
+                await storeDirectoryCache(content, directory: directory, isComplete: true)
             }
             await applyEpisodeContent(
                 content, provider: provider, generation: myGeneration, directory: directory)
@@ -1607,6 +1913,15 @@ final class FileSourceViewModel {
         await evictCachedDirectory(file.path)
         await evictCachedDirectory(
             BaiduPanPath.directory(ofFilePath: file.path), includeDescendants: false)
+        // ⛔ 当前目录的翻页状态要**剔除**被删的那一条,⛔ 不是整个丢掉:
+        // 丢掉整个状态会让 `hasMoreItems` 变 false → 页脚消失 → 用户以为目录就这些,
+        // 而这一层其余几百条还在屏幕上、却再也翻不出后面的页。
+        if let fsID = UInt64(item.ref.itemID), let state = directoryState {
+            directoryState = removingFileSource(fsID, from: state)
+            if let directory = currentDirectory {
+                directoryCache[directory] = directoryState
+            }
+        }
         await forgetRecords(fileIDs)
         // 重算角标;不在 `items` / `episodes` 里的分集再按 id 兜一层
         await loadWatchStates()

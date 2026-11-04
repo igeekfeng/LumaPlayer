@@ -171,7 +171,31 @@ actor BaiduPanConnection {
         let entries = try await withToken { [client] token in
             try await client.list(directory: directory, accessToken: token)
         }
-        return entries.sorted { lhs, rhs in
+        return Self.sorted(entries)
+    }
+
+    /// 列一页。浏览页按需翻页用这个,⛔ 不一次把整个目录拉完(配额,§7)。
+    ///
+    /// - Parameter offset: 偏移量。百度的翻页是 `start += limit`(官方推荐的 `list` 翻页方式)。
+    func page(
+        inDirectory directory: String,
+        offset: Int,
+        limit: Int
+    ) async throws -> BaiduPanDirectoryPage {
+        let page = try await withToken { [client] token in
+            try await client.listPage(
+                directory: directory, accessToken: token, start: offset, limit: limit)
+        }
+        return BaiduPanDirectoryPage(
+            files: Self.sorted(page.files),
+            hasMore: page.hasMore,
+            nextOffset: page.nextOffset
+        )
+    }
+
+    /// 目录在前、再按名字排(分页时也这样排,⛔ 不让页与页之间的顺序不一致)。
+    private static func sorted(_ files: [BaiduPanFile]) -> [BaiduPanFile] {
+        files.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
