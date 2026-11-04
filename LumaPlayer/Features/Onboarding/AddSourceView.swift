@@ -110,7 +110,7 @@ struct AddSourceView: View {
         dismiss()
     }
 
-    /// 品牌标记有自带底色,⛔ 不再套 tint;SF Symbol 才需要着色。
+    /// 品牌标记有自带配色,⛔ 不再套 tint;SF Symbol 才需要着色。
     @ViewBuilder
     private func kindIcon(_ kind: SourceKind) -> some View {
         if let symbol = kind.symbol {
@@ -118,8 +118,8 @@ struct AddSourceView: View {
                 .font(.title2)
                 .foregroundStyle(.tint)
                 .frame(width: Metrics.serverRowIconSize)
-        } else {
-            Pan115LogoMark(size: Metrics.serverRowIconSize)
+        } else if let brand = kind.brand {
+            SourceBrandMark(brand: brand, size: Metrics.serverRowIconSize)
         }
     }
 }
@@ -151,13 +151,22 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// `nil` = 这个来源不用 SF Symbol(115 用官方字标)。
+    /// `nil` = 这个来源不用 SF Symbol(网盘用官方品牌标记)。
     var symbol: String? {
         switch self {
         case .emby: return "server.rack"
-        case .baiduPan: return "cloud.fill"
+        case .baiduPan: return nil
         case .pan115: return nil
         case .localFolder: return "folder.fill"
+        }
+    }
+
+    /// 品牌标记种类;`nil` = 不用品牌标记。
+    var brand: SourceBrand? {
+        switch self {
+        case .emby, .localFolder: return nil
+        case .baiduPan: return .baiduPan
+        case .pan115: return .pan115
         }
     }
 }

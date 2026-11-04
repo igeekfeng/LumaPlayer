@@ -1,5 +1,11 @@
 import Foundation
 
+/// 需要用官方品牌标记(而非 SF Symbol)的来源种类。放 Models:`SourceProfile.brand` 要返回它。
+enum SourceBrand: Hashable, Sendable {
+    case baiduPan
+    case pan115
+}
+
 /// 一个**播放来源**的身份与**非敏感**配置。
 /// 加来源(其它网盘 / WebDAV)= 加一个 case,编译器会逼你处理所有 `switch` 点。
 /// ⚠️ **只放非敏感配置**:token / 密码 / AppKey 一律进凭据文件(`CredentialStore`);
@@ -62,6 +68,15 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .baiduPan: return "百度网盘"
         case .pan115: return "115 网盘"
         case .localFolder: return "本地文件夹"
+        }
+    }
+
+    /// 品牌标记种类;`nil` = 这个来源用 SF Symbol。
+    var brand: SourceBrand? {
+        switch self {
+        case .emby, .localFolder: return nil
+        case .baiduPan: return .baiduPan
+        case .pan115: return .pan115
         }
     }
 

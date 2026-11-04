@@ -4,12 +4,13 @@ import SwiftUI
 
 /// 表单顶部:图标 + 标题 + 一行说明。
 ///
-/// 图标有两种来源:SF Symbol(`systemImage:`),或带自家品牌底色的矢量标记(`pan115Title:`)——
-/// 后者⛔ 不能再套 tint 着色,否则官方配色会被强调色盖掉。
+/// 图标有三种来源:SF Symbol(`systemImage:`),或带自家品牌配色的矢量标记
+/// (`pan115Title:` / `baiduTitle:`)——后者⛔ 不能再套 tint 着色,否则官方配色会被强调色盖掉。
 struct OnboardingFormHeader: View {
     private enum Mark {
         case symbol(String)
         case pan115
+        case baidu
     }
 
     private let mark: Mark
@@ -24,6 +25,12 @@ struct OnboardingFormHeader: View {
 
     init(pan115Title title: String, subtitle: String) {
         self.mark = .pan115
+        self.title = title
+        self.subtitle = subtitle
+    }
+
+    init(baiduTitle title: String, subtitle: String) {
+        self.mark = .baidu
         self.title = title
         self.subtitle = subtitle
     }
@@ -54,6 +61,8 @@ struct OnboardingFormHeader: View {
                 .symbolRenderingMode(.hierarchical)
         case .pan115:
             Pan115LogoMark(size: Metrics.onboardingLogoSize)
+        case .baidu:
+            BaiduPanLogoMark(size: Metrics.onboardingLogoSize)
         }
     }
 }

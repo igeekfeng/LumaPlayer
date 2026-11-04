@@ -29,8 +29,7 @@ struct BaiduPanAuthorizationView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Metrics.spacingL) {
                     OnboardingFormHeader(
-                        systemImage: "cloud.fill",
-                        title: "接入百度网盘",
+                        baiduTitle: "接入百度网盘",
                         subtitle: "在开放平台建一个应用,把它的 API Key、Secret Key 与应用目录名填进来。"
                     )
 

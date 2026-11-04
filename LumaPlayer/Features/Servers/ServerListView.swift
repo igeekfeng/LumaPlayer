@@ -228,17 +228,17 @@ private struct SourceRow: View {
                     isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
                     in: RoundedRectangle(cornerRadius: Radius.card)
                 )
-        } else {
-            // 115 有自己的品牌底色,⛔ 不再套一层 tint / quaternary
-            Pan115LogoMark(size: Metrics.serverRowIconSize)
+        } else if let brand = source.brand {
+            // 网盘有自己的品牌配色,⛔ 不再套一层 tint / quaternary
+            SourceBrandMark(brand: brand, size: Metrics.serverRowIconSize)
         }
     }
 
-    /// `nil` = 这个来源不用 SF Symbol(115 用官方字标)。
+    /// `nil` = 这个来源不用 SF Symbol(网盘用官方品牌标记)。
     private var symbolName: String? {
         switch source {
         case .emby: return "server.rack"
-        case .baiduPan: return "cloud.fill"
+        case .baiduPan: return nil
         case .pan115: return nil
         case .localFolder: return "folder.fill"
         }

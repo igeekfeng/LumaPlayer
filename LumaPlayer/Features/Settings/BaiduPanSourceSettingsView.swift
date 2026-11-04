@@ -36,8 +36,7 @@ struct BaiduPanSourceSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             OnboardingFormHeader(
-                systemImage: "cloud.fill",
-                title: "百度网盘",
+                baiduTitle: "百度网盘",
                 subtitle: "片库根决定进来时先落在哪个目录。一个来源一个 ——"
                     + "想再要一个起点,就在来源列表里再加一个百度来源。"
             )
