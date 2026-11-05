@@ -298,6 +298,10 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
   ⛔ 未验:真实 DV 片源(DirectStream / 转码)、`CAOpenGLLayer` 上屏、DV P7/P8 与 HDR10/HLG 回归、能耗(GPU 约为 legacy 的 4–5 倍)。
   ⛔ 未修:PR 的 `map_frame` 上传失败时可能二次释放。上游合并后换基线、删补丁 0000,核对 `MPV_RENDER_PARAM_BACKEND` 编号。
   设置 →「播放 → 色彩」选「始终旧渲染器」是用户退回 legacy 的唯一入口。
+  **P7 增强层(补丁 0006)**:只验了编译通过、现有 DV / 非 DV 合成 fixture 的后端测试不回归。
+  ⛔ 未验(合成不出带 EL 的片源,只能真实 P7 原盘 Remux 走 DirectStream 只读播放):FEL 片源 EL 是否真被合成
+  (stats 看不出,要目检或对比 `vf=format:enhancement-layer=no`)、MEL 片源不上传 EL、EL 硬解走 VideoToolbox 零拷贝、
+  多一路 1080p HEVC 解码的 CPU / GPU / 能耗,以及 BL 等 EL 配对带来的起播 / seek 延迟。
 - **Q49 render 队列 + `report_swap` + 按需 render 的副作用只验了一半。** 已验:弹幕帧率恢复(约 585 帧 / 5 s,主线程渲染时测的);
   `MPVRenderGateTests` 证明暂停期间不 render、改尺寸会重画、主线程堵住时照样出帧、正常播放时 VO 不因等 swap 丢帧。
   ⛔ 未验:真实能耗、缩放 / 全屏 / 换屏(含 displayLink 跟屏)、窗口在别的桌面空间时的跳帧路径、60 fps 与 gpu-next、

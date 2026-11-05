@@ -16,6 +16,12 @@ struct MPVTrack: Sendable, Equatable, Identifiable {
     let isExternal: Bool
     /// `track-list/N/forced`
     let isForced: Bool
+    /// `track-list/N/commentary` / `original` / `hearing-impaired`:容器里的轨道标记
+    /// (mkv `FlagCommentary` 等,lavf 的 `AV_DISPOSITION_*`)。只有 DirectStream / 本地文件可靠,
+    /// 转码流基本不带。Emby `MediaStream` 侧没有核实过的对应字段(API_CONTRACT.md),只认 mpv 读出的。
+    var isCommentary = false
+    var isOriginal = false
+    var isHearingImpaired = false
     /// 封面图伪装的视频轨(`albumart`),不算真画面
     var isAlbumArt = false
     /// `track-list/N/dolby-vision-profile`(demuxer 读出);非 DV 片源为 nil
@@ -28,11 +34,14 @@ struct MPVTrack: Sendable, Equatable, Identifiable {
         return "轨道 \(id)"
     }
 
-    /// 编码 + 外挂标记;都没有时 nil。
+    /// 编码 + 外挂 / 轨道标记;都没有时 nil。
     var detail: String? {
         var parts: [String] = []
         if let codec, !codec.isEmpty { parts.append(codec.uppercased()) }
         if isExternal { parts.append("外挂") }
+        if isCommentary { parts.append("评论") }
+        if isOriginal { parts.append("原声") }
+        if isHearingImpaired { parts.append("听障") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
@@ -114,6 +123,9 @@ enum MPVTrackListParser {
             codec: string("codec"),
             isExternal: flag("external"),
             isForced: flag("forced"),
+            isCommentary: flag("commentary"),
+            isOriginal: flag("original"),
+            isHearingImpaired: flag("hearing-impaired"),
             isAlbumArt: flag("albumart"),
             dolbyVisionProfile: integer("dolby-vision-profile")
         )

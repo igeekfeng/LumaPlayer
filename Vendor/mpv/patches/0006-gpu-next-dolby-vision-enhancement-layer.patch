@@ -1,0 +1,72 @@
+diff --git a/video/out/gpu_next/video.c b/video/out/gpu_next/video.c
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -83,9 +83,50 @@
+  */
+ struct frame_priv {
+     struct pl_video *p; // A pointer back to the main pl_video engine struct.
++    // Dolby Vision Profile 7 FEL: the uploaded enhancement layer. The BL
++    // pl_frame points at it, so it must live as long as the queue entry.
++    struct pl_frame el_frame;
++    bool has_el;
+ };
+ 
+ /**
++ * Uploads the enhancement layer paired with a base-layer image (see
++ * f_enhancement_pair) and attaches it to the BL pl_frame. Mirrors
++ * vo_gpu_next.c map_frame.
++ *
++ * libplacebo only composes the EL for FEL (`repr.dovi->nlq_active`), so MEL
++ * and non-DV frames skip the upload. On failure only the BL is rendered.
++ */
++static void map_enhancement_layer(struct pl_video *p, struct frame_priv *fp,
++                                  const struct mp_image *bl, struct pl_frame *frame)
++{
++    const struct mp_image *el = bl->enhancement_layer;
++    const struct pl_dovi_metadata *dovi = bl->params.repr.dovi;
++    if (!el || !dovi || !dovi->nlq_active)
++        return;
++
++    if (!ra_upload_mp_image(p->ra, &fp->el_frame, el)) {
++        mp_msg(p->log, MSGL_WARN, "Failed setting up enhancement layer; "
++               "rendering base layer only.\n");
++        fp->el_frame = (struct pl_frame){0};
++        return;
++    }
++
++    // Same colorimetry as vo_gpu_next: guessed EL params, but keep the bit
++    // encoding the upload derived from the actual plane format.
++    struct mp_image_params el_par = el->params;
++    mp_image_params_guess_csp(&el_par);
++    struct pl_bit_encoding bits = fp->el_frame.repr.bits;
++    fp->el_frame.color = el_par.color;
++    fp->el_frame.repr = el_par.repr;
++    fp->el_frame.repr.bits = bits;
++    pl_frame_set_chroma_location(&fp->el_frame, el_par.chroma_location);
++
++    fp->has_el = true;
++    frame->enhancement_layer = &fp->el_frame;
++}
++
++/**
+  * @brief Callback to map an mp_image to a pl_frame for rendering.
+  *
+  * This function is called by the queue when it needs to prepare a frame for rendering.
+@@ -109,6 +150,8 @@
+         talloc_free(mpi); // Clean up the mp_image reference on failure
+         return false;
+     }
++
++    map_enhancement_layer(p, fp, mpi, frame);
+ 
+     // Store a pointer back to the original mp_image. This is used to get a unique
+     // signature for the frame and to access metadata (like colorspace) later.
+@@ -134,6 +177,8 @@
+ 
+     // Use the RA helper to destroy the GPU textures associated with the frame.
+     ra_cleanup_pl_frame(p->ra, frame);
++    if (fp->has_el)
++        ra_cleanup_pl_frame(p->ra, &fp->el_frame);
+     // Free the mp_image reference itself.
+     talloc_free(mpi);
+ }

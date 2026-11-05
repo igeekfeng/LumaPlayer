@@ -86,6 +86,9 @@ echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 #   0003  gpu-next 没注册硬解设备,hwdec=auto 退成 videotoolbox-copy(4K 每帧拷回内存,能耗高)
 #   0005  init 失败后会调 uninit,但 init_audiounit 失败路径释放了 unit 不置空 → 二次释放
 #         (v0.42.0 同样存在)
+#   0006  v0.42.0 对 DV Profile 7 无条件拆出增强层(EL)并多开一个解码器,但只有 vo_gpu_next.c
+#         会用它;0000 的精简渲染器把 EL 解完就丢。照 vo_gpu_next 把 FEL 的 EL 上传进
+#         pl_frame.enhancement_layer(MEL 不上传,libplacebo 只按 nlq_active 合成)
 # 编号不连续是有意的:文档与 PITFALLS.md 按编号引用。上游合并 16818 后删 0000、核对 BACKEND 编号,
 # 修好哪个缺陷就删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do

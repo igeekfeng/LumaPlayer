@@ -16,9 +16,15 @@
   `0000` PR 16818 的 head `80351bb3` 移植到 v0.42.0 —— v0.42.0 的 D3D11 render API 占了 21 / 22,
   这里 `MPV_RENDER_PARAM_BACKEND = 23`,与 PR 原版(21)不同,Swift 侧只用符号名;
   `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0003` gpu-next 注册 VideoToolbox 设备恢复零拷贝;
-  `0005` `ao_coreaudio` 的 `init_audiounit` 失败路径释放 unit 后置空,否则 init 失败走的 `uninit` 二次释放(v0.42.0 同样存在)。
+  `0005` `ao_coreaudio` 的 `init_audiounit` 失败路径释放 unit 后置空,否则 init 失败走的 `uninit` 二次释放(v0.42.0 同样存在);
+  `0006` gpu-next 应用 DV Profile 7 增强层(EL),见下条。
 - PR 16818 的 gpu-next 是一份独立的精简渲染器(`video/out/gpu_next/video.c`),**不是** `vo_gpu_next.c`:
-  上游只改 `vo_gpu_next.c` 的 gpu-next 功能(DV P7 增强层、参考白、scRGB、上传同步修复等)到不了这条路径。
+  上游只改 `vo_gpu_next.c` 的 gpu-next 功能(参考白、scRGB、上传同步修复等)到不了这条路径,要用就得像 `0006` 那样移植。
+- **DV P7 增强层**:v0.42.0 只要 `dvcC` 标了 BL + EL(P7,FEL / MEL 都算)就无条件把 EL 拆成隐藏的 dependent 轨、
+  多开一个解码器、在滤镜链末尾与 BL 按 pts 配对(`f_enhancement_pair`),没有选项能关(`vf=format:enhancement-layer=no`
+  也是解完再丢)。`0006` 在 `map_frame` 里照 `vo_gpu_next.c` 把 EL 上传进 `pl_frame.enhancement_layer`;
+  只有 FEL(`repr.dovi->nlq_active`)才上传,MEL 不上传(libplacebo 也只按它合成)。legacy `gpu` 不用 EL:
+  「始终旧渲染器」下 P7 的 EL 照样被解码再丢。
 - 打包:`Scripts/bundle-libmpv.sh` 把 libmpv 与依赖拷进 `Frameworks/`、改写 install name、删 Homebrew `LC_RPATH`。只对 Release 产物跑。
 - **上游合并 PR 16818 之后**:基线换到含它的正式版,删 `0000`;核对 `0001` / `0003` 是否还需要。
 
@@ -144,7 +150,9 @@ libcurl 链的是 macOS 自带的 `/usr/lib/libcurl.4.dylib`,用系统证书库,
 ## 7. 轨道
 
 `track-list/N/*`:`id`(设 `aid` / `sid` 用)、`type`、`src-id`(容器内轨道号,从 1 起,⛔ 不是 Emby 的 `Index`)、
-`selected`、`title` / `lang`(菜单显示名 title → lang →「轨道 N」)、`default` / `forced`、`codec`、`external`。
+`selected`、`title` / `lang`(菜单显示名 title → lang →「轨道 N」)、`default` / `forced`、`codec`、`external`、
+`commentary` / `original` / `hearing-impaired`(容器的轨道标记,菜单副标题显示「评论 / 原声 / 听障」;转码流基本不带,
+Emby 侧无核实过的对应字段,只认 mpv 读出的)。EL 这类 dependent 轨默认不进 `track-list`(`--show-dependent-tracks`)。
 
 - 选轨:设 `aid` / `sid` = id;关字幕 `sid = no`。设了不存在的轨会读回 `no` → 要读回验证。
 - `track-list` 事件里的 `mpv_node` 归 mpv,⛔ 不 `mpv_free_node_contents()`,同步解析完。
