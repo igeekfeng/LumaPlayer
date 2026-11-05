@@ -527,6 +527,10 @@ struct PlayerSubtitlePanel: View {
                 }
             }
 
+            if !viewModel.subtitleTracks.isEmpty {
+                secondarySection
+            }
+
             PlayerPanelSeparator()
 
             PlayerPanelHeader(title: "字幕延迟")
@@ -562,6 +566,32 @@ struct PlayerSubtitlePanel: View {
                     dismiss()
                     settingsTab = .subtitles
                     openSettings()
+                }
+            }
+        }
+    }
+
+    /// 副字幕(`secondary-sid`):叠在主字幕上方。只列文本字幕(图形字幕挪不动位置,`SecondarySubtitle.candidates`)。
+    @ViewBuilder
+    private var secondarySection: some View {
+        let candidates = viewModel.secondarySubtitleCandidates
+        PlayerPanelHeader(title: "副字幕")
+        if candidates.isEmpty {
+            Text("没有可叠加的文本字幕轨")
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, Metrics.spacingS)
+                .frame(maxWidth: .infinity, minHeight: Metrics.playerPanelRowHeight, alignment: .leading)
+        } else {
+            PlayerPanelList(rowCount: candidates.count + 1) {
+                PlayerPanelRow(title: "关闭", isSelected: viewModel.selectedSecondarySubtitleTrackID == nil) {
+                    viewModel.selectSecondarySubtitleTrack(nil)
+                }
+                ForEach(candidates) { track in
+                    PlayerPanelRow(
+                        title: track.displayName,
+                        detail: track.detail,
+                        isSelected: viewModel.selectedSecondarySubtitleTrackID == track.id
+                    ) { viewModel.selectSecondarySubtitleTrack(track.id) }
                 }
             }
         }

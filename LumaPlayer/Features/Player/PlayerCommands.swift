@@ -86,6 +86,7 @@ struct PlayerCommands: Commands {
             Divider()
 
             subtitleMenu
+            secondarySubtitleMenu
             subtitleDelayMenu
             audioMenu
             audioDelayMenu
@@ -156,6 +157,24 @@ struct PlayerCommands: Commands {
             }
         } else {
             Menu("Subtitles") {}.disabled(true)
+        }
+    }
+
+    /// 副字幕只列文本轨(`SecondarySubtitle.candidates`),与面板一致。
+    @ViewBuilder
+    private var secondarySubtitleMenu: some View {
+        if let player, !player.secondarySubtitleCandidates.isEmpty || player.selectedSecondarySubtitleTrackID != nil {
+            Picker("Secondary Subtitles", selection: Binding<Int?>(
+                get: { player.selectedSecondarySubtitleTrackID },
+                set: { player.selectSecondarySubtitleTrack($0) }
+            )) {
+                Text("Off").tag(Int?.none)
+                ForEach(player.secondarySubtitleCandidates) { track in
+                    Text(track.displayName).tag(Int?.some(track.id))
+                }
+            }
+        } else {
+            Menu("Secondary Subtitles") {}.disabled(true)
         }
     }
 

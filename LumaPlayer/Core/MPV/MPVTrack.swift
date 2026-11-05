@@ -26,6 +26,27 @@ struct MPVTrack: Sendable, Equatable, Identifiable {
     var isAlbumArt = false
     /// `track-list/N/dolby-vision-profile`(demuxer 读出);非 DV 片源为 nil
     var dolbyVisionProfile: Int? = nil
+    /// `track-list/N/main-selection`:选中时是第几路(字幕 0 = `sid`,1 = `secondary-sid`);未选中时 mpv 不给。
+    /// ⛔ 只看 `selected` 分不清主副字幕 —— 副字幕的 `selected` 同样是 true。
+    var mainSelection: Int? = nil
+
+    /// 被选为主轨(`aid` / `sid`)。没有 `main-selection` 时按主轨算(mpv 只对选中轨给这个字段)。
+    var isPrimarySelection: Bool { selected && (mainSelection ?? 0) == 0 }
+    /// 被选为副字幕(`secondary-sid`)
+    var isSecondarySelection: Bool { selected && mainSelection == 1 }
+
+    /// 文本字幕:mpv 走 libass 渲染,`secondary-sub-pos` 才挪得动。
+    /// 图形字幕的判据是 mpv `sd_lavc.c` 的 `init()` 接的那几种 codec,其余文本格式太多,只能反着列;
+    /// codec 读不到时不认(宁可少给一条,也不让图形字幕压在主字幕上)。
+    var isTextSubtitle: Bool {
+        guard type == .sub, let codec, !codec.isEmpty else { return false }
+        return !Self.bitmapSubtitleCodecs.contains(codec.lowercased())
+    }
+
+    /// mpv codec 名(= FFmpeg codec descriptor 名),与 `sd_lavc.c` `init()` 的 switch 一一对应
+    static let bitmapSubtitleCodecs: Set<String> = [
+        "dvb_subtitle", "dvb_teletext", "hdmv_pgs_subtitle", "xsub", "dvd_subtitle", "arib_caption",
+    ]
 
     /// title → lang →「轨道 N」,⛔ 不显示空串。
     var displayName: String {
@@ -127,7 +148,8 @@ enum MPVTrackListParser {
             isOriginal: flag("original"),
             isHearingImpaired: flag("hearing-impaired"),
             isAlbumArt: flag("albumart"),
-            dolbyVisionProfile: integer("dolby-vision-profile")
+            dolbyVisionProfile: integer("dolby-vision-profile"),
+            mainSelection: integer("main-selection")
         )
     }
 }

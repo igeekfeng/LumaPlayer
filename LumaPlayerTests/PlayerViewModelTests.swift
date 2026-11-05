@@ -106,6 +106,24 @@ final class PlayerViewModelTests: XCTestCase {
         viewModel.stop()
     }
 
+    /// 副字幕的轨同样 `selected`:读回时不得被当成主字幕,菜单里也不能再列当前主字幕。
+    func testTrackListSeparatesPrimaryAndSecondarySubtitle() throws {
+        let viewModel = try makeViewModel()
+        var secondary = MPVTrack(id: 1, type: .sub, selected: true, title: nil, lang: "eng",
+                                 codec: "subrip", isExternal: false, isForced: false)
+        secondary.mainSelection = 1
+        var primary = MPVTrack(id: 2, type: .sub, selected: true, title: "简体中文", lang: "chi",
+                               codec: "ass", isExternal: false, isForced: false)
+        primary.mainSelection = 0
+
+        viewModel.handle(.trackList([secondary, primary]), generation: 0)
+
+        XCTAssertEqual(viewModel.selectedSubtitleTrackID, 2)
+        XCTAssertEqual(viewModel.selectedSecondarySubtitleTrackID, 1)
+        XCTAssertEqual(viewModel.secondarySubtitleCandidates.map(\.id), [1])
+        viewModel.stop()
+    }
+
     /// 必须立即返回,否则详情页的关窗回调(PITFALLS.md Q22)永远不触发。
     func testWaitUntilReportingFinishedReturnsWhenSessionNeverBegan() async throws {
         let viewModel = try makeViewModel()

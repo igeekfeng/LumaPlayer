@@ -509,6 +509,12 @@ final class MPVPlayer: @unchecked Sendable {
         try setStringProperty("sid", id.map(String.init) ?? "no")
     }
 
+    /// 选副字幕:设 `secondary-sid` = track id;nil = 关(`no`,也是 mpv 默认)。
+    /// 只该传文本字幕(`SecondarySubtitle.candidates`);与 `sid` 同一条时 mpv 不报错码、只是不选上,靠 track-list 读回。
+    func selectSecondarySubtitleTrack(id: Int?) throws {
+        try setStringProperty("secondary-sid", id.map(String.init) ?? "no")
+    }
+
     /// 挂一条外挂字幕(`sub-add`)。片源常把字幕单独放成 .srt / .ass,内核发现不了,只能显式加轨:
     /// 百度同目录字幕与用户手动加载的本地文件都走这里。
     ///
@@ -540,15 +546,16 @@ final class MPVPlayer: @unchecked Sendable {
     /// 值由 `SubtitleStyle.mpvProperties` 生成;全是运行时可改的选项属性,
     /// 播放中改也立即生效。
     ///
-    /// 只放行 `sub-` 前缀:这是给字幕外观开的口子,⛔ 不是通用 setter,业务代码借它绕过封装会让状态机失去意义。
+    /// 只放行 `sub-` / `secondary-sub-` 前缀(后者是副字幕的位置与字号,`SecondarySubtitle.mpvProperties`):
+    /// 这是给字幕外观开的口子,⛔ 不是通用 setter,业务代码借它绕过封装会让状态机失去意义。
     /// 中途某一项被拒即抛错,前面已设上的保持生效(mpv 无批量事务)。
     func setSubtitleProperties(_ properties: [(name: String, value: String)]) throws {
         try withLiveHandle { handle, _ in
             for (name, value) in properties {
-                guard name.hasPrefix("sub-") else {
+                guard name.hasPrefix("sub-") || name.hasPrefix("secondary-sub-") else {
                     throw MPVError.commandFailed(
                         code: MPV_ERROR_INVALID_PARAMETER.rawValue,
-                        message: "setSubtitleProperties 只接受 sub-* 属性,收到 \(name)")
+                        message: "setSubtitleProperties 只接受 sub-* / secondary-sub-* 属性,收到 \(name)")
                 }
                 let err = mpv_set_property_string(handle, name, value)
                 guard err >= 0 else { throw mpvFailure(err, "设置 \(name)=\(value)") }

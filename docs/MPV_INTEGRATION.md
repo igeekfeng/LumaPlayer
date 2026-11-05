@@ -151,10 +151,12 @@ libcurl 链的是 macOS 自带的 `/usr/lib/libcurl.4.dylib`,用系统证书库,
 
 `track-list/N/*`:`id`(设 `aid` / `sid` 用)、`type`、`src-id`(容器内轨道号,从 1 起,⛔ 不是 Emby 的 `Index`)、
 `selected`、`title` / `lang`(菜单显示名 title → lang →「轨道 N」)、`default` / `forced`、`codec`、`external`、
+`main-selection`(选中时是第几路:字幕 0 = `sid`、1 = `secondary-sid`;未选中不给)、
 `commentary` / `original` / `hearing-impaired`(容器的轨道标记,菜单副标题显示「评论 / 原声 / 听障」;转码流基本不带,
 Emby 侧无核实过的对应字段,只认 mpv 读出的)。EL 这类 dependent 轨默认不进 `track-list`(`--show-dependent-tracks`)。
 
 - 选轨:设 `aid` / `sid` = id;关字幕 `sid = no`。设了不存在的轨会读回 `no` → 要读回验证。
+  读回按 `main-selection` 分主副:副字幕的 `selected` 同样是 true,⛔ 只看 `selected` 会把副字幕当成主字幕。
 - `track-list` 事件里的 `mpv_node` 归 mpv,⛔ 不 `mpv_free_node_contents()`,同步解析完。
 - 与 Emby 流索引的对应:只按「同类型内嵌轨的出现顺序」,见 `StreamIndexMapper`(`PITFALLS.md` Q21)。
 - 外挂字幕:`sub-add <path|url> [select|auto] [title]`(input.rst:658)。**本地文件传路径**,
@@ -206,6 +208,23 @@ Emby 侧无核实过的对应字段,只认 mpv 读出的)。EL 这类 dependent 
   一次写全:切回「自动」时上一项的值必须被覆盖。
 - 不持久化:都是针对这一集源的临时修正。跨集沿用走 `PageCarryOver.picture`(同一部剧多数是同一种压制)。
 - `setPicture` 复用了 `MPV_FORMAT` 字符串写入,所以值必须走 `PictureSettings` 生成,⛔ 不要在 View 里拼属性名。
+
+### 7.5 副字幕
+
+`secondary-sid`(默认 `no`)在主字幕之外再画一路。mpv **不会**把两路堆起来:`secondary-sub-pos`(0–150,默认 0 = 贴顶,
+正好压在弹幕区)只是把整块按画面高度百分比上移(`sd_ass.c`:`ass_set_line_position(100 - pos)`),主字幕多行时照样重叠。
+
+- 位置:`SecondarySubtitle.position`(纯函数)由主字幕 `sub-scale` / `sub-pos` 算一个**固定**值,预留主字幕两行
+  (`sub-font-size` 默认 38,按 720 高缩放;行高估 1.25 倍字号 → 一行约 6.6% 画面高)+ 1% 空隙;默认外观下约 85.8。
+  ⛔ 不按 `sub-lines` 逐句算位置:副字幕会随主字幕行数上下跳。主字幕三行或 ASS 自带大字号 / 大边距时会压到副字幕。
+- 字号:`secondary-sub-scale`(0.42 新增)= 主字幕 `sub-scale` × 0.8。副字幕是 `strip`(完全覆盖样式,套 `--sub-*` 的字体 / 颜色 / 描边),
+  字号只看 `secondary-sub-scale`、不乘 `sub-scale`,所以给绝对值。
+- 只允许文本轨(`MPVTrack.isTextSubtitle`,反列 `sd_lavc.c` 接的图形 codec;codec 读不到不认):图形字幕不吃 `secondary-sub-pos`。
+- `secondary-sub-ass-override=strip` 是默认值,仍显式设上;三项随主字幕外观一起写(`setSubtitleProperties` 放行 `secondary-sub-` 前缀)。
+- 同一条轨不能主副都选(`loadfile.c`「Track N is already selected」,属性写入本身不报错)→ 菜单不列当前主字幕;
+  主字幕改选当前副字幕时先关副字幕。
+- 新播放器(转码 seek / 重试)默认没有副字幕:按 id + 名字 + 语言 + codec + 外挂找回同一条轨再设一次,找不到就不设。
+- `sub-delay` 只管主字幕;`secondary-sub-delay` 不开放。不上报:Emby `Progress` 只有一个 `SubtitleStreamIndex`(API_CONTRACT.md 5.1)。
 
 ## 8. 生命周期
 

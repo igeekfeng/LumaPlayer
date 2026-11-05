@@ -57,6 +57,13 @@ final class PlayerViewModel {
     private var hasUserChosenSubtitle = false
     /// 默认偏好已应用过(track-list 会被推多次,只挑一次)
     private var hasAppliedPreferredSubtitle = false
+    /// 副字幕(`secondary-sid`,MPV_INTEGRATION.md 7.5),track-list 的 `main-selection` 读回值;nil = 关
+    private(set) var selectedSecondarySubtitleTrackID: Int?
+    /// 用户选的副字幕。新播放器(转码 seek / 重试)默认没有副字幕,按它找回同一条轨再设上。
+    /// ⛔ 只活在这一集:换集是新 ViewModel,轨道对不上。
+    private var requestedSecondarySubtitle: MPVTrack?
+    /// 新播放器还没把副字幕设回去:等带着那条轨的 track-list(外挂字幕晚到),设过一次就清掉,不反复重试。
+    private var isSecondarySubtitleRestorePending = false
     /// 转码 seek 正在重新起流(4.5):与首次取播放信息区分开,便于 UI 给准话
     private(set) var isRestarting = false
 
@@ -826,7 +833,8 @@ final class PlayerViewModel {
 
     private func applySubtitleStyle(_ style: SubtitleStyle, to player: MPVPlayer) {
         do {
-            try player.setSubtitleProperties(style.mpvProperties)
+            // 副字幕的位置 / 字号由主字幕外观算出(`SecondarySubtitle`),跟着一起设
+            try player.setSubtitleProperties(style.mpvProperties + SecondarySubtitle.mpvProperties(for: style))
         } catch {
             // 外观设不上不影响播放,不挂 failure;但要留痕,否则「设置改了没反应」无从查起。
             Self.logger.error("字幕外观设置失败: \(String(describing: error), privacy: .public)")
@@ -1141,6 +1149,11 @@ final class PlayerViewModel {
     /// 选字幕轨;nil = 关字幕(`sid` = `no`)。
     /// 选过之后起播默认偏好让位(`applyPreferredSubtitle()` 不再覆盖),否则会被回推的 track-list 顶掉。
     func selectSubtitleTrack(_ id: Int?) {
+        // 同一条轨不能主副都选(mpv 会拒绝主字幕):先把副字幕让出来
+        if let id, id == selectedSecondarySubtitleTrackID {
+            guard applySecondarySubtitle(nil) else { return }
+            requestedSecondarySubtitle = nil
+        }
         hasUserChosenSubtitle = true
         selectedSubtitleTrackID = id
         do { try player?.selectSubtitleTrack(id: id) } catch { return }
@@ -1148,6 +1161,56 @@ final class PlayerViewModel {
         reportNow(.subtitleTrackChange)
         let name = id.flatMap { id in subtitleTracks.first { $0.id == id }?.displayName }
         flash("字幕:\(name ?? "关闭")", systemImage: "captions.bubble")
+    }
+
+    /// 能当副字幕的轨(文本字幕、不是当前主字幕),菜单用。
+    var secondarySubtitleCandidates: [MPVTrack] {
+        SecondarySubtitle.candidates(in: subtitleTracks, primaryID: selectedSubtitleTrackID)
+    }
+
+    /// 选副字幕;nil = 关。位置与字号随主字幕外观一起设(`applySubtitleStyle`)。
+    /// 不上报:Emby `Progress` 只有一个 `SubtitleStreamIndex`(API_CONTRACT.md 5.1),没有副字幕字段。
+    func selectSecondarySubtitleTrack(_ id: Int?) {
+        let track = id.flatMap { id in secondarySubtitleCandidates.first { $0.id == id } }
+        if id != nil, track == nil {
+            // 菜单只列候选,走到这里说明轨道列表刚变过
+            flash("副字幕:这条轨不能叠加显示", systemImage: "exclamationmark.triangle")
+            return
+        }
+        guard applySecondarySubtitle(id) else { return }
+        requestedSecondarySubtitle = track
+        isSecondarySubtitleRestorePending = false
+        flash("副字幕:\(track?.displayName ?? "关闭")", systemImage: "captions.bubble")
+    }
+
+    /// 写 `secondary-sid`;失败起 OSD 并留痕,返回是否设上。成功后先乐观更新,track-list 随后读回覆盖。
+    @discardableResult
+    private func applySecondarySubtitle(_ id: Int?, quiet: Bool = false) -> Bool {
+        guard let player else { return false }
+        do {
+            try player.selectSecondarySubtitleTrack(id: id)
+        } catch {
+            if !quiet {
+                flash("副字幕设置失败", systemImage: "exclamationmark.triangle")
+            }
+            Self.logger.error("副字幕设置失败: \(String(describing: error), privacy: .public)")
+            return false
+        }
+        selectedSecondarySubtitleTrackID = id
+        return true
+    }
+
+    /// 新播放器把用户选的副字幕找回来:按 id + 名字 + 语言 + codec + 外挂认同一条轨(重新起流 id 可能不变,也可能对不上)。
+    private func restoreSecondarySubtitleIfNeeded() {
+        guard isSecondarySubtitleRestorePending, let wanted = requestedSecondarySubtitle else { return }
+        guard let match = secondarySubtitleCandidates.first(where: {
+            $0.id == wanted.id && $0.title == wanted.title && $0.lang == wanted.lang
+                && $0.codec == wanted.codec && $0.isExternal == wanted.isExternal
+        }) else { return }
+        isSecondarySubtitleRestorePending = false
+        if !applySecondarySubtitle(match.id, quiet: true) {
+            requestedSecondarySubtitle = nil
+        }
     }
 
     /// 起播后按设置页的字幕模式挑一次字幕轨(`SubtitlePreference.startupChoice`)。
@@ -1581,6 +1644,7 @@ final class PlayerViewModel {
             applyDefaultVolume(to: player)
             applySubtitleSettings(to: player)
             applyPlaybackAdjustments(to: player)
+            isSecondarySubtitleRestorePending = requestedSecondarySubtitle != nil
 
             let generation = self.generation
             let bridge = MPVEventBridge { [weak self] event in
@@ -1875,10 +1939,13 @@ final class PlayerViewModel {
             hasNoVideoTrack = !tracks.isEmpty && !tracks.contains { $0.type == .video }
             audioTracks = tracks.filter { $0.type == .audio }
             subtitleTracks = tracks.filter { $0.type == .sub }
-            // 读回验证(第 7 节:设置 aid/sid 后要读回,不能假设设置即生效);`selected` 就是读回结果。
-            selectedAudioTrackID = audioTracks.first { $0.selected }?.id
-            selectedSubtitleTrackID = subtitleTracks.first { $0.selected }?.id
+            // 读回验证(第 7 节:设置 aid/sid 后要读回,不能假设设置即生效);`selected` 就是读回结果,
+            // 主副字幕按 `main-selection` 分(副字幕的 `selected` 也是 true)。
+            selectedAudioTrackID = audioTracks.first { $0.isPrimarySelection }?.id
+            selectedSubtitleTrackID = subtitleTracks.first { $0.isPrimarySelection }?.id
+            selectedSecondarySubtitleTrackID = subtitleTracks.first { $0.isSecondarySelection }?.id
             applyPreferredSubtitle()
+            restoreSecondarySubtitleIfNeeded()
             pushState()
 
         case .endFile(.eof):

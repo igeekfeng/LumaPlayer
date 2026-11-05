@@ -105,7 +105,7 @@ struct SubtitleStyle: Codable, Equatable, Sendable {
     }
 
     /// 固定 POSIX 格式,不受系统地区的小数点影响。
-    private static func number(_ value: Double) -> String {
+    static func number(_ value: Double) -> String {
         String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value)
     }
 
