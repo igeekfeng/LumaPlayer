@@ -162,7 +162,8 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 - [ ] 中文片名 + 年份能命中,`overview` 是中文(`language=zh-CN`)
 - [ ] `image.tmdb.org` 可达(本机曾 `Connection reset`,用户指示按可达处理;不通则只出文字、封面降级)
 - [ ] 429 阈值(官方约 40 次/秒,未实测)
-- [ ] 详情页 `/3/{tv|movie}/{id}` 与 `/credits` 的实际取值与排版、`w185` 头像;多发的 1–2 次请求可接受
+- [ ] 详情页 `/3/{tv|movie}/{id}`、剧 `/aggregate_credits` 与电影 `/credits` 的实际取值与排版、
+      `w185` 头像;多发的 1–2 次请求可接受。⚠️ 全量演职员横排(含幕后)在人多时的观感未视觉验证
 
 已知限制:
 
@@ -175,6 +176,8 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 - **`number_of_episodes` 的计算口径未核实**:官方 OpenAPI 规格只给 `integer`,没说是否含第 0 季特别篇。
   它只作展示(详情页「共 N 集」),⛔ 不参与分集列表 / 换集队列;真实片库里与本地文件数的差值待看。
 - **分集 `runtime` / `vote_average` / `air_date` 的实际取值未在真实账号核对**(本机无 token,只有 mock 覆盖)。
+- **`aggregate_credits` 一人多角色 / 多职务只显示首个**(`roles[0]` / `jobs[0]`),⛔ 不摊成多张卡;
+  卡片上的「参演 N 集」取 `total_episode_count`,与角色各自的 `episode_count` 不是一回事。
 
 ### 本地文件夹来源(单测用临时目录 + 书签替身)
 

@@ -113,7 +113,8 @@ struct TMDBClient: Sendable {
 
     // MARK: - 演职员
 
-    /// 整部作品(非单季 / 单集)的演职员(§10)。`isSeries` 同 `details`。
+    /// 整部作品的演职员(§10)。⚠️ 剧集走 `aggregate_credits`(全剧汇总),
+    /// `/3/tv/{id}/credits` 只给最新一季;电影没有 aggregate 端点,走 `credits`。
     /// 滤掉没名字的人(⛔ 不伪造名字);`cast` 按 TMDB 给的 `order` 排,⛔ 不按别的字段重排。
     func credits(
         id: Int,
@@ -122,7 +123,7 @@ struct TMDBClient: Sendable {
         language: String = TMDBClient.defaultLanguage
     ) async throws -> TMDBCredits {
         let endpoint: TMDBEndpoint = isSeries
-            ? .tvCredits(id: id, language: language)
+            ? .tvAggregateCredits(id: id, language: language)
             : .movieCredits(id: id, language: language)
         let data = try await send(endpoint, token: token)
         let response: TMDBCreditsResponse = try decode(data, endpoint: endpoint)

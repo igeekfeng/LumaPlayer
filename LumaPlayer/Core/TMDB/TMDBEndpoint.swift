@@ -20,10 +20,10 @@ enum TMDBEndpoint: Sendable, Equatable {
     /// `GET /3/movie/{movie_id}?language=`
     /// 标签只给 id,电影还是剧由调用方按上下文定(`TMDBClient.details`)。
     case movieDetails(id: Int, language: String)
-    /// `GET /3/tv/{series_id}/credits?language=`(§10)
-    /// 不用 `aggregate_credits`:它把多季角色放进 `roles[]`,形状不同。
-    case tvCredits(id: Int, language: String)
-    /// `GET /3/movie/{movie_id}/credits?language=`,与 `tvCredits` 同形
+    /// `GET /3/tv/{series_id}/aggregate_credits?language=`(§10)
+    /// ⚠️ 不用 `/credits`:那个只返回**最新一季**,前几季的演员不在响应里。
+    case tvAggregateCredits(id: Int, language: String)
+    /// `GET /3/movie/{movie_id}/credits?language=`,与剧集侧的 `credits` 同形(电影没有 aggregate 端点)
     case movieCredits(id: Int, language: String)
 
     // MARK: - 形状
@@ -39,7 +39,7 @@ enum TMDBEndpoint: Sendable, Equatable {
             return "/3/tv/\(seriesID)/season/\(seasonNumber)"
         case .tvDetails(let id, _): return "/3/tv/\(id)"
         case .movieDetails(let id, _): return "/3/movie/\(id)"
-        case .tvCredits(let id, _): return "/3/tv/\(id)/credits"
+        case .tvAggregateCredits(let id, _): return "/3/tv/\(id)/aggregate_credits"
         case .movieCredits(let id, _): return "/3/movie/\(id)/credits"
         }
     }
@@ -54,7 +54,7 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .tvSeason: return "tv/season"
         case .tvDetails: return "tv/details"
         case .movieDetails: return "movie/details"
-        case .tvCredits: return "tv/credits"
+        case .tvAggregateCredits: return "tv/aggregate_credits"
         case .movieCredits: return "movie/credits"
         }
     }
@@ -77,7 +77,7 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .tvSeason(_, _, let language):
             return [("language", language)]
         case .tvDetails(_, let language), .movieDetails(_, let language),
-             .tvCredits(_, let language), .movieCredits(_, let language):
+             .tvAggregateCredits(_, let language), .movieCredits(_, let language):
             return [("language", language)]
         }
     }

@@ -272,18 +272,21 @@ func nonEmptyString(_ value: String?) -> String? {
 
 // MARK: - 演职员(`docs/TMDB_API.md` §10)
 
-/// `cast[]` / `crew[]` 同形不同填法(演员给 `character`,剧组给 `job` + `department`),一个类型收两边。
+/// `cast[]` / `crew[]` 同形不同填法:电影(及剧 `/credits`)给单个 `character` / `job`,
+/// 剧 `aggregate_credits` 给 `roles[]` / `jobs[]`(§10)。两种形状都收进这一个类型。
 /// 除 `id` 外都可能缺;`name` 缺了是空串,由上层滤掉,⛔ 不伪造。
 struct TMDBPerson: Sendable, Equatable, Identifiable, Decodable {
     let id: Int
     let name: String
-    /// 演员:角色名;剧组:职务(`Director` / `Writer` / …)
+    /// 演员的角色名 / 剧组的职务名;取 `character`、`job`,或 aggregate 的 `roles[0]` / `jobs[0]`。
     let role: String?
     /// 只有剧组给
     let department: String?
     let profilePath: String?
     /// `cast[]` 的主要程度,0 起;剧组没有 → 0
     let order: Int
+    /// 剧 `aggregate_credits` 的参演 / 参与总集数;电影 `/credits` 没有 → nil
+    let totalEpisodeCount: Int?
 
     /// nil → UI 降级成图标
     var profileURL: URL? { TMDBImage.profileURL(path: profilePath) }
@@ -295,9 +298,18 @@ struct TMDBPerson: Sendable, Equatable, Identifiable, Decodable {
         case name
         case character
         case job
+        case roles
+        case jobs
         case department
         case order
         case profilePath = "profile_path"
+        case totalEpisodeCount = "total_episode_count"
+    }
+
+    /// `roles[]` / `jobs[]` 元素:只取 `character` / `job`,忽略 `credit_id` / `episode_count`。
+    private struct Role: Decodable {
+        let character: String?
+        let job: String?
     }
 
     init(from decoder: Decoder) throws {
@@ -306,12 +318,39 @@ struct TMDBPerson: Sendable, Equatable, Identifiable, Decodable {
         self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
         let character = try container.decodeIfPresent(String.self, forKey: .character)
         let job = try container.decodeIfPresent(String.self, forKey: .job)
-        self.role = nonEmptyString(character) ?? nonEmptyString(job)
+        let roles = try container.decodeIfPresent([Role].self, forKey: .roles) ?? []
+        let jobs = try container.decodeIfPresent([Role].self, forKey: .jobs) ?? []
+        // 单个字段优先(电影 / 剧 credits),aggregate 取首项;⛔ 一人多角色不摊成多张卡
+        self.role = nonEmptyString(character)
+            ?? nonEmptyString(job)
+            ?? roles.compactMap({ nonEmptyString($0.character) }).first
+            ?? jobs.compactMap({ nonEmptyString($0.job) }).first
         self.department = nonEmptyString(
             try container.decodeIfPresent(String.self, forKey: .department))
         self.profilePath = nonEmptyString(
             try container.decodeIfPresent(String.self, forKey: .profilePath))
         self.order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        self.totalEpisodeCount = try container.decodeIfPresent(
+            Int.self, forKey: .totalEpisodeCount)
+    }
+
+    /// 测试用;线格式本身只走 `init(from:)`。
+    init(
+        id: Int,
+        name: String,
+        role: String? = nil,
+        department: String? = nil,
+        profilePath: String? = nil,
+        order: Int = 0,
+        totalEpisodeCount: Int? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.role = role
+        self.department = department
+        self.profilePath = profilePath
+        self.order = order
+        self.totalEpisodeCount = totalEpisodeCount
     }
 }
 
@@ -341,9 +380,6 @@ struct TMDBSeriesProfile: Sendable, Equatable {
     /// 按 `order` 升序
     let cast: [TMDBPerson]
     let crew: [TMDBPerson]
-
-    /// 与 Emby 详情页 `DetailPeopleRow` 同一上限
-    static let maxCastShown = 30
 
     /// 同 `TMDBCredits.names(withJob:)`
     func crewNames(withJob job: String) -> [String] {

@@ -400,7 +400,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     func testSeriesProfileWithExplicitIDSkipsSearch() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
-        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        MockEmbyURLProtocol.stub(.json(Self.aggregateCreditsJSON), host: host, path: "/3/tv/1399/aggregate_credits")
         let scraper = Self.makeScraper(credentials)
 
         let profile = await scraper.seriesProfile(tmdbID: 1399, title: "不该被用到", year: nil)
@@ -419,10 +419,13 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(match.lastAirDate, "2019-05-19")
         XCTAssertEqual(match.episodeRunTime, [60])
         XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
+        // aggregate 形状:角色取 roles[0],参演集数也带进来(§10)
+        XCTAssertEqual(profile?.cast.first?.role, "Daenerys Targaryen")
+        XCTAssertEqual(profile?.cast.first?.totalEpisodeCount, 62)
         XCTAssertEqual(profile?.crewNames(withJob: "Director"), ["David Nutter"])
         XCTAssertEqual(
             MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
-            ["/3/tv/1399", "/3/tv/1399/credits"],
+            ["/3/tv/1399", "/3/tv/1399/aggregate_credits"],
             "有 id 时只该发这两条")
     }
 
@@ -431,7 +434,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
-        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        MockEmbyURLProtocol.stub(.json(Self.aggregateCreditsJSON), host: host, path: "/3/tv/1399/aggregate_credits")
         let scraper = Self.makeScraper(credentials)
 
         let profile = await scraper.seriesProfile(tmdbID: nil, title: "权力的游戏", year: 2011)
@@ -440,13 +443,13 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(profile?.cast.count, 2)
         XCTAssertEqual(
             MockEmbyURLProtocol.recordedRequests().map(\.url.path).sorted(),
-            ["/3/search/tv", "/3/tv/1399", "/3/tv/1399/credits"])
+            ["/3/search/tv", "/3/tv/1399", "/3/tv/1399/aggregate_credits"])
     }
 
     func testSeriesProfileIsCached() async throws {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
-        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        MockEmbyURLProtocol.stub(.json(Self.aggregateCreditsJSON), host: host, path: "/3/tv/1399/aggregate_credits")
         let scraper = Self.makeScraper(credentials)
 
         _ = await scraper.seriesProfile(tmdbID: 1399, title: "", year: nil)
@@ -464,7 +467,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         await save(token: "T")
         MockEmbyURLProtocol.stub(.json(Self.tvJSON), host: host, path: "/3/search/tv")
         MockEmbyURLProtocol.stub(.json(Self.tvDetailsJSON), host: host, path: "/3/tv/1399")
-        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        MockEmbyURLProtocol.stub(.json(Self.aggregateCreditsJSON), host: host, path: "/3/tv/1399/aggregate_credits")
         let scraper = Self.makeScraper(credentials)
 
         let cards = await scraper.enrich([
@@ -525,7 +528,7 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertNil(profile)
         XCTAssertFalse(
             MockEmbyURLProtocol.recordedRequests().map(\.url.path)
-                .contains("/3/tv/999999/credits"),
+                .contains("/3/tv/999999/aggregate_credits"),
             "详情拿不到就不该再去问演职员")
     }
 
@@ -645,6 +648,21 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     {"id":99999,"name":"","profile_path":null,"character":"","order":2}],
     "crew":[{"id":9813,"name":"David Nutter","profile_path":null,
     "department":"Directing","job":"Director"}]}
+    """#
+
+    /// 剧 `aggregate_credits`(§10):`roles[]` / `jobs[]` + `total_episode_count`。
+    /// 与 `creditsJSON` 同一批人,但形状换成官网剧集页那份全剧汇总。
+    private static let aggregateCreditsJSON = #"""
+    {"id":1399,"cast":[{"id":1223786,"name":"Emilia Clarke",
+    "profile_path":"/daenerys.jpg","order":0,"total_episode_count":62,
+    "roles":[{"credit_id":"c1","character":"Daenerys Targaryen","episode_count":62}]},
+    {"id":22970,"name":"Peter Dinklage","profile_path":"/tyrion.jpg",
+    "order":1,"total_episode_count":67,
+    "roles":[{"credit_id":"c2","character":"Tyrion Lannister","episode_count":67}]},
+    {"id":99999,"name":"","profile_path":null,"order":2,"total_episode_count":0,"roles":[]}],
+    "crew":[{"id":9813,"name":"David Nutter","profile_path":null,
+    "department":"Directing","total_episode_count":9,
+    "jobs":[{"credit_id":"c4","job":"Director","episode_count":9}]}]}
     """#
 
     /// `status_code: 34` = 资源不存在。

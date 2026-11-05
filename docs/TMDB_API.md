@@ -240,10 +240,9 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 | `runtime` | int | ⛔ | ✅ | 片长(分钟) |
 | `homepage` / `popularity` / `original_language` / `production_countries` / `spoken_languages` / `adult` / `backdrop_path` | — | ✅ | ✅ | 本项目不读 |
 
-## 10. 演职员端点(演员列表 / 导演 / 编剧)
+## 10. 演职员端点(演员列表 / 主创)
 
-`GET /3/tv/{series_id}/credits` 与 `GET /3/movie/{movie_id}/credits`
-
+剧集用 `GET /3/tv/{series_id}/aggregate_credits`,电影用 `GET /3/movie/{movie_id}/credits`。
 同一份官方 OpenAPI 规格读出:
 
 | 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
@@ -251,12 +250,18 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 | `series_id` / `movie_id` | path | int32 | ✅ | — | 剧 / 电影的 TMDB id |
 | `language` | query | string | | `en-US` | 同 §2 |
 
+⚠️ **为什么剧集必须用 `aggregate_credits`**:`/3/tv/{id}/credits` 的官方描述是
+「Get the **latest season** credits of a TV show」—— 只给**最新一季**,前几季的常驻 / 客串
+演员根本不在响应里。`aggregate_credits` 的描述是「Get the **aggregate credits** ... added
+to a TV show」,才与官网剧集页那份完整演员表一致。两者差的不是形状而是**数据范围**,⛔ 不要为了
+「`character` 是单个字符串好解析」退回 `credits`。电影侧没有 aggregate 端点,仍用 `credits`。
+
 ⚠️ **为什么需要它**:`/3/search/*` 与 `/3/{tv\|movie}/{id}` 都**不给**演职员,
-而详情页要展示演员列表与主创(导演 / 编剧)。
+而详情页要展示演员列表与主创。
 
-**响应顶层**:`id`、`cast:[…]`、`crew:[…]`(tv 与 movie **同形**)。
+**响应顶层**:`id`、`cast:[…]`、`crew:[…]`(两个端点同形)。
 
-`cast[]` 一个条目:
+**电影 `credits` 的 `cast[]`**:
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -265,28 +270,35 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 | `character` | string | 角色名(可能为空串) |
 | `profile_path` | string | 头像相对路径(**可能为 `null`**)→ 走 §4 拼法 |
 | `order` | int | TMDB 给的主要程度排序(0 起) |
-| `known_for_department` / `original_name` / `popularity` / `gender` / `adult` / `credit_id` | — | 本项目不读 |
 
-`crew[]` 一个条目:
+**剧集 `aggregate_credits` 的 `cast[]`**:没有 `character`,改成
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `roles[]` | `{credit_id, character, episode_count}` | 同一演员跨季演过的角色;本项目取 `roles[0].character` 作角色名 |
+| `total_episode_count` | int | 参演总集数,展示用(如「参演 62 集」) |
+| `id` / `name` / `profile_path` / `order` | — | 同电影侧 |
+
+**电影 `credits` 的 `crew[]`**:
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` / `name` / `profile_path` | — | 同 `cast[]` |
 | `job` | string | 职务(`Director` / `Writer` / `Producer` / …) |
 | `department` | string | 部门(`Directing` / `Writing` / `Production` / …) |
-| `known_for_department` / `original_name` / `popularity` / `gender` / `adult` / `credit_id` | — | 本项目不读 |
 
-⚠️ **解码立场同 §3**:除 `id` 外一律可选 —— 真实数据里 `character` 可能是空串、
-`profile_path` 可能是 `null`。⛔ 不把它们写成必填(会让整条解失败)。
+**剧集 `aggregate_credits` 的 `crew[]`**:没有单个 `job`,改成 `jobs[]`
+(`{credit_id, job, episode_count}`);本项目取 `jobs[0].job` 作职务,`department` 与
+`total_episode_count` 同样在。⚠️ 一人兼多职时只展示第一个 job,其余不摊成多张卡。
 
-⚠️ **顺序按 TMDB 给的 `order`**,客户端只排序、⛔ 不自己重排主要程度。
+两侧都不读:`known_for_department` / `original_name` / `popularity` / `gender` / `adult` / `credit_id`。
 
-⚠️ **剧集用 `credits` 而不用 `aggregate_credits`。** 后者把同一演员的多季角色放进
-`roles[]` 数组(形状不同,没有 `character`),展示上要多一层拆解;`credits` 的
-`character` 是单个字符串,够用。⛔ 两个端点不要混用。
+⚠️ **解码立场同 §3**:除 `id` 外一律可选 —— 真实数据里角色名可能是空串、
+`profile_path` 可能是 `null`、`roles[]` / `jobs[]` 可能是空数组。⛔ 不写成必填(会让整条解失败)。
 
-⚠️ 该端点返回**整部剧 / 整部电影**的演职员,不是某一季的。
-分季 / 分集的演职员另有 `/3/tv/{id}/season/{n}/credits` 与
+⚠️ **顺序按 TMDB 给的 `order`**,客户端只排序、⛔ 不自己重排主要程度;`crew` 没有 `order`,按响应原序。
+
+⚠️ 分季 / 分集的演职员另有 `/3/tv/{id}/season/{n}/credits` 与
 `/3/tv/{id}/season/{n}/episode/{e}/credits`,本项目不用。
 
 ## 11. 人物头像(profile)

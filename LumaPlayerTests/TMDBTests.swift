@@ -421,34 +421,53 @@ final class TMDBTests: XCTestCase {
 
     // MARK: - 演职员(§10)
 
+    /// 剧集必须走 `aggregate_credits`:`/3/tv/{id}/credits` 只给最新一季(§10)。
     func testCreditsEndpointPaths() throws {
         XCTAssertEqual(
-            TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path, "/3/tv/1399/credits")
+            TMDBEndpoint.tvAggregateCredits(id: 1399, language: "zh-CN").path,
+            "/3/tv/1399/aggregate_credits")
         XCTAssertEqual(
-            TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").name, "tv/credits")
+            TMDBEndpoint.tvAggregateCredits(id: 1399, language: "zh-CN").name,
+            "tv/aggregate_credits")
         XCTAssertEqual(
             TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").path, "/3/movie/550/credits")
         XCTAssertEqual(
             TMDBEndpoint.movieCredits(id: 550, language: "zh-CN").name, "movie/credits")
-        // credits 是整部作品的,路径里不该有 season
-        XCTAssertFalse(TMDBEndpoint.tvCredits(id: 1399, language: "zh-CN").path.contains("season"))
     }
 
     func testCreditsDecodeCastAndCrew() async throws {
         MockEmbyURLProtocol.stub(
-            .json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+            .json(Self.creditsJSON), host: host, path: "/3/movie/550/credits")
 
-        let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
+        let credits = try await makeClient().credits(id: 550, isSeries: false, token: "T")
 
         XCTAssertEqual(credits.cast.count, 2)
         XCTAssertEqual(credits.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
         XCTAssertEqual(credits.cast.map(\.order), [0, 1])
         XCTAssertEqual(credits.cast.first?.role, "Daenerys Targaryen")
-        XCTAssertEqual(credits.cast.first?.department, nil, "演员没有 department")
+        XCTAssertNil(credits.cast.first?.totalEpisodeCount, "电影 credits 没有 total_episode_count")
 
         XCTAssertEqual(credits.crew.map(\.name), ["David Nutter"])
         XCTAssertEqual(credits.crew.first?.role, "Director", "剧组的 role 取自 job")
         XCTAssertEqual(credits.crew.first?.department, "Directing")
+    }
+
+    /// 剧集 aggregate 形状:`roles[]` / `jobs[]` 取代单个 `character` / `job`,另有参演集数。
+    func testAggregateCreditsDecodeRolesAndJobs() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(Self.aggregateCreditsJSON), host: host,
+            path: "/3/tv/1399/aggregate_credits")
+
+        let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
+
+        XCTAssertEqual(credits.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
+        XCTAssertEqual(credits.cast.first?.role, "Daenerys Targaryen", "取 roles[0].character")
+        XCTAssertEqual(credits.cast.first?.totalEpisodeCount, 62)
+        // 一人多角色只摊成一张卡,取第一个
+        XCTAssertEqual(credits.cast[1].role, "Tyrion Lannister")
+        XCTAssertEqual(credits.crew.first?.role, "Director", "取 jobs[0].job")
+        XCTAssertEqual(credits.crew.first?.department, "Directing")
+        XCTAssertEqual(credits.crew.first?.totalEpisodeCount, 9)
     }
 
     /// 响应里的顺序不保证,只按 `order` 排,⛔ 不自己判断主次。
@@ -475,9 +494,9 @@ final class TMDBTests: XCTestCase {
     }
 
     func testPersonWithoutProfilePathHasNoAvatar() async throws {
-        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/tv/1399/credits")
+        MockEmbyURLProtocol.stub(.json(Self.creditsJSON), host: host, path: "/3/movie/550/credits")
 
-        let credits = try await makeClient().credits(id: 1399, isSeries: true, token: "T")
+        let credits = try await makeClient().credits(id: 550, isSeries: false, token: "T")
         let daenerys = try XCTUnwrap(credits.cast.first)
         XCTAssertTrue(daenerys.hasProfile)
         XCTAssertEqual(daenerys.profileURL?.absoluteString,
@@ -519,7 +538,6 @@ final class TMDBTests: XCTestCase {
     // MARK: - 辅助构造
 
     private static func person(id: Int, name: String, job: String) throws -> TMDBPerson {
-        // `TMDBPerson` 只有解码构造器(自定义 `init(from:)` 抑制了逐成员构造器),⛔ 不为测试另开入口。
         let json = #"{"id":\#(id),"name":"\#(name)","job":"\#(job)","order":0}"#
         return try JSONDecoder().decode(TMDBPerson.self, from: Data(json.utf8))
     }
@@ -598,5 +616,26 @@ final class TMDBTests: XCTestCase {
     "crew":[{"adult":false,"gender":2,"id":9813,"known_for_department":"Directing",
     "name":"David Nutter","original_name":"David Nutter","popularity":3.0,
     "profile_path":null,"credit_id":"c4","department":"Directing","job":"Director"}]}
+    """#
+
+    /// 剧 `aggregate_credits`(§10):`roles[]` / `jobs[]` + `total_episode_count`,没有单个 `character` / `job`。
+    private static let aggregateCreditsJSON = #"""
+    {"id":1399,"cast":[
+    {"adult":false,"gender":1,"id":1223786,"known_for_department":"Acting",
+    "name":"Emilia Clarke","original_name":"Emilia Clarke","popularity":55.0,
+    "profile_path":"/daenerys.jpg","order":0,"total_episode_count":62,
+    "roles":[{"credit_id":"c1","character":"Daenerys Targaryen","episode_count":62}]},
+    {"adult":false,"gender":2,"id":22970,"known_for_department":"Acting",
+    "name":"Peter Dinklage","original_name":"Peter Dinklage","popularity":40.0,
+    "profile_path":"/tyrion.jpg","order":1,"total_episode_count":67,
+    "roles":[{"credit_id":"c2","character":"Tyrion Lannister","episode_count":67},
+    {"credit_id":"c9","character":"另一个角色","episode_count":1}]},
+    {"adult":false,"gender":2,"id":99999,"known_for_department":"Acting",
+    "name":"","original_name":"","popularity":0.1,"profile_path":null,"order":2,
+    "roles":[],"total_episode_count":0}],
+    "crew":[{"adult":false,"gender":2,"id":9813,"known_for_department":"Directing",
+    "name":"David Nutter","original_name":"David Nutter","popularity":3.0,
+    "profile_path":null,"department":"Directing","total_episode_count":9,
+    "jobs":[{"credit_id":"c4","job":"Director","episode_count":9}]}]}
     """#
 }
