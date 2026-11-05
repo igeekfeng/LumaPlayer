@@ -526,7 +526,7 @@ func testRemovingAnItemKeepsThePagingAvailable() {
             ref: SourceItemRef(sourceID: UUID(), fsID: file.fsID),
             title: file.name, kind: .video, overview: nil, year: nil, tmdbID: nil,
             episodeNumber: nil, seasonNumber: nil, episodeTitle: nil,
-            durationSeconds: nil, poster: nil, metadataOrigin: .none)
+            airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: nil, metadataOrigin: .none)
     }
     let state = FileSourceDirectoryState(
         content: FileSourceDirectoryContent(

@@ -74,6 +74,13 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     /// 集名(`第 3 集` 的那个名字)。`nil` = 还不知道。
     /// ⚠️ 与 `title` **分开**:剧集文件夹结构下 `title` 是剧名,集名只有 TMDB 分集数据里有(未命中 / 未配 token 即 nil)。
     let episodeTitle: String?
+    /// 单集播出日 `YYYY-MM-DD`,来自 TMDB 季详情(§7)。nil = 未播出 / 没刮到。
+    let airDate: String?
+    /// 单集片长(分钟),来自 TMDB 季详情(§7)。⚠️ 与 `durationSeconds` 不是一个东西:
+    /// 那格是媒体文件本身的时长(百度 `filemetas`),这格是 TMDB 记的播出时长。
+    let episodeRuntime: Int?
+    /// 单集社区评分,来自 TMDB 季详情(§7)。
+    let episodeVoteAverage: Double?
     let durationSeconds: Double?
     /// 封面。nil = 这个条目没找到任何可用的图 → UI 降级成图标卡
     let poster: ImageDescriptor?
@@ -97,6 +104,9 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: episodeTitle,
+            airDate: airDate,
+            episodeRuntime: episodeRuntime,
+            episodeVoteAverage: episodeVoteAverage,
             durationSeconds: durationSeconds,
             poster: poster,
             metadataOrigin: metadataOrigin
@@ -118,7 +128,32 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: episodeTitle,
+            airDate: airDate,
+            episodeRuntime: episodeRuntime,
+            episodeVoteAverage: episodeVoteAverage,
             durationSeconds: seconds,
+            poster: poster,
+            metadataOrigin: metadataOrigin
+        )
+    }
+
+    /// 用详情页取回的剧级信息补齐「从续播 / 片库根直接进剧」时没有的那几格。
+    /// ⚠️ 只补空位:目录卡片进来时 `overview` / `year` 已经由列表刮削填过,别盖掉。
+    func withSeriesProfile(overview: String?, year: Int?) -> SourceItem {
+        SourceItem(
+            ref: ref,
+            title: title,
+            kind: kind,
+            overview: self.overview ?? overview,
+            year: self.year ?? year,
+            tmdbID: tmdbID,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            episodeTitle: episodeTitle,
+            airDate: airDate,
+            episodeRuntime: episodeRuntime,
+            episodeVoteAverage: episodeVoteAverage,
+            durationSeconds: durationSeconds,
             poster: poster,
             metadataOrigin: metadataOrigin
         )
@@ -133,7 +168,10 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
         overview: String?,
         year: Int?,
         episodeTitle: String? = nil,
-        tmdbID: Int? = nil
+        tmdbID: Int? = nil,
+        airDate: String? = nil,
+        episodeRuntime: Int? = nil,
+        episodeVoteAverage: Double? = nil
     ) -> SourceItem {
         SourceItem(
             ref: ref,
@@ -145,6 +183,9 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: self.episodeTitle ?? episodeTitle,
+            airDate: self.airDate ?? airDate,
+            episodeRuntime: self.episodeRuntime ?? episodeRuntime,
+            episodeVoteAverage: self.episodeVoteAverage ?? episodeVoteAverage,
             durationSeconds: durationSeconds,
             poster: self.poster ?? poster,
             metadataOrigin: metadataOrigin

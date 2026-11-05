@@ -73,6 +73,9 @@ enum BaiduPanMetadataSynthesizer {
             // 季文件夹的季号,`BaiduPanSeriesLayout` 靠它判剧。用原始目录名判(标签与季标记可能同时出现)
             seasonNumber: seasonNumber(fromDirectoryName: file.name),
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: nil,
             poster: nil,
             metadataOrigin: .none
@@ -126,6 +129,9 @@ enum BaiduPanMetadataSynthesizer {
             seasonNumber: seasonNumber,
             // 集名只有 TMDB 有,⛔ 不拿剧名冒充
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             // 时长要另发 `filemetas`;播放时由 `authoritativeDurationSeconds` 补
             durationSeconds: nil,
             poster: nil,

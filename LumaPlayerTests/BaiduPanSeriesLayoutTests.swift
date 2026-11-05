@@ -28,6 +28,9 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
             episodeNumber: episode,
             seasonNumber: season,
             episodeTitle: episodeTitle,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: nil,
             poster: nil,
             metadataOrigin: .none
@@ -219,5 +222,23 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         let items = BaiduPanMetadataSynthesizer.synthesize(files: files, sourceID: sourceID)
             .map(\.item)
         XCTAssertEqual(BaiduPanSeriesLayout.shape(of: items), .directory)
+    }
+
+    // MARK: - 剧级信息补齐(只补空位)
+
+    /// 从续播 / 片库根直接进剧时没有目录卡片,`seriesProfile` 要补简介 / 年份;
+    /// 但目录卡片已由列表刮削填过时不能被盖掉。
+    func testWithSeriesProfileOnlyFillsGaps() {
+        let bare = item("某剧", kind: .folder)
+        XCTAssertNil(bare.overview)
+        XCTAssertNil(bare.year)
+
+        let filled = bare.withSeriesProfile(overview: "TMDB 简介", year: 2011)
+        XCTAssertEqual(filled.overview, "TMDB 简介")
+        XCTAssertEqual(filled.year, 2011)
+
+        let existing = filled.withSeriesProfile(overview: "别盖掉", year: 2024)
+        XCTAssertEqual(existing.overview, "TMDB 简介")
+        XCTAssertEqual(existing.year, 2011)
     }
 }

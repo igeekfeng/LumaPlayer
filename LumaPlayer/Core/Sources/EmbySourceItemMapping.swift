@@ -20,6 +20,9 @@ extension EmbyItem {
             seasonNumber: nil,
             // `Name` 已进 `title`
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: runTimeTicks.flatMap { TickConverter.seconds(fromTicks: $0) },
             poster: coverImage.map { cover in
                 .emby(

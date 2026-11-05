@@ -293,7 +293,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             ref: SourceItemRef(sourceID: sourceID, fsID: 7),
             title: "示例电影", kind: .video, overview: nil, year: nil, tmdbID: nil,
             episodeNumber: nil, seasonNumber: nil, episodeTitle: nil,
-            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+            airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: nil, metadataOrigin: .filename)
         let files = makeFiles(for: [movie])
 
         XCTAssertNil(FileSourceViewModel.episodeQueue(
@@ -315,7 +315,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             ref: SourceItemRef(sourceID: sourceID, fsID: 99),
             title: "幕后花絮", kind: .video, overview: nil, year: nil, tmdbID: nil,
             episodeNumber: nil, seasonNumber: nil, episodeTitle: nil,
-            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+            airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: nil, metadataOrigin: .filename)
         let items = episodes + [extra]
 
         let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
@@ -337,7 +337,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             ref: SourceItemRef(sourceID: sourceID, fsID: 10),
             title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
             episodeNumber: 1, seasonNumber: 1, episodeTitle: "第一集",
-            durationSeconds: nil, poster: cover, metadataOrigin: .filename)
+            airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: cover, metadataOrigin: .filename)
         let noCover = makeEpisodeItem(sourceID: sourceID, index: 2)
         let items = [withCover, noCover]
 
@@ -480,7 +480,7 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             ref: SourceItemRef(sourceID: sourceID, fsID: UInt64(index * 10)),
             title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
             episodeNumber: index, seasonNumber: 1, episodeTitle: nil,
-            durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+            airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: nil, metadataOrigin: .filename)
     }
 
     private func makeFiles(for items: [SourceItem]) -> [UInt64: BaiduPanFile] {
@@ -510,6 +510,9 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             episodeNumber: nil,
             seasonNumber: nil,
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: nil,
             poster: .remote(
                 ownerID: sourceID,

@@ -146,6 +146,10 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         let first = try XCTUnwrap(enriched.first)
         XCTAssertEqual(first.episodeTitle, "凛冬将至")
         XCTAssertEqual(first.overview, "第一集简介。")
+        // 季详情的播出日 / 片长 / 评分也落到条目上(§7)
+        XCTAssertEqual(first.airDate, "2011-04-17")
+        XCTAssertEqual(first.episodeRuntime, 62)
+        XCTAssertEqual(first.episodeVoteAverage, 7.8)
         XCTAssertEqual(first.poster?.cacheKey, ImageDescriptor.tmdbPosterKey(
             sourceID: sourceID, posterPath: "/still1.jpg", size: TMDBImage.stillSize))
 
@@ -408,6 +412,12 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(match.statusText, "已完结")
         XCTAssertEqual(match.productionCompanies, ["HBO"])
         XCTAssertEqual(match.networks, ["HBO"])
+        // §9 的播出信息 / 总数也进剧级 profile
+        XCTAssertEqual(match.numberOfEpisodes, 73)
+        XCTAssertEqual(match.numberOfSeasons, 8)
+        XCTAssertEqual(match.firstAirDate, "2011-04-17")
+        XCTAssertEqual(match.lastAirDate, "2019-05-19")
+        XCTAssertEqual(match.episodeRunTime, [60])
         XCTAssertEqual(profile?.cast.map(\.name), ["Emilia Clarke", "Peter Dinklage"])
         XCTAssertEqual(profile?.crewNames(withJob: "Director"), ["David Nutter"])
         XCTAssertEqual(
@@ -577,6 +587,9 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
             episodeNumber: episodeNumber,
             seasonNumber: seasonNumber,
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: nil,
             poster: nil,
             metadataOrigin: origin
@@ -608,7 +621,9 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "genres":[{"id":18,"name":"剧情"},{"id":10765,"name":"奇幻"}],
     "tagline":"凛冬将至。","status":"Ended",
     "production_companies":[{"id":3268,"name":"HBO","logo_path":"/x.png","origin_country":"US"}],
-    "networks":[{"id":49,"name":"HBO","logo_path":"/y.png","origin_country":"US"}]}
+    "networks":[{"id":49,"name":"HBO","logo_path":"/y.png","origin_country":"US"}],
+    "last_air_date":"2019-05-19","number_of_episodes":73,"number_of_seasons":8,
+    "episode_run_time":[60]}
     """#
 
     private static let movieDetailsJSON = #"""
@@ -644,7 +659,8 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
     "name":"Season 1","overview":"第一季。","poster_path":"/zwaj4egrhnXOBIit1tyb4Sbt3KP.jpg",
     "season_number":1,"episodes":[{"air_date":"2011-04-17","episode_number":1,
     "id":63056,"name":"凛冬将至","overview":"第一集简介。","production_code":"",
-    "season_number":1,"still_path":"/still1.jpg","vote_average":7.8,"vote_count":200},
+    "season_number":1,"still_path":"/still1.jpg","runtime":62,"vote_average":7.8,
+    "vote_count":200},
     {"air_date":"2011-04-24","episode_number":2,"id":63057,"name":"",
     "overview":null,"production_code":"","season_number":1,"still_path":"/still2.jpg",
     "vote_average":7.9,"vote_count":210}]}

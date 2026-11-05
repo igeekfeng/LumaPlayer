@@ -1187,19 +1187,23 @@ final class FileSourceViewModel {
         }
     }
 
-    /// 把续播快照暂代的封面换成 TMDB 剧集海报,让两个入口看到同一张图。
-    /// ⛔ 只换快照那张,不覆盖目录卡片自己的封面;拿不到海报时保留快照(剧照好过占位图)。
+    /// 把详情页取回的剧级信息贴到剧条目上:**从续播 / 片库根直接进剧**时没有目录卡片,
+    /// 那几格(简介 / 年份)是空的;封面也可能只是某一集的剧照快照。
+    /// ⚠️ 只补空位:目录卡片进来时列表刮削已填过,别盖掉;海报也只在「确实是续播快照」时换。
     private func applySeriesPosterFromProfile() {
-        guard let snapshot = resumeSnapshotPoster,
-              let profile = seriesProfile,
-              let poster = BaiduPanMetadataScraper.posterDescriptor(
-                  for: profile.match, sourceID: source.id),
-              let item = seriesItem else { return }
-        let updated = item.withPoster(poster)
+        guard let profile = seriesProfile, let item = seriesItem else { return }
+        var updated = item.withSeriesProfile(
+            overview: profile.match.overview, year: profile.match.year)
+        if let snapshot = resumeSnapshotPoster,
+           item.poster == snapshot,
+           let poster = BaiduPanMetadataScraper.posterDescriptor(
+               for: profile.match, sourceID: source.id) {
+            updated = updated.withPoster(poster)
+            // 刷新时 `seriesItem` 会从 `enteredSeriesItem` 重取,不一起换会退回剧照
+            if enteredSeriesItem?.poster == snapshot { enteredSeriesItem = updated }
+            resumeSnapshotPoster = nil
+        }
         seriesItem = updated
-        // 刷新时 `seriesItem` 会从 `enteredSeriesItem` 重取,不一起换会退回剧照
-        if enteredSeriesItem?.poster == snapshot { enteredSeriesItem = updated }
-        resumeSnapshotPoster = nil
     }
 
     private func cancelSeriesProfile() {
@@ -1449,6 +1453,9 @@ final class FileSourceViewModel {
             episodeNumber: nil,
             seasonNumber: nil,
             episodeTitle: nil,
+            airDate: nil,
+            episodeRuntime: nil,
+            episodeVoteAverage: nil,
             durationSeconds: nil,
             poster: poster,
             metadataOrigin: .none

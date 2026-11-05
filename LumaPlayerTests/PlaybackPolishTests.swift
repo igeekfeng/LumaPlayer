@@ -454,7 +454,7 @@ final class PlaybackPolishTests: XCTestCase {
                 ref: SourceItemRef(sourceID: sourceID, fsID: UInt64((index + 1) * 10)),
                 title: "示例剧", kind: .episode, overview: nil, year: nil, tmdbID: nil,
                 episodeNumber: index + 1, seasonNumber: 1, episodeTitle: nil,
-                durationSeconds: nil, poster: nil, metadataOrigin: .filename)
+                airDate: nil, episodeRuntime: nil, episodeVoteAverage: nil, durationSeconds: nil, poster: nil, metadataOrigin: .filename)
         }
         let files = Dictionary(uniqueKeysWithValues: items.compactMap { item -> (UInt64, BaiduPanFile)? in
             guard let fsID = UInt64(item.ref.itemID) else { return nil }

@@ -163,7 +163,7 @@ HTTP **429** → 「请求过于频繁,稍后重试」;其余非 2xx → 带状�
 没有它就只能拿剧海报去配每一集 —— 那正是「每张卡都是同一个封面」的成因。
 
 **响应顶层**(官方规格):`_id`、`air_date`、`name`、`overview`、`id`、
-`poster_path`、`season_number`、`vote_average`、`episodes:[…]`。
+`poster_path`、`season_number`、`vote_average`、`episodes:[…]`(顶层 `air_date` 本项目不读)。
 
 `episodes[]` 每项(官方规格):
 
@@ -173,7 +173,10 @@ HTTP **429** → 「请求过于频繁,稍后重试」;其余非 2xx → 带状�
 | `name` | string | 集名(可能为空串) |
 | `overview` | string | 单集简介(**可能为 `null`**) |
 | `still_path` | string | 分集剧照相对路径(可能为 `null`) |
-| `air_date` / `episode_type` / `id` / `runtime` / `season_number` / `show_id` / `production_code` / `vote_average` / `vote_count` / `crew` / `guest_stars` | — | 本项目不读 |
+| `air_date` | string | 单集播出日 `YYYY-MM-DD`(未播出的集可能为 `null` / 空串) |
+| `runtime` | int | 单集片长(分钟,可能为 `null`) |
+| `vote_average` | number | 单集评分(可能为 `null`) |
+| `episode_type` / `id` / `season_number` / `show_id` / `production_code` / `vote_count` / `crew` / `guest_stars` | — | 本项目不读 |
 
 ⚠️ 解码立场同 §3:**除 `episode_number` 外一律可选**。`name` 遇到空串当「没有集名」,
 ⛔ 不用空串冒充,也⛔ 不解码失败。
@@ -231,8 +234,9 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 | `status` | string | ✅ | ✅ | 剧:`Returning Series` / `Ended`;电影:`Released` / `Rumored` 等 |
 | `production_companies[]` | `{id,name,logo_path,origin_country}` | ✅ | ✅ | 制片公司 |
 | `networks[]` | `{id,name,logo_path,origin_country}` | ✅ | ⛔ | 电视台(电影侧没有这个字段) |
-| `number_of_seasons` / `number_of_episodes` | int | ✅ | ⛔ | ⚠️ 本项目**不读** —— 季 / 集结构以**网盘目录**为准(⛔ 不让 TMDB 覆盖用户实际存的东西) |
-| `last_air_date` | string | ✅ | ⛔ | 完结日 |
+| `number_of_seasons` / `number_of_episodes` | int | ✅ | ⛔ | 全剧总季数 / 总集数。**只作展示**(详情页「共 N 集 / 共 N 季」与「信息」区),⛔ 不覆盖网盘目录里实际存的东西、不参与分集列表与换集队列 |
+| `last_air_date` | string | ✅ | ⛔ | 完结日 / 最后播出日 |
+| `episode_run_time` | `[int]` | ✅ | ⛔ | 单集片长(分钟) |
 | `runtime` | int | ⛔ | ✅ | 片长(分钟) |
 | `homepage` / `popularity` / `original_language` / `production_countries` / `spoken_languages` / `adult` / `backdrop_path` | — | ✅ | ✅ | 本项目不读 |
 

@@ -122,7 +122,8 @@ struct FileSourceSeriesDetailView: View {
 
     // MARK: - 元信息行
 
-    /// 「2024 · 共 2 季 · 共 24 集 · ★ 7.8 · 已完结」。缺哪一段就不显示哪一段(`CLAUDE.md` 硬规则 4)。
+    /// 「2024 · 共 2 季 · 共 73 集 · ★ 7.8 · 已完结」。缺哪一段就不显示哪一段(`CLAUDE.md` 硬规则 4)。
+    /// ⚠️ 集数是 TMDB 记的全剧总数,不是当前文件夹里的文件数;后者只决定分集列表。
     @ViewBuilder
     private var metaLine: some View {
         let parts = metaParts
@@ -155,9 +156,14 @@ struct FileSourceSeriesDetailView: View {
     private var metaParts: [String] {
         var parts: [String] = []
         if let year = viewModel.seriesItem?.year { parts.append(String(year)) }
-        if structure.seasons.count > 1 { parts.append("共 \(structure.seasons.count) 季") }
-        // ⛔ 只有「单季且分集已到手」才算总数,不拿当前季的集数冒充全剧
-        if structure.isSingleSeason, !viewModel.episodes.isEmpty {
+        let match = viewModel.seriesProfile?.match
+        // 季数 / 集数以 TMDB 为准(全剧);没配 token / 没命中时退回网盘目录数出来的季数,
+        // 集数则只在单季时拿当前季的凑合,⛔ 不拿一季冒充全剧。
+        let seasons = match?.numberOfSeasons ?? (structure.seasons.count > 1 ? structure.seasons.count : nil)
+        if let seasons, seasons > 0 { parts.append("共 \(seasons) 季") }
+        if let episodes = match?.numberOfEpisodes, episodes > 0 {
+            parts.append("共 \(episodes) 集")
+        } else if structure.isSingleSeason, !viewModel.episodes.isEmpty {
             parts.append("共 \(viewModel.episodes.count) 集")
         }
         return parts
@@ -238,6 +244,11 @@ struct FileSourceSeriesDetailView: View {
                 if let name = episode.episodeTitle, !name.isEmpty {
                     Text([episodeLabel(episode), name].compactMap { $0 }.joined(separator: " · "))
                         .font(.headline)
+                }
+                if let date = MediaFormat.date(episode.airDate) {
+                    Text("播出 \(date)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if let text = episode.overview, !text.isEmpty {
                     Text(text)
@@ -328,6 +339,7 @@ struct FileSourceSeriesDetailView: View {
         } else {
             FileSourceEpisodeShelf(
                 episodes: viewModel.episodes,
+                isMultiSeason: !structure.isSingleSeason,
                 store: store,
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
                 isWatched: { viewModel.isWatched($0) },
@@ -375,14 +387,32 @@ struct FileSourceSeriesDetailView: View {
     private var facts: [(String, String)] {
         guard let profile = viewModel.seriesProfile else { return [] }
         var facts: [(String, String)] = []
+        let match = profile.match
+        if let date = MediaFormat.date(match.firstAirDate) {
+            facts.append((match.kind == .tv ? "首播" : "首映", date))
+        }
+        // 完结日只有 tv 给;与首播同一天(单集特别篇)就不重复列。
+        if let last = MediaFormat.date(match.lastAirDate),
+           last != MediaFormat.date(match.firstAirDate) {
+            facts.append(("最后播出", last))
+        }
+        if let episodes = match.numberOfEpisodes, episodes > 0 {
+            facts.append(("TMDB 总集数", "\(episodes) 集"))
+        }
+        if let seasons = match.numberOfSeasons, seasons > 0 {
+            facts.append(("TMDB 总季数", "\(seasons) 季"))
+        }
+        if let runtime = match.episodeRunTime.first, runtime > 0 {
+            facts.append(("单集片长", "\(runtime) 分钟"))
+        }
         let directors = profile.crewNames(withJob: "Director")
         if !directors.isEmpty { facts.append(("导演", directors.joined(separator: "、"))) }
         let writers = profile.crewNames(withJob: "Writer")
         if !writers.isEmpty { facts.append(("编剧", writers.joined(separator: "、"))) }
-        let companies = profile.match.productionCompanies
+        let companies = match.productionCompanies
         if !companies.isEmpty { facts.append(("制片公司", companies.joined(separator: "、"))) }
         // ⚠️ 电视台是剧才有的字段(`docs/TMDB_API.md` §9),电影侧恒空
-        let networks = profile.match.networks
+        let networks = match.networks
         if !networks.isEmpty { facts.append(("电视台", networks.joined(separator: "、"))) }
         return facts
     }
@@ -480,6 +510,8 @@ private struct FileSourcePersonCard: View {
 /// ⚠️ 百度不给时长,画不出进度条(⛔ 不猜比例),只显示「已看到 mm:ss」。
 private struct FileSourceEpisodeShelf: View {
     let episodes: [SourceItem]
+    /// 多季时这一排只是「本季」,头部元信息行的「共 N 集」是 TMDB 全剧总数,别让两处看起来打架。
+    let isMultiSeason: Bool
     let store: PosterImageStore
     let resumeSeconds: (SourceItem) -> Double?
     let isWatched: (SourceItem) -> Bool
@@ -542,12 +574,14 @@ private struct FileSourceEpisodeShelf: View {
         }
     }
 
-    /// 「共 12 集」/「共 12 集 · 已看 3 集」。
+    /// 「共 12 集」/「本季 12 集 · 已看 3 集」。
+    /// ⚠️ 这个数是**本季实际文件数**,与头部 TMDB 全剧总数不是一个口径;
     /// ⚠️ 这里的「已看」是准的(分集在手上),目录卡片那个只数得到本地有记录的。
     private var countText: String {
         let watched = episodes.filter(isWatched).count
-        guard watched > 0 else { return "共 \(episodes.count) 集" }
-        return "共 \(episodes.count) 集 · 已看 \(watched) 集"
+        let total = isMultiSeason ? "本季 \(episodes.count) 集" : "共 \(episodes.count) 集"
+        guard watched > 0 else { return total }
+        return "\(total) · 已看 \(watched) 集"
     }
 }
 
@@ -573,6 +607,12 @@ private struct FileSourceEpisodeCard: View {
                     Text(progressText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let episodeMeta {
+                    Text(episodeMeta)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
                 if let overview = episode.overview, !overview.isEmpty {
@@ -642,6 +682,16 @@ private struct FileSourceEpisodeCard: View {
         }
         guard let number = episode.episodeNumber else { return episode.title }
         return "第 \(number) 集"
+    }
+
+    /// 「2011-04-17 · 60 分钟 · ★ 7.8」。缺哪段不显示哪段,整段没有就 nil(`CLAUDE.md` 硬规则 4)。
+    /// ⚠️ 来自 TMDB 季详情(§7),不是本地文件的时长。
+    private var episodeMeta: String? {
+        var parts: [String] = []
+        if let date = MediaFormat.date(episode.airDate) { parts.append(date) }
+        if let runtime = episode.episodeRuntime, runtime > 0 { parts.append("\(runtime) 分钟") }
+        if let rating = MediaFormat.rating(episode.episodeVoteAverage) { parts.append("★ \(rating)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// 百度没有服务端进度,这一行来自本地续播库(时长由 `filemetas` 带回)。

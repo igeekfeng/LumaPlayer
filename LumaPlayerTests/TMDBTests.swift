@@ -368,6 +368,27 @@ final class TMDBTests: XCTestCase {
         XCTAssertEqual(match.statusText, "已完结")
         XCTAssertEqual(match.productionCompanies, ["HBO"])
         XCTAssertEqual(match.networks, ["HBO"])
+        // §9:总集数 / 季数 / 首播 / 完结 / 单集片长
+        XCTAssertEqual(match.numberOfEpisodes, 73)
+        XCTAssertEqual(match.numberOfSeasons, 8)
+        XCTAssertEqual(match.firstAirDate, "2011-04-17")
+        XCTAssertEqual(match.lastAirDate, "2019-05-19")
+        XCTAssertEqual(match.episodeRunTime, [60])
+    }
+
+    /// 分集字段(§7):播出日 / 片长 / 评分。空串与 null 由上层降级,这里只验解码。
+    func testSeasonEpisodeDecodesAirDateRuntimeAndRating() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(Self.seasonJSON), host: host, path: "/3/tv/1399/season/1")
+
+        let episodes = try await makeClient().seasonDetails(
+            seriesID: 1399, seasonNumber: 1, token: "T")
+
+        XCTAssertEqual(episodes[0].airDate, "2011-04-17")
+        XCTAssertEqual(episodes[0].runtime, 62)
+        XCTAssertEqual(episodes[0].voteAverage, 7.8)
+        XCTAssertEqual(episodes[1].airDate, "2011-04-24")
+        XCTAssertNil(episodes[1].runtime)
     }
 
     /// 搜索响应没有详情字段 → 一律为空,⛔ 不拿 `genre_ids` 编名字。
@@ -383,6 +404,10 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(match.tagline)
         XCTAssertNil(match.status)
         XCTAssertNil(match.statusText)
+        XCTAssertNil(match.numberOfEpisodes)
+        XCTAssertNil(match.numberOfSeasons)
+        XCTAssertNil(match.lastAirDate)
+        XCTAssertTrue(match.episodeRunTime.isEmpty)
     }
 
     /// `status` 没有枚举定义:只映射官方示例里的两个值,其余原样显示英文。
@@ -537,7 +562,8 @@ final class TMDBTests: XCTestCase {
     "name":"Season 1","overview":"第一季。","poster_path":"/zwaj4egrhnXOBIit1tyb4Sbt3KP.jpg",
     "season_number":1,"episodes":[{"air_date":"2011-04-17","episode_number":1,
     "id":63056,"name":"凛冬将至","overview":"第一集简介。","production_code":"",
-    "season_number":1,"still_path":"/still1.jpg","vote_average":7.8,"vote_count":200},
+    "season_number":1,"still_path":"/still1.jpg","runtime":62,"vote_average":7.8,
+    "vote_count":200},
     {"air_date":"2011-04-24","episode_number":2,"id":63057,"name":"",
     "overview":null,"production_code":"","season_number":1,"still_path":"/still2.jpg",
     "vote_average":7.9,"vote_count":210}]}

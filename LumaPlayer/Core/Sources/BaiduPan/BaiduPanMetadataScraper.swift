@@ -143,7 +143,10 @@ actor BaiduPanMetadataScraper {
                 overview: entry.overview,
                 year: entry.year,
                 episodeTitle: entry.episodeTitle,
-                tmdbID: entry.tmdbID
+                tmdbID: entry.tmdbID,
+                airDate: entry.airDate,
+                episodeRuntime: entry.episodeRuntime,
+                episodeVoteAverage: entry.episodeVoteAverage
             )
             hits.insert(item.ref.itemID)
         }
@@ -160,6 +163,9 @@ actor BaiduPanMetadataScraper {
                 overview: item.overview,
                 year: item.year,
                 episodeTitle: item.episodeTitle,
+                airDate: item.airDate,
+                episodeRuntime: item.episodeRuntime,
+                episodeVoteAverage: item.episodeVoteAverage,
                 tmdbID: item.tmdbID,
                 savedAt: Date()
             )
@@ -292,7 +298,10 @@ actor BaiduPanMetadataScraper {
             poster: poster,
             overview: nonEmpty(episode?.overview) ?? bundle.series.overview,
             year: bundle.series.year,
-            episodeTitle: nonEmpty(episode?.name)
+            episodeTitle: nonEmpty(episode?.name),
+            airDate: nonEmpty(episode?.airDate),
+            episodeRuntime: episode?.runtime,
+            episodeVoteAverage: episode?.voteAverage
         )
     }
 

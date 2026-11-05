@@ -15,13 +15,18 @@ actor BaiduPanScrapeCache {
         var overview: String?
         var year: Int?
         var episodeTitle: String?
+        /// 分集播出日 / 片长 / 评分,来自季详情(§7)
+        var airDate: String?
+        var episodeRuntime: Int?
+        var episodeVoteAverage: Double?
         var tmdbID: Int?
         var savedAt: Date
 
         /// 什么都没补到就不存
         var isEmpty: Bool {
             poster == nil && overview == nil && year == nil
-                && episodeTitle == nil && tmdbID == nil
+                && episodeTitle == nil && airDate == nil
+                && episodeRuntime == nil && episodeVoteAverage == nil && tmdbID == nil
         }
     }
 

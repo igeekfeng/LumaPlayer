@@ -37,6 +37,13 @@ struct TMDBResult: Decodable, Sendable, Equatable {
     let productionCompanies: [TMDBCompany]?
     /// 电视台,电影侧没有
     let networks: [TMDBCompany]?
+    /// 完结日(tv)。电影侧没有
+    let lastAirDate: String?
+    /// 全剧总集数 / 总季数(tv)。⛔ 只作展示,不覆盖网盘目录里实际存的东西
+    let numberOfEpisodes: Int?
+    let numberOfSeasons: Int?
+    /// 单集片长(分钟,tv)。电影侧另有 `runtime`(本项目不读)
+    let episodeRunTime: [Int]?
 
     enum CodingKeys: String, CodingKey {
         case tmdbID = "id"
@@ -54,6 +61,78 @@ struct TMDBResult: Decodable, Sendable, Equatable {
         case status
         case productionCompanies = "production_companies"
         case networks
+        case lastAirDate = "last_air_date"
+        case numberOfEpisodes = "number_of_episodes"
+        case numberOfSeasons = "number_of_seasons"
+        case episodeRunTime = "episode_run_time"
+    }
+
+    /// 详情端点独有的字段用 `decodeIfPresent`:搜索响应里没有这些键,不该让整条解失败(§3 解码立场)。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.tmdbID = try container.decode(Int.self, forKey: .tmdbID)
+        self.title = try container.decodeIfPresent(String.self, forKey: .title)
+        self.originalTitle = try container.decodeIfPresent(String.self, forKey: .originalTitle)
+        self.releaseDate = try container.decodeIfPresent(String.self, forKey: .releaseDate)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.originalName = try container.decodeIfPresent(String.self, forKey: .originalName)
+        self.firstAirDate = try container.decodeIfPresent(String.self, forKey: .firstAirDate)
+        self.overview = try container.decodeIfPresent(String.self, forKey: .overview)
+        self.posterPath = try container.decodeIfPresent(String.self, forKey: .posterPath)
+        self.voteAverage = try container.decodeIfPresent(Double.self, forKey: .voteAverage)
+        self.genres = try container.decodeIfPresent([TMDBGenre].self, forKey: .genres)
+        self.tagline = try container.decodeIfPresent(String.self, forKey: .tagline)
+        self.status = try container.decodeIfPresent(String.self, forKey: .status)
+        self.productionCompanies = try container.decodeIfPresent(
+            [TMDBCompany].self, forKey: .productionCompanies)
+        self.networks = try container.decodeIfPresent([TMDBCompany].self, forKey: .networks)
+        self.lastAirDate = try container.decodeIfPresent(String.self, forKey: .lastAirDate)
+        self.numberOfEpisodes = try container.decodeIfPresent(Int.self, forKey: .numberOfEpisodes)
+        self.numberOfSeasons = try container.decodeIfPresent(Int.self, forKey: .numberOfSeasons)
+        self.episodeRunTime = try container.decodeIfPresent([Int].self, forKey: .episodeRunTime)
+    }
+
+    /// 测试与合成用;线格式本身只走 `init(from:)`。
+    init(
+        tmdbID: Int,
+        title: String? = nil,
+        originalTitle: String? = nil,
+        releaseDate: String? = nil,
+        name: String? = nil,
+        originalName: String? = nil,
+        firstAirDate: String? = nil,
+        overview: String? = nil,
+        posterPath: String? = nil,
+        voteAverage: Double? = nil,
+        genres: [TMDBGenre]? = nil,
+        tagline: String? = nil,
+        status: String? = nil,
+        productionCompanies: [TMDBCompany]? = nil,
+        networks: [TMDBCompany]? = nil,
+        lastAirDate: String? = nil,
+        numberOfEpisodes: Int? = nil,
+        numberOfSeasons: Int? = nil,
+        episodeRunTime: [Int]? = nil
+    ) {
+        self.tmdbID = tmdbID
+        self.title = title
+        self.originalTitle = originalTitle
+        self.releaseDate = releaseDate
+        self.name = name
+        self.originalName = originalName
+        self.firstAirDate = firstAirDate
+        self.overview = overview
+        self.posterPath = posterPath
+        self.voteAverage = voteAverage
+        self.genres = genres
+        self.tagline = tagline
+        self.status = status
+        self.productionCompanies = productionCompanies
+        self.networks = networks
+        self.lastAirDate = lastAirDate
+        self.numberOfEpisodes = numberOfEpisodes
+        self.numberOfSeasons = numberOfSeasons
+        self.episodeRunTime = episodeRunTime
     }
 }
 
@@ -74,18 +153,26 @@ struct TMDBSeasonResponse: Decodable, Sendable {
     let episodes: [TMDBEpisode]
 }
 
-/// 只有匹配键 `episode_number` 必填;`name` 可能是 `""`,`overview` / `still_path` 可能是 `null`(§7)。
+/// 只有匹配键 `episode_number` 必填;`name` 可能是 `""`,`overview` / `still_path` / `air_date` 可能是 `null`(§7)。
 struct TMDBEpisode: Decodable, Sendable, Equatable {
     let episodeNumber: Int
     let name: String?
     let overview: String?
     let stillPath: String?
+    /// `YYYY-MM-DD`,可能为 `null` / 空串(未播出的集)
+    let airDate: String?
+    /// 分钟,可能为 `null`
+    let runtime: Int?
+    let voteAverage: Double?
 
     enum CodingKeys: String, CodingKey {
         case episodeNumber = "episode_number"
         case name
         case overview
         case stillPath = "still_path"
+        case airDate = "air_date"
+        case runtime
+        case voteAverage = "vote_average"
     }
 
     /// nil → UI 降级成图标卡
@@ -119,6 +206,16 @@ struct TMDBMatch: Sendable, Equatable {
     let productionCompanies: [String]
     /// 电影侧恒空
     let networks: [String]
+    /// `YYYY-MM-DD` 原文(首播 / 上映);未取到就是 nil,⛔ 不伪造。
+    /// 与 `year` 分开:详情页「信息」区显示完整日期,元信息行只显示年。
+    let firstAirDate: String?
+    /// tv 完结日;电影侧恒 nil
+    let lastAirDate: String?
+    /// tv 全剧总集数 / 总季数(§9)。⚠️ 只是 TMDB 的记录,不代表用户网盘里存了多少。
+    let numberOfEpisodes: Int?
+    let numberOfSeasons: Int?
+    /// tv 单集片长(分钟);空数组 = 没有
+    let episodeRunTime: [Int]
 
     /// nil → UI 降级成图标卡
     var posterURL: URL? { TMDBImage.posterURL(path: posterPath) }
@@ -153,6 +250,11 @@ struct TMDBMatch: Sendable, Equatable {
         self.productionCompanies = (result.productionCompanies ?? [])
             .compactMap { nonEmptyString($0.name) }
         self.networks = (result.networks ?? []).compactMap { nonEmptyString($0.name) }
+        self.firstAirDate = nonEmptyString(result.firstAirDate ?? result.releaseDate)
+        self.lastAirDate = nonEmptyString(result.lastAirDate)
+        self.numberOfEpisodes = result.numberOfEpisodes
+        self.numberOfSeasons = result.numberOfSeasons
+        self.episodeRunTime = result.episodeRunTime ?? []
     }
 
     /// `YYYY-MM-DD` 取前 4 位;不足 4 位或非数字为 nil。
