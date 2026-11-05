@@ -22,6 +22,8 @@ final class Pan115EndpointTests: XCTestCase {
             "webapi.115.com")
         XCTAssertEqual(try XCTUnwrap(Pan115Endpoint.directoryID(path: "/").url).host, "webapi.115.com")
         XCTAssertEqual(
+            try XCTUnwrap(Pan115Endpoint.deleteFiles(ids: ["1"]).url).host, "webapi.115.com")
+        XCTAssertEqual(
             try XCTUnwrap(
                 Pan115Endpoint.downloadURL(timestamp: 1, encryptedPayload: "x").url).host,
             "proapi.115.com")
@@ -99,6 +101,30 @@ final class Pan115EndpointTests: XCTestCase {
         XCTAssertFalse(query.contains("path=/"), "斜杠不得原样留在查询串里:\(query)")
     }
 
+    // MARK: - 删除(§9)
+
+    /// `POST /rb/delete`,`fid[0]` 带下标;中括号整体编码(与 `115driver` / `p115client` 的 urlencode 一致)。
+    /// ⚠️ 本项目一次只传一个 id:批量语义没实测(§9)。
+    func testDeleteFilesUsesIndexedFIDForm() throws {
+        let endpoint = Pan115Endpoint.deleteFiles(ids: ["987"])
+        XCTAssertEqual(endpoint.method, "POST")
+        XCTAssertEqual(endpoint.contentType, "application/x-www-form-urlencoded")
+        XCTAssertEqual(endpoint.name, "webapi/rb/delete")
+        let url = try XCTUnwrap(endpoint.url)
+        XCTAssertEqual(url.host, "webapi.115.com")
+        XCTAssertEqual(url.path, "/rb/delete")
+        XCTAssertNil(url.query)
+        let body = String(decoding: try XCTUnwrap(endpoint.httpBody), as: UTF8.self)
+        XCTAssertEqual(body, "fid%5B0%5D=987")
+    }
+
+    /// 多个 id 时下标递增(接口支持;本项目调用点只传一个,这里锁的是编码规则)。
+    func testDeleteFilesNumbersMultipleIDs() throws {
+        let endpoint = Pan115Endpoint.deleteFiles(ids: ["11", "22"])
+        let body = String(decoding: try XCTUnwrap(endpoint.httpBody), as: UTF8.self)
+        XCTAssertEqual(body, "fid%5B0%5D=11&fid%5B1%5D=22")
+    }
+
     // MARK: - 取直链(§4.1)
 
     /// body 是 `data=<m115 密文>`,`t` 是秒级时间戳。密文里的 `+` `/` `=` 必须整体编码,否则服务端解不开。
@@ -120,6 +146,7 @@ final class Pan115EndpointTests: XCTestCase {
             .userInfo(now: 1),
             .fileList(cid: "0", offset: 0, limit: 1000),
             .directoryID(path: "/"),
+            .deleteFiles(ids: ["1"]),
             .downloadURL(timestamp: 1, encryptedPayload: "x"),
         ]
         for endpoint in endpoints {

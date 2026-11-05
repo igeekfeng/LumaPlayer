@@ -34,16 +34,26 @@ enum FileSource: Sendable, Equatable, Hashable {
     }
 
     /// 能不能连源文件一起删。本地文件夹只读(entitlement `files.user-selected.read-only`),只有「隐藏」;
-    /// 115 也还没有删除接口(只做了读,见 `docs/PAN115_API.md` §7),所以同样只有「隐藏」。
+    /// 百度与 115 都能删(115 走 `POST /rb/delete`,进的是回收站,见 `docs/PAN115_API.md` §9)。
     var supportsDeletingFiles: Bool {
         switch self {
-        case .baiduPan: return true
-        case .pan115: return false
+        case .baiduPan, .pan115: return true
         case .localFolder: return false
         }
     }
 
-    /// 能不能按 TMDB 重命名整部剧(写操作)。115 只做了读,没有重命名接口。
+    /// 真删之后在网盘端还能不能恢复。只决定删除确认面板的措辞,⛔ 不是「删了没删」的判据。
+    ///
+    /// - 115:`/rb/delete` 会把内容移进**回收站**(§9),可以在 115 网页端还原。
+    /// - 百度:按「不可撤销」告知用户(`docs/BAIDU_PAN_API.md` §2.4,删除是递归的)。
+    var remoteDeletionIsRecoverable: Bool {
+        switch self {
+        case .pan115: return true
+        case .baiduPan, .localFolder: return false
+        }
+    }
+
+    /// 能不能按 TMDB 重命名整部剧(写操作)。改名只有百度做了;115 的改名接口没接(§7)。
     var supportsRenamingSeries: Bool {
         switch self {
         case .baiduPan: return true

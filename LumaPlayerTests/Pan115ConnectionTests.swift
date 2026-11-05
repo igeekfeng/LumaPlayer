@@ -13,6 +13,7 @@ final class Pan115ConnectionTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        MockEmbyURLProtocol.reset()
         storage = CredentialFileStore(fileURL: .temporaryCredentialsFile())
         credentials = CredentialStore(storage: storage)
         connection = Pan115Connection(
@@ -106,6 +107,65 @@ final class Pan115ConnectionTests: XCTestCase {
         XCTAssertEqual(state, .needsAuthorization)
         let root = try await connection.libraryRoot(for: sourceID)
         XCTAssertEqual(root, Pan115LibraryRoot(path: "/A", name: "A"))
+    }
+
+    // MARK: - 删除(§9)
+
+    /// 删除按 id 走 `POST /rb/delete`;响应必须是 `state:1`。
+    func testDeletingAFileSendsItsID() async throws {
+        try await credentials.savePan115Credential(
+            Pan115Credential(uid: "u", cid: "c", seid: "s", kid: nil))
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":1}"#), host: "webapi.115.com", path: "/rb/delete")
+
+        try await connection.deleteFile(id: "987")
+
+        let request = try XCTUnwrap(
+            MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/rb/delete"))
+        XCTAssertEqual(
+            String(decoding: try XCTUnwrap(request.body), as: UTF8.self),
+            "fid%5B0%5D=987")
+    }
+
+    /// 没 Cookie 时连请求都不发(删除是写操作,⛔ 不拿空凭据去撞)。
+    func testDeletingWithoutCredentialThrowsNotAuthorized() async {
+        do {
+            try await connection.deleteFile(id: "1")
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .notAuthorized)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
+    /// 空 id 不发请求:没有可删对象时说清楚,⛔ 不交给服务端猜。
+    func testDeletingEmptyIDIsRejectedWithoutNetwork() async {
+        do {
+            try await connection.deleteFile(id: "")
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .invalidRequest("这一条没有可用的文件 ID"))
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
+    /// `231011`「已删除」是幂等成功:目标状态已经达成,⛔ 不报错、不重发。
+    func testDeletingAlreadyDeletedFileSucceedsIdempotently() async throws {
+        try await credentials.savePan115Credential(
+            Pan115Credential(uid: "u", cid: "c", seid: "s", kid: nil))
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":0,"errno":231011,"error":"文件已删除，请勿重复操作"}"#),
+            host: "webapi.115.com", path: "/rb/delete")
+
+        try await connection.deleteFile(id: "1")
+
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().filter { $0.url.path == "/rb/delete" }.count,
+            1, "⛔ 幂等成功不重发")
     }
 
     // MARK: - 路径工具

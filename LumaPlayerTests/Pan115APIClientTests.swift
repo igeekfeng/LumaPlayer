@@ -444,6 +444,113 @@ final class Pan115APIClientTests: XCTestCase {
         XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
     }
 
+    // MARK: - 删除(§9)
+
+    /// 删除 = `POST /rb/delete`,body 是带下标的 `fid[0]=<id>`(中括号要整体编码),带 Cookie;
+    /// 成功只认显式 `state:1`。
+    func testDeleteSendsIndexedFIDFormAndAcceptsStateOne() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":1}"#), host: "webapi.115.com", path: "/rb/delete")
+        try await client.delete(ids: ["987"], credential: credential)
+
+        let request = try XCTUnwrap(
+            MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "/rb/delete"))
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(
+            String(decoding: try XCTUnwrap(request.body), as: UTF8.self),
+            "fid%5B0%5D=987")
+        XCTAssertEqual(request.header("Cookie"), credential.cookieHeader)
+    }
+
+    /// 没有 `state:1` 的响应(这里 `{}`)⛔ 不能当成删掉了:删除是写操作,
+    /// 「无法证伪」不等于「成功」。
+    func testDeleteRequiresExplicitStateOne() async {
+        MockEmbyURLProtocol.stub(.json(#"{}"#), host: "webapi.115.com", path: "/rb/delete")
+        do {
+            try await client.delete(ids: ["1"], credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            guard case .decoding(_, let detail) = error else {
+                return XCTFail("应当是 decoding,实际是 \(error)")
+            }
+            XCTAssertTrue(detail.contains("state"), detail)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
+    /// `231011`「文件已删除,请勿重复操作」是幂等档:API 层如实抛 `.alreadyDeleted`,
+    /// 由 `Pan115Connection` 当成功处理(见 `Pan115ConnectionTests`)。
+    func testAlreadyDeletedCodeBecomesAlreadyDeleted() async {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":0,"errno":231011,"error":"文件已删除，请勿重复操作"}"#),
+            host: "webapi.115.com", path: "/rb/delete")
+        do {
+            try await client.delete(ids: ["1"], credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .alreadyDeleted)
+            XCTAssertFalse(error.needsAuthorization)
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
+    /// 删除失败⛔ 不重试:重试就是第二次删除,还多一次风控面(§9)。
+    func testDeleteDoesNotRetry() async {
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":0,"errno":990003,"error":"操作失败。"}"#),
+            host: "webapi.115.com", path: "/rb/delete")
+        do {
+            try await client.delete(ids: ["1"], credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .server(code: 990003, message: "操作失败。"))
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        XCTAssertEqual(
+            MockEmbyURLProtocol.recordedRequests().filter { $0.url.path == "/rb/delete" }.count,
+            1, "⛔ 删除只发一次,失败不重试")
+    }
+
+    /// `990009`「删除操作尚未执行完成」是 115 的后台任务,不是频控 ——
+    /// 折成 `rateLimited` 会让 App 白锁 30 分钟(§9)。
+    func testOperationBusyCodeIsNotRateLimited() async {
+        let limiter = Pan115RateLimiter(minimumInterval: .zero)
+        let limited = Pan115APIClient(session: session, limiter: limiter)
+        MockEmbyURLProtocol.stub(
+            .json(#"{"state":0,"errno":990009,"error":"删除操作尚未执行完成，请稍后再试！"}"#),
+            host: "webapi.115.com", path: "/rb/delete")
+        do {
+            try await limited.delete(ids: ["1"], credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            guard case .server(let code, _) = error else {
+                return XCTFail("应当是 server,实际是 \(error)")
+            }
+            XCTAssertEqual(code, 990009)
+            XCTAssertEqual(error.userMessage, "115 还在处理上一次删除或还原,请过几秒再试。")
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        let coolDown = await limiter.remainingCoolDown
+        XCTAssertNil(coolDown, "990009 不是频控,⛔ 不要进冷却")
+    }
+
+    /// 空 id 在发请求前就拒绝(省一次风控额度)。
+    func testDeleteRejectsEmptyIDsWithoutNetwork() async {
+        do {
+            try await client.delete(ids: [], credential: credential)
+            XCTFail("应当抛错")
+        } catch let error as Pan115Error {
+            XCTAssertEqual(error, .invalidRequest("没有要删除的文件 ID"))
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+        XCTAssertTrue(MockEmbyURLProtocol.recordedRequests().isEmpty)
+    }
+
     // MARK: - 辅助
 
     private func stubFiles(_ body: String) {

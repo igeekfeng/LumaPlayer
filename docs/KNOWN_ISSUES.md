@@ -215,7 +215,11 @@
 - [ ] **网页版 m3u8 路线**(`GET https://115.com/api/video/m3u8/{pickcode}.m3u8`)完全没做。
       多音轨没声音的问题要靠它解决(直链只有默认音轨)。p115client 说它「只支持 web 的 cookies」且内层链接绑 UA
 - [ ] **剧集详情页 / 续播卡 / 选集队列**:与百度共用同一套浏览页,但没有真实片库可验
-- [ ] **删除与改名**:115 这条链路没做(只有读)。`FileSource.supportsDeletingFiles` / `supportsRenamingSeries` 都是 false
+- [ ] ❗ **删除真实走通**(`Pan115Connection.deleteFile` → `POST /rb/delete`,`docs/PAN115_API.md` §9):
+      真实删一个文件、一个目录,看响应是不是 `state:1`、目录用 `cid` 当 `fid` 是否被接受、是否真的进回收站。
+      ⛔ 不要在常用账号上批量试 —— 删除不可并发,而且是写操作。`FileSource.supportsDeletingFiles` 已为 115 打开;
+      结案失败时把它切回 false(浏览页只剩「隐藏」),⛔ 不要留一个点了会报错的开关。
+- [ ] **改名**:115 没接(`FileSource.supportsRenamingSeries` 仍 false)
 
 已知边界:
 
@@ -225,6 +229,9 @@
   字幕是逐条取的,失败就跳过(不影响正片)。
 - **不取封面**:`Pan115SourceProvider.content` 的 `durations` 恒为空、封面恒 nil,靠 TMDB 刮削补。
   省请求就是少风控面。
+- **删除只删一条、不重试、删完不重新列目录**:115 的删除与还原互斥且不能并发(§9);
+  `alreadyDeleted`(`231011`)按成功算。删完只做本地移除 + 目录缓存失效(`FileSourceViewModel.delete`),
+  ⛔ 不为刷新再发一次 `files`。
 - **不支持从指定位置起流**:`Pan115SessionPreparer.makeSession(startTimeTicks:)` 带值即抛错(没有对位的起流参数)。
   续播靠客户端 seek。
 - **`fs_id` 跨网盘不唯一**:`PlaybackSpeedStore.pan115Isolation` / 弹幕 / 手动标记都带 `pan115` 隔离段,

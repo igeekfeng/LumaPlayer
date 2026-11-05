@@ -2,13 +2,14 @@ import Foundation
 import Observation
 import os
 
-/// 文件树来源(百度网盘 / 本地文件夹)页的 ViewModel。两个来源共用:列目录 → 合成 → TMDB 刮削 →
+/// 文件树来源(百度网盘 / 115 网盘 / 本地文件夹)页的 ViewModel。三家共用:列目录 → 合成 → TMDB 刮削 →
 /// 剧集详情 → 本地续播 / 已看。差别按 `source` 分派:
 ///
-/// - 授权只有百度有,三屏(填密钥 → 扫码 → 浏览)共用本 ViewModel,因为是一条连续流程。
+/// - 授权只有两家网盘有,三屏(填密钥 / 扫码 → 浏览)共用本 ViewModel,因为是一条连续流程。
 ///   本地文件夹访问权来自书签,失效时在目录层报 `.needsFolderReselection`。
-/// - 目录缓存只有百度要(配额),见 `cachesDirectories`。
-/// - 删 / 改名只有百度能做(`FileSource.supportsDeletingFiles`)。
+/// - 目录缓存两家网盘都要(百度是配额,115 是串行限速),见 `cachesDirectories`。
+/// - 删除:百度与 115 都能做;改名只有百度能做(`FileSource.supportsDeletingFiles` /
+///   `supportsRenamingSeries`)。
 ///
 /// 名字带 `BaiduPan…` 的纯函数(排序、剧集判定、合成器)对两个来源通用。
 @MainActor
@@ -1894,12 +1895,17 @@ final class FileSourceViewModel {
             return
         }
 
-        guard case .baiduPan = source else {
-            // 115 与本地文件夹都没有删除接口:115 的网页 Cookie 接口里没有可用的删除端点
-            // (`docs/PAN115_API.md` §7),⛔ 不要拿开放平台的 `/open/rb/delete` 顶上 —— 那是另一套凭据。
+        switch source {
+        case .baiduPan:
+            try await connection.deleteFile(at: file.path)
+        case .pan115:
+            // 115 按 id 删(文件 `fid` / 目录 `cid`,`docs/PAN115_API.md` §9),不用路径:
+            // ⛔ 为删除再发一次 `files/getid` 是白花一次风控预算,而且删的还是同一个对象。
+            try await pan115Connection.deleteFile(id: String(file.fsID))
+        case .localFolder:
+            // 本地文件夹只读(`files.user-selected.read-only`),界面不给这个开关;走到这里是调用方 bug,如实抛
             throw LocalFolderError.readOnly
         }
-        try await connection.deleteFile(at: file.path)
 
         if libraryRoot?.path == file.path {
             await clearLibraryRoot()

@@ -31,6 +31,11 @@ enum Pan115Endpoint: Sendable, Equatable {
     case fileList(cid: String, offset: Int, limit: Int)
     /// `GET https://webapi.115.com/files/getid?path=` —— 按路径换目录 ID
     case directoryID(path: String)
+    /// `POST https://webapi.115.com/rb/delete`(§9)。
+    ///
+    /// `fid` 是**文件 `fid` 或目录 `cid`**,表单字段名是 `fid[0]` / `fid[1]`…(`115driver` 就这么发)。
+    /// ⚠️ 一次只传一个:批量语义与条数上限都没实测(§9)。
+    case deleteFiles(ids: [String])
 
     // MARK: - 取直链(proapi)
 
@@ -51,7 +56,7 @@ enum Pan115Endpoint: Sendable, Equatable {
             return "passportapi.115.com"
         case .userInfo:
             return "my.115.com"
-        case .fileList, .directoryID:
+        case .fileList, .directoryID, .deleteFiles:
             return "webapi.115.com"
         case .downloadURL:
             return "proapi.115.com"
@@ -66,13 +71,14 @@ enum Pan115Endpoint: Sendable, Equatable {
         case .userInfo: return "/"
         case .fileList: return "/files"
         case .directoryID: return "/files/getid"
+        case .deleteFiles: return "/rb/delete"
         case .downloadURL: return "/app/chrome/downurl"
         }
     }
 
     var method: String {
         switch self {
-        case .qrCodeLogin, .downloadURL: return "POST"
+        case .qrCodeLogin, .downloadURL, .deleteFiles: return "POST"
         case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID:
             return "GET"
         }
@@ -87,6 +93,7 @@ enum Pan115Endpoint: Sendable, Equatable {
         case .userInfo: return "my/ajax?ac=nav"
         case .fileList: return "webapi/files"
         case .directoryID: return "webapi/files/getid"
+        case .deleteFiles: return "webapi/rb/delete"
         case .downloadURL: return "proapi/app/chrome/downurl"
         }
     }
@@ -125,6 +132,8 @@ enum Pan115Endpoint: Sendable, Equatable {
             ]
         case .directoryID(let path):
             return [("path", path)]
+        case .deleteFiles:
+            return []
         case .downloadURL(let timestamp, _):
             return [("t", String(timestamp))]
         }
@@ -137,6 +146,9 @@ enum Pan115Endpoint: Sendable, Equatable {
             return [("account", account), ("app", app)]
         case .downloadURL(_, let encryptedPayload):
             return [("data", encryptedPayload)]
+        case .deleteFiles(let ids):
+            // ⚠️ 字段名带下标:`fid[0]` / `fid[1]`…;`fid=a,b` 这种写法 p115client 也支持,本项目只发前一种。
+            return ids.enumerated().map { ("fid[\($0.offset)]", $0.element) }
         case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID:
             return nil
         }

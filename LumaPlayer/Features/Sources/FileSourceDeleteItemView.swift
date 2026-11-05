@@ -70,12 +70,16 @@ struct FileSourceDeleteItemView: View {
     }
 
     /// ⚠️ 文件夹要说清「连里面的内容一起」:删除是**递归**的
-    /// (`docs/BAIDU_PAN_API.md` §2.4),删一个季目录等于删掉整季。
+    /// (`docs/BAIDU_PAN_API.md` §2.4、`docs/PAN115_API.md` §9),删一个季目录等于删掉整季。
+    /// 115 的删除进回收站(可恢复),百度按不可撤销告知 —— 措辞按来源能力分派。
     private var remoteSubtitle: String {
         let files = item.kind.isContainer
             ? "网盘上这个文件夹会连同里面的内容一起删掉,"
             : "网盘上的这个文件也会被删掉,"
-        return files + "该操作无法撤销。"
+        let consequence = viewModel.source.remoteDeletionIsRecoverable
+            ? "115 会把它收进回收站,可以在 115 网页端恢复。"
+            : "该操作无法撤销。"
+        return files + consequence
             + (item.kind.isContainer
                 ? "里面每一集的本地观看记录也会一起清掉,「继续观看」里不再有这部的内容。"
                 : "它的本地观看记录也会一起清掉,「继续观看」里不再有它。")
@@ -88,6 +92,9 @@ struct FileSourceDeleteItemView: View {
             try await viewModel.delete(item, alsoDeleteRemotely: alsoDeleteRemotely)
             dismiss()
         } catch let error as BaiduPanError {
+            dismiss()
+            onFailure(error.userMessage)
+        } catch let error as Pan115Error {
             dismiss()
             onFailure(error.userMessage)
         } catch let error as LocalFolderError {

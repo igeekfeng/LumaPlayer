@@ -190,6 +190,30 @@ struct Pan115APIClient: Sendable {
         return id
     }
 
+    // MARK: - 删除(§9)
+
+    /// 删除文件或目录 —— 115 是**移进回收站**,不是彻底删除(§9)。
+    ///
+    /// ⚠️ 这类操作 115 明确要求**不能并发**(删除与还原还互斥),这里靠全 App 共用的
+    /// `Pan115RateLimiter` 串行;调用方也只逐条删。
+    /// ⛔ **不重试**:删除可能已经生效,重发就是第二次删除,还多一次风控面(§6)。
+    /// ⛔ 不为刷新再列一次目录:调用方本地移除 + 让目录缓存失效。
+    ///
+    /// - Parameter ids: 文件 `fid` 或目录 `cid`。接口支持多个,本项目只传一个(§9 的批量未实测)。
+    func delete(ids: [String], credential: Pan115Credential) async throws {
+        guard !ids.isEmpty else {
+            throw Pan115Error.invalidRequest("没有要删除的文件 ID")
+        }
+        let endpoint = Pan115Endpoint.deleteFiles(ids: ids)
+        let data = try await send(endpoint, credential: credential).data
+        // 成功只认显式的 `state: 1`:空对象 / HTML / 缺 state 的响应⛔ 都不能当成「删掉了」。
+        // (`send` 已经把 `state: false` 折成具体错误,这里兜的是「没有 state」这种无法证伪的形态。)
+        let envelope: Pan115Envelope = try decode(data, endpoint: endpoint)
+        guard envelope.state == true else {
+            throw Pan115Error.decoding(endpoint: endpoint.name, detail: "响应里没有 state:1")
+        }
+    }
+
     // MARK: - 取直链(§4.1)
 
     /// 取一条文件的播放地址。
@@ -335,6 +359,9 @@ struct Pan115APIClient: Sendable {
         }
         if code == Pan115Code.kickedOut { throw Pan115Error.kickedOut }
         if code == Pan115Code.notLoggedIn { throw Pan115Error.notAuthorized }
+        // 删除的幂等档:文件已经不在网盘里(`231011`,§9)。折成专用错误,由 `Pan115Connection`
+        // 当成功处理 —— ⛔ 不折成通用 `.server`,否则删除会「失败」,本地记录也不会清。
+        if code == Pan115Code.alreadyDeleted { throw Pan115Error.alreadyDeleted }
         // 二维码过期有两种表现:轮询响应里 `status: -1`,或 `state: 0` + 这个错误码。
         // 后一种在 `send` 阶段就被这里拦下,⛔ 不折成通用 server 错误 —— 否则用户看到的是
         // 「115 返回 40199002」而不是「二维码过期,请重新获取」。

@@ -247,6 +247,31 @@ actor Pan115Connection {
         return trimmed.isEmpty ? "/" : trimmed
     }
 
+    // MARK: - 删除
+
+    /// 删一个文件或目录(115 → 回收站,§9)。
+    ///
+    /// - Parameter id: 文件 `fid` 或目录 `cid`。浏览页拿到的 `BaiduPanFile.fsID` 就是它,
+    ///   ⛔ 不为删除再按路径换一次 id(多一次请求 = 多一次风控面)。
+    ///
+    /// ⚠️ 115 的删除是**移进回收站**,不允许并发、与还原互斥(§9):一次只删一条,
+    /// 由全 App 共用的 `Pan115RateLimiter` 串行。
+    /// ⛔ **失败不重试**:第一次可能已经生效,重发就是第二次删除,还多一次风控面。
+    func deleteFile(id: String) async throws {
+        guard !id.isEmpty else {
+            throw Pan115Error.invalidRequest("这一条没有可用的文件 ID")
+        }
+        let credential = try await credential()
+        do {
+            try await client.delete(ids: [id], credential: credential)
+        } catch let error as Pan115Error where error == .alreadyDeleted {
+            // 文件已经不在网盘里(别处删过 / 上一次其实生效了)。目标状态已经达成:
+            // ⛔ 不重发也不报错,交给调用方照常做本地清理。
+        }
+        // 删掉的是目录时,它的 path → cid 映射随之失效;⛔ 留着会让同路径的下一层列到旧目录。
+        directoryIndex = directoryIndex.filter { $0.value != id }
+    }
+
     // MARK: - 播放
 
     /// 取一条可播放的直链。

@@ -379,6 +379,8 @@ from p115cipher.util import rsa_gen_key, xor, rsa_decrypt_with_pubkey
   Cookie 失效会在第一次读盘时以 `errno 990001` / `40101035` 暴露,那时浏览页切扫码屏(§2.3)。
 - ❗ **因 Cookie 被封号的一手案例未找到**。协议明确禁止(§8),但实际处置案例只有社区转述。
 - ❗ 直链 `t` 的具体有效秒数未知(只有「读 `t` 提前 5 分钟」这个做法)。
+- ❗ **删除**(`POST /rb/delete`,§9)未在真实账号验证:请求形状、`state:1`、目录用 `cid` 当 `fid`、
+  「进回收站」都只有源码侧证据。结案方式见 `KNOWN_ISSUES.md` 的 115 小节。
 
 ## 8. 合规(必须在 UI 里告知用户)
 
@@ -398,3 +400,46 @@ from p115cipher.util import rsa_gen_key, xor, rsa_decrypt_with_pubkey
 旧分享端点自 **2026-09** 起对第三方客户端返回「当前版本过低,请升级到最新版本下载」。
 
 ⇒ 添加 115 来源的 UI 必须明说:这是非官方接口,风险自负。
+
+## 9. 删除(写操作)
+
+**只做「移到回收站」这一种**,⛔ 不做彻底删除 / 清空回收站(`/rb/clean` 是另一个端点,
+`115driver pkg/driver/api.go:63` `ApiRecycleClean`)。
+
+```
+POST https://webapi.115.com/rb/delete
+Content-Type: application/x-www-form-urlencoded
+body: fid[0]=<文件或目录的 id>&fid[1]=…
+```
+
+表单字段名出处【源码】:`115driver pkg/driver/op.go:9-25` `Delete(fileIDs ...string)` 用
+`fmt.Sprintf("fid[%d]", i)`;`p115client client.py:10910-10919` 的 docstring 也支持
+`fid=<id1>,<id2>`(逗号分隔,`:10923`),或者 `fid[i]`(`:10925`)。
+两种写法同一个参数,本项目用 `fid[0]`(与 `115driver` 一致)。
+
+- **`fid` 是文件 `fid` 或目录 `cid`**:p115client docstring 原话「文件或目录的 id,多个用逗号 "," 隔开」
+  (`client.py:10911`);`115driver pkg/driver/file.go:44-61` 对目录就是把列表里的 `CategoryID`(即 `cid`)
+  当成 `FileID`。⇒ 浏览页拿到的 `BaiduPanFile.fsID`(`Pan115FileEntry.numericID`:文件取 `fid`、目录取 `cid`)
+  直接就是删除 id,⛔ 不为删除再按路径换一次 `cid`(多一次请求 = 多一次风控面)。
+- **成功只有通用信封 `{"state":1}`**,失败是 `state:0` + `errno`(`115driver` 的 `BasicResp` + `CheckErr`)。
+  没有逐条结果 ⇒ 本项目一次只删一条,`state:1` 就是这一条删掉了。
+- **目录是递归的,而且后台可能还在跑**:p115client docstring 原话(`client.py:10970-10973`)
+  「如果删除的只是文件,那么在接口响应时,涉及的文件,已经删除完毕;但如果是目录,那么接口响应时,
+  后台可能还在执行」。⇒ 删完目录立刻删下一条可能撞 `990009`(见下),不是失败。
+- **进回收站,不是彻底删除**:同一条 docstring 说 `aid=12` 下的删除「不会经过回收站(`aid=7`),
+  而是彻底删除(`aid=120`)」(`client.py:10976`)⇒ 普通 `aid=1`(本项目)的删除**经过回收站**,
+  可以在 115 网页端还原。回收站与删除**互斥**:「删除和(从回收站)还原是互斥的,
+  同时最多只允许执行一个操作」(`client.py:10908`)。
+- **不能并发**:p115client 异常类注释「115 网盘的复制、移动、删除、还原只允许最多一个操作进行中」
+  (`exception.py:69-71`);`batch_delete` 的 docstring 也写「删除操作不支持并发」(`tool/edit.py:1401`)。
+- 相关错误码(原样取自 `p115client client.py:237-470` 的响应注释):
+  - `990009`「删除[...]操作尚未执行完成,请稍后再试!」⇒ 上一次还在后台跑,**不是频控**,别进冷却也别立刻重发;
+  - `231011`「文件已删除,请勿重复操作」⇒ 目标状态已达成,按成功处理(幂等);
+  - `590075` 操作太频繁 ⇒ 与 §6 同一档,进冷却。
+
+**本项目的约束**:
+- 一次请求只删一条。接口支持批量,但批量条数上限、逐条失败语义、目录后台执行都没实测,⛔ 不碰。
+- 失败⛔ 不重试(重试 = 第二次删除,还多一次风控面);`231011` 除外 —— 它不重发也不报错。
+- 删完⛔ 不为了刷新再列一次目录:调用方本地移除条目、让目录缓存失效(`FileSourceViewModel.delete`)。
+- ⚠️ **未在真实账号验证**(本机无 115 账号)。请求形状、`state:1`、目录用 `cid`、回收站效果都只有源码侧证据,
+  见 `KNOWN_ISSUES.md` 的 115 小节。

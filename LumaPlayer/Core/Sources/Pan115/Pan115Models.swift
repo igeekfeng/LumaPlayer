@@ -264,6 +264,11 @@ enum Pan115Error: Error, Equatable {
     case server(code: Int, message: String?)
     /// 被踢下线(`40101035`,§2.3)
     case kickedOut
+    /// 删除时服务端回「文件已删除,请勿重复操作」(`231011`,§9)。
+    /// 目标状态已经达到(别处删过 / 上一次其实生效了),按幂等成功处理,⛔ 不重试也不报错。
+    case alreadyDeleted
+    /// 本项目自己的参数检查,不是 115 的错误码:没有可用的 id 就不发请求。
+    case invalidRequest(String)
     /// 直链过期或签名不符(§4.3),重取即可
     case linkExpired
     /// 被 115 频控挡下:`590075 操作太频繁`,或 403/405/429(阿里云 WAF)。
@@ -303,6 +308,10 @@ enum Pan115Error: Error, Equatable {
         case .kickedOut:
             return "115 的登录已在别处失效(同一渠道内重复登录会顶掉旧 Cookie),请重新扫码登录。"
                 + "想让 App 与网页端共存,退出登录再扫一次即可切到「\(Pan115AuthorizationApp.default.displayName)」渠道。"
+        case .alreadyDeleted:
+            return "这个文件已经不在 115 网盘里了。"
+        case .invalidRequest(let detail):
+            return "115 请求参数不完整:\(detail)"
         case .linkExpired:
             return "播放地址已过期,重新获取一次。"
         case .rateLimited(let retryAfter):
@@ -353,8 +362,15 @@ enum Pan115Error: Error, Equatable {
     }
 
     static func serverMessage(code: Int, serverMessage: String?) -> String {
+        // 「上一个删除 / 还原还没完」:115 的后台任务,不是频控。⛔ 别把它说成「操作太频繁」,
+        // 否则用户以为要等半小时;实际几秒后重试就行(§9)。
+        if Pan115Code.operationBusy.contains(code) {
+            return "115 还在处理上一次删除或还原,请过几秒再试。"
+        }
         let base: String
         switch code {
+        case Pan115Code.alreadyDeleted:
+            base = "这个文件已经不在网盘里了"
         case Pan115Code.notLoggedIn:
             base = "115 的登录已失效"
         case Pan115Code.kickedOut:
@@ -385,6 +401,13 @@ enum Pan115Code {
     /// 「目录不存在」的三个码。片库根被删 / 改名时 115 就回这几个(没有 HTTP 404)。
     /// 出处:`p115client client.py:252`、`:266`、`:334`。
     static let directoryMissing: Set<Int> = [800001, 10014, 20009]
+    /// 删除时「文件已删除,请勿重复操作」(§9 的 `231011`)。目标状态已达成,当成功。
+    static let alreadyDeleted = 231011
+    /// 删除 / 还原还在后台跑(`990009`),或账号有同类任务(`990005`)。
+    ///
+    /// ⚠️ 这不是频控(不进冷却):服务端只是说「上一个还没完」,重发也没用。
+    /// 出处:`p115client client.py:349-356` 的响应原样。
+    static let operationBusy: Set<Int> = [990005, 990009]
     /// 操作太频繁(`p115client` 把它归成 `EBUSY`)。这是风控的第一档,**比 WAF 早一步**:
     /// 认出来就该停手,继续打才会升级成域名级拦截(§6)。
     static let tooFrequent: Set<Int> = [590075, 40110000]
