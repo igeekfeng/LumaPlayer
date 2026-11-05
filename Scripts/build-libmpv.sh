@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# build-libmpv.sh —— 从上游未合并的 draft PR 自编带 `gpu-next` 后端的 libmpv,装到 Vendor/mpv/prefix/。
+# build-libmpv.sh —— 以 mpv 正式版为基线、打上未合并的 draft PR 自编带 `gpu-next` 后端的 libmpv,装到 Vendor/mpv/prefix/。
 #
 # 为什么要自编:Dolby Vision(P5)在老 gpu 渲染器上发紫发绿(它不处理 RPU/IPTPQc2),只有 gpu-next
-# (libplacebo)做得对。而它进 render API 需要 mpv-player/mpv#16818,该 PR 至今未合并,Homebrew 的 mpv
-# 和上游 master 都没有 MPV_RENDER_PARAM_BACKEND,所以只能钉死那个 commit 自己编。
+# (libplacebo)做得对。而它进 render API 需要 mpv PR 16818,该 PR 至今未合并,Homebrew 的 mpv
+# 和上游正式版都没有 MPV_RENDER_PARAM_BACKEND,所以只能把它作为补丁 0000 打在钉死的正式版上自己编。
 #
 # 用法:./Scripts/build-libmpv.sh [--clean|--force]  # --clean 删 build/ 重配,--force 连源码重克隆
 # 依赖:brew install meson ninja pkgconf;libplacebo / ffmpeg / libass 复用 Homebrew 那份不重编。
@@ -14,9 +14,9 @@ set -euo pipefail
 # realpath 取物理路径:meson 会把 prefix 写进 libmpv 的 install name,再被 App 继承。
 # 经软链调用时 install name 会与编译时的 SRCROOT 不一致,打包就收不到依赖(PITFALLS.md 第 1 节)。
 REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"
-MPV_REPO="https://github.com/sparky3387/mpv.git"
-# 钉死 mpv-player/mpv#16818 的 head(fork sparky3387/mpv)。上游合并后改回官方仓库并更新此值。
-MPV_SHA="80351bb32492402c894bb4291acdd44594db8450"
+MPV_REPO="https://github.com/mpv-player/mpv.git"
+# 钉死 v0.42.0 tag 指向的 commit(按 sha 取,tag 被移动也不受影响)。
+MPV_SHA="b0841e8c4d156b8403dc1876c4cbd9011eb583f3"
 
 VENDOR="${REPO_ROOT}/Vendor/mpv"
 SRC_DIR="${VENDOR}/src"
@@ -65,27 +65,29 @@ if [[ ! -d "${SRC_DIR}/.git" ]]; then
     echo "克隆 mpv 源码（钉死 ${MPV_SHA:0:12}）…"
     /bin/mkdir -p "${SRC_DIR}"
     /usr/bin/git -C "${SRC_DIR}" init -q
-    /usr/bin/git -C "${SRC_DIR}" remote add origin "${MPV_REPO}" 2>/dev/null \
-        || /usr/bin/git -C "${SRC_DIR}" remote set-url origin "${MPV_REPO}"
+    /usr/bin/git -C "${SRC_DIR}" remote add origin "${MPV_REPO}"
 fi
+# 已有的 src/ 可能还指着别的仓库(换基线时),每次对齐。
+/usr/bin/git -C "${SRC_DIR}" remote set-url origin "${MPV_REPO}"
 # --depth 1 按 sha 取:拿到就是那个 commit,不拖全部历史。
 /usr/bin/git -C "${SRC_DIR}" fetch --depth 1 origin "${MPV_SHA}"
 # reset --hard 而非 checkout：src/ 是本脚本的产物，每次回到干净的钉死 commit 再打补丁，
-# 保证补丁可重复应用（已打过补丁的工作区再 apply 会失败）。
+# 保证补丁可重复应用（已打过补丁的工作区再 apply 会失败）。补丁 0000 会新增文件,reset 不删
+# 未跟踪文件,必须再 clean,否则第二次运行时 apply 报 already exists。
 /usr/bin/git -C "${SRC_DIR}" reset -q --hard FETCH_HEAD
+/usr/bin/git -C "${SRC_DIR}" clean -qfdx
 echo "源码 HEAD: $(/usr/bin/git -C "${SRC_DIR}" rev-parse HEAD)"
 
-# 本地补丁（Vendor/mpv/patches/*.patch，按文件名顺序），都是修 #16818 draft 或上游自身的缺陷：
-#   0001  gpu-next 无视 FLIP_Y（画面上下颠倒）、渲染参数写死最近邻缩放且零初始化（运动画面闪烁）
-#   0002  上游 PR #18383 原样（已合入 master，fork 基线早于它）：init 失败走 uninit 清理，
-#         热插拔监听挪到 AudioUnit 建好之后注册 —— 否则失败后设备变化回调野指针 → 崩溃
-#   0003  gpu-next 没注册硬解设备，hwdec=auto 退成 videotoolbox-copy（4K 每帧拷回内存，能耗高）
-#   0004  上游 PR #18679 原样（未合并，钉在 head ea102c95）：ChannelMap 一直被传了 AudioChannelLayout
-#         而不是 SInt32 数组，macOS 27 起直接 -50 → 全退回 ao_avfoundation（预排 2 秒音频，改倍速丢帧）；
-#         删掉这次误用、立体声偏好布局优先，换设备时重载 ao。issue #18384 的另一候选 #18637 未选
-#   0005  #18383 让 init 失败后调 uninit，但 init_audiounit 失败路径释放了 unit 不置空 → 二次释放
-#         （上游 master 同样存在）
-# 换到含 #18383 的上游基线后删 0002；上游修好后删掉对应补丁。
+# 本地补丁(Vendor/mpv/patches/*.patch,按文件名顺序):
+#   0000  mpv PR 16818 的 head 80351bb3 移植到 v0.42.0:唯一冲突是 render.h 的枚举 ——
+#         0.42 的 D3D11 render API 占了 21 / 22,MPV_RENDER_PARAM_BACKEND 从 21 挪到 23
+#         (Swift 侧用符号名,不受影响)
+#   0001  gpu-next 无视 FLIP_Y(画面上下颠倒)、渲染参数写死最近邻缩放且零初始化(运动画面闪烁)
+#   0003  gpu-next 没注册硬解设备,hwdec=auto 退成 videotoolbox-copy(4K 每帧拷回内存,能耗高)
+#   0005  init 失败后会调 uninit,但 init_audiounit 失败路径释放了 unit 不置空 → 二次释放
+#         (v0.42.0 同样存在)
+# 编号不连续是有意的:文档与 PITFALLS.md 按编号引用。上游合并 16818 后删 0000、核对 BACKEND 编号,
+# 修好哪个缺陷就删掉对应补丁。
 for patch in "${VENDOR}"/patches/*.patch; do
     [[ -e "${patch}" ]] || continue
     echo "打补丁：$(/usr/bin/basename "${patch}")"
@@ -114,6 +116,10 @@ if [[ ! -f "${BUILD_DIR}/build.ninja" ]]; then
     echo "meson setup …"
     # -Dlibmpv=true 只出库（cplayer=false 不编 mpv 可执行文件）。
     # gpl=true 与 Homebrew 的 GPL ffmpeg 对齐；javascript/lua 保持 mpv 默认能力。
+    # libcurl 必须是 macOS 自带那份(/usr/lib/libcurl.4.dylib,Homebrew 的 curl 是 keg-only,不在上面的
+    # PKG_CONFIG_PATH 里):tls-verify 默认开,系统 curl 用系统证书库,沙盒里实测可用。缺了它网络流退回
+    # ffmpeg + Homebrew openssl,CA 路径在 /opt/homebrew 下,没装 Homebrew 的机器上 HTTPS 全部失败 ——
+    # 所以写死 enabled,找不到就配置失败,不静默退化。
     meson setup "${BUILD_DIR}" "${SRC_DIR}" \
         --prefix="${PREFIX}" \
         --buildtype=release \
@@ -124,6 +130,7 @@ if [[ ! -f "${BUILD_DIR}/build.ninja" ]]; then
         -Djavascript=enabled \
         -Dlua=luajit \
         -Dlibarchive=enabled \
+        -Dlibcurl=enabled \
         -Duchardet=enabled \
         -Dvapoursynth=disabled
 fi
@@ -142,7 +149,7 @@ HEADER="${PREFIX}/include/mpv/render.h"
 
 # 自检：这份自编 libmpv 的意义就在 MPV_RENDER_PARAM_BACKEND，缺了等于白编。
 if ! /usr/bin/grep -q "MPV_RENDER_PARAM_BACKEND" "${HEADER}"; then
-    echo "error: ${HEADER} 里没有 MPV_RENDER_PARAM_BACKEND —— 这份源码不含 #16818？" >&2
+    echo "error: ${HEADER} 里没有 MPV_RENDER_PARAM_BACKEND —— 补丁 0000 没打上?" >&2
     exit 1
 fi
 

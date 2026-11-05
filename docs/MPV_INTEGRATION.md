@@ -8,18 +8,19 @@
 ## 0. 来源与构建
 
 - 头文件是 `#include <mpv/client.h>` / `render.h` / `render_gl.h`,⛔ 不是 `<libmpv/...>`;API 版本 2.5。
-- **运行的是自编 libmpv**:`Scripts/build-libmpv.sh` 钉死上游 draft PR mpv-player/mpv#16818 的一个 commit
-  (带 `MPV_RENDER_PARAM_BACKEND`,Homebrew 的 0.41.0 没有),meson 只编库,装到 `Vendor/mpv/prefix/`(gitignore)。
-  ffmpeg / libplacebo / libass 等依赖复用 Homebrew。`Vendor/mpv/module.modulemap` 与 `OTHER_LDFLAGS` 指向那里。
+- **运行的是自编 libmpv**:`Scripts/build-libmpv.sh` 以上游 v0.42.0(按 sha 钉死)为基线,打上 draft PR 16818
+  (带 `MPV_RENDER_PARAM_BACKEND`,上游正式版与 Homebrew 都没有),meson 只编库,装到 `Vendor/mpv/prefix/`(gitignore)。
+  ffmpeg / libplacebo / libass 等依赖复用 Homebrew;libcurl 用系统自带的(§3.4)。`Vendor/mpv/module.modulemap` 与 `OTHER_LDFLAGS` 指向那里。
   ⛔ 不覆盖 Homebrew 的 mpv(要留作参照,且 `brew upgrade` 会回退)。
-- 本地补丁在 `Vendor/mpv/patches/`,脚本按文件名顺序 `git apply`:
-  `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0002` 上游 #18383 原样(`ao_coreaudio` init 失败走
-  `uninit`,热插拔监听在 AudioUnit 建好后才注册;fork 基线早于它);
-  `0003` gpu-next 注册 VideoToolbox 设备恢复零拷贝;`0004` 上游 #18679 原样(未合并;`ao_coreaudio` 不再把
-  `AudioChannelLayout` 误传给 `ChannelMap`,macOS 27 上那次调用报 `-50` 会让 coreaudio 整体回退 avfoundation,见 PITFALLS.md 第 2 节);
-  `0005` `init_audiounit` 失败路径释放 unit 后置空,否则 #18383 的 `uninit` 二次释放(上游 master 同样存在)。
+- 本地补丁在 `Vendor/mpv/patches/`,脚本按文件名顺序 `git apply`(编号不连续,按编号引用,不重排):
+  `0000` PR 16818 的 head `80351bb3` 移植到 v0.42.0 —— v0.42.0 的 D3D11 render API 占了 21 / 22,
+  这里 `MPV_RENDER_PARAM_BACKEND = 23`,与 PR 原版(21)不同,Swift 侧只用符号名;
+  `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0003` gpu-next 注册 VideoToolbox 设备恢复零拷贝;
+  `0005` `ao_coreaudio` 的 `init_audiounit` 失败路径释放 unit 后置空,否则 init 失败走的 `uninit` 二次释放(v0.42.0 同样存在)。
+- PR 16818 的 gpu-next 是一份独立的精简渲染器(`video/out/gpu_next/video.c`),**不是** `vo_gpu_next.c`:
+  上游只改 `vo_gpu_next.c` 的 gpu-next 功能(DV P7 增强层、参考白、scRGB、上传同步修复等)到不了这条路径。
 - 打包:`Scripts/bundle-libmpv.sh` 把 libmpv 与依赖拷进 `Frameworks/`、改写 install name、删 Homebrew `LC_RPATH`。只对 Release 产物跑。
-- **上游合并 #16818 之后**:改回官方仓库与 sha;核对 `MPV_RENDER_PARAM_BACKEND` 的编号与语义(Swift 侧一起改);能删的补丁删掉。
+- **上游合并 PR 16818 之后**:基线换到含它的正式版,删 `0000`;核对 `0001` / `0003` 是否还需要。
 
 ## 1. 已定决策
 
@@ -91,6 +92,14 @@ hook 任何路径都必须 `mpv_hook_continue`,否则核心永远卡住。gpu-ne
 实际后端记进统计 `renderBackend`。⚠️ 未知后端名会**静默**回退且返回成功;确证看 `Using gpu-next backend.`
 (打在 render context create 时,VO 建起是之后的 `VO: [libmpv]`)。测试用 `Tools/dv-fixture/` 合成的只有 `dvcC` 的片源。
 gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 非致命设置。
+
+### 3.4 网络与证书
+
+网络流走 libcurl 后端(`--curl-enabled` 默认 yes,ffmpeg 的嵌套 HTTP 打开(HLS 分片等)也经它),`--tls-verify` 默认 yes。
+libcurl 链的是 macOS 自带的 `/usr/lib/libcurl.4.dylib`,用系统证书库,沙盒里实测:有效证书能开、自签名被拒。
+构建脚本写死 `-Dlibcurl=enabled`:缺了它会退回 ffmpeg + Homebrew openssl,CA 路径在 `/opt/homebrew` 下,
+没装 Homebrew 的机器上 HTTPS 全部失败。⛔ 不链 Homebrew 的 curl(同理)。
+局域网自签名 HTTPS 的 Emby 播不了,与 `URLSession` 一侧行为一致(不实现「接受任意证书」)。
 
 ## 4. Swift 桥接
 

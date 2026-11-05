@@ -99,7 +99,7 @@ displayLink 停了没叫醒、或只在部分时候报,症状是画面一卡一�
 **`time-pos` 通知只有 3.4–3.6 次/秒。** 要更细的进度做插值。
 
 **杜比视界发紫发绿 = legacy `gpu` 渲染器不处理 DV 的 RPU。** 解:render context 传
-`MPV_RENDER_PARAM_BACKEND = "gpu-next"`(来自未合并的 draft PR mpv-player/mpv#16818,所以要自编 libmpv)。
+`MPV_RENDER_PARAM_BACKEND = "gpu-next"`(来自未合并的 draft PR 16818,所以要自编 libmpv)。
 
 **create 成功 ≠ gpu-next 生效。** 传不认识的后端名 mpv 静默回退且 `rc=0`。⛔ 别声称能检测静默回退;
 要确证看日志 `Using gpu-next backend.` 或用真实 DV 片源看画面。
@@ -114,17 +114,21 @@ legacy 后端不认识这些选项 → 连回退也崩。要加就 post-create �
 **draft PR 后端上下颠倒、闪烁(补丁 0001)。** `render()` 不读 `FLIP_Y`;参数零初始化 + 写死最近邻缩放。改用默认参数时同时
 `frame_mixer = NULL`。翻转设目标**平面** `flipped`,⛔ 别翻 crop(OSD / 字幕不跟着翻)。
 
-**换音频设备(连蓝牙耳机)崩溃 = `ao_coreaudio` 初始化失败时漏注销热插拔监听(补丁 0002)。** 之后任何设备变化回调读野指针。
-复现不用真插拔:同进程建一个私有聚合设备即可。0002 用的是上游 #18383:失败统一走 `uninit`,而 `init_audiounit` 的失败
-标签释放 unit 却不置空,`uninit` 会再释放一次 —— 补丁 0005 补上置空,换上游基线时要确认上游修了这里再删。
+**换音频设备(连蓝牙耳机)崩溃 = `ao_coreaudio` 初始化失败时漏注销热插拔监听。** 之后任何设备变化回调读野指针。
+复现不用真插拔:同进程建一个私有聚合设备即可。上游的修法是失败统一走 `uninit`,而 `init_audiounit` 的失败标签释放 unit
+却不置空,`uninit` 会再释放一次 —— 补丁 0005 补上置空,换基线时确认上游修了这里再删。
 
-**改倍速卡顿 = 实际跑的是 `ao_avfoundation`(补丁 0004,Q43)。** 上游 `ao_coreaudio` 把 `AudioChannelLayout` 传给
-`kAudioOutputUnitProperty_ChannelMap`(要的是 `SInt32` 数组),macOS 27 上这次调用报 `-50`(issue #18384,不是每台设备都报),
+**改倍速卡顿 = 实际跑的是 `ao_avfoundation`(Q43)。** `ao_coreaudio` 把 `AudioChannelLayout` 传给
+`kAudioOutputUnitProperty_ChannelMap`(要的是 `SInt32` 数组)时,macOS 27 上这次调用报 `-50`(不是每台设备都报),
 mpv 静默回退 avfoundation;它预排约 2 秒按旧倍速拉伸的音频,改 `speed` 后音频时钟跳几秒,视频连续丢帧追。
-排查先看 `current-ao`;拿 Homebrew mpv 对照时别加 `--ao=coreaudio`(初始化失败就没声音,反而看不出问题)。
-0004 是上游 #18679(未合并):删掉这次误用,声道顺序交给 `ca_init_chmap` 选出的布局。同一 issue 的另一候选 #18637
-(改成 Output scope 的 `SInt32` 映射,IINA 自带补丁走这条路)没选:作者后提 #18679 作为替代,讨论与测试都转到了那边。
-上游合并后核对合入的是哪一版,再删 0004。
+v0.42.0 起上游已删掉这次误用;回归时排查先看 `current-ao`;拿 Homebrew mpv 对照时别加 `--ao=coreaudio`
+(初始化失败就没声音,反而看不出问题)。
+
+**补丁 0000 新增文件,`git reset --hard` 清不掉。** 构建脚本 reset 后必须 `git clean -fdx`,否则第二次运行 apply 报
+`already exists in working directory`。
+
+**HTTPS 流播不了先看 libmpv 链的是哪个 libcurl(MPV_INTEGRATION.md §3.4)。** `otool -L` 应是 `/usr/lib/libcurl.4.dylib`。
+日志 `[curl] TLS certificate verification failed.` = 证书真的不被系统信任,⛔ 不要用 `tls-verify=no` 绕。
 
 **`NSWindow.isReleasedWhenClosed` 默认 YES。** 手动建窗口交给 ARC 时置 `false`,否则 `close()` 过度释放。
 

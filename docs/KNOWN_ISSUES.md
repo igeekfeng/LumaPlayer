@@ -86,6 +86,16 @@
 (需关直连或压低码率);`TranscodingProfiles`(HLS/TS/h264/aac)的服务端行为未在任何服务器验证:
 - [ ] 触发转码后服务端按该 profile 给出 `TranscodingUrl`(m3u8),mpv 能播,seek 经 `StartTimeTicks` 重起流正常
 
+### Q55 libmpv v0.42.0 基线的网络栈未在真实服务器上播过
+
+v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开、HLS 多变体 / MPEG-TS 多节目以 edition 暴露。
+已验:全部单测通过(含 DV 合成片源切 gpu-next);沙盒 test host 里 libcurl 对公网有效证书能开、自签名 / 过期被拒。
+⛔ 未验(本地实例是 http,验不到 TLS):
+- [ ] HTTPS Emby 的 DirectStream 出画面、`Range` 拖动可用,`http-header-fields` 认证头经 curl 正常带上
+- [ ] 转码 m3u8 不因 edition 分组漏轨 / 选错变体(不行再看 `--flatten-editions`)
+- [ ] 115 / 百度网盘 CDN 直链经 curl 能播(依赖 UA / Cookie / Referer 头)
+- [ ] 换音频设备、改倍速回归(这两处 coreaudio 修复由上游 v0.42.0 提供,与本地补丁的版本不同)
+
 ### 网盘分页:合入前的真机门禁(未跑完 ⛔ 不合入)
 
 分页链路现在只有单测与第三方 SDK / 官方文档佐证。在一个**条目数 > 300 的真实目录**上
@@ -286,7 +296,7 @@
 - **Q42 杜比视界修复(自编 libmpv + gpu-next)未在真实片源 / 上屏画面验证。**
   已验:离屏 harness 复现 legacy 发绿、gpu-next 中性;按片源自动切换在合成 fixture 上能建起 gpu-next。
   ⛔ 未验:真实 DV 片源(DirectStream / 转码)、`CAOpenGLLayer` 上屏、DV P7/P8 与 HDR10/HLG 回归、能耗(GPU 约为 legacy 的 4–5 倍)。
-  ⛔ 未修:PR 的 `map_frame` 上传失败时可能二次释放。上游合并后改回官方仓库与 sha,核对 `MPV_RENDER_PARAM_BACKEND` 编号,删掉能删的补丁。
+  ⛔ 未修:PR 的 `map_frame` 上传失败时可能二次释放。上游合并后换基线、删补丁 0000,核对 `MPV_RENDER_PARAM_BACKEND` 编号。
   设置 →「播放 → 色彩」选「始终旧渲染器」是用户退回 legacy 的唯一入口。
 - **Q49 render 队列 + `report_swap` + 按需 render 的副作用只验了一半。** 已验:弹幕帧率恢复(约 585 帧 / 5 s,主线程渲染时测的);
   `MPVRenderGateTests` 证明暂停期间不 render、改尺寸会重画、主线程堵住时照样出帧、正常播放时 VO 不因等 swap 丢帧。
