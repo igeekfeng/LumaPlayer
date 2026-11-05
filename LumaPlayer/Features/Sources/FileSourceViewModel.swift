@@ -49,8 +49,8 @@ final class FileSourceViewModel {
     private(set) var libraryRoot: BaiduPanLibraryRoot?
     private(set) var currentDirectory: String?
     /// 导航目标(进 / 退目录、进详情页),内容到手才与 `items` 一起提交给 `currentDirectory`。
-    /// ⛔ 别在发请求前就写 `currentDirectory`:目录换了条目还没换,按目录算的区块
-    /// (如「最近添加」)会在加载途中先消失,界面剩下半新半旧的一帧。
+    /// ⛔ 别在发请求前就写 `currentDirectory`:目录换了条目还没换,页名与网格会对不上,
+    /// 界面剩下半新半旧的一帧。
     private var pendingDirectory: String?
 
     /// 必须等网络的导航的目标目录:页面据此立刻换成目标目录的骨架,而不是停在上一层的网格上干等。
@@ -101,31 +101,6 @@ final class FileSourceViewModel {
     var sortedItems: [SourceItem] {
         let ordered = sortOrder.apply(to: items, filesByID: filesByID, ascending: sortAscending)
         return visible(ordered).filter { matchesWatchFilter($0) }
-    }
-
-    /// 片库根上的「最近添加」:按 `server_mtime` 倒序,零请求。只在片库根、且条目多于
-    /// `recentShelfLimit` 时给(否则只是把网格换个顺序重画)。不受观看筛选影响。
-    /// 目录的 `server_mtime` 随往里加文件更新,正好表示「这部剧最近更新过」。
-    var recentItems: [SourceItem] {
-        guard isAtLibraryRoot else { return [] }
-        let dated = visible(items).compactMap { item -> (SourceItem, Date)? in
-            guard let fsID = UInt64(item.ref.itemID),
-                  let modified = filesByID[fsID]?.modifiedAt else { return nil }
-            return (item, modified)
-        }
-        guard dated.count > Self.recentShelfLimit else { return [] }
-        return dated
-            .sorted { $0.1 > $1.1 }
-            .prefix(Self.recentShelfLimit)
-            .map(\.0)
-    }
-
-    private static let recentShelfLimit = 12
-
-    /// 配了片库根就是它,否则是应用目录
-    private var isAtLibraryRoot: Bool {
-        guard let current = currentDirectory else { return false }
-        return current == topmostDirectory
     }
 
     /// 排序与筛选只作用于已取回的条目,零请求;控件放页头,不放主窗口工具栏。

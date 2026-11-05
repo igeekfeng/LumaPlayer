@@ -21,8 +21,6 @@ struct FileSourceBrowserView: View {
     @Environment(\.browseChrome) private var chrome
 
     @State private var pendingDeletion: SourceItem?
-    /// 「最近添加」的横向偏移。本页在窗口里一直活着,子目录来回也能保住
-    @State private var recentShelfOffset: CGFloat = 0
 
     /// 重命名请求。目录与 ViewModel ⛔ 必须装在同一个载荷里交给 `.sheet(item:)`:分成两个 `@State`
     /// 时 sheet 内容闭包可能读到上一次的值(首次空白面板,之后显示上一部剧)。
@@ -183,9 +181,6 @@ struct FileSourceBrowserView: View {
                     if !viewModel.resumeCards.isEmpty {
                         resumeShelf
                     }
-                    if !viewModel.recentItems.isEmpty {
-                        recentShelf
-                    }
                     if !viewModel.sortedItems.isEmpty {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
                             ForEach(viewModel.sortedItems) { item in
@@ -232,7 +227,7 @@ struct FileSourceBrowserView: View {
         }
     }
 
-    /// 主网格与「最近添加」共用,保证两处右键菜单一致
+    /// 主网格卡片。续播区是另一种卡(`FileSourceResumeCardView`,跨目录)
     private func card(for item: SourceItem) -> some View {
         FileSourceCard(
             item: item,
@@ -268,21 +263,6 @@ struct FileSourceBrowserView: View {
             }
             Button("删除…", systemImage: "trash", role: .destructive) {
                 pendingDeletion = item
-            }
-        }
-    }
-
-    /// 卡片宽度要自己钉住:`MediaShelf` 是横向 `LazyHStack`,没有列宽可借。
-    /// 横向位置存在这里而非货架内部:进子目录时货架被销毁,位置要跟着本页活到返回
-    private var recentShelf: some View {
-        MediaShelf(
-            title: "最近添加",
-            initialOffset: recentShelfOffset,
-            onLeave: { recentShelfOffset = $0 }
-        ) {
-            ForEach(viewModel.recentItems) { item in
-                card(for: item)
-                    .frame(width: Metrics.posterMinWidth)
             }
         }
     }
