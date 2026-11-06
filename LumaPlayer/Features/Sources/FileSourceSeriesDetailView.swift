@@ -148,6 +148,7 @@ struct FileSourceSeriesDetailView: View {
 
     /// 「2024 · 共 2 季 · 共 73 集 · ★ 7.8 · 已完结」。缺哪一段就不显示哪一段(`CLAUDE.md` 硬规则)。
     /// ⚠️ 集数是 TMDB 记的全剧总数,不是当前文件夹里的文件数;后者只决定分集列表。
+    /// 只有一季时不列季数;季数 / 集数只在这一行出现,「信息」区不再重复。
     @ViewBuilder
     private var metaLine: some View {
         let parts = metaParts
@@ -178,19 +179,20 @@ struct FileSourceSeriesDetailView: View {
     }
 
     private var metaParts: [String] {
-        var parts: [String] = []
-        if let year = viewModel.seriesItem?.year { parts.append(String(year)) }
         let match = viewModel.seriesProfile?.match
         // 季数 / 集数以 TMDB 为准(全剧);没配 token / 没命中时退回网盘目录数出来的季数,
         // 集数则只在单季时拿当前季的凑合,⛔ 不拿一季冒充全剧。
         let seasons = match?.numberOfSeasons ?? (structure.seasons.count > 1 ? structure.seasons.count : nil)
-        if let seasons, seasons > 0 { parts.append("共 \(seasons) 季") }
-        if let episodes = match?.numberOfEpisodes, episodes > 0 {
-            parts.append("共 \(episodes) 集")
+        let episodes: Int?
+        if let tmdbEpisodes = match?.numberOfEpisodes, tmdbEpisodes > 0 {
+            episodes = tmdbEpisodes
         } else if structure.isSingleSeason, !viewModel.episodes.isEmpty {
-            parts.append("共 \(viewModel.episodes.count) 集")
+            episodes = viewModel.episodes.count
+        } else {
+            episodes = nil
         }
-        return parts
+        return FileSourceSeriesMeta.parts(
+            year: viewModel.seriesItem?.year, seasons: seasons, episodes: episodes)
     }
 
     /// 类型(「剧情 · 奇幻」)。⚠️ 只来自详情端点(`docs/TMDB_API.md` §9),搜索端点只给 `genre_ids`。
@@ -449,12 +451,7 @@ struct FileSourceSeriesDetailView: View {
            last != MediaFormat.date(match.firstAirDate) {
             facts.append(("最后播出", last))
         }
-        if let episodes = match.numberOfEpisodes, episodes > 0 {
-            facts.append(("TMDB 总集数", "\(episodes) 集"))
-        }
-        if let seasons = match.numberOfSeasons, seasons > 0 {
-            facts.append(("TMDB 总季数", "\(seasons) 季"))
-        }
+        // 总集数 / 总季数已经在标题下的元信息行列过,这里不重复(⛔ 也不带「TMDB」前缀)。
         if let runtime = match.episodeRunTime.first, runtime > 0 {
             facts.append(("单集片长", "\(runtime) 分钟"))
         }
