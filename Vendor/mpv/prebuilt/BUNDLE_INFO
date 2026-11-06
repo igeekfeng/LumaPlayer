@@ -1,0 +1,4 @@
+mpv=b0841e8c4d156b8403dc1876c4cbd9011eb583f3
+target=macos27-arm64
+dylibs=50
+deps=brotli=1.2.1,dav1d=1.5.4,ffmpeg=9.0.2_1,fontconfig=2.18.3,freetype=2.15.0,fribidi=1.0.18,gettext=1.0,glib=2.90.1,graphite2=1.3.15,harfbuzz=15.1.0,jpeg-turbo=3.2.1,lame=4.0,libarchive=3.8.11,libass=0.17.5_1,libb2=0.98.1,libbluray=1.5.0,libplacebo=7.387.0,libpng=1.6.59,libsamplerate=0.2.2,libudfread=1.2.0,libunibreak=8.0,libvmaf=3.2.1,libvpx=1.17.0,little-cms2=2.19.1,luajit=2.1.1793383622,lz4=1.11.0,mpg123=1.33.7,mujs=1.3.11,openssl@4=4.1.0,opus=1.6.1,pcre2=10.49,rubberband=4.0.0,shaderc=2026.4,svt-av1=4.3.0,uchardet=0.0.8,vulkan-loader=1.4.363.0,x264=r3222,x265=4.3,xz=5.8.4,zimg=3.0.6,zstd=1.5.7_1

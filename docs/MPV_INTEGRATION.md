@@ -10,9 +10,16 @@
 - 头文件是 `#include <mpv/client.h>` / `render.h` / `render_gl.h`,⛔ 不是 `<libmpv/...>`;API 版本 2.5。
 - **运行的是自编 libmpv**:`Scripts/build-libmpv.sh` 以上游 v0.42.0(按 sha 钉死)为基线,打上 draft PR 16818
   (带 `MPV_RENDER_PARAM_BACKEND`,上游正式版与 Homebrew 都没有),meson 只编库,装到 `Vendor/mpv/prefix/`(gitignore)。
-  ffmpeg / libplacebo / libass 等依赖复用 Homebrew;libcurl 用系统自带的(§3.4)。`Vendor/mpv/module.modulemap` 与 `OTHER_LDFLAGS` 指向那里。
-  ⛔ 不覆盖 Homebrew 的 mpv(要留作参照,且 `brew upgrade` 会回退)。
-- 本地补丁在 `Vendor/mpv/patches/`,脚本按文件名顺序 `git apply`(编号不连续,按编号引用,不重排):
+  `Vendor/mpv/module.modulemap` 与 `OTHER_LDFLAGS` 指向那里。
+- **构建不依赖 Homebrew**:自编产物连同全部传递依赖 dylib 与头文件固化在 `Vendor/mpv/prebuilt/`
+  (`libmpv-bundle.tar.gz` + `SHA256SUMS`),新克隆跑一次 `./Scripts/build-libmpv.sh` 即校验散列、解压、
+  把 libmpv 的 install name 重定位到本仓库 prefix、逐个 ad-hoc 重签。还原路径只用 `/usr/bin` 系统工具,
+  不需要 meson / ninja / pkg-config / ffmpeg,也不需要网络。包内 dylib 一律 `@rpath/<basename>` 互引、
+  带 `@loader_path` rpath,与机器路径无关;libcurl 链系统自带的(§3.4)。
+  `LUMA_LIBMPV_BUNDLE` 可把产物来源覆盖为本地路径或 https URL,`LUMA_MPV_PREFIX` 可改安装位置(隔离验证用)。
+  升级 mpv / 补丁:在装有依赖的维护机上跑 `--from-source` 重编,再跑 `--pack` 重新固化并提交产物。
+  Debug / 测试与 Release 构建一律只读 `Vendor/mpv/prefix/`;`brew upgrade` 改的是别处的库,动不到它。
+- 本地补丁在 `Vendor/mpv/patches/`,`--from-source` 按文件名顺序 `git apply`(编号不连续,按编号引用,不重排):
   `0000` PR 16818 的 head `80351bb3` 移植到 v0.42.0 —— v0.42.0 的 D3D11 render API 占了 21 / 22,
   这里 `MPV_RENDER_PARAM_BACKEND = 23`,与 PR 原版(21)不同,Swift 侧只用符号名;
   `0001` gpu-next 读 `FLIP_Y` + 默认渲染参数 + `frame_mixer = NULL`;`0003` gpu-next 注册 VideoToolbox 设备恢复零拷贝;
@@ -25,7 +32,9 @@
   也是解完再丢)。`0006` 在 `map_frame` 里照 `vo_gpu_next.c` 把 EL 上传进 `pl_frame.enhancement_layer`;
   只有 FEL(`repr.dovi->nlq_active`)才上传,MEL 不上传(libplacebo 也只按它合成)。legacy `gpu` 不用 EL:
   「始终旧渲染器」下 P7 的 EL 照样被解码再丢。
-- 打包:`Scripts/bundle-libmpv.sh` 把 libmpv 与依赖拷进 `Frameworks/`、改写 install name、删 Homebrew `LC_RPATH`。只对 Release 产物跑。
+- 打包:`Scripts/bundle-libmpv.sh` 把 libmpv 与依赖拷进 `Frameworks/`、改写 install name、删依赖根 `LC_RPATH`。
+  只对 Release 产物跑;脚本同时收 `Vendor/mpv/prefix/` 与 `/opt/homebrew` 两个根 —— 后者只为兼容
+  `--from-source` 就地编译、依赖仍留在 brew 前缀的旧布局,默认还原产物不会命中。
 - **上游合并 PR 16818 之后**:基线换到含它的正式版,删 `0000`;核对 `0001` / `0003` 是否还需要。
 
 ## 1. 已定决策
@@ -103,8 +112,8 @@ gpu-next 专属选项若要加,只能 post-create 用 `mpv_set_property_string` 
 
 网络流走 libcurl 后端(`--curl-enabled` 默认 yes,ffmpeg 的嵌套 HTTP 打开(HLS 分片等)也经它),`--tls-verify` 默认 yes。
 libcurl 链的是 macOS 自带的 `/usr/lib/libcurl.4.dylib`,用系统证书库,沙盒里实测:有效证书能开、自签名被拒。
-构建脚本写死 `-Dlibcurl=enabled`:缺了它会退回 ffmpeg + Homebrew openssl,CA 路径在 `/opt/homebrew` 下,
-没装 Homebrew 的机器上 HTTPS 全部失败。⛔ 不链 Homebrew 的 curl(同理)。
+构建脚本写死 `-Dlibcurl=enabled`:缺了它会退回 ffmpeg + openssl,CA 路径落在依赖前缀下,
+没装该前缀的机器上 HTTPS 全部失败。⛔ 不链依赖里的 curl(同理)。
 局域网自签名 HTTPS 的 Emby 播不了,与 `URLSession` 一侧行为一致(不实现「接受任意证书」)。
 
 ## 4. Swift 桥接

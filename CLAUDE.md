@@ -53,7 +53,7 @@ Emby 服务器**都不是自己的**,滥用会被封禁。手工验证一律**�
 ## 常用命令
 
 ```bash
-# 新克隆先编 libmpv(产物在 Vendor/mpv/prefix/,被 gitignore;需 brew install meson ninja pkgconf)
+# 新克隆先还原 libmpv(产物在 Vendor/mpv/prefix/,被 gitignore;零额外工具,不需要 brew)
 ./Scripts/build-libmpv.sh
 # 构建(必须零编译器 warning)
 xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' build

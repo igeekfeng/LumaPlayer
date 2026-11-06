@@ -23,7 +23,8 @@
 
 set -euo pipefail
 
-FFMPEG="${FFMPEG:-/opt/homebrew/bin/ffmpeg}"
+# 优先用 PATH 里的 ffmpeg,没有再退回 Homebrew 的默认安装位置;可用 FFMPEG= 显式覆盖。
+FFMPEG="${FFMPEG:-$(command -v ffmpeg 2>/dev/null || echo /opt/homebrew/bin/ffmpeg)}"
 # 生成标签用;Pillow 缺失时降级为「不烧标签」而不是失败。
 PYTHON="${PYTHON:-python3}"
 

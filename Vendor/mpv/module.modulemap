@@ -1,10 +1,10 @@
 // libmpv C API 的 Swift 导入模块。
 //
-// 头文件来自**仓库内自编**的 libmpv（Scripts/build-libmpv.sh 产物，装在
-// Vendor/mpv/prefix/），不再指向 Homebrew。原因：gpu-next 渲染后端用的
-// MPV_RENDER_PARAM_BACKEND 只存在于自编那份 render.h 里 —— Homebrew 的
-// mpv 与上游正式版都没有（mpv PR 16818 未合并）。
-// 见 docs/PITFALLS.md 第 2 节「播放内核(libmpv)」。
+// 头文件来自**仓库内自编**的 libmpv（Scripts/build-libmpv.sh 从 Vendor/mpv/prebuilt/
+// 还原到 Vendor/mpv/prefix/），不指向 Homebrew。原因：gpu-next 渲染后端用的
+// MPV_RENDER_PARAM_BACKEND 只存在于自编那份 render.h 里 —— 上游正式版与 Homebrew 的
+// mpv 都没有（mpv PR 16818 未合并）。
+// 见 docs/MPV_INTEGRATION.md §0、docs/PITFALLS.md 第 2 节「播放内核(libmpv)」。
 //
 // ⚠️ 路径相对于本文件；**新克隆要先跑 Scripts/build-libmpv.sh** 生成
 //    prefix/，否则编译找不到头（.gitignore 把 prefix/ 排除了）。

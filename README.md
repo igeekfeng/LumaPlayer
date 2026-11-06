@@ -41,18 +41,29 @@ macOS 原生 Emby 客户端。SwiftUI 写界面，自编 libmpv（gpu-next）负
 | 芯片 | Apple Silicon（arm64） |
 | Xcode | 16 或更高（工程用同步文件夹，`objectVersion = 77`；开发实测 Xcode 27） |
 | Swift | 6 语言模式（`SWIFT_VERSION = 6.0`） |
-| 构建 libmpv 额外依赖 | `meson`、`ninja`、`pkgconf` |
+
+> 不需要 Homebrew、meson、ninja、pkg-config。libmpv 及其全部依赖已随仓库以预编译产物分发。
 
 ## 构建
 
-libmpv **不在仓库里**，新克隆必须先自己编一份（约几百 MB 产物，产物目录已 gitignore）：
+libmpv 的头文件与 dylib **不在仓库里**，但**预编译产物在**：`Vendor/mpv/prebuilt/` 下的
+`libmpv-bundle.tar.gz`（约 26 MB）含 libmpv 本体、49 个传递依赖 dylib 与头文件，
+按 macOS 27 / arm64 编好，随仓库分发。新克隆先还原一次：
 
 ```bash
-brew install meson ninja pkgconf
-./Scripts/build-libmpv.sh          # 产物在 Vendor/mpv/prefix/
+./Scripts/build-libmpv.sh
 ```
 
-为什么不用 `brew install mpv`：Dolby Vision（Profile 5）片源在老 `gpu` 渲染器上会发紫发绿，只有 `gpu-next`（libplacebo）处理得对，而它进 render API 依赖一个未合并的上游 draft PR。脚本把该 PR 的 commit 钉死，并复用 Homebrew 那份 ffmpeg / libplacebo / libass。
+脚本校验 sha256、解压到 `Vendor/mpv/prefix/`（gitignore）、把 libmpv 的 install name
+重定位到本机仓库路径并逐个 ad-hoc 重签。还原路径只用 `/usr/bin` 下的系统工具，
+**不依赖 Homebrew、meson、ninja、pkg-config，也不需要网络**。产物里的 dylib 互相用
+`@rpath` 引用，与机器路径无关；`LUMA_LIBMPV_BUNDLE` 可把来源覆盖为本地路径或 https URL。
+
+为什么不用 `brew install mpv`：Dolby Vision（Profile 5）片源在老 `gpu` 渲染器上会发紫发绿，
+只有 `gpu-next`（libplacebo）处理得对，而它进 render API 依赖一个未合并的上游 draft PR。
+维护者需要升级 mpv 或补丁时，在装有依赖的机器上跑 `./Scripts/build-libmpv.sh --from-source`
+（需要 meson / ninja / pkg-config 及 ffmpeg、libplacebo、libass 等），再跑 `--pack`
+重新固化并提交 `Vendor/mpv/prebuilt/`。普通构建与新克隆不需要走这条路径。
 
 编好之后：
 
@@ -83,7 +94,8 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' \
 ```
 
 两者都会调用 `Scripts/bundle-libmpv.sh`，把 libmpv 及其全部传递依赖打进
-`Contents/Frameworks/`，因此装出来的 App 不再依赖目标机的 Homebrew。
+`Contents/Frameworks/`，因此装出来的 App 不依赖目标机的 Homebrew 或任何外部库。
+（还原后的 prefix 里已经带着全部依赖，打包只是把它们再拷进 App 并改写加载路径。）
 
 App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 
@@ -113,7 +125,7 @@ LumaPlayer/
 ├── Components/   设计 token 与复用视图
 └── Resources/    Info.plist、entitlements、Assets.xcassets
 LumaPlayerTests/  75 个测试文件 + 全部脱敏 fixture
-Vendor/           libmpv 的 module map（prefix 需自编，见「构建」）
+Vendor/           libmpv 的 module map、本地补丁与预编译产物（prefix 由脚本还原，见「构建」）
 Tools/            图标生成脚本、本地 Emby 开发实例（Docker）、DV 测试素材工具
 Scripts/          构建、打包、部署、隐私自检脚本
 ```

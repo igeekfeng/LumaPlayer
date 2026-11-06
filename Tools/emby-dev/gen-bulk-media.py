@@ -47,7 +47,8 @@ TV_DIR = MEDIA / "TV"
 POOL_DIR = BASE / ".bulk-pool"
 MANIFEST = BASE / ".bulk-manifest.json"
 
-FFMPEG = os.environ.get("FFMPEG", "/opt/homebrew/bin/ffmpeg")
+# 优先用 PATH 里的 ffmpeg,没有再退回 Homebrew 的默认安装位置;可用 FFMPEG= 显式覆盖。
+FFMPEG = os.environ.get("FFMPEG") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FONTS = [
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/System/Library/Fonts/Supplemental/Songti.ttc",

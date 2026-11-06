@@ -257,8 +257,22 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 
 ### Q29 打包了 libmpv 的 App 在没有 Homebrew 的 Mac 上是否正常
 
-本机确认 0 次从 `/opt/homebrew` 加载 dylib,但没有第二台机器。fontconfig / OpenSSL 运行时仍按编译期路径读数据文件。
-⛔ 做完之前不得声称「可在其他 Mac 上使用」。结案:另一台无 Homebrew 的 Mac 装 DMG,确认启动、直接串流、转码、ASS 字幕、HTTPS。
+dylib 层已不依赖 Homebrew:固化产物含 libmpv 本体 + 49 个传递依赖,`@rpath` 互引、0 条
+`/opt/homebrew` 加载路径;本机用 `DYLD_PRINT_LIBRARIES` 加 `dlopen` 探针确认 0 次从 `/opt/homebrew`
+加载(`Scripts/build-libmpv.sh` 的还原路径也只用系统工具)。剩两处编译期数据文件路径,都没有第二台机器验证:
+
+- **OpenSSL CA**:`libcrypto.4.dylib` 内嵌 `OPENSSLDIR: /opt/homebrew/etc/openssl@4`,ffmpeg
+  (`libavformat` / `libavcodec`)带 `--enable-openssl` 编、链了 `libssl.4` / `libcrypto.4`。
+  mpv 网络流走系统 libcurl(`MPV_INTEGRATION.md §3.4`),平时碰不到这条路径;但只要有代码绕过
+  curl、让 ffmpeg 直接建 TLS 连接,没装 Homebrew 的机器上 CA 目录不存在 → HTTPS 证书校验失败。
+  这是明确风险,不是「已解决」。
+- **fontconfig**:产物里只有 `libbluray.4.dylib` 链 `libfontconfig.1.dylib`;`libass.9.dylib` 走
+  CoreText / ApplicationServices,不链 fontconfig。所以 **ASS 字幕不受影响**,受影响的只有
+  libbluray 的字体查找(蓝光菜单 / 文本字幕渲染)。
+
+⛔ 做完之前不得声称「可在其他 Mac 上使用」。结案:另一台无 Homebrew 的 Mac 装 DMG,确认启动、
+直接串流、转码、ASS 字幕、HTTPS;另需专门触发一次「ffmpeg 直接建 TLS」的分支验证 CA 路径,
+并核查 libbluray 的字体查找是否退化。
 
 ### 弹幕(弹弹play;本机无应用凭据,只有 mock 覆盖)
 
