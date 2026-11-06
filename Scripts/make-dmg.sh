@@ -5,7 +5,7 @@
 # 用法(任意目录):./Scripts/make-dmg.sh [--no-build] [--allow-dirty]   # --no-build 只打包已有产物
 # 产物:build/LumaPlayer-{版本}-{构建号}.dmg(build/ 已被 gitignore)
 #
-# DMG 里的 App 已由 bundle-libmpv.sh 打入 libmpv 及全部依赖,目标机不需要 Homebrew / mpv。
+# DMG 里的 App 已由 bundle-libmpv.sh 打入 libmpv 及全部依赖,目标机不需要 Homebrew / mpv 或任何外部库。
 # 但签名是 ad-hoc、未公证,其他机器首次打开要右键「打开」放行一次 —— 只在自己机器上用,不是分发包。
 #
 set -euo pipefail

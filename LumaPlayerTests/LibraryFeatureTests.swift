@@ -53,7 +53,7 @@ final class LibraryFeatureTests: XCTestCase {
         XCTAssertEqual(LibraryFilter.unplayed.filters, ["IsUnplayed"])
         XCTAssertEqual(LibraryFilter.favorite.filters, ["IsFavorite"])
         XCTAssertFalse(LibraryFilter.allCases.contains { $0.filters.contains("IsResumable") },
-                       "IsResumable 在 4.7.11.0 上未核实(Q28),媒体库不提供")
+                       "按 Q28,媒体库不提供 IsResumable")
     }
 
     func testDatesAndRatingsDefaultToNewestFirst() {

@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 播放决策引擎(API_CONTRACT.md 4.4 全分支)。纯函数,全用 fixture,真机难构造的分支在这里覆盖。
-/// `_synthetic` 后缀的 fixture 是构造数据,未经真实服务器验证(API_CONTRACT.md 9.4)。
+/// `_synthetic` 后缀的 fixture 是构造数据,其余是真实响应脱敏(API_CONTRACT.md 9.4)。
 final class PlaybackDecisionEngineTests: XCTestCase {
 
     private var urlBuilder: PlaybackURLBuilder {

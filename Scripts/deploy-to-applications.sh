@@ -5,7 +5,7 @@
 # 用法(任意目录):./Scripts/deploy-to-applications.sh [--no-build] [--allow-dirty] [--no-open]
 #   --no-build 只安装最近一次 Release 产物 / --allow-dirty 工作区不干净也照建 / --no-open 装完不启动
 #
-# 装好的 App 由 bundle-libmpv.sh 打入 libmpv 及全部依赖,之后 brew upgrade mpv 不影响它。
+# 装好的 App 由 bundle-libmpv.sh 打入 libmpv 及全部依赖,之后 brew upgrade 或删除 Homebrew 都不影响它。
 #
 set -euo pipefail
 

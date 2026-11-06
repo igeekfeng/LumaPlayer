@@ -354,7 +354,7 @@ actor ServerConnection {
         return userData
     }
 
-    /// 图片二进制(API_CONTRACT.md 3.3)。端点是否需要认证未核实(Q12),一律带;
+    /// 图片二进制(API_CONTRACT.md 3.3)。按 Q12,一律带上认证头;
     /// 唯一出口是 `PosterImage`。
     func imageData(itemID: String, type: EmbyImageType, tag: String?, maxWidth: Int) async throws -> Data {
         try await ensureCredentials()

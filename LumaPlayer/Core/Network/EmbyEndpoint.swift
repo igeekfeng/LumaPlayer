@@ -29,7 +29,7 @@ enum EmbyEndpoint: Sendable, Equatable {
     /// GET /Shows/{Id}/Episodes ✅
     case episodes(seriesID: String, query: EmbyEpisodesQuery)
     /// GET /Items/{Id}/Images/{Type} ✅
-    /// 是否需要认证头未核实(Q12),一律带上;只能由 `PosterImage` 发起。
+    /// 按 Q12,一律带上认证头;只能由 `PosterImage` 发起。
     case image(itemID: String, type: EmbyImageType, query: EmbyImageQuery)
     /// POST /Items/{Id}/PlaybackInfo ✅(4.3)
     case playbackInfo(itemID: String, request: PlaybackInfoRequest)

@@ -876,7 +876,7 @@ final class PlayerViewModel {
     }
 
     /// 挂本次会话的外挂字幕(百度侧同目录 `.srt` / `.ass` …)。只挂一次(见 `didAddExternalSubtitles`),否则菜单堆同名轨。
-    /// 失败不打断播放(附加轨),但要一句 OSD 说清哪几条没挂上(`CLAUDE.md` 硬规则 4)。
+    /// 失败不打断播放(附加轨),但要一句 OSD 说清哪几条没挂上(`CLAUDE.md` 硬规则 3)。
     /// `auto`:用户还没选过字幕轨时自动选它,真正的选择仍走 `sid`(`selectSubtitleTrack`)。
     private func addExternalSubtitlesIfNeeded() {
         guard !didAddExternalSubtitles else { return }
@@ -1352,7 +1352,7 @@ final class PlayerViewModel {
     }
 
     /// 落库 + 立即生效 + 屏显反馈:内存先改、落盘异步(标注要立刻影响跳过按钮)。
-    /// 写盘失败不静默吞(硬规则 4),内存里的改动保留。
+    /// 写盘失败不静默吞(硬规则 3),内存里的改动保留。
     private func commitManualMarkers(_ updated: ManualMarkers, flashText: String) {
         manualMarkers = updated.isEmpty ? nil : updated
         refreshMarkers()
@@ -1883,7 +1883,7 @@ final class PlayerViewModel {
             scheduleRateChangeReport()
 
         case .subtitleDelay(let value):
-            // 不上报:5.1 的 `SubtitleOffset` 单位未核实(KNOWN_ISSUES.md Q39),发错单位比不发更糟。
+            // 不上报:5.1 的 `SubtitleOffset` 单位未写明(KNOWN_ISSUES.md Q39),发错单位比不发更糟。
             subtitleDelay = value
 
         case .audioDelay(let value):

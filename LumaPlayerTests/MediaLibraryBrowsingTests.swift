@@ -317,7 +317,7 @@ final class MediaLibraryBrowsingTests: XCTestCase {
 
         XCTAssertEqual(data.count, 4)
         let request = try XCTUnwrap(MockEmbyURLProtocol.lastRequest(matchingPathSuffix: "Images/Primary"))
-        // 图片是否需要认证头尚未核实(docs/KNOWN_ISSUES.md Q12):核实前一律带上
+        // 按 Q12,图片请求一律带上认证头
         XCTAssertEqual(request.header("X-Emby-Token"), Self.token)
         XCTAssertEqual(queryValue(request.url, "MaxWidth"), "300")
         XCTAssertEqual(queryValue(request.url, "Tag"), "TAG-1")

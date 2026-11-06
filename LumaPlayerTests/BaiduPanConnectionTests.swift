@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 只覆盖 `BaiduPanConnection` 不发网络请求的部分;设备码轮询 / 列表 / 播放流需要真网盘账号,未验证。
+/// `BaiduPanConnection` 不发网络请求的部分:授权状态、配置与片库根归一化、带 token 的查询串拼接。
 final class BaiduPanConnectionTests: XCTestCase {
     private var storage: CredentialFileStore!
     private var credentials: CredentialStore!

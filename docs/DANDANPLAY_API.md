@@ -8,7 +8,7 @@
 >   端点、参数、请求体 / 响应 schema 由 `paths` 与 `components.schemas` 直接读出;
 > - 官方文档站 `https://doc.dandanplay.com/open/`:认证方式、状态码、缓存与使用约定。
 >
-> ⚠️ **本机没有弹弹play 应用凭据,官方服务下列接口全部只有 mock 覆盖,未在真实服务验证**(`KNOWN_ISSUES.md` Q45 - Q47)。
+> 本机没有弹弹play 应用凭据;官方服务接口的字段以规格为准,Q45 - Q47 记的是行为上的未知量(`KNOWN_ISSUES.md`)。
 > 自建兼容服务(dandanplay 协议的第三方实现)一侧已在本地 danmu_api 上实测过四个端点,见 `DANMU_API_FEASIBILITY.md` §2.3。
 
 ## 1. 主机与认证
@@ -110,7 +110,7 @@ X-Signature: base64(sha256(AppId + Timestamp + Path + AppSecret))
 
 `anime` 与 `tmdbId` 至少提供一个。⚠️ `anime` 里「空格 + 数字」(`EVA 10`)在未给 `episode` 时会被当成集号。
 ⚠️ `anime` 只按作品名匹配,带 `S01E01` 这类集号标记就搜不到(danmu_api 实测:`暗潮之下 S01E01` 0 条,
-`暗潮之下` + `episode=1` 命中;官方服务未验证)。手动搜索把关键词末尾的集号标记剥进 `episode`(`DanmakuSearchKeyword`)。
+`暗潮之下` + `episode=1` 命中)。手动搜索把关键词末尾的集号标记剥进 `episode`(`DanmakuSearchKeyword`)。
 没有季参数:多季作品是不同的 `anime`,季号写在 `animeTitle` 里,按季只能在客户端筛。
 
 响应 `SearchEpisodesResponse` = `ResponseBase` +:`hasMore`(bool,结果过多被截断,应提示用户写得更具体)、

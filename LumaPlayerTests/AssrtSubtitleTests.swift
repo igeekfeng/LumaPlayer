@@ -2,7 +2,6 @@ import XCTest
 @testable import LumaPlayer
 
 /// 在线字幕(assrt):端点、解码、错误映射、下载与缓存。
-/// ⛔ 验不到:真实 assrt 的返回(要 API 密钥)、配额、字幕上屏(要真机),见 `KNOWN_ISSUES.md` B 节。
 final class AssrtSubtitleTests: XCTestCase {
 
     private static let token = "TESTTOKEN123"

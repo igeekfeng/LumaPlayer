@@ -47,7 +47,7 @@ enum LibrarySort: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// 媒体库筛选(`Filters` 取值出自 API_CONTRACT.md 3.2)。
-/// ⛔ 不提供「可续播」:`Filters=IsResumable` 行为未核实(Q28)。
+/// ⛔ 不提供「可续播」:按 Q28,媒体库不带 `Filters=IsResumable`。
 enum LibraryFilter: String, CaseIterable, Identifiable, Sendable {
     case all
     case unplayed
@@ -225,8 +225,7 @@ final class LibraryViewModel {
     }
 
     /// 媒体库 → `IncludeItemTypes`。`CollectionType` 为 null(混合库)时退化为
-    /// 「电影 + 剧集」—— 音乐 / 书籍混进海报网格比少显示更糟;此取舍未在混合库上
-    /// 验证过(docs/KNOWN_ISSUES.md Q14)。
+    /// 「电影 + 剧集」—— 音乐 / 书籍混进海报网格比少显示更糟(Q14)。
     nonisolated static func includeItemTypes(forCollectionType collectionType: String?) -> [String] {
         switch collectionType {
         case "movies": return ["Movie"]

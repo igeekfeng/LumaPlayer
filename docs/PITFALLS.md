@@ -23,17 +23,25 @@
 **scheme 里不要留空的 `<TestPlans></TestPlans>`**,否则 `xcodebuild test` 退出码 66。
 
 **新克隆必须先跑 `Scripts/build-libmpv.sh`。** module map 与 `OTHER_LDFLAGS` 都指向 `Vendor/mpv/prefix/`。
-`brew upgrade` 换了 ffmpeg / libplacebo 大版本后 Debug 运行与测试会在加载期失败,重跑脚本即可。
-mpv 源码改动只能写成 `Vendor/mpv/patches/*.patch`(脚本 `reset --hard` 后按序 `git apply`)。
+脚本默认从 `Vendor/mpv/prebuilt/libmpv-bundle.tar.gz` 还原(校验 sha256 + 解压 + 重定位 install name +
+逐个 ad-hoc 重签),只用 `/usr/bin` 系统工具,不需要 Homebrew / meson / ninja / pkg-config。
+还原后的 prefix 自带 50 个 dylib(libmpv 本体 + 49 个传递依赖),Debug 运行与测试只读这里,
+`brew upgrade` 改的是别处的库,动不到它。
+mpv 源码改动只能写成 `Vendor/mpv/patches/*.patch`(`--from-source` 里 `reset --hard` 后按序 `git apply`)。
+升级内核:维护机 `--from-source` 重编 → `--pack` 重新固化 → 提交 `Vendor/mpv/prebuilt/` 下三个文件。
+固化产物进仓库,⛔ 不能带本机路径(用户名):mpv 把 `meson.build_options()` 原样编进库,⛔ 不给 meson 传带路径的 `-D`;
+Swift 模块的 N_AST stab、tar 头的属主也会带用户名。对策写在 `build-libmpv.sh` 源码模式的注释里,
+`--from-source` 与 `--pack` 都按原始字节扫 `$HOME`,命中即失败(`strings` 扫不到符号表,不能用它判)。
 
 **打包脚本只对 Release 产物跑,且只作用于拷出来的 App。** Debug 产物是桩 + `LumaPlayer.debug.dylib`,
-从桩遍历 `otool -L` 会漏依赖;打包时要删指向 Homebrew 的 `LC_RPATH`。
+从桩遍历 `otool -L` 会漏依赖;打包时要删指向依赖根的 `LC_RPATH`。
+重签名一步别用 `> >(...)` 进程替换:命令行沙箱会拦 `/dev/fd`,用临时文件收 stderr 再 `grep -v`。
 
 **脚本必须用物理路径解析仓库根。** 二进制里的 libmpv 路径是编译器的物理路径;从软链或大小写不同的路径调用时,
 `pwd` 拿到的逻辑路径对不上,`bundle-libmpv.sh` 一条依赖都匹配不到、`Frameworks/` 空着。
 做法:`REPO_ROOT="$(/bin/realpath "$(dirname "$0")/..")"`(`pwd -P` 不改大小写,不够)。
 
-**只支持 macOS 27。** Homebrew 的依赖按 27.0 编译,Deployment Target 低于 27 会有链接器 warning 且产物也只能在 27 上跑(Q3、Q26)。
+**只支持 macOS 27。** 固化产物按 27.0 编译,Deployment Target 低于 27 会有链接器 warning 且产物也只能在 27 上跑(Q3、Q26)。
 
 **`swift-plugin-server produced malformed response`,`@Observable` / `@State` 宏全线报错** —— 不是代码问题,是宏服务。
 常见诱因:命令行沙箱拦了 `~/.swiftpm/security`(stderr 只有 `sandbox ... file-delete`)。处理:**前台**申请无沙箱执行
@@ -109,7 +117,7 @@ legacy 后端不认识这些选项 → 连回退也崩。要加就 post-create �
 
 **gpu-next 能耗爆表 = 硬解退成了 `videotoolbox-copy`(补丁 0003)。** PR 后端不注册 hwdec 设备,补丁注册 VT 设备 + IOSurface 映射;
 ① libplacebo 的 GL 后端采样不了 `GL_TEXTURE_RECTANGLE`,要先 `pl_tex_blit` 到 2D 纹理;② libplacebo 外调 GL 残留的错误码会被它下一次
-`glGetError` 认领(看到 `pl_generate_blue_noise` 吃 CPU 就开 `libmpv_render=trace` 找第一条 GL 报错)。验收:统计「解码」是 `videotoolbox` 不是 `-copy`。
+`glGetError` 认领(看到 `pl_generate_blue_noise` 吃 CPU 就开 `libmpv_render=trace` 找第一条 GL 报错)。判据:统计「解码」是 `videotoolbox` 不是 `-copy`。
 
 **draft PR 后端上下颠倒、闪烁(补丁 0001)。** `render()` 不读 `FLIP_Y`;参数零初始化 + 写死最近邻缩放。改用默认参数时同时
 `frame_mixer = NULL`。翻转设目标**平面** `flipped`,⛔ 别翻 crop(OSD / 字幕不跟着翻)。

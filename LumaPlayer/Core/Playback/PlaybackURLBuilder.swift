@@ -63,8 +63,8 @@ struct PlaybackURLBuilder: Sendable, Equatable {
     /// `MediaSource.TranscodingUrl` 是相对路径(通常已带 `/emby`),拼到站点根;绝对地址原样采用。
     /// ⛔ 不在这里补认证参数,认证头由 mpv 携带(第 6 节)。
     ///
-    /// 已知局限(Q17,未验证,刻意不改):`baseURL` 带子路径(反代)时,以 `/` 开头的值会替换整个 path、
-    /// 丢掉子路径,与 `directStreamURL` 不一致;服务端是否已写进子路径无从判断,待真机核实。
+    /// 已知局限(Q17,刻意不改):`baseURL` 带子路径(反代)时,以 `/` 开头的值会替换整个 path、
+    /// 丢掉子路径,与 `directStreamURL` 不一致;服务端是否已写进子路径无从判断。
     func transcodeURL(relativePath: String) -> URL? {
         guard !relativePath.isEmpty else { return nil }
         return URL(string: relativePath, relativeTo: baseURL)

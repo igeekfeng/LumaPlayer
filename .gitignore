@@ -42,9 +42,11 @@ Tools/emby-dev/.bulk-pool/
 Tools/emby-dev/.bulk-manifest.json
 
 # ── 自编 libmpv（Scripts/build-libmpv.sh 产物）──
-# 源码 + 构建目录 + 安装前缀都是几百 MB 的本机产物，不入库。
-# ⚠️ 新克隆的仓库没有 Vendor/mpv/prefix，**必须先跑一次 Scripts/build-libmpv.sh**
-#    才能编译 App（module.modulemap 与 OTHER_LDFLAGS 都指向那里）。
+# 源码 + 构建目录 + 安装前缀都是本机产物，不入库。
+# ⚠️ 新克隆的仓库没有 Vendor/mpv/prefix/，**必须先跑一次 Scripts/build-libmpv.sh**
+#    从 Vendor/mpv/prebuilt/ 的固化产物还原，才能编译 App
+#    （module.modulemap 与 OTHER_LDFLAGS 都指向那里）。
+# prebuilt/ 下的 libmpv-bundle.tar.gz / SHA256SUMS / BUNDLE_INFO 是随仓库分发的构建输入，要提交。
 Vendor/mpv/src/
 Vendor/mpv/build/
 Vendor/mpv/prefix/

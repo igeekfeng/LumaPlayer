@@ -3,7 +3,7 @@ import Foundation
 /// `POST /Sessions/Playing*` 三个上报端点共用的请求体(API_CONTRACT.md 5.1,官方 Playback-Check-ins.html)。
 /// 三个端点 body 结构完全相同,只有 Progress 多一个 `EventName` —— 用可选字段表达,nil 时 `encodeIfPresent` 省略。
 /// 不使用的字段(`LiveStreamId` / `PlaylistIndex` / `PlaylistLength`)按 5.1 标注不建模,而不是发 null。
-/// `SubtitleOffset` 也不建模:官方没写这个字段的**单位**(KNOWN_ISSUES.md Q39),发错单位比不发更糟,核实后再补。
+/// `SubtitleOffset` 也不建模:官方没写这个字段的**单位**(KNOWN_ISSUES.md Q39),发错单位比不发更糟。
 struct PlaybackReportBody: Encodable, Sendable, Equatable {
     let itemID: String
     let mediaSourceID: String

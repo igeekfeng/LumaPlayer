@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 本地文件夹来源的生命周期:添加 / 浏览 / 进剧集 / 起播 / 只读 / 换文件夹 / 删除时清本地数据。
-/// 访问权走 `FakeBookmarks`;真实打开面板、书签跨启动、外接盘拔插未验证。
+/// 访问权走 `FakeBookmarks`。
 @MainActor
 final class LocalFolderSourceTests: XCTestCase {
     private var storage: CredentialFileStore!

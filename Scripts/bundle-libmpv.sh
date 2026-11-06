@@ -4,20 +4,21 @@
 #
 # 把 LumaPlayer.app 依赖的 libmpv 及其全部传递依赖拷进
 # Contents/Frameworks/，引用改成 @rpath，再逐个重签名。
-# 处理后的 App 不需要目标机安装 Homebrew / mpv。
+# 处理后的 App 不需要目标机安装 Homebrew / mpv 或任何外部库。
 #
-# ⚠️ 有两个依赖根：
-#   1. /opt/homebrew —— libmpv 的全部传递依赖（ffmpeg / libplacebo / …）；
-#   2. Vendor/mpv/prefix —— **自编**的 libmpv 本体（Scripts/build-libmpv.sh 产物，
-#      带 gpu-next 渲染后端，见 docs/MPV_INTEGRATION.md §0、§3.3）。
-#   主程序里 LC_LOAD_DYLIB 指向第 2 个根的绝对路径，其余依赖都在第 1 个根。
+# 依赖根（两个都收）：
+#   1. Vendor/mpv/prefix —— 默认来源。Scripts/build-libmpv.sh 从 prebuilt/ 还原的产物，
+#      libmpv 本体与 49 个传递依赖 dylib 都在这里（带 gpu-next 渲染后端，
+#      见 docs/MPV_INTEGRATION.md §0、§3.3）。主程序 LC_LOAD_DYLIB 指向这里的绝对路径。
+#   2. /opt/homebrew —— 仅当维护者用 --from-source 就地编过、依赖仍留在 brew 前缀时才会命中；
+#      默认还原路径下这里一条都不会收。保留它使脚本对两种 prefix 都可用。
 #
 # 用法：
 #   ./Scripts/bundle-libmpv.sh <path/to/LumaPlayer.app>
 #
 # ⚠️ 会原地修改传入的 App。只对拷贝出来的 App 用（make-dmg.sh 的暂存目录、
 # /Applications 下的安装副本），不要直接改 DerivedData 里的构建产物 ——
-# 那份还要给 Debug 运行和测试用，它们按方案 A 直接链接仓库内的绝对路径。
+# 那份还要给 Debug 运行和测试用，它们直接链接仓库内的绝对路径。
 #
 set -euo pipefail
 
@@ -36,7 +37,8 @@ FW="${APP}/Contents/Frameworks"
 /bin/mkdir -p "${FW}"
 
 # 列出一个 Mach-O 引用的、位于任一依赖根下的 dylib（跳过 dylib 自己的 id 行）。
-# 两个根都要收：自编的 libmpv 在 Vendor/mpv/prefix，其余依赖在 Homebrew。
+# 两个根都要收：还原产物把 libmpv 与全部依赖都放在 Vendor/mpv/prefix；
+# /opt/homebrew 只在 --from-source 就地编译的旧布局里命中（保留兼容）。
 bundled_deps() {
     local id
     id="$(/usr/bin/otool -D "$1" | /usr/bin/sed -n 2p)"
@@ -87,7 +89,7 @@ resolved_rpath_deps() {
 # 而不是解开符号链接后的真实文件名（libavcodec.63.1.102.dylib）—— 引用方认的是前者。
 # 路径前缀必须与编译时写进二进制的一致：二进制里是物理路径（含大小写），所以
 # VENDOR_PREFIX 用 realpath 取物理路径（bash 内建 `pwd -P` 不改大小写，见 PITFALLS.md 第 1 节）。
-echo "收集依赖（Homebrew + 自编 libmpv）…"
+echo "收集依赖（Vendor/mpv/prefix / Homebrew 兼容）…"
 if [[ -z "$(bundled_deps "${EXE}")" ]]; then
     echo "error: 主程序没有引用任何位于依赖根下的库，打包无从下手。" >&2
     echo "       期望的依赖根: ${BREW_PREFIX} 与 ${VENDOR_PREFIX}" >&2
@@ -129,7 +131,7 @@ rewrite() {
         [[ -n "${dep}" ]] && args+=(-change "${dep}" "@rpath/$(/usr/bin/basename "${dep}")")
     done < <(bundled_deps "${f}")
     # 删掉指向依赖根 / Xcode 的 rpath：留着的话在开发机上会悄悄回退去加载
-    # 仓库内或 Homebrew 那份，打包缺库也照样能跑，问题就被掩盖了。
+    # 仓库内或 brew 前缀里那份，打包缺库也照样能跑，问题就被掩盖了。
     while IFS= read -r rp; do
         case "${rp}" in
             "${BREW_PREFIX}"/*|"${VENDOR_PREFIX}"/*|/Applications/Xcode*|@loader_path/../lib) args+=(-delete_rpath "${rp}") ;;
@@ -178,12 +180,20 @@ done
 # --- 4. 重签名：先签每个 dylib，最后签 App -----------------------------------
 # App 签名时保留原有的 entitlements / DR / flags，不在这里另起一套配置。
 # 每个文件都会打一行「replacing existing signature」，是预期的，滤掉；其他 stderr 照常输出。
+# 用临时文件收 stderr 而不是 > >(...)：命令行沙箱会拦进程替换的 /dev/fd。
 echo "重签名…"
-/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" --timestamp=none "${FW}"/*.dylib \
-    2> >(/usr/bin/grep -v 'replacing existing signature' >&2)
-/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" --timestamp=none \
-    --preserve-metadata=identifier,entitlements,requirements,flags "${APP}" \
-    2> >(/usr/bin/grep -v 'replacing existing signature' >&2)
+SIGN_ERR="$(/usr/bin/mktemp -t lumaplayer-codesign)"
+trap '/bin/rm -f "${SIGN_ERR}"' EXIT
+resign() {
+    /usr/bin/codesign "$@" 2>"${SIGN_ERR}" || {
+        /usr/bin/grep -v 'replacing existing signature' "${SIGN_ERR}" >&2
+        return 1
+    }
+    /usr/bin/grep -v 'replacing existing signature' "${SIGN_ERR}" >&2 || true
+}
+resign --force --sign "${SIGN_IDENTITY}" --timestamp=none "${FW}"/*.dylib
+resign --force --sign "${SIGN_IDENTITY}" --timestamp=none \
+    --preserve-metadata=identifier,entitlements,requirements,flags "${APP}"
 /usr/bin/codesign --verify --strict --deep "${APP}"
 
 count="$(/bin/ls "${FW}"/*.dylib | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
