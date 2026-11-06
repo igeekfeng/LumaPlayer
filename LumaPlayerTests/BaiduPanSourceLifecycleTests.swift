@@ -286,6 +286,26 @@ final class BaiduPanSourceLifecycleTests: XCTestCase {
             "百度条目要带上展示快照的来源 —— 换集时靠它补记「继续观看」,⛔ 不回头列网盘")
     }
 
+    /// 「继续观看」卡片补列目录拿到的是文件名字串序(`10.mp4` 在 `2.mp4` 前),
+    /// 队列必须按集号重排 —— 否则播放页上一集 / 下一集 / 选集面板是乱的(先详情再看却是对的)。
+    func testEpisodeQueueSortsByEpisodeNumberNotRawDirectoryOrder() throws {
+        let sourceID = UUID()
+        let ep2 = makeEpisodeItem(sourceID: sourceID, index: 2)
+        let ep10 = makeEpisodeItem(sourceID: sourceID, index: 10)
+        let ep1 = makeEpisodeItem(sourceID: sourceID, index: 1)
+        // 网盘 / 本地目录的原始序:01、10、02
+        let rawOrder = [ep1, ep10, ep2]
+
+        let queue = try XCTUnwrap(FileSourceViewModel.episodeQueue(
+            selecting: ep2, in: rawOrder, filesByID: makeFiles(for: rawOrder),
+            source: .baiduPan(BaiduPanSource(folderName: "LumaPlayer"))))
+
+        XCTAssertEqual(queue.episodes.map(\.id), ["10", "20", "100"], "顺序按集号,不按文件名字串序")
+        XCTAssertEqual(queue.current?.id, "20")
+        XCTAssertEqual(queue.previous?.id, "10")
+        XCTAssertEqual(queue.next?.id, "100")
+    }
+
     /// 单条视频 / 电影不给队列:合成器只在「这一层像剧集序列」时才给 `.episode`。
     func testEpisodeQueueIsNilForNonEpisode() {
         let sourceID = UUID()

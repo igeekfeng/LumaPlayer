@@ -1578,7 +1578,7 @@ final class FileSourceViewModel {
         guard let file = file(for: item) else { return }
         // 起播时记下展示快照,续播区才画得出来;⛔ 不在渲染续播区时回头列网盘
         Task { await container.rememberResumeCard(item: item, file: file) }
-        // 详情页用这一季分集,网格用当前目录,零请求
+        // 详情页用这一季分集,网格用当前目录,零请求;`episodeQueue` 内再按集号排定序
         let queueItems = directoryShape.isSeries ? episodes : sortedItems
         container.play(
             file,
@@ -1602,7 +1602,10 @@ final class FileSourceViewModel {
         LibraryItemIdentity(item: item, seriesTitle: knownSeriesTitle)
     }
 
-    /// 用已列出的条目装配剧集队列,零请求;顺序即传入的 `items`(与界面一致)。纯函数,便于测试。
+    /// 用已列出的条目装配剧集队列,零请求;顺序按集号(`BaiduPanSeriesLayout.sortedEpisodes`),
+    /// 与详情页分集一致。⛔ 不沿用传入 `items` 的顺序:网盘 / 本地目录返回的是文件名字串序
+    /// (`10.mkv` 在 `2.mkv` 前),续播卡片补列目录拿到的就是这种原始序,直接拿来当队列会让
+    /// 播放页的上一集 / 下一集 / 选集面板乱序(只有先进详情页再看才是对的)。
     /// 只收 `.episode`(合成器认定为剧集序列才给),不足两集返回 nil。
     ///
     /// - Parameter seriesTitle: 详情页确认的剧名。同一部剧各集共用 —— 换集时靠它把剧名带进新请求,
@@ -1615,7 +1618,8 @@ final class FileSourceViewModel {
         seriesTitle: String? = nil
     ) -> EpisodeQueue? {
         guard item.kind == .episode else { return nil }
-        let episodes = items.filter { $0.kind == .episode }
+        let episodes = BaiduPanSeriesLayout.sortedEpisodes(
+            items.filter { $0.kind == .episode })
         guard episodes.count > 1 else { return nil }
         let entries = episodes.compactMap { entry -> PlaybackEpisode? in
             guard let fsID = UInt64(entry.ref.itemID), let file = filesByID[fsID] else { return nil }
@@ -1635,7 +1639,8 @@ final class FileSourceViewModel {
     }
 
     /// 播续播卡片。文件由快照重建(`fs_id` / `path` / `name` 是原值,播放用不到的字段留空)。
-    /// 换集队列要兄弟集,起播前补列文件所在目录(就是当前目录时复用)。
+    /// 换集队列要兄弟集,起播前补列文件所在目录(就是当前目录时复用);补列的是原始目录序,
+    /// `episodeQueue` 会按集号重排成详情页同一口径。
     /// ⛔ 不改 `currentDirectory`:接着看不该让浏览页换一屏。
     ///
     /// - Returns: 是否已发出播放请求(视图据此决定要不要唤起播放窗口)。
