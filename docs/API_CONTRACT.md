@@ -409,7 +409,7 @@ ticks ↔ 秒只在 `TickConverter`(1 秒 = 10⁷ ticks),⛔ 业务代码不出�
 | 用户 Id / 服务器 Id | 固定假 UUID |
 | 密码字段 | 整个键删除 |
 
-⛔ 含真实 token 的文件不进 git(`.gitignore` 含 `*.real.json`)。自检命令见 `CLAUDE.md`。
+⛔ 含真实 token 的文件不进 git(`.gitignore` 含 `*.real.json`);提交前跑 `./Scripts/check-privacy.sh`。
 
 ### 9.4 构造数据
 

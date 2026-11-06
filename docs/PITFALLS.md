@@ -316,7 +316,7 @@ push 页 `.navigationBarBackButtonHidden(true)`),顶栏自绘(`BrowseChromeBar.s
 
 ## 6. 工具与环境
 
-**沙盒 App 写不了 `~/Library/Logs`。** 诊断日志在容器里(路径见 `CLAUDE.md`);系统日志
+**沙盒 App 写不了 `~/Library/Logs`。** 诊断日志在 App 容器里 (`~/Library/Containers/com.local.LumaPlayer/Data/Library/Logs/LumaPlayer/network.log`);系统日志
 `/usr/bin/log show --last 10m --predicate 'subsystem == "com.local.LumaPlayer"' --info`(zsh 里裸 `log` 是内建命令)。
 
 **本机 `grep` 可能是 rg 的别名。** 用 `/usr/bin/grep`。BSD `grep -E` 不支持 lookahead。

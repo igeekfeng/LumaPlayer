@@ -21,7 +21,7 @@ final class LoginViewModel {
         self.username = server.username ?? ""
     }
 
-    /// 只读展示用:显示名与地址。View 不据此拼 URL(CLAUDE.md「架构主线」)。
+    /// 只读展示用:显示名与地址。View 不据此拼 URL。
     var serverDisplayName: String {
         server.displayName
     }
@@ -30,7 +30,7 @@ final class LoginViewModel {
         server.baseURL.absoluteString
     }
 
-    /// http 连接(含局域网回退)必须标注未加密(API_CONTRACT.md 1.4、CLAUDE.md「安全与隐私」)。
+    /// http 连接(含局域网回退)必须标注未加密(API_CONTRACT.md 1.4)。
     var isUnencrypted: Bool {
         server.baseURL.scheme == "http"
     }

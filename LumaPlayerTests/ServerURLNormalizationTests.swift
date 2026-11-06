@@ -103,7 +103,7 @@ final class ServerURLNormalizationTests: XCTestCase {
     }
 
     func testStripsUserInfo() throws {
-        // 密码不做本地持久化,剥掉 userinfo(CLAUDE.md「安全与隐私」)
+        // 密码不做本地持久化,剥掉 userinfo
         let result = try normalizeServerURL("https://user:pass@example.com")
         XCTAssertEqual(result.url.absoluteString, "https://example.com")
         XCTAssertFalse(result.schemeWasInferred)

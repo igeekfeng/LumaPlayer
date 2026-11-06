@@ -27,8 +27,8 @@ macOS 原生 Emby 播放器客户端：SwiftUI 界面，自编 libmpv（gpu-next
 - **多来源**：Emby 与网盘都是「播放来源」
 - **播放**：DirectStream / 转码两条路径由服务端 `PlaybackInfo` 决定；转码 seek 走停流 + `StartTimeTicks` 重新起流
 - **浏览**：首页（随机推荐轮播 / 继续观看 / 下一集 / 分库最新）、媒体库（排序、筛选、已看角标、右键操作）、搜索、详情、剧集页
-- **弹幕**：接入弹弹play或接自建弹幕服务
-- **元数据刮削**：自动刮削媒体数据，美化展示
+- **弹幕**：可接入弹弹play官方服务或自建兼容服务
+- **元数据刮削**：网盘来源不提供封面、简介、年份与剧集结构，用 TMDB 补齐
 
 ## 环境要求
 
@@ -54,7 +54,7 @@ libmpv 的头文件与 dylib **不在仓库里**，但**预编译产物在**：`
 **不依赖 Homebrew、meson、ninja、pkg-config，也不需要网络**。产物里的 dylib 互相用
 `@rpath` 引用，与机器路径无关；`LUMA_LIBMPV_BUNDLE` 可把来源覆盖为本地路径或 https URL。
 
-编好之后：
+还原之后：
 
 ```bash
 # 构建（要求零编译器 warning）
@@ -113,7 +113,7 @@ LumaPlayer/
 ├── Models/       Emby 响应模型
 ├── Components/   设计 token 与复用视图
 └── Resources/    Info.plist、entitlements、Assets.xcassets
-LumaPlayerTests/  75 个测试文件 + 全部脱敏 fixture
+LumaPlayerTests/  测试与全部脱敏 fixture
 Vendor/           libmpv 的 module map、本地补丁与预编译产物（prefix 由脚本还原，见「构建」）
 Tools/            图标生成脚本、本地 Emby 开发实例（Docker）、DV 测试素材工具
 Scripts/          构建、打包、部署、隐私自检脚本
@@ -138,8 +138,7 @@ Scripts/          构建、打包、部署、隐私自检脚本
 - 没有 Direct Play（那是客户端直读文件系统），只有 DirectStream 与转码两条路径
 - 非目标（完整清单）：下载 / 离线、直播、音乐、有声书、投屏（Chromecast / DLNA）、客户端自己转码、
   局域网自动发现服务器、为每个 Emby 版本写独立分支
-- 不承诺「兼容所有 Emby 实例」;接口行为按 `docs/API_CONTRACT.md` 的置信度标记处理
-
+- 不承诺「兼容所有 Emby 实例」；接口行为按 `docs/API_CONTRACT.md` 的置信度标记处理
 
 ## 致谢
 

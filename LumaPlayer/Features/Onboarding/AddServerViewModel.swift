@@ -21,7 +21,7 @@ final class AddServerViewModel {
     }
 
     /// 用户**显式**写了 `http://`:密码明文发送,输入阶段就警告
-    /// (API_CONTRACT.md 3.1、CLAUDE.md「安全与隐私」)。没写 scheme 的由探测阶段决定,
+    /// (API_CONTRACT.md 3.1)。没写 scheme 的由探测阶段决定,
     /// 回退成 http 后由登录页再警告一次。
     var showsInsecureWarning: Bool {
         address.trimmingCharacters(in: .whitespacesAndNewlines)

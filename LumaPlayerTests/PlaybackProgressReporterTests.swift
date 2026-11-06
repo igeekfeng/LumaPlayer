@@ -5,7 +5,7 @@ import XCTest
 /// actor 读取先取到局部常量再断言:`await` 不能出现在 `XCTAssert` 的 autoclosure 里。
 final class PlaybackProgressReporterTests: XCTestCase {
 
-    /// 用 actor 而不是 `@unchecked Sendable` 的盒子:后者被 CLAUDE.md「并发分层」禁止,测试也不例外。
+    /// 用 actor 而不是 `@unchecked Sendable` 的盒子:后者被项目并发规则禁止,测试也不例外。
     private actor Recorder {
         private(set) var entered: [EmbyEndpoint] = []
         private(set) var sent: [EmbyEndpoint] = []

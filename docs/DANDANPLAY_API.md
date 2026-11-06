@@ -1,7 +1,7 @@
 # 弹弹play 开放平台接口(本项目用到的部分)
 
 > 本文件是**弹弹play 接口的唯一事实来源**,与 `API_CONTRACT.md`(Emby)、`BAIDU_PAN_API.md`、
-> `TMDB_API.md` 平行。遵循 `CLAUDE.md` 的**禁止发明接口**规则,只用本文件列出的端点 / 参数 / 字段。
+> `TMDB_API.md` 平行。⛔ 只用本文件列出的端点 / 参数 / 字段,不自行发明接口。
 >
 > 核实来源:
 > - 官方 OpenAPI 3.0 规格 `https://api.dandanplay.net/swagger/v2/swagger.json`(`info.version = v2`),
