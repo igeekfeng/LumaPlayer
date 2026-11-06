@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 
 /// 读取 `Fixtures/` 下的脱敏 fixture(API_CONTRACT.md 第 9 节)。
-/// `_synthetic` 后缀 = 构造数据、未经真实服务器验证;无后缀 = 真实响应按 9.3 脱敏。
+/// `_synthetic` 后缀 = 构造数据,其余 = 真实响应按 9.3 脱敏。
 enum FixtureLoader {
     private final class BundleMarker {}
 

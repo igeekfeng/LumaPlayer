@@ -117,7 +117,7 @@ legacy 后端不认识这些选项 → 连回退也崩。要加就 post-create �
 
 **gpu-next 能耗爆表 = 硬解退成了 `videotoolbox-copy`(补丁 0003)。** PR 后端不注册 hwdec 设备,补丁注册 VT 设备 + IOSurface 映射;
 ① libplacebo 的 GL 后端采样不了 `GL_TEXTURE_RECTANGLE`,要先 `pl_tex_blit` 到 2D 纹理;② libplacebo 外调 GL 残留的错误码会被它下一次
-`glGetError` 认领(看到 `pl_generate_blue_noise` 吃 CPU 就开 `libmpv_render=trace` 找第一条 GL 报错)。验收:统计「解码」是 `videotoolbox` 不是 `-copy`。
+`glGetError` 认领(看到 `pl_generate_blue_noise` 吃 CPU 就开 `libmpv_render=trace` 找第一条 GL 报错)。判据:统计「解码」是 `videotoolbox` 不是 `-copy`。
 
 **draft PR 后端上下颠倒、闪烁(补丁 0001)。** `render()` 不读 `FLIP_Y`;参数零初始化 + 写死最近邻缩放。改用默认参数时同时
 `frame_mixer = NULL`。翻转设目标**平面** `flipped`,⛔ 别翻 crop(OSD / 字幕不跟着翻)。

@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 字幕缓存(`SubtitleFileStore`)、每集字幕记录(`SubtitleBindingStore`)、`SubtitleService` 先查缓存。
-/// 起播时的自动挂载(`PlayerViewModel.restoreRememberedSubtitle`)要真起 mpv,单测验不到,需真实 App 手验。
+/// 起播时的自动挂载(`PlayerViewModel.restoreRememberedSubtitle`)要真起 mpv,不在这里覆盖。
 final class SubtitleCacheTests: XCTestCase {
 
     private var directory: URL!

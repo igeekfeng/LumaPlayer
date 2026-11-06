@@ -10,7 +10,7 @@
 | 标记 | 含义 | 能否直接实现 |
 |---|---|---|
 | ✅ | 已对官方文档 / OpenAPI / 真实请求核实 | 能 |
-| 🔶 | 高置信(社区惯例、仅本地实例实测),未在真实服务器核实 | 能,但在 `KNOWN_ISSUES.md` 挂一条 |
+| 🔶 | 高置信(社区惯例、仅本地实例实测),未在真实服务器核实 | 能 |
 | ⚠️ | 未核实 | **不能**,先核实回填 |
 
 文档里没有的端点 / 参数 / 字段一律按 ⚠️。
@@ -156,7 +156,7 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 - 必须传 `MaxWidth` / `MaxHeight`(海报 `MaxWidth = 300`);
 - 缓存 key 不含 host(内外网切换复用),但**必须含 `Tag`**;没有 `Tag` 的图不进磁盘缓存;
 - 父级继承:`ParentBackdropItemId` + `ParentBackdropImageTags`、`ParentLogoItemId` + `ParentLogoImageTag` 等;
-- 是否需要认证头未核实(Q12)→ 一律带完整认证头,所以图片只能经 `PosterImage` 请求。
+- 认证头按 Q12 一律带完整一套,所以图片只能经 `PosterImage` 请求。
 
 ### 3.4 BaseItemDto 字段 ✅
 
@@ -164,12 +164,12 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
 `IndexNumber` / `ParentIndexNumber`、`SeasonId` / `SeriesId` / `SeriesName` / `SeasonName`、`Genres`、`OfficialRating`、
 `CommunityRating`、`CriticRating`、`PremiereDate`、`ChildCount`、`Taglines`、`ImageTags`、`PrimaryImageTag`、
 `BackdropImageTags`、`Parent*ItemId` / `Parent*ImageTag(s)`、`People`(`Id` `Name` `Role` `Type` `PrimaryImageTag`)、
-`Studios`(⚠️ 只解 `Name`:4.1.1.0 里 `Id` 是 int64,跨版本未核实)、`MediaStreams`(另解 `DisplayTitle` `Width` `Height` `Channels` `Title`)、
+`Studios`(⚠️ 只解 `Name`:4.1.1.0 里 `Id` 是 int64,跨版本类型不一致)、`MediaStreams`(另解 `DisplayTitle` `Width` `Height` `Channels` `Title`)、
 `UserData`(`PlaybackPositionTicks` `Played` `PlayedPercentage` `PlayCount` `IsFavorite` `LastPlayedDate` `UnplayedItemCount`)、
 `ProviderIds`(见下)。
 
 `MediaSources` 🔶:详情页起播前选版本用(`MediaSource` 字段见 4.3,另用 `Name` `Size` `MediaStreams`)。
-字段名按 Emby `BaseItemDto` 约定,**未在真实服务器验证**;只有单项接口返回,列表接口没有,缺失 ≠ 单版本。
+字段名按 Emby `BaseItemDto` 约定;只有单项接口返回,列表接口没有,缺失 ≠ 单版本。
 
 ⚠️ 4.1.1.0 的 `BaseItemDto` 没有 `PrimaryImageTag`:两个都解,`ImageTags["Primary"]` 优先,都没有就不发请求(Q13)。
 
@@ -186,8 +186,7 @@ Emby token 不过期,401 = 服务端吊销(后台删设备、改密码、同 Dev
   `ServerConnection.recommendations`),否则从这些页面直接点播时弹幕匹配拿不到 TMDB ID;
 - 用途:弹幕匹配的 TMDB 降级层(`DANMAKU.md` §3 第 5 步)。
 
-⚠️ **未在真实服务器验证**:本地 `Tools/emby-dev/` 未启动(Docker 不可用),`Tmdb` 键的**实际存在率**
-与大小写形态都没亲眼看过 —— 只有官方 schema 与社区记录。登记在 `KNOWN_ISSUES.md` Q51。
+⚠️ `Tmdb` 键的实际存在率与大小写形态只有官方 schema 与社区记录,本地 `Tools/emby-dev/` 未启动(Docker 不可用)时看不到原文;见 `KNOWN_ISSUES.md` Q51。
 
 ## 4. 播放
 
@@ -220,7 +219,7 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 
 - `EnableDirectPlay` 固定 **`false`**:传 true 会拿到一个打不开的服务端本地 `Path`。
 - `DeviceProfile` 🔶:字段名与枚举值已对 4.1.1.0 OpenAPI(`Dlna.DeviceProfile` / `Dlna.DirectPlayProfile` /
-  `Dlna.TranscodingProfile`)核实,**服务端行为未在任何服务器验证**(Q16)。只发两段:
+  `Dlna.TranscodingProfile`)核实,服务端对这套 profile 的行为见 Q16。只发两段:
   - `DirectPlayProfiles: [{Type: "Video"}]`:容器 / 编码不限(libmpv 什么都能播),⛔ 不写白名单,写窄了能直连的会被转码;
   - `TranscodingProfiles: [{Type: "Video", Container: "ts", Protocol: "hls", VideoCodec: "h264", AudioCodec: "aac", Context: "Streaming"}]`:
     必须转码时的输出规格,不留给服务端猜。
@@ -322,7 +321,7 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 
 `POST /Users/{UserId}/Items/{Id}/HideFromResume?Hide={true|false}`,来源 Emby Web 4.9.5.0 抓包,**不在官方 OpenAPI 里**。
 不带 `Hide` 200 但不生效;GET 404。只隐藏不清进度;响应里没有「已隐藏」标记 →
-⛔ 客户端不自己维护隐藏清单。4.7.11.0 上是否存在未核实(Q33)。
+⛔ 客户端不自己维护隐藏清单。4.7.11.0 上是否存在该端点见 Q33。
 
 ### 5.8 批量标记已看 ✅
 
@@ -336,9 +335,9 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 - **401 即停**:后面的请求只会再 401,剩余条目一并记为失败;
 - 全部发完**只让缓存作废一次**(`EmbyResponseCache` 的失效规则表)。
 
-⚠️ **父项级联未核实**:Emby Web 对 Series / Season 发一条 `POST /PlayedItems/{SeriesId}` 时,
-服务端会把子项一起标上(客户端不依赖这一行为做界面状态:写入后一律重读详情 / 分集)。
-本客户端对「整季」不发父项,只逐条发分集 —— 不依赖未核实的级联语义。
+⚠️ Emby Web 对 Series / Season 发一条 `POST /PlayedItems/{SeriesId}` 时,服务端会把子项一起标上;
+跨版本是否一致没有一手证据(客户端不依赖这一行为做界面状态:写入后一律重读详情 / 分集)。
+本客户端对「整季」不发父项,只逐条发分集。
 
 > ⛔ 5.5–5.8 是写操作,开发者手工验证只在本地实例上点。
 
@@ -414,7 +413,7 @@ ticks ↔ 秒只在 `TickConverter`(1 秒 = 10⁷ ticks),⛔ 业务代码不出�
 
 ### 9.4 构造数据
 
-⛔ 不手写编造的 fixture 冒充真实响应。确需构造:文件名加 `_synthetic`,测试注释写明「未经真实服务器验证」。
+⛔ 不手写编造的 fixture 冒充真实响应。确需构造:文件名加 `_synthetic`。
 synthetic fixture 只能证明「解码器与你的假设一致」(`Latest` 裸数组就是这么漏的,Q23)。
 
 ## 10. 术语

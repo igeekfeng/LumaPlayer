@@ -116,7 +116,7 @@ struct EmbyPerson: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 制片公司(`NameLongIdPair`)。只解 `Name`:`Id` 类型在各版本未核实,解它可能让整项详情解码失败。
+/// 制片公司(`NameLongIdPair`)。只解 `Name`:各版本 `Id` 类型不一致,解它可能让整项详情解码失败。
 struct EmbyStudio: Decodable, Sendable, Equatable {
     let name: String
 

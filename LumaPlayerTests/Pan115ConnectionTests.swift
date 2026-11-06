@@ -2,9 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// `Pan115Connection` 里不发网络请求的部分:授权状态、片库根、路径归一化与 `path → cid` 索引。
-///
-/// ⚠️ 列目录 / 取直链 / 扫码登录需要真实 115 账号,**未在真实服务器验证**;
-/// 这些路径的行为只能靠 `Pan115DecodingTests`(线格式)与 `Pan115EndpointTests`(请求形状)间接锁住。
+/// 列目录 / 取直链 / 扫码登录的线格式与请求形状由 `Pan115DecodingTests`、`Pan115EndpointTests` 锁住。
 final class Pan115ConnectionTests: XCTestCase {
     private var storage: CredentialFileStore!
     private var credentials: CredentialStore!

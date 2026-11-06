@@ -24,7 +24,7 @@ struct EmbyItemsQuery: Sendable, Equatable {
     var sortOrder: [String] = []
     var fields: [String] = []
     var filters: [String] = []
-    /// 🔶 官方 OpenAPI 只在 `/Search/Hints` 上列出,`/Items` 上待真机核实(KNOWN_ISSUES.md Q12)。
+    /// 🔶 官方 OpenAPI 只在 `/Search/Hints` 上列出,`/Items` 上按 Q12 使用(KNOWN_ISSUES.md)。
     var searchTerm: String?
     /// ✅ 分页偏移
     var startIndex: Int?

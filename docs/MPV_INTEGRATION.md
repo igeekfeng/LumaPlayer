@@ -77,7 +77,7 @@ displayLink 就停;layer 出帧时叫醒它(VO 最多多等一次主线程跳转
 
 `report_swap` 只持 `mutex`(free 都在 `mutex` 内),⛔ 不拿 `renderMutex`,否则主线程每个 vsync 都要等一整帧 render。
 render.h 要求 render 系函数互斥且 GL context current,但它的实现只在 mpv 内部锁里加计数、不碰 GL。
-代价:主线程卡顿超过 200 ms 时 VO 会因等不到 swap 丢帧(未验证项见 Q49)。
+代价:主线程卡顿超过 200 ms 时 VO 会因等不到 swap 丢帧(见 Q49)。
 
 ## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer.startupOptions` + `MPVCacheBudget`)
 

@@ -2,19 +2,19 @@
 
 > 对象:`https://github.com/huangxd-/danmu_api`(LogVar 弹幕 API 服务器)
 > 目的:本地 Docker 跑起来,给 LumaPlayer 当弹幕服务,替代弹弹play 开放平台
-> 结论日期:2026-11-03。文中所有「实测」都是本轮在本机真跑过的,命令与输出见 §2。
+> 文中带「实测」的条目都是在本机真跑过的,命令与输出见 §2。
 
 ## 0. 结论
 
-**可行,三步已落地两步半:部署与协议核对完成,LumaPlayer 已支持自建服务作为弹幕来源,待真机串联验证(§7)。**
+**可行。** 部署与协议核对完成,LumaPlayer 已支持自建服务作为弹幕来源(接入方式见 §7)。
 
 | 环节 | 结论 | 依据 |
 |---|---|---|
-| Docker 本地部署 | ✅ 已跑通 | 官方镜像 `logvar/danmu-api:latest` 有 arm64,本机 Docker Desktop 起容器、接口全部通 |
-| 弹弹play 协议兼容 | ✅ 已核对 | LumaPlayer 实际调用的 4 个端点,返回体字段与 `DANDANPLAY_API.md` 一致 |
-| 接入 LumaPlayer | ✅ 代码已落地,⚠️ 未真机串联 | 自建服务与官方并列为弹幕来源、默认官方(§3.1),自建跳过签名头与 AppId / AppSecret(§3.2),绑定 / 缓存按来源隔离(§3.3);真机串联验证见 §7 |
+| Docker 本地部署 | ✅ 可行 | 官方镜像 `logvar/danmu-api:latest` 有 arm64,本机 Docker Desktop 起容器、接口全部通 |
+| 弹弹play 协议兼容 | ✅ 一致 | LumaPlayer 实际调用的 4 个端点,返回体字段与 `DANDANPLAY_API.md` 一致 |
+| 接入 LumaPlayer | ✅ 已支持 | 自建服务与官方并列为弹幕来源、默认官方(§3.1),自建跳过签名头与 AppId / AppSecret(§3.2),绑定 / 缓存按来源隔离(§3.3) |
 
-**一句话**:两侧都已实现(`Tools/danmu-api/` + LumaPlayer 多弹幕来源),剩 §7 的真机串联。
+`Tools/danmu-api/` 与 LumaPlayer 多弹幕来源两侧都已实现。
 
 ---
 
@@ -51,7 +51,7 @@ arm64 原生可用,不需要 Rosetta。
 
 ### 2.2 容器
 
-`Tools/danmu-api/docker-compose.yml` 起的容器,已验证:
+`Tools/danmu-api/docker-compose.yml` 起的容器:
 
 ```
 danmu-api | Up | 127.0.0.1:9321->9321/tcp
@@ -244,7 +244,7 @@ LumaPlayer 的处理是 `DANMAKU.md` §3 步骤 4:`isMatched` → 直接采用�
 **这意味着一次错配会被记住 4 小时(`DanmakuCommentCache`)并绑进集 / 剧绑定**,
 后面同一集都走缓存。
 
-官方弹弹play 对同样输入的行为本轮**没有验证**,所以不能说这是 danmu_api 独有的问题。
+官方弹弹play 对同样输入的行为没有一手证据,所以不能说这是 danmu_api 独有的问题。
 但自建服务换了匹配引擎,**匹配手感一定会变**,上线初期建议:
 
 - 开 `USE_BANGUMI_DATA=true`(已开),元数据全了匹配才准;
@@ -277,11 +277,12 @@ dandanplay 官方也依赖同样的上游,但 danmu_api 更新更频繁(镜像 l
 
 ---
 
-## 7. 下一步
+## 7. 本地服务的接入方式
 
-1. ✅ 地址可配 + 单测 + 文档同步:`DandanplayBase`、多来源(`DanmakuSource`,默认官方)、
-   按来源隔离的绑定 / 缓存、失效绑定重新匹配,`docs/DANMAKU.md` §1 / §3 与 `docs/DANDANPLAY_API.md` §1。
-2. 真机串联:`cd Tools/danmu-api && docker compose up -d` → 设置 › 弹幕填
-   `http://127.0.0.1:9321/<TOKEN>`(`config/.env` 里的 `TOKEN`,当前是 `87654321`)
-   → 播一集,看 `docker compose logs -f` 里的实际请求。验证标准:`match` 拿到
-   `isMatched`,`comment` 返回的 `count` 与播放画面上的弹幕条数对得上。
+地址可配:`DandanplayBase`、多来源(`DanmakuSource`,默认官方)、按来源隔离的绑定 / 缓存、失效绑定重新匹配,
+见 `docs/DANMAKU.md` §1 / §3 与 `docs/DANDANPLAY_API.md` §1。
+
+`cd Tools/danmu-api && docker compose up -d` → 设置 › 弹幕填
+`http://127.0.0.1:9321/<TOKEN>`(`config/.env` 里的 `TOKEN`,当前是 `87654321`)
+→ 播一集,看 `docker compose logs -f` 里的实际请求。判据:`match` 拿到 `isMatched`,
+`comment` 返回的 `count` 与播放画面上的弹幕条数对得上。

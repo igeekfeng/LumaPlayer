@@ -3,7 +3,6 @@ import XCTest
 @testable import LumaPlayer
 
 /// 本地外挂字幕:`SubtitleTextDecoder`(编码归一,纯函数)+ `SubtitleFileStore`(扩展名闸门 / 大小上限 / 编码转换 / 落盘)。
-/// ⛔ 验不到:文件选择面板与沙箱授权、mpv 是否真画出这条轨(要真机,`KNOWN_ISSUES.md` B 节)。
 final class SubtitleImportTests: XCTestCase {
 
     private var directory: URL!

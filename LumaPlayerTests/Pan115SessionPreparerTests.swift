@@ -2,10 +2,9 @@ import XCTest
 @testable import LumaPlayer
 
 /// `Pan115SessionPreparer` 的行为:起流位置拒绝、`pick_code` 回落、直链每次重取。
-///
-/// ⚠️ **未在真实服务器验证**。桩按 `scheme|host|path` 打,所以 115 的真实主机名可以原样用。
-/// `makeSession` 的成功路径测不了:取直链的响应要用客户端那一次的随机 key 加密,桩造不出合法密文
-/// (见 `Pan115APIClientTests` 的同类说明),这里只覆盖失败与回落分支。
+/// 桩按 `scheme|host|path` 打,所以 115 的真实主机名可以原样用。
+/// `makeSession` 只覆盖失败与回落分支:取直链的响应要用客户端那一次的随机 key 加密,桩造不出合法密文
+/// (见 `Pan115APIClientTests` 的同类说明)。
 final class Pan115SessionPreparerTests: XCTestCase {
     private var store: CredentialStore!
     private var connection: Pan115Connection!

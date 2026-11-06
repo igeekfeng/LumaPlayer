@@ -29,7 +29,7 @@ struct BaiduPanSeriesStructure: Equatable, Sendable {
 }
 
 struct BaiduPanSeason: Equatable, Sendable, Identifiable {
-    /// `nil` = 未分季:剧目录里既有季文件夹又有平铺集文件时,平铺的那批单列一季,不丢掉(`CLAUDE.md` 硬规则 4)。
+    /// `nil` = 未分季:剧目录里既有季文件夹又有平铺集文件时,平铺的那批单列一季,不丢掉(`CLAUDE.md` 硬规则 3)。
     let number: Int?
     /// `第 N 季` / `特别篇`(第 0 季)/ `未分季`
     let title: String

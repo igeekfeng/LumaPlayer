@@ -1,54 +1,20 @@
 # CLAUDE.md
 
 LumaPlayer 是自用的 macOS 原生 Emby 播放器,SwiftUI + **libmpv**(自编,带 gpu-next 后端),**仅 macOS 27** + Apple Silicon。
-处于**维护迭代**:修 bug、按需加功能、跟进服务器差异。
 
-## 文档
+## 注释
+精简 —— 历史看 git;删掉的东西直接删,不留墓碑;不复述代码。
 
-| 文件 | 内容 |
-|---|---|
-| `docs/API_CONTRACT.md` | Emby 接口唯一事实来源:端点、参数、字段、认证、错误映射、fixture 规范 |
-| `docs/MPV_INTEGRATION.md` | libmpv 对接:构建、选项、事件、线程、轨道、字幕、生命周期 |
-| `docs/PITFALLS.md` | 踩坑记录。改签名 / 构建 / 播放内核 / 接口代码前先扫一眼 |
-| `docs/KNOWN_ISSUES.md` | 未决问题、待真实服务器核实项、待人工确认项 |
-| `docs/BAIDU_PAN_API.md` / `PAN115_API.md` / `TMDB_API.md` / `DANDANPLAY_API.md` | 百度网盘 / 115 网盘 / TMDB / 弹弹play 接口的事实来源(同硬规则 1) |
-| `docs/DANMAKU.md` | 弹幕分层、匹配流程与渲染 |
-
-其余知识写在代码的文档注释里:设计 token 与 UI 硬约束在 `Components/DesignTokens.swift`,快捷键在
-`Features/Player/PlayerCommands.swift`,缓存策略在 `Core/Cache/EmbyResponseCache.swift`,凭据存储在
-`Core/Security/CredentialFileStore.swift`。**改了行为就同步改那里的注释**,不要另开文档。
-
-注释与文档只写**现在成立、看代码看不出来**的东西(约束、陷阱、外部接口怪癖、为什么不能改)。
-⛔ 不写修改记录、日期、「以前 / 改成 / 不再 / 已删除」—— 历史看 git;删掉的东西直接删,不留墓碑;不复述代码。
-
-引用约定:「API_CONTRACT.md 4.4」「MPV_INTEGRATION.md §8」是**章节编号**,编号稳定,改文档时不要重排;
 `Qnn` / `M2` / `M4` 是问题编号,未结案在 `KNOWN_ISSUES.md`,已结案在 `PITFALLS.md`。
-
-⛔ 提交信息 / PR 描述里引用上游 issue / PR 不写 owner/repo#N 或完整 GitHub 链接 —— 推到公开仓库后 GitHub 会在上游页面自动挂反向引用,且删不掉。写成 mpv PR 16818 这类不被识别的形式。
+提交信息 / PR 描述里引用上游 issue / PR 不写 owner/repo#N 或完整 GitHub 链接,写成 mpv PR 16818 这类不被识别的形式。
 
 ## 硬规则
 
-1. **不发明 Emby 接口**。只用 `API_CONTRACT.md` 里标 ✅ / 🔶 的端点、参数、字段名;没有的按其 0.2 核实
-   (最可靠是看 Emby Web 怎么发请求)并回填文档后再写,核实不了登记 `KNOWN_ISSUES.md`。
-2. **不谎报验证状态**。判据是「这条命令我跑过并看到成功输出了吗」:build/test 结论必须真跑;接口行为没在真实服务器上
-   验证就标「未在真实服务器验证」(本地实例 4.9.5.0 的结论不外推);UI 外观没亲眼看过截图就标「未视觉验证」。
-   截图只放 scratchpad、看完即删,⛔ 不进仓库。
-3. **不用 `@unchecked Sendable` / `nonisolated(unsafe)` / `@preconcurrency` / 降回 Swift 5 消除并发报错**。
+- **不用 `@unchecked Sendable` / `nonisolated(unsafe)` / `@preconcurrency` / 降回 Swift 5 消除并发报错**。
    唯一例外是 `Core/MPV/` 下包裹 C 指针的类型,须注释论证线程安全(见「并发分层」)。
-4. **不静默吞错、不用假数据占位**。⛔ 空数组 / 假数据 / `try?` 让上层「看起来能跑」;做不了的分支明确抛错并登记
+- **不静默吞错、不用假数据占位**。⛔ 空数组 / 假数据 / `try?` 让上层「看起来能跑」;做不了的分支明确抛错并登记
    `KNOWN_ISSUES.md`。缺省值只在 UI 层决定,不进模型层。
-5. **改动收敛在任务范围内**。顺手发现的问题记进 `KNOWN_ISSUES.md` 或单独提。
-
-## 真实服务器使用纪律(硬约束)
-
-Emby 服务器**都不是自己的**,滥用会被封禁。手工验证一律**只读、低频率、单次请求**。
-
-- ⛔ 压测、并发打同一台、循环刷列表;
-- ⛔ 写操作(标记已看、删除、收藏、移出继续观看、改服务端设置)—— App 里这些按钮只在本地开发实例上点;
-- ⛔ 故意构造异常请求(超大 `Limit`、畸形 `SearchTerm`);⛔ 去别人后台删设备制造 401;
-- ⛔ 真实 host、服务器 Id、token 进仓库 —— fixture 与贴出的日志按 `API_CONTRACT.md` 9.3 脱敏,提交前跑自检。
-
-异常分支用 `MockEmbyURLProtocol` 覆盖;要行为可控的真实 Emby 用本地实例 `Tools/emby-dev/`(Docker,4.9.5.0,见其 README)。
+- **改动收敛在任务范围内**。顺手发现的问题记进 `KNOWN_ISSUES.md` 或单独提。
 
 ## 常用命令
 
@@ -91,7 +57,7 @@ grep -rnE '10{7}|10_000_000|1[eE]-?7|0\.0000001' LumaPlayer/ | grep -v 'TickConv
 ./Scripts/check-privacy.sh
 ```
 
-(1)(2a)(2b) 有输出必须修;(5) 的命中逐条确认是不是真实服务器 / 个人信息。(3)(4) 有误报也有漏报,⛔ 不能因为无输出就声称「已确认无强解包」,只能写「(3)(4) 无输出」。
+(1)(2a)(2b) 有输出必须修;(5) 的命中逐条确认是不是真实服务器 / 个人信息。(3)(4) 有误报也有漏报。
 
 ### 产物检查
 

@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 音频延迟 / 章节 / 画面适配:纯映射与夹取、真实 libmpv 是否接受这些属性(空闲实例设进去再读回,不播放)、
-/// `PlayerViewModel` 的事件与门禁。播放中的实际观感(裁切是否居中、旋转是否跟着字幕)这里验不到。
+/// `PlayerViewModel` 的事件与门禁。
 @MainActor
 final class PictureAndChapterTests: XCTestCase {
 

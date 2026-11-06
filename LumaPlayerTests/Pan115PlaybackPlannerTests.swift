@@ -2,9 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 115 直链 → 播放决策(`docs/PAN115_API.md` §4)。纯函数,不联网。
-///
-/// ⛔ 这里不验证「115 真的会返回什么」—— 那些只能拿真实账号验,未做。
-/// 本文件验的是:地址逐字节原样、只走 DirectStream、请求头按 `f` 参数给、seek 交给内核。
+/// 覆盖:地址逐字节原样、只走 DirectStream、请求头按 `f` 参数给、seek 交给内核。
 final class Pan115PlaybackPlannerTests: XCTestCase {
 
     // MARK: - 地址必须逐字节原样

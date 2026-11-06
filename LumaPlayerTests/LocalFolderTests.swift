@@ -2,7 +2,8 @@ import Synchronization
 import XCTest
 @testable import LumaPlayer
 
-/// 全部在临时目录里跑,⛔ 不碰真实用户文件夹。访问权用 `FakeBookmarks`:沙盒里对临时目录做安全作用域书签的行为与用户选的文件夹不同(见 `LocalFolderBookmarking`)。真实书签 + 外接盘 / 网络卷的行为未验证。
+/// 本地文件夹来源:临时目录里跑列目录 / 文件 id / 路径越界 / Matroska 时长 / 书签访问权 / 起播规划 / 数据往返。
+/// 访问权用 `FakeBookmarks`:沙盒里对临时目录做安全作用域书签的行为与用户选的文件夹不同(见 `LocalFolderBookmarking`)。
 final class LocalFolderTests: XCTestCase {
     private var root: URL!
 

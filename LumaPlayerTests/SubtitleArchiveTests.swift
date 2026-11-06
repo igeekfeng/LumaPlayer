@@ -2,7 +2,7 @@ import XCTest
 @testable import LumaPlayer
 
 /// 字幕压缩包:本地解压(`SubtitleArchiveExtractor`)与 assrt 单文件失败后的整包兜底。
-/// 包用 `/usr/bin/bsdtar` 现场打,顺带验了沙箱里能起 bsdtar 子进程。⛔ 验不到真实 RAR 包(libarchive 能读不能写)。
+/// 包用 `/usr/bin/bsdtar` 现场打,顺带覆盖沙箱里能起 bsdtar 子进程;真实 RAR 包不在覆盖内(libarchive 能读不能写)。
 final class SubtitleArchiveTests: XCTestCase {
 
     private static let token = "TESTTOKEN123"

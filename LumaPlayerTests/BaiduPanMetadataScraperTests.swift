@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// ⛔ 零真实网络:全部走 `MockEmbyURLProtocol`。真实 TMDB 行为待真机验证,见 `docs/KNOWN_ISSUES.md`「TMDB 在线刮削」。
+/// `BaiduPanMetadataScraper` 的在线刮削与目录卡片匹配:零真实网络,全部走 `MockEmbyURLProtocol`。
 final class BaiduPanMetadataScraperTests: XCTestCase {
 
     private let host = "api.themoviedb.org"

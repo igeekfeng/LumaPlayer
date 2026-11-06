@@ -122,7 +122,7 @@ struct FileSourceSeriesDetailView: View {
 
     // MARK: - 元信息行
 
-    /// 「2024 · 共 2 季 · 共 73 集 · ★ 7.8 · 已完结」。缺哪一段就不显示哪一段(`CLAUDE.md` 硬规则 4)。
+    /// 「2024 · 共 2 季 · 共 73 集 · ★ 7.8 · 已完结」。缺哪一段就不显示哪一段(`CLAUDE.md` 硬规则 3)。
     /// ⚠️ 集数是 TMDB 记的全剧总数,不是当前文件夹里的文件数;后者只决定分集列表。
     @ViewBuilder
     private var metaLine: some View {
@@ -684,7 +684,7 @@ private struct FileSourceEpisodeCard: View {
         return "第 \(number) 集"
     }
 
-    /// 「2011-04-17 · 60 分钟 · ★ 7.8」。缺哪段不显示哪段,整段没有就 nil(`CLAUDE.md` 硬规则 4)。
+    /// 「2011-04-17 · 60 分钟 · ★ 7.8」。缺哪段不显示哪段,整段没有就 nil(`CLAUDE.md` 硬规则 3)。
     /// ⚠️ 来自 TMDB 季详情(§7),不是本地文件的时长。
     private var episodeMeta: String? {
         var parts: [String] = []

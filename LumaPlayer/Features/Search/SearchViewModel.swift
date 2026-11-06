@@ -1,7 +1,7 @@
 import Foundation
 
 /// 搜索结果。`SearchTerm` 走 `/Users/{UserId}/Items`(API_CONTRACT.md 3.2 标 🔶,
-/// 待真机核实,见 docs/KNOWN_ISSUES.md Q12)。
+/// 见 docs/KNOWN_ISSUES.md Q12)。
 ///
 /// 只在**提交**时搜索、空关键词不请求(服务器不是我们的);只搜电影 / 剧集 / 单集,
 /// 不限定时服务端会把人物、音乐、文件夹也混进来。

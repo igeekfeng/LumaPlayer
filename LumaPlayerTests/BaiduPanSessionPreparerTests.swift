@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// `BaiduPanSessionPreparer` 不联网就能测的部分。真实取流(设备码 → `dlink` → `method=streaming`)需要真网盘账号,未验证。
+/// `BaiduPanSessionPreparer` 不联网就能测的部分:拒绝 `StartTimeTicks`、权威时长在取流前为 nil。
 final class BaiduPanSessionPreparerTests: XCTestCase {
     private var storage: CredentialFileStore!
     private var credentials: CredentialStore!

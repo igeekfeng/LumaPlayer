@@ -113,7 +113,7 @@ final class EmbyRequestBuilderQueryTests: XCTestCase {
     }
 
     func testImageRequestCarriesAuthHeadersUntilVerified() throws {
-        // 「图片是否需要认证头」未核实(Q12) → 一律带上(多带无害)
+        // 按 Q12,图片请求一律带上认证头(多带无害)
         let request = try makeBuilder().makeRequest(
             for: .image(itemID: "ITEM-1", type: .backdrop, query: EmbyImageQuery(maxWidth: 1360)),
             accessToken: "FAKE_TOKEN_0123456789",

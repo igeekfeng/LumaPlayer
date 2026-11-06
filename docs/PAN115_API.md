@@ -288,7 +288,7 @@ body: data=<urlencode(m115 加密后的 JSON)>
 | App 版下载 | `POST https://proapi.115.com/2.0/ufile/download` | payload key 是 `pick_code`(下划线),响应是扁平 `{"url":…}` 没有文件名/大小;且属于「非网页端」行为,风控更重 |
 | `os_mac` 版 | `POST https://proapi.115.com/2.0/ufile/downurl` | 要 **ECDH P-224 + AES-CBC**,而 CryptoKit 只有 P-256/384/521,**没有 P-224**;且 115 已下架 mac 客户端 |
 | 网页 302 | `GET https://115.com/?ct=download&ac=video&pickcode=` | **最大 200 MB**,只能兜底 |
-| 网页 m3u8 | `GET https://115.com/api/video/m3u8/{pickcode}.m3u8?definition=<n>` | 要 web Cookie、m3u8 内层也绑 UA、消耗 115 转码资源。见 §7 待办 |
+| 网页 m3u8 | `GET https://115.com/api/video/m3u8/{pickcode}.m3u8?definition=<n>` | 要 web Cookie、m3u8 内层也绑 UA、消耗 115 转码资源。见 §7 |
 
 ### 4.3 直链的 `f` 参数决定要不要带 UA / Cookie
 
@@ -370,17 +370,17 @@ from p115cipher.util import rsa_gen_key, xor, rsa_decrypt_with_pubkey
 - 403 一律当「直链过期」处理:重取一次;再失败就报错给用户,⛔ 不循环重试。
 - 翻页用服务端回显的 `offset` 推进,⛔ 不自行累加(防越界静默回绕,§3.2)。
 
-## 7. 未核实 / 待办
+## 7. 边界与未知量
 
-- ❗ **网页 m3u8 路线未在真实账号验证**:`GET https://115.com/api/video/m3u8/{pickcode}.m3u8` 需要真实 web Cookie,
+- ❗ **网页 m3u8 路线**:`GET https://115.com/api/video/m3u8/{pickcode}.m3u8` 需要真实 web Cookie,
   本项目没有凭据。p115client docstring 说它「只支持 web 的 cookies」且 m3u8 内层链接「会绑定前一次请求时的 user-agent」。
   多音轨(`multitrack_list`)只能靠它。见 `KNOWN_ISSUES.md`。
 - ❗ **Cookie 有效期未知**。社区说法从「几天」到「几个月」都有,无一手证据。本项目**不主动探活** ——
   Cookie 失效会在第一次读盘时以 `errno 990001` / `40101035` 暴露,那时浏览页切扫码屏(§2.3)。
 - ❗ **因 Cookie 被封号的一手案例未找到**。协议明确禁止(§8),但实际处置案例只有社区转述。
 - ❗ 直链 `t` 的具体有效秒数未知(只有「读 `t` 提前 5 分钟」这个做法)。
-- ❗ **删除**(`POST /rb/delete`,§9)未在真实账号验证:请求形状、`state:1`、目录用 `cid` 当 `fid`、
-  「进回收站」都只有源码侧证据。结案方式见 `KNOWN_ISSUES.md` 的 115 小节。
+- ❗ **删除**(`POST /rb/delete`,§9):请求形状、`state:1`、目录用 `cid` 当 `fid`、
+  「进回收站」都只有源码侧证据。见 `KNOWN_ISSUES.md` 的 115 小节。
 
 ## 8. 合规(必须在 UI 里告知用户)
 
@@ -438,8 +438,8 @@ body: fid[0]=<文件或目录的 id>&fid[1]=…
   - `590075` 操作太频繁 ⇒ 与 §6 同一档,进冷却。
 
 **本项目的约束**:
-- 一次请求只删一条。接口支持批量,但批量条数上限、逐条失败语义、目录后台执行都没实测,⛔ 不碰。
+- 一次请求只删一条。接口支持批量,但批量条数上限、逐条失败语义、目录后台执行都无一手证据,⛔ 不碰。
 - 失败⛔ 不重试(重试 = 第二次删除,还多一次风控面);`231011` 除外 —— 它不重发也不报错。
 - 删完⛔ 不为了刷新再列一次目录:调用方本地移除条目、让目录缓存失效(`FileSourceViewModel.delete`)。
-- ⚠️ **未在真实账号验证**(本机无 115 账号)。请求形状、`state:1`、目录用 `cid`、回收站效果都只有源码侧证据,
+- ⚠️ 本机无 115 账号。请求形状、`state:1`、目录用 `cid`、回收站效果都只有源码侧证据,
   见 `KNOWN_ISSUES.md` 的 115 小节。

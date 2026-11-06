@@ -1,9 +1,9 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 字幕延迟与外观,分三层验:`SubtitleStyle` → mpv 属性的映射 / 夹取 / 持久化;真实 libmpv 是否接受这些属性
+/// 字幕延迟与外观:`SubtitleStyle` → mpv 属性的映射 / 夹取 / 持久化;真实 libmpv 是否接受这些属性
 /// (空闲 `MPVPlayer` 设进去再读回,不播放);`PlayerViewModel` 的字幕延迟(有会话时的步进要真实播放,不在这里覆盖)。
-/// 字幕实际渲染效果这里验不到(KNOWN_ISSUES.md Q40)。
+/// 字幕实际渲染效果见 KNOWN_ISSUES.md Q40。
 @MainActor
 final class SubtitleSettingsTests: XCTestCase {
 

@@ -27,7 +27,7 @@ enum SecondarySubtitle {
     /// mpv `--sub-font-size` 默认 38(本 App 不改),单位是 720 高画面下的 scaled pixel。
     static let fontSize = 38.0
     static let referenceHeight = 720.0
-    /// 行高 / 字号:libass 行高 ≈ 字体 ascent + descent,中文字体约 1.2,再算上描边。估算值,未视觉验证(KNOWN_ISSUES.md Q56)。
+    /// 行高 / 字号:libass 行高 ≈ 字体 ascent + descent,中文字体约 1.2,再算上描边。估算值(KNOWN_ISSUES.md Q56)。
     static let lineHeightFactor = 1.25
     /// 主副字幕之间的空隙,占画面高度的百分比
     static let gapPercent = 1.0

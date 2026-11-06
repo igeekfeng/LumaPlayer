@@ -1,7 +1,7 @@
 import XCTest
 @testable import LumaPlayer
 
-/// API_CONTRACT.md 8.1 的可选性原则与必填表。`public_info.json` 是真实 4.7.11.0 响应脱敏;带 `_synthetic` 后缀的是构造数据,未在真实服务器验证(9.4)。
+/// API_CONTRACT.md 8.1 的可选性原则与必填表。`public_info.json` 是真实 4.7.11.0 响应脱敏;带 `_synthetic` 后缀的是构造数据(9.4)。
 final class EmbyFixtureDecodingTests: XCTestCase {
     private let decoder = ResponseDecoder()
 

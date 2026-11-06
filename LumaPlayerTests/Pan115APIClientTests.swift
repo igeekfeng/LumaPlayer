@@ -2,10 +2,8 @@ import XCTest
 @testable import LumaPlayer
 
 /// `Pan115APIClient` 的传输层行为:错误码映射、翻页、直链请求头。
-///
-/// ⚠️ **未在真实服务器验证**。这里全部用 `MockEmbyURLProtocol` 造响应 ——
-/// 它按 `scheme|host|path` 打桩,所以 115 的真实主机名(`webapi.115.com` 等)可以原样用。
-/// `downloadURL` 的**成功**路径测不了:响应要用客户端那次的随机 key 加密,桩造不出来(见该用例注释)。
+/// 全部用 `MockEmbyURLProtocol` 打桩(`scheme|host|path`),所以 115 的真实主机名(`webapi.115.com` 等)可以原样用。
+/// `downloadURL` 只测失败路径:成功响应要用客户端那一次的随机 key 加密,桩造不出来(见该用例注释)。
 final class Pan115APIClientTests: XCTestCase {
     private var session: URLSession!
     private var client: Pan115APIClient!
@@ -414,9 +412,9 @@ final class Pan115APIClientTests: XCTestCase {
 
     // MARK: - downloadURL
 
-    /// ⚠️ **只测失败路径**。成功路径的响应必须用客户端那一次的随机 key 加密,
+    /// 只测失败路径。成功路径的响应必须用客户端那一次的随机 key 加密,
     /// 而 key 不随请求发出(它内嵌在密文里,`decode` 用的是调用方传的那个),
-    /// 桩无法生成合法密文 —— 这一段只能靠真实账号验证(`KNOWN_ISSUES.md`)。
+    /// 桩无法生成合法密文。
     func testDownloadURLSurfacesBusinessError() async {
         MockEmbyURLProtocol.stub(
             .json(#"{"state":0,"errno":990001,"error":"请重新登录"}"#),

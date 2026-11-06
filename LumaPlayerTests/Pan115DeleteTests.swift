@@ -1,10 +1,8 @@
 import XCTest
 @testable import LumaPlayer
 
-/// 115 删除的真实链路:浏览页 → `FileSourceViewModel.delete` → `Pan115Connection.deleteFile`
-/// → `POST /rb/delete`。
-///
-/// ⚠️ **未在真实账号验证**(本机无 115 账号):这里用 `MockEmbyURLProtocol` 造响应。
+/// 115 删除的链路:浏览页 → `FileSourceViewModel.delete` → `Pan115Connection.deleteFile`
+/// → `POST /rb/delete`。全部用 `MockEmbyURLProtocol` 造响应。
 /// 请求形状取自 `115driver` / `p115client`(`docs/PAN115_API.md` §9)。
 @MainActor
 final class Pan115DeleteTests: XCTestCase {
