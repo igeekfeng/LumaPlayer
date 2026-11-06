@@ -538,7 +538,7 @@ struct FileSourceSeriesDetailView: View {
 
 // MARK: - 一位演职员
 
-/// 一张演职员卡:圆形头像 + 姓名 + 角色 / 职务(+ aggregate 的参演集数)。
+/// 一张演职员卡:圆形头像 + 姓名 + 角色 / 职务。
 private struct FileSourcePersonCard: View {
     let person: TMDBPerson
     let descriptor: ImageDescriptor?
@@ -562,12 +562,6 @@ private struct FileSourcePersonCard: View {
                 Text(role)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            if let count = person.totalEpisodeCount, count > 0 {
-                Text("参演 \(count) 集")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
         }
