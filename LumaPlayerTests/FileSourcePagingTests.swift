@@ -449,6 +449,47 @@ final class FileSourcePagingTests: XCTestCase {
         XCTAssertNil(viewModel.loadMoreFailure)
     }
 
+    /// 回归:从「继续观看」卡片直接起播,补列目录拿到的是文件名字串序(`10.mkv` 在 `2.mkv` 前),
+    /// 播放页的换集队列仍要按集号排 —— 与先详情再看同一口径。
+    ///
+    /// 走真实的 `play(_ card:)`,不是只测装配函数:顺序错的就是这条路径。
+    @MainActor
+    func testResumeCardPlayBuildsEpisodeQueueInEpisodeOrder() async throws {
+        let sourceID = UUID()
+        let localSource = Self.localFolderSource()
+        // 网盘 / 本地列目录的原始序:01.mkv、10.mkv、02.mkv(文件名字串序)
+        let files = [
+            Self.file(name: "01.mkv", id: 1),
+            Self.file(name: "10.mkv", id: 10),
+            Self.file(name: "02.mkv", id: 2)
+        ]
+        let provider = StubBrowsingProvider(
+            sourceID: sourceID,
+            pages: [StubBrowsingProvider.Page(
+                files: files, hasMore: false, nextOffset: files.count,
+                totalCount: files.count)])
+        let container = try makeContainer()
+        let viewModel = FileSourceViewModel(
+            container: container, source: .localFolder(localSource), loadsDirectory: false)
+        viewModel.setBrowsingProviderOverride(provider)
+
+        // 卡片指向第 2 集(`02.mkv` = fs_id 2)
+        let card = try XCTUnwrap(FileSourceResumeCard(record: WatchProgressStore.ResumeRecord(
+            fileID: "2", positionSeconds: 600, durationSeconds: 2400, updatedAt: Date(),
+            display: WatchProgressStore.Display(
+                sourceID: sourceID, title: "示例剧", locator: files[2].path,
+                fileName: "02.mkv", cover: nil, episodeNumber: 2))))
+        let played = await viewModel.play(card)
+        XCTAssertTrue(played)
+
+        let request = try XCTUnwrap(container.state.nowPlaying)
+        XCTAssertEqual(
+            request.episodeQueue?.episodes.map(\.id), ["1", "2", "10"],
+            "换集队列按集号,⛔ 不是补列目录的文件名字串序")
+        XCTAssertEqual(request.episodeQueue?.current?.id, "2")
+        XCTAssertEqual(request.episodeQueue?.next?.id, "10")
+    }
+
     /// 翻页失败**不清空**已显示的内容(同 Emby 侧 `PagedItemList` 的语义)。
     @MainActor
     func testLoadingMoreFailureKeepsTheLoadedItems() async throws {
