@@ -24,6 +24,8 @@ struct TMDBResult: Decodable, Sendable, Equatable {
 
     let overview: String?
     let posterPath: String?
+    /// 横版背景图相对路径(§9)。搜索响应也带,可为 `null`
+    let backdropPath: String?
     let voteAverage: Double?
 
     // MARK: 只有详情端点 `/3/{tv|movie}/{id}` 才给(§9),搜索响应里恒为 nil
@@ -55,6 +57,7 @@ struct TMDBResult: Decodable, Sendable, Equatable {
         case firstAirDate = "first_air_date"
         case overview
         case posterPath = "poster_path"
+        case backdropPath = "backdrop_path"
         case voteAverage = "vote_average"
         case genres
         case tagline
@@ -79,6 +82,7 @@ struct TMDBResult: Decodable, Sendable, Equatable {
         self.firstAirDate = try container.decodeIfPresent(String.self, forKey: .firstAirDate)
         self.overview = try container.decodeIfPresent(String.self, forKey: .overview)
         self.posterPath = try container.decodeIfPresent(String.self, forKey: .posterPath)
+        self.backdropPath = try container.decodeIfPresent(String.self, forKey: .backdropPath)
         self.voteAverage = try container.decodeIfPresent(Double.self, forKey: .voteAverage)
         self.genres = try container.decodeIfPresent([TMDBGenre].self, forKey: .genres)
         self.tagline = try container.decodeIfPresent(String.self, forKey: .tagline)
@@ -103,6 +107,7 @@ struct TMDBResult: Decodable, Sendable, Equatable {
         firstAirDate: String? = nil,
         overview: String? = nil,
         posterPath: String? = nil,
+        backdropPath: String? = nil,
         voteAverage: Double? = nil,
         genres: [TMDBGenre]? = nil,
         tagline: String? = nil,
@@ -123,6 +128,7 @@ struct TMDBResult: Decodable, Sendable, Equatable {
         self.firstAirDate = firstAirDate
         self.overview = overview
         self.posterPath = posterPath
+        self.backdropPath = backdropPath
         self.voteAverage = voteAverage
         self.genres = genres
         self.tagline = tagline
@@ -196,6 +202,8 @@ struct TMDBMatch: Sendable, Equatable {
     let year: Int?
     let overview: String?
     let posterPath: String?
+    /// 横版背景图(§9)。搜索命中时也带,可为 nil
+    let backdropPath: String?
     let voteAverage: Double?
 
     // MARK: 只有详情端点才有值(§9),搜索命中时为空;列表卡片拿不到,⛔ 不为此改搜索链路
@@ -220,6 +228,9 @@ struct TMDBMatch: Sendable, Equatable {
     /// nil → UI 降级成图标卡
     var posterURL: URL? { TMDBImage.posterURL(path: posterPath) }
 
+    /// 横版背景图(§9)。nil → hero 退回竖版海报放大模糊
+    var backdropURL: URL? { TMDBImage.backdropURL(path: backdropPath) }
+
     /// 规格里 `status` 没有枚举定义,只映射规格示例出现过的值;其余原样显示英文,⛔ 不猜中文词。
     var statusText: String? {
         guard let status = nonEmptyString(status) else { return nil }
@@ -243,6 +254,7 @@ struct TMDBMatch: Sendable, Equatable {
         }
         self.overview = nonEmptyString(result.overview)
         self.posterPath = nonEmptyString(result.posterPath)
+        self.backdropPath = nonEmptyString(result.backdropPath)
         self.voteAverage = result.voteAverage
         self.genres = (result.genres ?? []).compactMap { nonEmptyString($0.name) }
         self.tagline = nonEmptyString(result.tagline)
@@ -387,6 +399,68 @@ struct TMDBSeriesProfile: Sendable, Equatable {
     }
 }
 
+// MARK: - 图片集合(§12)
+
+/// `/images` 响应元素的领域类型。⛔ 只留展示要的字段,缺就是 nil。
+struct TMDBImageAsset: Sendable, Equatable, Identifiable {
+    /// `file_path` 自带版本语义,可直接作 id 与缓存 key
+    let filePath: String
+    let width: Int?
+    let height: Int?
+
+    var id: String { filePath }
+}
+
+/// `/images` 各端点的领域结果:没有那一类就是空数组(⛔ 不用假数据占位)。
+struct TMDBImageSet: Sendable, Equatable {
+    var backdrops: [TMDBImageAsset] = []
+    var posters: [TMDBImageAsset] = []
+    var logos: [TMDBImageAsset] = []
+    var stills: [TMDBImageAsset] = []
+
+    var isEmpty: Bool {
+        backdrops.isEmpty && posters.isEmpty && logos.isEmpty && stills.isEmpty
+    }
+}
+
+/// `/images` 线格式(§12)。四类数组都可能缺 / 为空;`file_path` 之外一律可选。
+struct TMDBImagesResponse: Decodable, Sendable {
+    let backdrops: [TMDBImageAssetLine]?
+    let posters: [TMDBImageAssetLine]?
+    let logos: [TMDBImageAssetLine]?
+    let stills: [TMDBImageAssetLine]?
+}
+
+/// `file_path` 必填(没有路径的图没法展示);其余可选。
+struct TMDBImageAssetLine: Decodable, Sendable {
+    let filePath: String
+    let width: Int?
+    let height: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case filePath = "file_path"
+        case width
+        case height
+    }
+}
+
+extension TMDBImagesResponse {
+    var asImageSet: TMDBImageSet {
+        TMDBImageSet(
+            backdrops: Self.assets(backdrops),
+            posters: Self.assets(posters),
+            logos: Self.assets(logos),
+            stills: Self.assets(stills)
+        )
+    }
+
+    private static func assets(_ lines: [TMDBImageAssetLine]?) -> [TMDBImageAsset] {
+        (lines ?? [])
+            .filter { !$0.filePath.isEmpty }
+            .map { TMDBImageAsset(filePath: $0.filePath, width: $0.width, height: $0.height) }
+    }
+}
+
 // MARK: - 图片地址
 
 /// TMDB 图片地址:`https://image.tmdb.org/t/p/{size}/{path}`(§4)。档位写死,
@@ -399,9 +473,19 @@ enum TMDBImage {
     static let stillSize = "w300"
     /// 头像卡片约 75pt 宽(§11)
     static let profileSize = "w185"
+    /// 背景图用 `/3/configuration` 给的 backdrop 档位(§12)
+    static let backdropSize = "w1280"
+    /// 海报墙(§12)
+    static let galleryPosterSize = "w500"
+    /// Logo 墙(§12)
+    static let logoSize = "w300"
 
     /// `path` 形如 `/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg`;为空时返回 nil。
     static func posterURL(path: String?, size: String = posterSize) -> URL? {
+        url(path: path, size: size)
+    }
+
+    static func backdropURL(path: String?, size: String = backdropSize) -> URL? {
         url(path: path, size: size)
     }
 

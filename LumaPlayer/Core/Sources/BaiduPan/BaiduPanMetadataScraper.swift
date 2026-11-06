@@ -74,6 +74,18 @@ actor BaiduPanMetadataScraper {
     /// 详情页专用(`seriesProfile`);值 nil = 404
     private var creditsCache: [DetailsKey: TMDBCredits?] = [:]
 
+    /// 图片集合的键:影 / 剧分空间,季 / 集再细一层(§12)。
+    struct ImageKey: Hashable, Sendable {
+        let id: Int
+        let isSeries: Bool
+        let season: Int?
+        let episode: Int?
+    }
+
+    /// 图片集合:进程内缓存 + 单飞。⛔ 失败不缓存(下次可重试),取消也不留半成品。
+    private var imageCache: [ImageKey: TMDBImageSet] = [:]
+    private var imageTasks: [ImageKey: Task<TMDBImageSet, Error>] = [:]
+
     /// 只给界面提一句,⛔ 不进模型层
     private(set) var lastFailureDescription: String?
 
@@ -472,20 +484,30 @@ actor BaiduPanMetadataScraper {
         item.kind == .folder && !item.title.isEmpty
     }
 
-    /// 剧级海报。⛔ 目录卡片与详情页(`FileSourceViewModel`)必须共用这里的拼法,否则两个入口海报不一致。
-    static func posterDescriptor(for match: TMDBMatch, sourceID: UUID) -> ImageDescriptor? {
-        guard let url = match.posterURL, let path = match.posterPath else { return nil }
+    /// TMDB 图床的图描述符。⛔ 目录卡片与详情页必须共用这里的拼法,否则两个入口海报不一致。
+    /// 公开 CDN 不带认证头(§4);`filePath` 自带版本语义,直接进缓存 key。
+    static func imageDescriptor(
+        path: String?, size: String, sourceID: UUID
+    ) -> ImageDescriptor? {
+        guard let path, !path.isEmpty,
+              let url = TMDBImage.posterURL(path: path, size: size) else { return nil }
         return .remote(
             ownerID: sourceID,
             url: url,
-            // 公开 CDN,不带认证头(`docs/TMDB_API.md` §4)
             headers: [:],
             cacheKey: ImageDescriptor.tmdbPosterKey(
-                sourceID: sourceID,
-                posterPath: path,
-                size: TMDBImage.posterSize
-            )
+                sourceID: sourceID, posterPath: path, size: size)
         )
+    }
+
+    /// 剧级海报。
+    static func posterDescriptor(for match: TMDBMatch, sourceID: UUID) -> ImageDescriptor? {
+        imageDescriptor(path: match.posterPath, size: TMDBImage.posterSize, sourceID: sourceID)
+    }
+
+    /// 剧级横版背景图(§9)。nil 时 hero 退回竖版海报放大模糊。
+    static func backdropDescriptor(for match: TMDBMatch, sourceID: UUID) -> ImageDescriptor? {
+        imageDescriptor(path: match.backdropPath, size: TMDBImage.backdropSize, sourceID: sourceID)
     }
 
     /// - Parameter fillTMDBID: 只有目录卡片要(详情页按它取 `seriesProfile`)。分集 / 单条视频填了
@@ -554,6 +576,58 @@ actor BaiduPanMetadataScraper {
             return series
         }
         return await detailsMatch(id: id, isSeries: false, token: token)
+    }
+
+    // MARK: - 图片集合(按需,§12)
+
+    /// 取某一层的多图候选,**只在用户点开图片时才调用**。
+    /// ⛔ 剧级 /images 不并进 `seriesProfile`(进详情页不该固定多一次请求);
+    /// ⛔ 分集 /images 更不为整季批量拉 —— 一次一次按需发。
+    ///
+    /// 缓存 + 单飞:同一 key 重复查看零请求;换剧时 key 不同自然隔离。
+    /// 失败抛 `TMDBError` 给调用方,⛔ 不静默吞、不拿空数组冒充「没有图」。
+    func imageSet(
+        id: Int,
+        isSeries: Bool,
+        season: Int? = nil,
+        episode: Int? = nil
+    ) async throws -> TMDBImageSet {
+        let key = ImageKey(id: id, isSeries: isSeries, season: season, episode: episode)
+        if let cached = imageCache[key] { return cached }
+        if let running = imageTasks[key] { return try await running.value }
+
+        let task = Task<TMDBImageSet, Error> { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.fetchImageSet(key: key)
+        }
+        imageTasks[key] = task
+        do {
+            let result = try await task.value
+            imageCache[key] = result
+            imageTasks[key] = nil
+            return result
+        } catch {
+            imageTasks[key] = nil
+            throw error
+        }
+    }
+
+    private func fetchImageSet(key: ImageKey) async throws -> TMDBImageSet {
+        let token: String
+        do {
+            guard let stored = try await credentials.tmdbReadAccessToken(),
+                  !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw TMDBError.tokenMissing
+            }
+            token = stored
+        } catch let error as TMDBError {
+            throw error
+        } catch {
+            throw TMDBError.transport("读取 TMDB 凭据失败")
+        }
+        return try await client.images(
+            id: key.id, isSeries: key.isSeries,
+            seasonNumber: key.season, episodeNumber: key.episode, token: token)
     }
 
     /// 缓存口径同 `detailsMatch`

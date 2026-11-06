@@ -134,6 +134,40 @@ struct TMDBClient: Sendable {
         )
     }
 
+    // MARK: - 图片集合(§12)
+
+    /// 取某一层的多图候选。⚠️ `episodeNumber` 非空时是**每集一次**请求,调用方须按需触发(§12 请求纪律)。
+    /// 失败折叠成 `TMDBError` 抛给调用方;空数组 = 这一类没有候选图,⛔ 不伪造。
+    func images(
+        id: Int,
+        isSeries: Bool,
+        seasonNumber: Int? = nil,
+        episodeNumber: Int? = nil,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBImageSet {
+        // ⛔ 集号没有季号就没法拼路径,不能静默退化成剧级端点(硬规则 4)
+        if episodeNumber != nil && seasonNumber == nil {
+            throw TMDBError.transport("分集图片缺季号")
+        }
+        let endpoint: TMDBEndpoint
+        if let episodeNumber, let seasonNumber {
+            endpoint = .tvEpisodeImages(
+                seriesID: id, seasonNumber: seasonNumber,
+                episodeNumber: episodeNumber, language: language)
+        } else if let seasonNumber {
+            endpoint = .tvSeasonImages(
+                seriesID: id, seasonNumber: seasonNumber, language: language)
+        } else {
+            endpoint = isSeries
+                ? .tvImages(id: id, language: language)
+                : .movieImages(id: id, language: language)
+        }
+        let data = try await send(endpoint, token: token)
+        let response: TMDBImagesResponse = try decode(data, endpoint: endpoint)
+        return response.asImageSet
+    }
+
     // MARK: - 传输与解码
 
     /// 只做传输层校验。

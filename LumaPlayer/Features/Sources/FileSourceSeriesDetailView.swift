@@ -17,6 +17,8 @@ struct FileSourceSeriesDetailView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var isOverviewExpanded = false
+    /// 点开的图片墙(剧级 / 季 / 集);nil = 没打开
+    @State private var imageRequest: FileSourceImageRequest?
 
     var body: some View {
         ScrollView {
@@ -35,13 +37,25 @@ struct FileSourceSeriesDetailView: View {
         }
         // hero 铺到窗口最上沿(与 Emby 详情页一致),不铺则顶栏那段露出窗口底色
         .ignoresSafeArea(.container, edges: .top)
+        .sheet(item: $imageRequest) { request in
+            FileSourceImageGalleryView(
+                request: request,
+                sourceID: viewModel.seriesSourceID ?? UUID(),
+                store: store,
+                load: { request in
+                    try await viewModel.loadImageSet(
+                        season: request.season, episode: request.episode)
+                }
+            )
+        }
     }
 
     // MARK: - Hero
 
     /// 背景 + 海报 + 标题区。
-    /// ⚠️ 与 Emby 的 `DetailHero` 不同:只有竖版海报,背景用海报放大模糊压暗;
-    /// 没有海报就退成一层很淡的渐变,⛔ 不拿占位图撑出一大块灰。
+    /// ⚠️ 与 Emby 的 `DetailHero` 不同:只有竖版海报;背景优先用 TMDB 的横版 backdrop(§9),
+    /// 没有 backdrop 才退回海报放大模糊压暗;连海报都没有就退成一层很淡的渐变,
+    /// ⛔ 不拿占位图撑出一大块灰。
     private var hero: some View {
         VStack(alignment: .leading, spacing: 0) {
             backdrop
@@ -73,7 +87,17 @@ struct FileSourceSeriesDetailView: View {
 
     @ViewBuilder
     private var backdrop: some View {
-        if let descriptor = viewModel.seriesItem?.poster {
+        if let descriptor = viewModel.seriesBackdrop {
+            // 真正的横版背景图:不用重度模糊,只轻压暗让文字可读
+            PosterImage(descriptor: descriptor, store: store, placeholderSystemImage: "tv")
+                .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fill)
+                .overlay {
+                    Color(nsColor: .windowBackgroundColor)
+                        .opacity(Metrics.heroBackdropDimOpacity)
+                }
+                .accessibilityHidden(true)
+        } else if let descriptor = viewModel.seriesItem?.poster {
+            // 没有 backdrop:竖版海报放大模糊压暗(原来的退路)
             PosterImage(descriptor: descriptor, store: store, placeholderSystemImage: "tv")
                 .scaleEffect(Metrics.heroBackdropScale)
                 .blur(radius: Metrics.heroBackdropBlur)
@@ -195,35 +219,50 @@ struct FileSourceSeriesDetailView: View {
     // MARK: - 操作
 
     /// 播放主按钮:作用于定位的那一集(有进度的那集,否则第一集)。分集还没到手时整块不画,⛔ 不给空按钮。
+    /// 「图片」按钮只在认出 TMDB 身份后出现 —— 没身份就不给点了没反应的入口。
     @ViewBuilder
     private var actions: some View {
-        if let episode = viewModel.focusedEpisode {
-            GlassEffectContainer(spacing: Metrics.spacingM) {
-                HStack(spacing: Metrics.spacingM) {
-                    Button {
-                        play(episode)
-                    } label: {
-                        Label(playTitle(for: episode), systemImage: "play.fill")
-                            .padding(.horizontal, Metrics.spacingS)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    .keyboardShortcut(.defaultAction)
-                    if hasProgress(episode) {
+        HStack(spacing: Metrics.spacingM) {
+            if let episode = viewModel.focusedEpisode {
+                GlassEffectContainer(spacing: Metrics.spacingM) {
+                    HStack(spacing: Metrics.spacingM) {
                         Button {
-                            play(episode, fromBeginning: true)
+                            play(episode)
                         } label: {
-                            Label("从头播放", systemImage: "arrow.counterclockwise")
+                            Label(playTitle(for: episode), systemImage: "play.fill")
+                                .padding(.horizontal, Metrics.spacingS)
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glassProminent)
                         .controlSize(.large)
+                        .keyboardShortcut(.defaultAction)
+                        if hasProgress(episode) {
+                            Button {
+                                play(episode, fromBeginning: true)
+                            } label: {
+                                Label("从头播放", systemImage: "arrow.counterclockwise")
+                            }
+                            .buttonStyle(.glass)
+                            .controlSize(.large)
+                        }
                     }
                 }
+            } else if viewModel.isLoadingEpisodes {
+                Text("正在读取分集…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        } else if viewModel.isLoadingEpisodes {
-            Text("正在读取分集…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if viewModel.seriesImageIdentity != nil {
+                Button {
+                    imageRequest = FileSourceImageRequest(
+                        title: viewModel.seriesItem?.title ?? "剧集",
+                        season: nil, episode: nil)
+                } label: {
+                    Label("图片", systemImage: "photo.on.rectangle")
+                }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+                .help("浏览 TMDB 的背景图 / 海报 / Logo")
+            }
         }
     }
 
@@ -340,6 +379,8 @@ struct FileSourceSeriesDetailView: View {
             FileSourceEpisodeShelf(
                 episodes: viewModel.episodes,
                 isMultiSeason: !structure.isSingleSeason,
+                seasonNumber: viewModel.selectedSeason?.number,
+                canShowImages: viewModel.seriesImageIdentity != nil,
                 store: store,
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
                 isWatched: { viewModel.isWatched($0) },
@@ -350,6 +391,18 @@ struct FileSourceSeriesDetailView: View {
                 },
                 onMarkAll: { played in
                     Task { await viewModel.markSeasonPlayed(played) }
+                },
+                // ⚠️ 每集一次请求,只在点开这一集时才发(§12)
+                onShowImages: { episode in
+                    guard let season = viewModel.selectedSeason?.number,
+                          let number = episode.episodeNumber else { return }
+                    imageRequest = FileSourceImageRequest(
+                        title: "第 \(season) 季 · 第 \(number) 集",
+                        season: season, episode: number)
+                },
+                onSeasonImages: { season in
+                    imageRequest = FileSourceImageRequest(
+                        title: "第 \(season) 季", season: season, episode: nil)
                 }
             )
         }
@@ -534,6 +587,9 @@ private struct FileSourceEpisodeShelf: View {
     let episodes: [SourceItem]
     /// 多季时这一排只是「本季」,头部元信息行的「共 N 集」是 TMDB 全剧总数,别让两处看起来打架。
     let isMultiSeason: Bool
+    /// 当前季号;分集图片端点要它,nil(未分季)时不给入口
+    let seasonNumber: Int?
+    let canShowImages: Bool
     let store: PosterImageStore
     let resumeSeconds: (SourceItem) -> Double?
     let isWatched: (SourceItem) -> Bool
@@ -542,6 +598,10 @@ private struct FileSourceEpisodeShelf: View {
     let onMark: (SourceItem, Bool) -> Void
     /// 整季标记(分集已经在手上,零请求)
     let onMarkAll: (Bool) -> Void
+    /// ⚠️ 每集一次请求,只在这一集被点开时触发(§12)
+    let onShowImages: (SourceItem) -> Void
+    /// 季海报:点开才发一次请求(§12)
+    let onSeasonImages: ((Int) -> Void)?
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
@@ -556,6 +616,13 @@ private struct FileSourceEpisodeShelf: View {
                 Menu {
                     Button("标记本季全部已看", systemImage: "checkmark.circle") { onMarkAll(true) }
                     Button("标记本季全部未看", systemImage: "arrow.counterclockwise") { onMarkAll(false) }
+                    // 季海报只在认出季号 + TMDB 身份时给:一次请求,点开才发
+                    if canShowImages, let seasonNumber {
+                        Divider()
+                        Button("查看本季海报", systemImage: "photo") {
+                            onSeasonImages?(seasonNumber)
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -575,8 +642,11 @@ private struct FileSourceEpisodeShelf: View {
                             store: store,
                             resumeSeconds: resumeSeconds(episode),
                             isWatched: isWatched(episode),
+                            canShowImages: canShowImages
+                                && seasonNumber != nil && episode.episodeNumber != nil,
                             onPlay: { onPlay(episode) },
-                            onMark: { played in onMark(episode, played) }
+                            onMark: { played in onMark(episode, played) },
+                            onShowImages: { onShowImages(episode) }
                         )
                     }
                 }
@@ -613,8 +683,10 @@ private struct FileSourceEpisodeCard: View {
     /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
     let resumeSeconds: Double?
     let isWatched: Bool
+    let canShowImages: Bool
     let onPlay: () -> Void
     let onMark: (Bool) -> Void
+    let onShowImages: () -> Void
 
     @State private var isHovering = false
 
@@ -659,6 +731,10 @@ private struct FileSourceEpisodeCard: View {
                 Button("标记为未看", systemImage: "arrow.counterclockwise") { onMark(false) }
             } else {
                 Button("标记为已看", systemImage: "checkmark.circle") { onMark(true) }
+            }
+            if canShowImages {
+                Divider()
+                Button("查看本集剧照", systemImage: "photo") { onShowImages() }
             }
         }
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)

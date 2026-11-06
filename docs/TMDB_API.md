@@ -238,7 +238,8 @@ id 在该端点不存在时返回 404(`status_code: 34`,见 §5)→ 折成 `.not
 | `last_air_date` | string | ✅ | ⛔ | 完结日 / 最后播出日 |
 | `episode_run_time` | `[int]` | ✅ | ⛔ | 单集片长(分钟) |
 | `runtime` | int | ⛔ | ✅ | 片长(分钟) |
-| `homepage` / `popularity` / `original_language` / `production_countries` / `spoken_languages` / `adult` / `backdrop_path` | — | ✅ | ✅ | 本项目不读 |
+| `backdrop_path` | string | ✅ | ✅ | 横版背景图相对路径(可能为 `null`)→ 走 §4 的 `w1280` 档;详情页 hero 用它,⛔ 不再拿竖版海报放大模糊 |
+| `homepage` / `popularity` / `original_language` / `production_countries` / `spoken_languages` / `adult` | — | ✅ | ✅ | 本项目不读 |
 
 ## 10. 演职员端点(演员列表 / 主创)
 
@@ -300,6 +301,52 @@ to a TV show」,才与官网剧集页那份完整演员表一致。两者差的�
 
 ⚠️ 分季 / 分集的演职员另有 `/3/tv/{id}/season/{n}/credits` 与
 `/3/tv/{id}/season/{n}/episode/{e}/credits`,本项目不用。
+
+## 12. 图片集合端点(§4 之外的多图)
+
+`GET /3/tv/{series_id}/images`、`GET /3/tv/{series_id}/season/{season_number}/images`、
+`GET /3/tv/{series_id}/season/{season_number}/episode/{episode_number}/images`、
+`GET /3/movie/{movie_id}/images`
+
+同一份官方 OpenAPI 规格读出:
+
+| 参数 | 位置 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|---|
+| `series_id` / `movie_id` | path | integer | ✅ | — | 剧 / 电影的 TMDB id |
+| `season_number` / `episode_number` | path | integer | ✅(分季 / 分集端点) | — | 季号 / 集号 |
+| `language` | query | string | | `en-US` | 同 §2 |
+| `include_image_language` | query | string | | — | 逗号分隔的语言码;⛔ 本项目不传(拿官方给的全部候选) |
+
+**响应顶层**:`id` 加以下数组,各端点给哪些不同:
+
+| 端点 | 顶层数组 |
+|---|---|
+| `/3/tv/{id}/images` | `backdrops[]`、`posters[]`、`logos[]` |
+| `/3/tv/{id}/season/{n}/images` | `posters[]` |
+| `/3/tv/{id}/season/{n}/episode/{e}/images` | `stills[]` |
+| `/3/movie/{id}/images` | `backdrops[]`、`posters[]`、`logos[]` |
+
+每个数组元素(`file_path` 必填,其余可选):
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `file_path` | string | 图片相对路径 → 走 §4 拼法 |
+| `width` / `height` / `aspect_ratio` | int / int / number | 原始尺寸与宽高比 |
+| `iso_639_1` | string 或 null | 语言码;`backdrops[]` / `stills[]` 可能是 `null` |
+| `vote_average` / `vote_count` | number / int | 社区评分,⛔ 本项目不按它排序(按响应原序) |
+
+⚠️ **解码立场同 §3**:`file_path` 之外一律可选;数组本身也可能缺 / 为空,空数组 = 这一类没有候选图。
+
+⚠️ **档位**(官方 `/3/configuration` 的 200 示例,本项目写死,⛔ 不为常量发请求):
+`backdrop_sizes = [w300, w780, w1280, original]`、`poster_sizes = [w92, w154, w185, w342, w500, w780, original]`、
+`still_sizes = [w92, w185, w300, original]`、`logo_sizes = [w45, w92, w154, w185, w300, w500, original]`。
+本项目背景图用 `w1280`、海报墙用 `w500`、剧照墙用 `w300`、logo 用 `w300`。
+
+⚠️ **请求纪律(硬约束)**:分集 `/images` 是**每集一次**请求。⛔ 进详情页不为整季批量拉,
+只在用户点开某一集的图片时才发;季 `/images` 同理只在点开「季海报」时发。
+结果按端点缓存(进程内),重复查看零请求;换剧 / 换授权时清空。
+
+⚠️ `backdrop_path` 仍由 §9 详情端点给(单张主图),零额外请求;§12 的多图集合是**补充**,不替代它。
 
 ## 11. 人物头像(profile)
 

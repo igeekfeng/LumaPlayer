@@ -198,6 +198,33 @@ final class FileSourceViewModel {
     /// 人物头像的归属来源,与海报 / 剧照同一缓存分区。详情页显示期间实际恒非 nil。
     var seriesSourceID: UUID? { seriesItem?.ref.sourceID ?? episodes.first?.ref.sourceID }
 
+    // MARK: - 图片集合(§12,按需)
+
+    /// 剧级横版背景图。nil = 没配 token / 没命中 / 该作品没有 backdrop → hero 退回海报放大模糊。
+    /// ⚠️ 来自 `/3/tv/{id}` 详情端点,`seriesProfile` 那趟已发出,零额外请求。
+    var seriesBackdrop: ImageDescriptor? {
+        guard let profile = seriesProfile, let sourceID = seriesSourceID else { return nil }
+        return BaiduPanMetadataScraper.backdropDescriptor(
+            for: profile.match, sourceID: sourceID)
+    }
+
+    /// 当前剧的 TMDB 身份,供图片墙拼 `/images` 端点。nil = 没刮到,图片墙整块不显示。
+    var seriesImageIdentity: (id: Int, isSeries: Bool)? {
+        guard let profile = seriesProfile else { return nil }
+        return (profile.match.tmdbID, profile.match.kind == .tv)
+    }
+
+    /// 按需取图片集合。⚠️ 只在用户点开图片墙时调用,⛔ 不为整季批量拉(§12 请求纪律)。
+    /// - Parameter episode: 传了就是分集 `/images`(每集一次);必须先给 `season`。
+    func loadImageSet(season: Int?, episode: Int? = nil) async throws -> TMDBImageSet {
+        guard let identity = seriesImageIdentity else {
+            throw TMDBError.transport("还没认出这部剧的 TMDB 身份")
+        }
+        return try await container.metadataScraper().imageSet(
+            id: identity.id, isSeries: identity.isSeries,
+            season: season, episode: episode)
+    }
+
     /// 本地续播库里有进度且带快照的条目,按最近看排序。⛔ 不限于当前目录。
     private(set) var resumeCards: [FileSourceResumeCard] = []
 

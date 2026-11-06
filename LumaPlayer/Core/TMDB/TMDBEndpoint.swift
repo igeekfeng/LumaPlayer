@@ -25,6 +25,15 @@ enum TMDBEndpoint: Sendable, Equatable {
     case tvAggregateCredits(id: Int, language: String)
     /// `GET /3/movie/{movie_id}/credits?language=`,与剧集侧的 `credits` 同形(电影没有 aggregate 端点)
     case movieCredits(id: Int, language: String)
+    /// `GET /3/tv/{series_id}/images?language=`(§12)
+    case tvImages(id: Int, language: String)
+    /// `GET /3/movie/{movie_id}/images?language=`(§12)
+    case movieImages(id: Int, language: String)
+    /// `GET /3/tv/{series_id}/season/{season_number}/images?language=`(§12)
+    case tvSeasonImages(seriesID: Int, seasonNumber: Int, language: String)
+    /// `GET /3/tv/{series_id}/season/{season_number}/episode/{episode_number}/images?language=`(§12)
+    /// ⚠️ 每集一次请求,只在用户点开某一集的图片时才发(§12 请求纪律)。
+    case tvEpisodeImages(seriesID: Int, seasonNumber: Int, episodeNumber: Int, language: String)
 
     // MARK: - 形状
 
@@ -41,6 +50,12 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .movieDetails(let id, _): return "/3/movie/\(id)"
         case .tvAggregateCredits(let id, _): return "/3/tv/\(id)/aggregate_credits"
         case .movieCredits(let id, _): return "/3/movie/\(id)/credits"
+        case .tvImages(let id, _): return "/3/tv/\(id)/images"
+        case .movieImages(let id, _): return "/3/movie/\(id)/images"
+        case .tvSeasonImages(let seriesID, let season, _):
+            return "/3/tv/\(seriesID)/season/\(season)/images"
+        case .tvEpisodeImages(let seriesID, let season, let episode, _):
+            return "/3/tv/\(seriesID)/season/\(season)/episode/\(episode)/images"
         }
     }
 
@@ -56,6 +71,10 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .movieDetails: return "movie/details"
         case .tvAggregateCredits: return "tv/aggregate_credits"
         case .movieCredits: return "movie/credits"
+        case .tvImages: return "tv/images"
+        case .movieImages: return "movie/images"
+        case .tvSeasonImages: return "tv/season/images"
+        case .tvEpisodeImages: return "tv/episode/images"
         }
     }
 
@@ -77,7 +96,10 @@ enum TMDBEndpoint: Sendable, Equatable {
         case .tvSeason(_, _, let language):
             return [("language", language)]
         case .tvDetails(_, let language), .movieDetails(_, let language),
-             .tvAggregateCredits(_, let language), .movieCredits(_, let language):
+             .tvAggregateCredits(_, let language), .movieCredits(_, let language),
+             .tvImages(_, let language), .movieImages(_, let language),
+             .tvSeasonImages(_, _, let language), .tvEpisodeImages(_, _, _, let language):
+            // ⛔ 不传 include_image_language:拿官方给的全部候选(§12)
             return [("language", language)]
         }
     }
