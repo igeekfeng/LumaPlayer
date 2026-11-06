@@ -18,7 +18,7 @@ struct SourceItemRef: Sendable, Equatable, Hashable, Codable {
     }
 }
 
-/// 条目的媒体分类。⛔ 判不出来就是 `.unknown` —— 不猜(`CLAUDE.md` 硬规则 3)。
+/// 条目的媒体分类。⛔ 判不出来就是 `.unknown` —— 不猜(`CLAUDE.md` 硬规则)。
 enum SourceItemKind: String, Sendable, Equatable, Hashable {
     case movie
     case episode
@@ -49,7 +49,7 @@ enum MetadataOrigin: String, Sendable, Equatable, Hashable {
     case none
 }
 
-/// 来源无关的媒体条目。⛔ 所有可选字段缺就是缺,不填假值(`CLAUDE.md` 硬规则 3)。
+/// 来源无关的媒体条目。⛔ 所有可选字段缺就是缺,不填假值(`CLAUDE.md` 硬规则)。
 /// 百度只给文件名,所以 `overview` 恒为 nil、`year` 多半没有 —— 这不是缺陷,是如实。
 struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     let ref: SourceItemRef

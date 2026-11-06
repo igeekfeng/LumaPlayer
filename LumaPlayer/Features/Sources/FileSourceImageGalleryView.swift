@@ -13,7 +13,7 @@ struct FileSourceImageRequest: Identifiable, Sendable {
 }
 
 /// TMDB 图片墙:背景图 / 海报 / Logo / 剧照分类横向浏览。
-/// 数据在 `task` 里按需拉一次,失败明示,⛔ 不用空数组冒充「没有图」(`CLAUDE.md` 硬规则 4)。
+/// 数据在 `task` 里按需拉一次,失败明示,⛔ 不用空数组冒充「没有图」(`CLAUDE.md` 硬规则)。
 struct FileSourceImageGalleryView: View {
     let request: FileSourceImageRequest
     let sourceID: UUID

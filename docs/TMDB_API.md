@@ -2,7 +2,7 @@
 
 > 本文件是 **TMDB 接口的唯一事实来源**,与 `API_CONTRACT.md`(Emby)、
 > `BAIDU_PAN_API.md`(百度网盘)平行。
-> 硬规则同 CLAUDE.md 1:**禁止发明接口**,只用本文件列出的端点 / 参数 / 字段。
+> 遵循 `CLAUDE.md` 的**禁止发明接口**规则,只用本文件列出的端点 / 参数 / 字段。
 >
 > 字段与端点**逐条对着 TMDB 官方 OpenAPI 规格核实**:
 > 文档站 `developer.themoviedb.org` 的响应字段在页面上是 JS 渲染的,抓不到,

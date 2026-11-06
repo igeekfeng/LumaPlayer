@@ -146,7 +146,7 @@ struct TMDBClient: Sendable {
         token: String,
         language: String = TMDBClient.defaultLanguage
     ) async throws -> TMDBImageSet {
-        // ⛔ 集号没有季号就没法拼路径,不能静默退化成剧级端点(硬规则 4)
+        // ⛔ 集号没有季号就没法拼路径,不能静默退化成剧级端点(`CLAUDE.md` 硬规则)
         if episodeNumber != nil && seasonNumber == nil {
             throw TMDBError.transport("分集图片缺季号")
         }

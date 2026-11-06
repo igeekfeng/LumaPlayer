@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Signing](https://img.shields.io/badge/signing-ad--hoc%20%7C%20not%20notarized-yellow)
 
-macOS 原生播放器客户端。SwiftUI 写界面
+macOS 原生 Emby 播放器客户端：SwiftUI 界面，自编 libmpv（gpu-next）负责解码播放；Emby 与网盘都可作为播放来源。
 
 > **平台限制**：仅支持 **macOS 27+ / Apple Silicon（arm64）**。不提供 Intel 与 Universal 构建，代码里也没有 `#available` 守卫 —— libmpv 及其依赖也是按 27.0 编译的，部署目标更低会有链接器 warning 且产物跑不起来。
 

@@ -177,7 +177,7 @@ danmu_api 的 `episodeId` / `animeId` 是它自己的编号,与官方弹弹play 
 
 `docs/DANMAKU.md` §1(弹幕来源与凭据口径)与 `docs/DANDANPLAY_API.md` §1(主机声明、
 签名与凭据来源)必须和实现一致:默认官方 `api.dandanplay.net`,地址可改自建兼容服务;
-自建服务不校验签名。按 `CLAUDE.md` 硬规则 1 的口径,文档先于 / 同步于代码。
+自建服务不校验签名。文档先于 / 同步于代码。
 
 ---
 
