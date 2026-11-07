@@ -163,6 +163,12 @@ final class FileSourceViewModel {
     /// `applyDirectoryShape` 消费即清,留着会影响下次进别的目录。
     private var preferredSeasonNumber: Int?
 
+    /// 续播卡片点的那一集(`ref.itemID`):一季里多集都有进度时,别被「第一个有进度的集」抢走定位。
+    /// 换季时找不着自然退回自动定位。
+    private var preferredEpisodeItemID: String?
+    /// 用户在分集横排里点选的那一集,优先于一切自动定位;清空即回到自动。
+    private var selectedEpisodeItemID: String?
+
     private(set) var selectedSeason: BaiduPanSeason?
 
     /// 选中季的分集(已按集号排序;只含能播的条目)
@@ -175,9 +181,14 @@ final class FileSourceViewModel {
     private var episodeGeneration = 0
     private var episodeScrapeTask: Task<Void, Never>?
 
-    /// 播放主按钮对应的集:看到一半的 > 「下一集」占位 > 第一集。nil = 没有分集,不画按钮。
+    /// 播放主按钮 / 分集横排高亮对应的集:手选 > 续播卡片那一集 > 看到一半的 > 「下一集」占位 > 第一集。
+    /// nil = 没有分集,不画按钮。
     var focusedEpisode: SourceItem? {
-        episodes.first { (resumeSeconds(for: $0) ?? 0) > 0 }
+        if let itemID = selectedEpisodeItemID ?? preferredEpisodeItemID,
+           let episode = episodes.first(where: { $0.ref.itemID == itemID }) {
+            return episode
+        }
+        return episodes.first { (resumeSeconds(for: $0) ?? 0) > 0 }
             ?? episodes.first { upNextFileIDs.contains($0.ref.itemID) }
             ?? episodes.first
     }
@@ -355,6 +366,8 @@ final class FileSourceViewModel {
         resumeSnapshotPoster = nil
         shapeDirectory = nil
         preferredSeasonNumber = nil
+        preferredEpisodeItemID = nil
+        selectedEpisodeItemID = nil
         // 结构变了,导航目标也作废(否则重试会去追赶已不存在的目录)
         pendingDirectory = nil
         switch source {
@@ -1132,6 +1145,8 @@ final class FileSourceViewModel {
         enteredSeriesItem = item
         resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
+        preferredEpisodeItemID = nil
+        selectedEpisodeItemID = nil
         await navigate(to: file.path)
     }
 
@@ -1142,6 +1157,8 @@ final class FileSourceViewModel {
         enteredSeriesItem = nil
         resumeSnapshotPoster = nil
         preferredSeasonNumber = nil
+        preferredEpisodeItemID = nil
+        selectedEpisodeItemID = nil
         // ⛔ 不退到最外层(片库根 / 应用目录)之上:上面没意义,应用目录外也访问不到
         await navigate(to: BaiduPanPath.isInside(parent, applicationRoot: top) ? parent : top)
     }
@@ -1248,6 +1265,7 @@ final class FileSourceViewModel {
     /// 季文件夹要另列一次(会话缓存兜住重复切换);平铺存法零请求。
     func selectSeason(_ season: BaiduPanSeason?) async {
         guard let season else { return }
+        if selectedSeason?.id != season.id { selectedEpisodeItemID = nil }
         selectedSeason = season
         switch season.source {
         case .flatFiles(let files):
@@ -1265,6 +1283,11 @@ final class FileSourceViewModel {
         }
         await loadWatchStates()
         applySeriesPosterFallback()
+    }
+
+    /// 单击分集卡只换定位,主按钮与顶部信息跟着换,不播放。
+    func selectEpisode(_ episode: SourceItem) {
+        selectedEpisodeItemID = episode.ref.itemID
     }
 
     /// 判定为剧之后把这一层**列全**,并按整套内容重判形态。
@@ -1455,6 +1478,8 @@ final class FileSourceViewModel {
         selectedSeason = nil
         episodes = []
         episodeFailure = nil
+        preferredEpisodeItemID = nil
+        selectedEpisodeItemID = nil
     }
 
     /// 剧级兜底条目:目录名 + 可能有的封面,⛔ 不伪造其他字段。`ref` 用目录路径,只用于展示。
@@ -1685,6 +1710,8 @@ final class FileSourceViewModel {
     /// 不越出最外层,见 `detailDirectory(ofFilePath:topmost:)`。
     func openDetail(for card: FileSourceResumeCard) async {
         preferredSeasonNumber = Self.seasonNumber(ofFilePath: card.path)
+        preferredEpisodeItemID = card.fileID
+        selectedEpisodeItemID = nil
         let directory = Self.detailDirectory(ofFilePath: card.path, topmost: topmostDirectory)
         // 没有父目录卡片,用续播快照的封面兜底(过渡用,见 `resumeSnapshotPoster`)
         resumeSnapshotPoster = card.poster

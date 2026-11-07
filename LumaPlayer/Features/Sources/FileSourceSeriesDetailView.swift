@@ -365,6 +365,7 @@ struct FileSourceSeriesDetailView: View {
         } else {
             FileSourceEpisodeShelf(
                 episodes: viewModel.episodes,
+                selectedEpisodeID: viewModel.focusedEpisode?.id,
                 isMultiSeason: !structure.isSingleSeason,
                 seasonNumber: viewModel.selectedSeason?.number,
                 canShowImages: viewModel.seriesImageIdentity != nil,
@@ -372,6 +373,7 @@ struct FileSourceSeriesDetailView: View {
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
                 progressFraction: { viewModel.progressFraction(for: $0) },
                 isWatched: { viewModel.isWatched($0) },
+                onSelect: { viewModel.selectEpisode($0) },
                 onPlay: { play($0) },
                 // 观看状态只有本地这一份(百度无此类接口):⛔ 不发请求,标完直接重读本地库
                 onMark: { episode, played in
@@ -560,8 +562,10 @@ private struct FileSourcePersonCard: View {
 
 /// 一季的分集:横向可滚动的一排卡片(与 Emby 的 `EpisodeListView` 同形)。
 /// 进度合在播放按钮的环上;本地库没有时长时只显示「已看到 mm:ss」,⛔ 不猜比例。
+/// 单击只换定位,双击或点播放按钮才播;定位集在视野外时自动滚到可见。
 private struct FileSourceEpisodeShelf: View {
     let episodes: [SourceItem]
+    let selectedEpisodeID: SourceItemRef?
     /// 多季时这一排只是「本季」,头部元信息行的「共 N 集」是 TMDB 全剧总数,别让两处看起来打架。
     let isMultiSeason: Bool
     /// 当前季号;分集图片端点要它,nil(未分季)时不给入口
@@ -571,6 +575,7 @@ private struct FileSourceEpisodeShelf: View {
     let resumeSeconds: (SourceItem) -> Double?
     let progressFraction: (SourceItem) -> Double?
     let isWatched: (SourceItem) -> Bool
+    let onSelect: (SourceItem) -> Void
     let onPlay: (SourceItem) -> Void
     /// 单集标记:参数是「标成已看(true)/ 未看(false)」
     let onMark: (SourceItem, Bool) -> Void
@@ -583,6 +588,10 @@ private struct FileSourceEpisodeShelf: View {
 
     @State private var position = ScrollPosition()
     @State private var geometry = ShelfGeometry()
+    /// 指针在分集区域内时显示滚动条
+    @State private var isHoveringEpisodes = false
+    /// 布局数据没到手时先记着,等 `onScrollGeometryChange` 再对齐
+    @State private var needsAlignment = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
@@ -612,37 +621,80 @@ private struct FileSourceEpisodeShelf: View {
                     ShelfPagingButtons(position: $position, geometry: geometry)
                 }
             }
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
-                    ForEach(episodes) { episode in
-                        FileSourceEpisodeCard(
-                            episode: episode,
-                            store: store,
-                            resumeSeconds: resumeSeconds(episode),
-                            progressFraction: progressFraction(episode),
-                            isWatched: isWatched(episode),
-                            canShowImages: canShowImages
-                                && seasonNumber != nil && episode.episodeNumber != nil,
-                            onPlay: { onPlay(episode) },
-                            onMark: { played in onMark(episode, played) },
-                            onShowImages: { onShowImages(episode) }
-                        )
+            VStack(spacing: Metrics.spacingXS) {
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
+                        ForEach(episodes) { episode in
+                            FileSourceEpisodeCard(
+                                episode: episode,
+                                isSelected: episode.id == selectedEpisodeID,
+                                store: store,
+                                resumeSeconds: resumeSeconds(episode),
+                                progressFraction: progressFraction(episode),
+                                isWatched: isWatched(episode),
+                                canShowImages: canShowImages
+                                    && seasonNumber != nil && episode.episodeNumber != nil,
+                                onSelect: { onSelect(episode) },
+                                onPlay: { onPlay(episode) },
+                                onMark: { played in onMark(episode, played) },
+                                onShowImages: { onShowImages(episode) }
+                            )
+                        }
                     }
+                    .padding(.vertical, Metrics.spacingS)
                 }
-                .padding(.vertical, Metrics.spacingS)
+                .scrollIndicators(.hidden)
+                .scrollPosition($position)
+                .onScrollGeometryChange(for: ShelfGeometry.self) { proxy in
+                    ShelfGeometry(
+                        offset: proxy.contentOffset.x,
+                        contentWidth: proxy.contentSize.width,
+                        containerWidth: proxy.containerSize.width
+                    )
+                } action: { _, new in
+                    geometry = new
+                    if needsAlignment { alignSelection(using: new) }
+                }
+                if geometry.isScrollable {
+                    ShelfScrubber(
+                        position: $position,
+                        geometry: geometry,
+                        isHovering: isHoveringEpisodes
+                    )
+                }
             }
-            .scrollIndicators(.hidden)
-            .scrollPosition($position)
-            .onScrollGeometryChange(for: ShelfGeometry.self) { proxy in
-                ShelfGeometry(
-                    offset: proxy.contentOffset.x,
-                    contentWidth: proxy.contentSize.width,
-                    containerWidth: proxy.containerSize.width
-                )
-            } action: { _, new in
-                geometry = new
-            }
+            .onHover { isHoveringEpisodes = $0 }
         }
+        .onAppear {
+            needsAlignment = true
+            alignSelection()
+        }
+        .onChange(of: selectedEpisodeID) { _, _ in
+            needsAlignment = true
+            alignSelection()
+        }
+        .onChange(of: episodes.first?.id) { _, _ in
+            needsAlignment = true
+            alignSelection()
+        }
+    }
+
+    /// 只在定位集不完全可见时滚:点眼前的卡不会挪走,异步到的续播定位与切季仍能对齐。
+    private func alignSelection() {
+        alignSelection(using: geometry)
+    }
+
+    private func alignSelection(using current: ShelfGeometry) {
+        guard current.containerWidth > 0, current.isScrollable,
+              let selectedEpisodeID,
+              let index = episodes.firstIndex(where: { $0.id == selectedEpisodeID }) else { return }
+        needsAlignment = false
+        let step = Metrics.landscapeCardWidth + Metrics.spacingL
+        let start = CGFloat(index) * step
+        let end = start + Metrics.landscapeCardWidth
+        guard start < current.offset || end > current.offset + current.containerWidth else { return }
+        // 按偏移滚:LazyHStack 里还没实例化的卡片也定位得到
+        position.scrollTo(x: min(start, current.maxOffset))
     }
 
     /// 「共 12 集」/「本季 12 集 · 已看 3 集」。
@@ -658,6 +710,7 @@ private struct FileSourceEpisodeShelf: View {
 
 private struct FileSourceEpisodeCard: View {
     let episode: SourceItem
+    let isSelected: Bool
     let store: PosterImageStore
     /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
     let resumeSeconds: Double?
@@ -665,6 +718,7 @@ private struct FileSourceEpisodeCard: View {
     let progressFraction: Double?
     let isWatched: Bool
     let canShowImages: Bool
+    let onSelect: () -> Void
     let onPlay: () -> Void
     let onMark: (Bool) -> Void
     let onShowImages: () -> Void
@@ -700,12 +754,22 @@ private struct FileSourceEpisodeCard: View {
         }
         .padding(Metrics.spacingS)
         .frame(width: Metrics.landscapeCardWidth, alignment: .topLeading)
+        // 选中:整块高亮 + 描边(卡片挨得近,只靠底色分不清)
         .background {
             RoundedRectangle(cornerRadius: Radius.panel)
-                .fill(Color.primary.opacity(isHovering ? 0.05 : 0))
+                .fill(isSelected
+                      ? Color.accentColor.opacity(0.15)
+                      : Color.primary.opacity(isHovering ? 0.05 : 0))
+        }
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: Radius.panel)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+            }
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
+        .onTapGesture(count: 2, perform: onPlay)
+        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .contextMenu {
             if isWatched {
@@ -721,6 +785,8 @@ private struct FileSourceEpisodeCard: View {
         .animation(.easeOut(duration: Metrics.animationFast), value: isHovering)
         .accessibilityElement(children: .combine)
         .accessibilityLabel([title, progressText].compactMap { $0 }.joined(separator: ","))
+        .accessibilityAddTraits(isSelected ? .isSelected : AccessibilityTraits())
+        .accessibilityAction(named: "选中") { onSelect() }
         .accessibilityAction(named: "播放") { onPlay() }
     }
 
