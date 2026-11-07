@@ -56,8 +56,6 @@ struct MediaDetailView: View {
         }
         // 栈顶再 push 一页(相似推荐)时,返回按钮要有个名字可显示
         .navigationTitle(item.name)
-        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
-        .allowsHitTesting(!viewModel.isLoading)
         .task(id: "\(server.id.uuidString)-\(item.id)-\(refreshToken)") {
             viewModel.load(item: item, server: server)
         }
@@ -221,7 +219,8 @@ struct MediaDetailView: View {
     }
 
     private func userDataButtons(for detail: EmbyItem) -> some View {
-        let busy = viewModel.updatingItemIDs.contains(detail.id)
+        // 刷新中也禁用:先发出的读请求带着旧 UserData 回来,会盖掉刚写的结果
+        let busy = viewModel.updatingItemIDs.contains(detail.id) || viewModel.isLoading
         return HStack(spacing: Metrics.spacingM) {
             GlassIconButton(
                 systemImage: detail.isPlayed ? "checkmark.circle.fill" : "checkmark.circle",
@@ -363,6 +362,7 @@ struct MediaDetailView: View {
                     serverID: server.id,
                     store: container.posters,
                     updatingIDs: viewModel.updatingItemIDs,
+                    writesDisabled: viewModel.isLoading,
                     batchProgress: viewModel.batchProgress,
                     onSelect: { viewModel.selectEpisode($0) },
                     onPlay: { play($0, fromBeginning: $1) },

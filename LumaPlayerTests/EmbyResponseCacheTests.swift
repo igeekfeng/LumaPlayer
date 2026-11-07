@@ -76,6 +76,8 @@ final class EmbyResponseCacheTests: XCTestCase {
         let hit = await cache.freshData(serverID: serverID, endpoint: endpoint)
 
         XCTAssertNil(hit, "超过 fresh 窗口必须按 miss 处理")
+        let stale = await cache.staleData(serverID: serverID, endpoint: endpoint)
+        XCTAssertEqual(stale, Data("x".utf8), "过期条目留着,给「先显示旧数据」用")
     }
 
     // MARK: - epoch 竞态防护
@@ -96,7 +98,7 @@ final class EmbyResponseCacheTests: XCTestCase {
 
     // MARK: - 失效
 
-    func testInvalidateClearsMemoryAndDisk() async {
+    func testInvalidateMarksStaleButKeepsData() async {
         let serverID = UUID()
         let endpoint = EmbyEndpoint.userViews(userID: "USER-1")
         let epoch = await cache.currentEpoch(serverID: serverID)
@@ -104,8 +106,41 @@ final class EmbyResponseCacheTests: XCTestCase {
 
         await cache.invalidate(serverID: serverID)
 
-        let hit = await cache.freshData(serverID: serverID, endpoint: endpoint)
-        XCTAssertNil(hit, "invalidate 后内存与磁盘都必须作废")
+        let fresh = await cache.freshData(serverID: serverID, endpoint: endpoint)
+        let stale = await cache.staleData(serverID: serverID, endpoint: endpoint)
+        XCTAssertNil(fresh, "作废后不得再当 fresh 命中")
+        XCTAssertEqual(stale, Data("x".utf8), "作废不删数据")
+    }
+
+    /// 作废要落到磁盘:重启后的新实例也不能把作废前的条目当 fresh。
+    func testInvalidateSurvivesRestart() async {
+        let serverID = UUID()
+        let endpoint = EmbyEndpoint.userViews(userID: "USER-1")
+        let epoch = await cache.currentEpoch(serverID: serverID)
+        await cache.store(Data("x".utf8), serverID: serverID, endpoint: endpoint, epoch: epoch)
+        await cache.invalidate(serverID: serverID)
+
+        let reborn = EmbyResponseCache(directory: directory) { [clock] in clock.withLock { $0 } }
+        let fresh = await reborn.freshData(serverID: serverID, endpoint: endpoint)
+        let stale = await reborn.staleData(serverID: serverID, endpoint: endpoint)
+
+        XCTAssertNil(fresh)
+        XCTAssertEqual(stale, Data("x".utf8))
+    }
+
+    func testPurgeClearsMemoryAndDisk() async {
+        let serverID = UUID()
+        let endpoint = EmbyEndpoint.userViews(userID: "USER-1")
+        let epoch = await cache.currentEpoch(serverID: serverID)
+        await cache.store(Data("x".utf8), serverID: serverID, endpoint: endpoint, epoch: epoch)
+
+        await cache.purge(serverID: serverID)
+
+        let stale = await cache.staleData(serverID: serverID, endpoint: endpoint)
+        XCTAssertNil(stale, "purge 后连旧数据也不能给(换了用户)")
+        let reborn = EmbyResponseCache(directory: directory) { [clock] in clock.withLock { $0 } }
+        let onDisk = await reborn.staleData(serverID: serverID, endpoint: endpoint)
+        XCTAssertNil(onDisk)
     }
 
     func testInvalidateDoesNotTouchOtherServer() async {

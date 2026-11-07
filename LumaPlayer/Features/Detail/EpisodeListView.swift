@@ -11,6 +11,8 @@ struct EpisodeListView: View {
     let serverID: UUID
     let store: PosterImageStore
     let updatingIDs: Set<String>
+    /// 页面刷新中禁用标记(见 `ItemGridActions.writesDisabled`),选集与播放照常
+    let writesDisabled: Bool
     let batchProgress: MediaDetailViewModel.BatchPlayedProgress?
     let onSelect: (EmbyItem) -> Void
     /// 第二个参数:是否从头播放
@@ -108,7 +110,7 @@ struct EpisodeListView: View {
     private var batchMenu: some View {
         let pendingPlayed = episodes.filter { !$0.isPlayed }.count
         let pendingUnplayed = episodes.count - pendingPlayed
-        let isBusy = batchProgress != nil
+        let isBusy = batchProgress != nil || writesDisabled
         return Menu {
             Button("整季标记为已看", systemImage: "checkmark.circle") {
                 onMarkSeasonPlayed(true)
@@ -128,7 +130,8 @@ struct EpisodeListView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(isBusy)
-        .help(isBusy ? "正在标记,请稍候" : "整季或选中的分集一次性标记已看 / 未看")
+        .help(batchProgress != nil ? "正在标记,请稍候"
+              : writesDisabled ? "正在刷新,请稍候" : "整季或选中的分集一次性标记已看 / 未看")
         .accessibilityLabel("批量标记")
     }
 
@@ -147,7 +150,7 @@ struct EpisodeListView: View {
                systemImage: episode.isPlayed ? "circle" : "checkmark.circle") {
             onTogglePlayed(episode)
         }
-        .disabled(updatingIDs.contains(episode.id))
+        .disabled(writesDisabled || updatingIDs.contains(episode.id))
     }
 }
 

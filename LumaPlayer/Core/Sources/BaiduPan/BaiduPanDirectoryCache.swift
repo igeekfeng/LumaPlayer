@@ -6,7 +6,8 @@ import os
 ///
 /// ⛔ 不存封面地址(`dlink` 会过期,封面靠 `PosterDiskCache` 兜)与刮削结果(`BaiduPanScrapeCache`,失效条件不同)。
 ///
-/// 失效:超过 `maxAge`;删 / 改名 / 隐藏后调用方 `remove`;删来源时 `purge`。
+/// 不按时间丢:过期的照样先显示,只是要后台刷新(`isFresh`);容量靠 `maxDirectoriesPerSource`。
+/// 删 / 改名 / 隐藏后调用方 `remove`;删来源时 `purge`。
 /// 缓存只用于显示,不是事实来源:已删的文件播放会如实失败,后台刷新随后抹掉。
 actor BaiduPanDirectoryCache {
 
@@ -51,7 +52,12 @@ actor BaiduPanDirectoryCache {
     private static let logger = Logger(
         subsystem: NetworkDiagnostics.subsystem, category: "baidu-directory-cache")
 
-    static let maxAge: TimeInterval = 24 * 60 * 60
+    /// 窗口内的缓存直接用、不后台刷新(配额 / 限速);要更早看到新内容按 ⌘R。与 Emby 响应缓存同一口径。
+    static let freshWindow: TimeInterval = 12 * 60 * 60
+
+    static func isFresh(_ entry: Entry, now: Date = Date()) -> Bool {
+        now.timeIntervalSince(entry.fetchedAt) <= freshWindow
+    }
 
     /// 超出时按 `fetchedAt` 丢最旧的。
     static let maxDirectoriesPerSource = 300
@@ -80,11 +86,9 @@ actor BaiduPanDirectoryCache {
 
     // MARK: - 读
 
-    /// 过期 / 没有都返回 nil。
-    func content(sourceID: UUID, directory: String, now: Date = Date()) -> Entry? {
-        guard let entry = state()[sourceID.uuidString]?[directory] else { return nil }
-        guard now.timeIntervalSince(entry.fetchedAt) <= Self.maxAge else { return nil }
-        return entry
+    /// 不论新旧,有就给;要不要后台刷新由调用方看 `isFresh`。
+    func content(sourceID: UUID, directory: String) -> Entry? {
+        state()[sourceID.uuidString]?[directory]
     }
 
     // MARK: - 写

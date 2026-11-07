@@ -5,10 +5,11 @@ import os
 /// 只存条目级补丁,不存剧级 `seriesProfile`(只在详情页用,进程内缓存够)。
 ///
 /// 按 `fs_id` 认即可:改名 / 挪目录不变,替换文件就是新 `fs_id`(`docs/BAIDU_PAN_API.md` §2.2)。
-/// 失效只有 `maxAge` 与删除来源两档。
+/// 失效只有 `maxAge`(没匹配上的 `missMaxAge`)与删除来源两档。
 actor BaiduPanScrapeCache {
 
-    /// 全部可选:当时没拿到的不存,下次再问。
+    /// 全部可选。没有任何 TMDB 字段 = 问过、确实没匹配上(`isMiss`),按 `missMaxAge` 记着,
+    /// 免得每次启动都再搜一遍。
     struct Entry: Codable, Sendable, Equatable {
         /// 只可能是 TMDB 图床的远端图。⛔ 百度 `dlink` 封面会过期,不进这里。
         var poster: ImageDescriptor.Snapshot?
@@ -22,9 +23,9 @@ actor BaiduPanScrapeCache {
         var tmdbID: Int?
         var savedAt: Date
 
-        /// 什么都没补到就不存
-        var isEmpty: Bool {
-            poster == nil && overview == nil && year == nil
+        /// 问过、没匹配上。`year` 不算:文件名里本来就能解析出来
+        var isMiss: Bool {
+            poster == nil && overview == nil
                 && episodeTitle == nil && airDate == nil
                 && episodeRuntime == nil && episodeVoteAverage == nil && tmdbID == nil
         }
@@ -39,6 +40,9 @@ actor BaiduPanScrapeCache {
 
     /// TMDB 的简介 / 海报极少变,重刮代价是一串网络请求。
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
+
+    /// 没匹配上的记短一些:用户可能改了文件名,或 TMDB 后来补了条目。
+    static let missMaxAge: TimeInterval = 7 * 24 * 60 * 60
 
     private let fileURL: URL
     private var snapshot: Snapshot?
@@ -64,17 +68,18 @@ actor BaiduPanScrapeCache {
 
     func entry(sourceID: UUID, fsID: String, now: Date = Date()) -> Entry? {
         guard let entry = state()[Self.key(sourceID: sourceID, fsID: fsID)] else { return nil }
-        guard now.timeIntervalSince(entry.savedAt) <= Self.maxAge else { return nil }
+        let maxAge = entry.isMiss ? Self.missMaxAge : Self.maxAge
+        guard now.timeIntervalSince(entry.savedAt) <= maxAge else { return nil }
         return entry
     }
 
     // MARK: - 写
 
-    /// 一次落盘。失败只记原因,不影响浏览。
+    /// 一次落盘。失败只记原因,不影响浏览。没匹配上的也存(见 `Entry.isMiss`)。
     func store(sourceID: UUID, entries: [String: Entry]) {
         guard !entries.isEmpty else { return }
         var all = state()
-        for (fsID, entry) in entries where !entry.isEmpty {
+        for (fsID, entry) in entries {
             all[Self.key(sourceID: sourceID, fsID: fsID)] = entry
         }
         persist(all)

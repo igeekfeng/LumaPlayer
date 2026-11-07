@@ -468,7 +468,7 @@ final class AppContainer {
         disk: posterDiskCache
     )
 
-    /// ⌘R 手动刷新时整台作废,不吃 TTL 内的缓存。
+    /// ⌘R 手动刷新时整台作废,不吃 fresh 窗口内的缓存(旧数据仍可先显示)。
     func invalidateResponses(for server: ServerProfile) async {
         await responseCache.invalidate(serverID: server.id)
     }
@@ -846,7 +846,7 @@ final class AppContainer {
             if let probedID = probe.serverID {
                 if let oldID = server.serverID, oldID != probedID {
                     // 换成了另一台 Emby:缓存 key 不含 host,旧列表不能端给新地址
-                    await responseCache.invalidate(serverID: server.id)
+                    await responseCache.purge(serverID: server.id)
                 }
                 updated.serverID = probedID
             }
@@ -908,7 +908,7 @@ final class AppContainer {
         try await registry.remove(id: id)
         state.serverListRevision += 1
         connections.removeValue(forKey: id)
-        await responseCache.invalidate(serverID: id)
+        await responseCache.purge(serverID: id)
         await posters.purgeDisk(ownerID: id)
         // 字幕 / 弹幕绑定键带服务器 id(`DanmakuMediaQuery.itemKey`);字幕文件与弹幕缓存不分服务器,
         // 由 `cleanUp…Cache` 按时间淘汰

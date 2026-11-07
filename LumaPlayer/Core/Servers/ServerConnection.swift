@@ -133,7 +133,7 @@ actor ServerConnection {
 
         profile.compatibility = probe.compatibility
         // 换用户 / 重新登录后旧缓存是死数据
-        await responseCache?.invalidate(serverID: profile.id)
+        await responseCache?.purge(serverID: profile.id)
         return ServerLoginResult(profile: profile, compatibility: probe.compatibility)
     }
 
@@ -144,7 +144,7 @@ actor ServerConnection {
         try await credentials.deleteToken(forServer: profile.id)
         try await credentials.deletePassword(forServer: profile.id)
         await client.setCredentials(accessToken: nil, userID: nil)
-        await responseCache?.invalidate(serverID: profile.id)
+        await responseCache?.purge(serverID: profile.id)
     }
 
     // MARK: - 媒体库入口
@@ -176,11 +176,15 @@ actor ServerConnection {
     /// 可续播与否由服务端判定,客户端不复制 MinResumePct 等规则。
     func resume(limit: Int) async throws -> EmbyItemsResponse<EmbyItem> {
         let userID = try await currentUserID()
+        return try await authenticated(.resume(userID: userID, query: Self.resumeQuery(limit: limit)))
+    }
+
+    private static func resumeQuery(limit: Int) -> EmbyItemsQuery {
         var query = EmbyItemsQuery()
         query.recursive = true
         query.mediaTypes = ["Video"]
         query.limit = limit
-        return try await authenticated(.resume(userID: userID, query: query))
+        return query
     }
 
     /// 首页 hero 的随机推荐池,走通用 `/Items` 查询(`SortBy=Random`,API_CONTRACT.md 3.2)。
@@ -189,9 +193,13 @@ actor ServerConnection {
     /// `/Items/{Id}/Similar` 要种子条目,也不适用(`PITFALLS.md` 第 3 节「首页推荐」)。
     /// 只要顶层 Movie / Series、未看过的。
     ///
-    /// ⚠️ 结果被响应缓存钉住(key 含完整 query,TTL 内同一批),只在 ⌘R 与播放 Playing / Stopped
+    /// ⚠️ 结果被响应缓存钉住(key 含完整 query,fresh 窗口内同一批),只在 ⌘R 与播放 Playing / Stopped
     /// 整台作废时换一批。有意为之:每次回首页都换主角首屏会很跳。
     func recommendations(limit: Int) async throws -> [EmbyItem] {
+        try await items(Self.recommendationsQuery(limit: limit)).items
+    }
+
+    private static func recommendationsQuery(limit: Int) -> EmbyItemsQuery {
         var query = EmbyItemsQuery()
         query.recursive = true
         query.includeItemTypes = ["Movie", "Series"]
@@ -200,7 +208,7 @@ actor ServerConnection {
         // Overview / Genres 给 hero 显示;ProviderIds 给弹幕匹配用 Tmdb(`DANMAKU.md` §3)
         query.fields = ["Overview", "Genres", "ProviderIds"]
         query.limit = limit
-        return try await items(query).items
+        return query
     }
 
     /// `GET /Users/{UserId}/Items/Latest`:最近添加。端点没有 StartIndex / SortBy,不分页。
@@ -479,6 +487,46 @@ actor ServerConnection {
         }
         await cache.store(data, serverID: serverID, endpoint: endpoint, epoch: epoch)
         return value
+    }
+
+    // MARK: - 只读缓存(先显示旧数据)
+
+    /// 以下 `cached…` 只读本地响应缓存(过期 / 已作废的也给),不发请求、不碰凭据;没有返回 nil。
+    /// 只用来先把界面填上,调用方之后必须照常调对应的网络方法(`EmbyResponseCache.staleData`)。
+    func cachedUserViews() async -> [EmbyView]? {
+        guard let userID = profile.userID else { return nil }
+        let response: EmbyItemsResponse<EmbyView>? = await staleValue(.userViews(userID: userID))
+        return response?.items
+    }
+
+    func cachedResume(limit: Int) async -> [EmbyItem]? {
+        guard let userID = profile.userID else { return nil }
+        let response: EmbyItemsResponse<EmbyItem>? = await staleValue(
+            .resume(userID: userID, query: Self.resumeQuery(limit: limit)))
+        return response?.items
+    }
+
+    func cachedRecommendations(limit: Int) async -> [EmbyItem]? {
+        guard let userID = profile.userID else { return nil }
+        let response: EmbyItemsResponse<EmbyItem>? = await staleValue(
+            .items(userID: userID, query: Self.recommendationsQuery(limit: limit)))
+        return response?.items
+    }
+
+    func cachedLatest(query: EmbyLatestQuery) async -> [EmbyItem]? {
+        guard let userID = profile.userID else { return nil }
+        return await staleValue(.latest(userID: userID, query: query))
+    }
+
+    /// 解不出 = 条目损坏:删掉,按没有处理
+    private func staleValue<T: Decodable & Sendable>(_ endpoint: EmbyEndpoint) async -> T? {
+        guard let cache = responseCache,
+              let data = await cache.staleData(serverID: profile.id, endpoint: endpoint) else { return nil }
+        if let value = try? await client.decode(T.self, from: data, endpointName: endpoint.name) {
+            return value
+        }
+        await cache.discard(serverID: profile.id, endpoint: endpoint)
+        return nil
     }
 
     /// ⛔ 必须实时、不吃缓存:命中缓存会让失效 token 假装登录成功。

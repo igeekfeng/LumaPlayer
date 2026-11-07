@@ -179,8 +179,8 @@ v0.42.0 起上游已删掉这次误用;回归时排查先看 `current-ao`;拿 Ho
 `/Users/{uid}/Recommendations` 404;`/Items/{Id}/Similar` 要种子条目。
 `Limit` 要大于轮播张数:hero 要求带背景图,而 `Movie` 常常只有竖版海报。
 
-**`SortBy=Random` 的结果会被响应缓存钉住 1 小时 —— 有意为之,别去「修」。** 缓存 key 含完整 query,同一批「随机」在 TTL 内稳定;
-换一批只在 ⌘R 与播放上报 Playing / Stopped 时(整台作废)。⛔ 别为此改 `isResponseCacheable` 或让推荐绕缓存。
+**`SortBy=Random` 的结果会被响应缓存钉住 —— 有意为之,别去「修」。** 缓存 key 含完整 query,同一批「随机」在 fresh 窗口内稳定;
+首页已有一批时只在 ⌘R / 重试时换(静默刷新不换,免得 hero 在眼前换人)。⛔ 别为此改 `isResponseCacheable` 或让推荐绕缓存。
 
 **`/Shows/NextUp` 路径里没有 `{Id}`(Q25)。** 剧集页定位 = NextUp → 可续播 → 第一集。
 

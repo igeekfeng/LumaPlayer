@@ -9,21 +9,14 @@ struct LocalFolderSourceView: View {
     /// 「Reload」菜单(⌘R)的计数器:变化即重读当前目录
     let refreshToken: Int
 
-    @State private var viewModel: FileSourceViewModel
-
-    init(container: AppContainer, source: LocalFolderSource, refreshToken: Int) {
-        self.container = container
-        self.source = source
-        self.refreshToken = refreshToken
-        self._viewModel = State(
-            initialValue: FileSourceViewModel(container: container, source: .localFolder(source)))
-    }
+    /// 由 `BrowseView` 按来源 id 持有(`FileSourceViewModelStore`):切到别的来源再切回来停在原处
+    let viewModel: FileSourceViewModel
 
     var body: some View {
         FileSourceBrowserView(
             viewModel: viewModel, store: container.posters, state: container.state)
             // 首次进入 = 从文件夹根列起;之后只重读当前所在的那一层(`refreshFromToolbar`)
-            .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
+            .task(id: refreshToken) { await viewModel.appear(refreshToken: refreshToken) }
             .task(id: container.state.serverListRevision) {
                 viewModel.sourceDidChange(.localFolder(source))
                 await viewModel.refreshLibraryRoot()

@@ -7,8 +7,11 @@ import SwiftUI
 ///
 /// 「我的媒体」是媒体库的唯一入口,加载态与失败态必须露出来 —— 静默少一行,用户只会以为这台服务器没有媒体库。
 ///
-/// 媒体库多时的两点约束(别回退):外层 `LazyVStack` 让屏幕外的行不建、也不提前发图片请求;
-/// 每一行是独立的子视图,只读自己那行的 `Row`,一行数据到了只让这一行重算,`body` 只依赖媒体库列表。
+/// 媒体库多时的两点约束(别回退):外层 `LazyVStack` 让屏幕外的行不建、也不提前发请求(「最新」行出现才取数,
+/// 见 `HomeViewModel.latestRowAppeared`);每一行是独立的子视图,只读自己那行的 `Row`,
+/// 一行数据到了只让这一行重算,`body` 只依赖媒体库列表。
+///
+/// ⛔ 请求过程中页面不挡操作(不要按 `isLoading` 关 hit testing)。
 struct HomeView: View {
     let container: AppContainer
     let server: ServerProfile
@@ -19,23 +22,8 @@ struct HomeView: View {
     /// 变化即重新加载(⌘R)
     let refreshToken: Int
 
-    /// 首页是导航栈的根,push 别的页时不会销毁;状态按服务器分开存,切走再切回来不闪 loading
-    @State private var viewModel: HomeViewModel
-
-    init(
-        container: AppContainer,
-        server: ServerProfile,
-        onOpenItem: @escaping (EmbyItem) -> Void,
-        onOpenLibrary: @escaping (EmbyView) -> Void,
-        refreshToken: Int
-    ) {
-        self.container = container
-        self.server = server
-        self.onOpenItem = onOpenItem
-        self.onOpenLibrary = onOpenLibrary
-        self.refreshToken = refreshToken
-        self._viewModel = State(initialValue: HomeViewModel(container: container))
-    }
+    /// 由 `BrowseView` 持有:切到网盘 / 本地来源再切回来,首页内容还在,不重建、不重新请求
+    let viewModel: HomeViewModel
 
     /// hero 还垫在顶栏底下。滚出去之后顶栏下面是货架,栏底要换回窗口底色的压暗
     @State private var isHeroUnderChrome = true
@@ -93,10 +81,9 @@ struct HomeView: View {
             updateHeroUnderChrome(scrolledOffset)
         }
         .navigationTitle("首页")
-        // 加载 / 刷新中整页不可点,避免对旧内容做操作
-        .allowsHitTesting(!viewModel.isLoading)
+        // 从别的页返回也会重跑;要不要真的加载由 `appear` 判断
         .task(id: "\(server.id.uuidString)-\(refreshToken)") {
-            viewModel.load(server: server)
+            await viewModel.appear(server: server, refreshToken: refreshToken)
         }
         // 设置窗口在另一个场景里,改完开关这里不会自动重新 `load`,推荐数据得有人去发请求 / 清旧行。
         // ⛔ 不整页 `load`:改的是一个显示开关,不该把媒体库、继续观看、各「最新」全部重来一遍。
@@ -332,29 +319,32 @@ private struct HomeLatestRow: View {
     var body: some View {
         // 标题就是库名,不加「最新 ·」前缀
         let title = view.name ?? "未命名媒体库"
-        switch row?.state ?? .idle {
-        case .idle:
-            EmptyView()
-        case .loading:
-            SkeletonShelf(title: title, count: 6)
-        case .failed(let failure):
-            HomeSectionError(title: title, failure: failure, context: context)
-        case .loaded(let items):
-            if !items.isEmpty {
-                MediaShelf(title: title, seeAll: { context.onOpenLibrary(view) }) {
-                    ForEach(items) { item in
-                        Button {
-                            context.onOpenItem(item)
-                        } label: {
-                            MediaCard(item: item, serverID: context.server.id, store: context.container.posters)
-                                .frame(width: Metrics.posterMinWidth)
+        Group {
+            switch row?.state ?? .idle {
+            case .idle, .loading:
+                // `.idle` 也占位:没滚到的行要有高度,出现时才触发取数
+                SkeletonShelf(title: title, count: 6)
+            case .failed(let failure):
+                HomeSectionError(title: title, failure: failure, context: context)
+            case .loaded(let items):
+                if !items.isEmpty {
+                    MediaShelf(title: title, seeAll: { context.onOpenLibrary(view) }) {
+                        ForEach(items) { item in
+                            Button {
+                                context.onOpenItem(item)
+                            } label: {
+                                MediaCard(item: item, serverID: context.server.id, store: context.container.posters)
+                                    .frame(width: Metrics.posterMinWidth)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu { HomeItemMenu(item: item, context: context) }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu { HomeItemMenu(item: item, context: context) }
                     }
                 }
             }
         }
+        .onAppear { context.viewModel.latestRowAppeared(view.id, server: context.server) }
+        .onDisappear { context.viewModel.latestRowDisappeared(view.id, server: context.server) }
     }
 }
 
@@ -426,7 +416,7 @@ private struct HomeSectionError: View {
             ErrorStateView(
                 failure: failure,
                 // 重试即整页重新加载:已加载的分区保持原样不闪
-                retry: { context.viewModel.load(server: context.server) },
+                retry: { context.viewModel.load(server: context.server, userInitiated: true) },
                 login: { context.container.state.serverNeedingLogin = context.server }
             )
             .frame(height: Metrics.posterMinWidth)

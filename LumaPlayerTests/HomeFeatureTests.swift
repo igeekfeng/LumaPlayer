@@ -59,6 +59,11 @@ final class HomeFeatureTests: XCTestCase {
 
         let views = try XCTUnwrap(viewModel.sections(for: server.id).views.state.value)
         XCTAssertEqual(views.count, 3)
+        // 「最新」行出现在屏幕上才请求(这里模拟每行都出现)
+        for view in HomeViewModel.latestViews(in: views) {
+            viewModel.latestRowAppeared(view.id, server: server)
+        }
+        await viewModel.waitUntilIdle()
         let requests = MockEmbyURLProtocol.recordedRequests()
         let paths = requests.map(\.url.path)
         XCTAssertEqual(paths.filter { $0.hasSuffix("/Views") }.count, 1)
@@ -84,39 +89,100 @@ final class HomeFeatureTests: XCTestCase {
         XCTAssertNil(queryValue(pick.url, "ParentId"))
     }
 
-    /// 媒体库多时「最新」分两批发:首屏只发前 `firstScreenLatestCount` 行,其余等第一批回来再发。
-    /// 这里验两批都跑到、不重不漏 —— 第二批被丢掉的话,那些行会一直停在 loading。
-    func testLatestRowsPastFirstScreenAreStillLoaded() async throws {
+    /// 「最新」只给出现在屏幕上的行请求,每轮每行最多一次;没出现的行不发。
+    func testLatestRowsAreRequestedOnlyWhenTheyAppear() async throws {
         let ids = (1...6).map { "V\($0)" }
         let items = ids.map { #"{"Id":"\#($0)","Name":"\#($0)","CollectionType":"movies"}"# }
         MockEmbyURLProtocol.stub(
             .json(#"{"Items":[\#(items.joined(separator: ","))],"TotalRecordCount":\#(ids.count)}"#),
             path: "/emby/Users/USER-1/Views"
         )
-        MockEmbyURLProtocol.stub(.json("[]"), path: "/emby/Users/USER-1/Items/Latest")
-        MockEmbyURLProtocol.stub(
-            .json(#"{"Items":[],"TotalRecordCount":0}"#),
-            path: "/emby/Users/USER-1/Items/Resume"
-        )
-        let (viewModel, server) = try await makeHomeViewModel()
-        XCTAssertGreaterThan(ids.count, HomeViewModel.firstScreenLatestCount, "这个用例要跨两批")
+        MockEmbyURLProtocol.stub(.json(#"[{"Id":"M1","Name":"M1","Type":"Movie"}]"#), path: "/emby/Users/USER-1/Items/Latest")
+        let (viewModel, server, container) = try await makeHomeViewModelWithContainer()
 
         viewModel.load(server: server)
         await viewModel.waitUntilIdle()
+        XCTAssertTrue(latestParents().isEmpty, "没出现的行不请求")
 
-        let latestParents = MockEmbyURLProtocol.recordedRequests()
-            .filter { $0.url.path.hasSuffix("/Items/Latest") }
-            .compactMap { queryValue($0.url, "ParentId") }
-        XCTAssertEqual(latestParents.count, ids.count, "每个库各请求一次")
-        XCTAssertEqual(Set(latestParents), Set(ids))
+        viewModel.latestRowAppeared("V1", server: server)
+        viewModel.latestRowAppeared("V2", server: server)
+        viewModel.latestRowAppeared("V1", server: server)
+        await viewModel.waitUntilIdle()
+        XCTAssertEqual(latestParents().sorted(), ["V1", "V2"], "出现才请求,同一轮不重复")
 
         let sections = viewModel.sections(for: server.id)
-        for id in ids {
-            guard case .loaded(let rowItems)? = sections.latest[id]?.state else {
-                return XCTFail("库 \(id) 的结果没落到行上")
-            }
-            XCTAssertTrue(rowItems.isEmpty)
+        XCTAssertEqual(sections.latest["V1"]?.state.value?.map(\.id), ["M1"])
+        guard case .idle? = sections.latest["V3"]?.state else {
+            return XCTFail("没滚到的行保持 idle")
         }
+
+        // 新一轮(⌘R = 先作废缓存再加载):仍在屏幕上的行直接重取,不等再次出现
+        viewModel.latestRowDisappeared("V2", server: server)
+        await container.responseCache.invalidate(serverID: server.id)
+        viewModel.load(server: server, userInitiated: true)
+        await viewModel.waitUntilIdle()
+        XCTAssertEqual(latestParents().filter { $0 == "V1" }.count, 2)
+        XCTAssertEqual(latestParents().filter { $0 == "V2" }.count, 1)
+        await container.responseCache.purge(serverID: server.id)
+    }
+
+    // MARK: - 请求克制
+
+    /// 返回首页(`appear` 重跑)时没有任何变化:不重新加载,行内容原样。
+    func testAppearAgainWithoutChangesDoesNotReload() async throws {
+        try stubHomeSections()
+        let (viewModel, server, container) = try await makeHomeViewModelWithContainer()
+        await viewModel.appear(server: server, refreshToken: 0)
+        await viewModel.waitUntilIdle()
+        XCTAssertFalse(try loadedResumeItems(viewModel, server: server).isEmpty)
+        // 哨兵:真的重新加载的话(哪怕打的是缓存)会被换回服务端那份
+        viewModel.sections(for: server.id).resume.replace(with: .loaded([]))
+        let before = MockEmbyURLProtocol.recordedRequests().count
+
+        await viewModel.appear(server: server, refreshToken: 0)
+        await viewModel.waitUntilIdle()
+
+        XCTAssertTrue(try loadedResumeItems(viewModel, server: server).isEmpty)
+        XCTAssertEqual(MockEmbyURLProtocol.recordedRequests().count, before)
+        await container.responseCache.purge(serverID: server.id)
+    }
+
+    /// 缓存被作废(写操作 / 播放)后再回到首页:静默重新加载。
+    func testAppearAfterCacheInvalidationReloads() async throws {
+        try stubHomeSections()
+        let (viewModel, server, container) = try await makeHomeViewModelWithContainer()
+        await viewModel.appear(server: server, refreshToken: 0)
+        await viewModel.waitUntilIdle()
+        let before = resumeRequestCount()
+
+        await container.responseCache.invalidate(serverID: server.id)
+        await viewModel.appear(server: server, refreshToken: 0)
+        await viewModel.waitUntilIdle()
+
+        XCTAssertEqual(resumeRequestCount(), before + 1)
+        await container.responseCache.purge(serverID: server.id)
+    }
+
+    /// 缓存作废后服务器出错:新开的首页(内存里什么都没有)也先显示本地的旧数据,不是错误卡片。
+    func testStaleCacheFillsRowsWhenServerFails() async throws {
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_episodes_synthetic.json")),
+            path: "/emby/Users/USER-1/Items/Resume"
+        )
+        let (viewModel, server, container) = try await makeHomeViewModelWithContainer()
+        viewModel.load(server: server)
+        await viewModel.waitUntilIdle()
+        let before = try XCTUnwrap(loadedResumeItems(viewModel, server: server))
+
+        await container.responseCache.invalidate(serverID: server.id)
+        MockEmbyURLProtocol.stub(.status(500), path: "/emby/Users/USER-1/Items/Resume")
+        let reopened = HomeViewModel(container: container)
+        reopened.load(server: server)
+        await reopened.waitUntilIdle()
+
+        XCTAssertEqual(try loadedResumeItems(reopened, server: server).map(\.id), before.map(\.id))
+        XCTAssertFalse(reopened.isLoading)
+        await container.responseCache.purge(serverID: server.id)
     }
 
     // MARK: - hero 的随机推荐(`ServerConnection.recommendations`)
@@ -178,47 +244,6 @@ final class HomeFeatureTests: XCTestCase {
         for (id, row) in before {
             XCTAssertTrue(after[id] === row, "行 \(id) 被换成了新对象")
         }
-    }
-
-    // MARK: - 「最新」并发上限
-
-    /// 媒体库 20+ 时同时在途不超过上限,且每个都跑到。
-    func testRunLimitedNeverExceedsMaxConcurrent() async {
-        let probe = ConcurrencyProbe()
-        var finished: [Int] = []
-
-        await HomeViewModel.runLimited(count: 23, maxConcurrent: 4) { index in
-            await probe.enter()
-            try? await Task.sleep(for: .milliseconds(5))
-            await probe.leave()
-            return index
-        } onResult: { index, value in
-            XCTAssertEqual(index, value)
-            finished.append(index)
-        }
-
-        let peak = await probe.peak
-        XCTAssertLessThanOrEqual(peak, 4)
-        XCTAssertGreaterThan(peak, 1, "应当并行,不是退化成串行")
-        XCTAssertEqual(finished.sorted(), Array(0..<23))
-    }
-
-    func testRunLimitedStopsLaunchingAfterCancellation() async throws {
-        let probe = ConcurrencyProbe()
-        let task = Task { @MainActor in
-            await HomeViewModel.runLimited(count: 20, maxConcurrent: 2) { index in
-                await probe.enter()
-                try? await Task.sleep(for: .milliseconds(20))
-                await probe.leave()
-                return index
-            } onResult: { _, _ in }
-        }
-        try await Task.sleep(for: .milliseconds(30))
-        task.cancel()
-        await task.value
-
-        let started = await probe.started
-        XCTAssertLessThan(started, 20)
     }
 
     // MARK: - 整页空状态
@@ -425,7 +450,31 @@ final class HomeFeatureTests: XCTestCase {
 
     private struct ResumeNotLoaded: Error {}
 
+    private func stubHomeSections() throws {
+        MockEmbyURLProtocol.stub(.json(#"{"Items":[],"TotalRecordCount":0}"#), path: "/emby/Users/USER-1/Views")
+        MockEmbyURLProtocol.stub(.json(#"{"Items":[],"TotalRecordCount":0}"#), path: "/emby/Users/USER-1/Items")
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_episodes_synthetic.json")),
+            path: "/emby/Users/USER-1/Items/Resume"
+        )
+    }
+
+    private func latestParents() -> [String] {
+        MockEmbyURLProtocol.recordedRequests()
+            .filter { $0.url.path.hasSuffix("/Items/Latest") }
+            .compactMap { queryValue($0.url, "ParentId") }
+    }
+
+    private func resumeRequestCount() -> Int {
+        MockEmbyURLProtocol.recordedRequests().filter { $0.url.path.hasSuffix("/Items/Resume") }.count
+    }
+
     private func makeHomeViewModel() async throws -> (HomeViewModel, ServerProfile) {
+        let (viewModel, profile, _) = try await makeHomeViewModelWithContainer()
+        return (viewModel, profile)
+    }
+
+    private func makeHomeViewModelWithContainer() async throws -> (HomeViewModel, ServerProfile, AppContainer) {
         let profile = try await makeServer(host: "emby.test")
         // UserDefaults 不是 Sendable,不能在 MainActor 上构造后送进 actor 的 init,用默认参数(actor 侧求值);registry 不落库。
         let registry = ServerRegistry(profiles: [], credentials: credentials)
@@ -433,7 +482,7 @@ final class HomeFeatureTests: XCTestCase {
         let container = AppContainer(
             registry: registry, credentials: credentials, session: session,
             preferences: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
-        return (HomeViewModel(container: container), profile)
+        return (HomeViewModel(container: container), profile, container)
     }
 
     private func makeServer(host: String) async throws -> ServerProfile {
@@ -473,22 +522,5 @@ final class HomeFeatureTests: XCTestCase {
     private func queryValue(_ url: URL, _ name: String) -> String? {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == name }?.value
-    }
-}
-
-/// 记录同时在跑的任务数峰值与累计启动数
-private actor ConcurrencyProbe {
-    private(set) var peak = 0
-    private(set) var started = 0
-    private var running = 0
-
-    func enter() {
-        running += 1
-        started += 1
-        peak = max(peak, running)
-    }
-
-    func leave() {
-        running -= 1
     }
 }

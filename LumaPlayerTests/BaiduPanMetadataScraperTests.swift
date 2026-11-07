@@ -384,6 +384,52 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         XCTAssertEqual(MockEmbyURLProtocol.recordedRequests().count, afterFirst, "第二次不该再发请求")
     }
 
+    /// 没匹配上也落盘:重启(新实例、内存查询缓存为空)后不再搜一遍。
+    func testMissIsRememberedAcrossLaunches() async throws {
+        await save(token: "READ_TOKEN")
+        MockEmbyURLProtocol.stub(.json(#"{"results":[]}"#), host: host, path: "/3/search/movie")
+        let cache = BaiduPanScrapeCache(fileURL: FileManager.default.temporaryDirectory
+            .appending(path: "scrape-cache-\(UUID().uuidString).json", directoryHint: .notDirectory))
+        let items = [item(title: "Nobody Knows This", year: 2001, kind: .movie, origin: .filename)]
+
+        _ = await Self.makeScraper(credentials, cache: cache).enrich(items)
+        let afterFirst = MockEmbyURLProtocol.recordedRequests().count
+        XCTAssertEqual(afterFirst, 1)
+
+        _ = await Self.makeScraper(credentials, cache: cache).enrich(items)
+        XCTAssertEqual(MockEmbyURLProtocol.recordedRequests().count, afterFirst, "未命中要记住")
+    }
+
+    /// 请求失败时分不清「没匹配上」与「没问成」,⛔ 不记成未命中。
+    func testFailedRequestIsNotRememberedAsMiss() async throws {
+        await save(token: "READ_TOKEN")
+        MockEmbyURLProtocol.stub(
+            .failure(.cannotConnectToHost), host: host, path: "/3/search/movie")
+        let cache = BaiduPanScrapeCache(fileURL: FileManager.default.temporaryDirectory
+            .appending(path: "scrape-cache-\(UUID().uuidString).json", directoryHint: .notDirectory))
+        let items = [item(title: "Fight Club", year: 1999, kind: .movie, origin: .filename)]
+
+        _ = await Self.makeScraper(credentials, cache: cache).enrich(items)
+
+        let entry = await cache.entry(sourceID: sourceID, fsID: items[0].ref.itemID)
+        XCTAssertNil(entry)
+    }
+
+    /// 未命中只记 `missMaxAge`。
+    func testRememberedMissExpiresSooner() async {
+        let cache = BaiduPanScrapeCache(fileURL: FileManager.default.temporaryDirectory
+            .appending(path: "scrape-cache-\(UUID().uuidString).json", directoryHint: .notDirectory))
+        let miss = BaiduPanScrapeCache.Entry(savedAt: Date())
+        await cache.store(sourceID: sourceID, entries: ["F1": miss])
+
+        let soon = await cache.entry(sourceID: sourceID, fsID: "F1")
+        let later = await cache.entry(
+            sourceID: sourceID, fsID: "F1",
+            now: Date().addingTimeInterval(BaiduPanScrapeCache.missMaxAge + 60))
+        XCTAssertNotNil(soon)
+        XCTAssertNil(later)
+    }
+
     // MARK: - 详情页的剧级扩展信息 + 演职员(`seriesProfile`)
 
     func testSeriesProfileWithoutTokenIsSilent() async {
@@ -538,10 +584,13 @@ final class BaiduPanMetadataScraperTests: XCTestCase {
         try? await credentials.saveTMDBReadAccessToken(token)
     }
 
-    private static func makeScraper(_ credentials: CredentialStore) -> BaiduPanMetadataScraper {
+    private static func makeScraper(
+        _ credentials: CredentialStore, cache: BaiduPanScrapeCache? = nil
+    ) -> BaiduPanMetadataScraper {
         BaiduPanMetadataScraper(
             credentials: credentials,
-            client: TMDBClient(session: MockEmbyURLProtocol.makeSession()))
+            client: TMDBClient(session: MockEmbyURLProtocol.makeSession()),
+            cache: cache)
     }
 
     private static func select(_ matches: [TMDBMatch], title: String, year: Int?) -> TMDBMatch? {

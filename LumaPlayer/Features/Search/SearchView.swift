@@ -37,7 +37,6 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(title)
         // 换服务器后旧结果属于别的服务器,按新服务器重搜
         .task(id: "\(server.id.uuidString)-\(submission)-\(term)") {

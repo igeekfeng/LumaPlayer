@@ -13,22 +13,15 @@ struct Pan115SourceView: View {
     /// 「Reload」菜单(⌘R)的计数器:变化即重读登录状态与目录
     let refreshToken: Int
 
-    @State private var viewModel: FileSourceViewModel
-
-    init(container: AppContainer, source: Pan115Source, refreshToken: Int) {
-        self.container = container
-        self.source = source
-        self.refreshToken = refreshToken
-        self._viewModel = State(
-            initialValue: FileSourceViewModel(container: container, source: source))
-    }
+    /// 由 `BrowseView` 按来源 id 持有(`FileSourceViewModelStore`):切到别的来源再切回来停在原处
+    let viewModel: FileSourceViewModel
 
     var body: some View {
         content
             // 扫码屏也占着主窗口标题栏,给个兜底标题;浏览屏自己的 `navigationTitle` 更靠内层,会覆盖它。
             .navigationTitle("115 网盘")
             // ⌘R:首次进入结构性重载(回片库根),之后只重读当前目录,不把人踢回起点。
-            .task(id: refreshToken) { await viewModel.refreshFromToolbar() }
+            .task(id: refreshToken) { await viewModel.appear(refreshToken: refreshToken) }
             // 设置里改过来源 → 重读片库根。只有真变了才重载目录,改名 / 增删来源不该白列一次。
             .task(id: container.state.serverListRevision) {
                 await viewModel.refreshLibraryRoot()

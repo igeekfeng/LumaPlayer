@@ -7,6 +7,8 @@ struct ItemGridActions {
     var toggleFavorite: ((EmbyItem) -> Void)?
     /// 正在写 UserData 的条目(对应菜单项禁用,防止连点发出相反的两次请求)
     var updatingIDs: Set<String> = []
+    /// 页面刷新中:先发出的读请求带着旧 UserData 回来,会盖掉刚写的结果,写操作等刷新完再开放
+    var writesDisabled = false
 }
 
 /// 海报网格(DesignTokens.swift 的网格 token;卡片不用玻璃,滚动时不为每张卡建玻璃容器)。
@@ -61,14 +63,14 @@ struct ItemGridView: View {
                    systemImage: item.isPlayed ? "circle" : "checkmark.circle") {
                 togglePlayed(item)
             }
-            .disabled(actions.updatingIDs.contains(item.id))
+            .disabled(actions.writesDisabled || actions.updatingIDs.contains(item.id))
         }
         if let toggleFavorite = actions.toggleFavorite {
             Button(item.isFavorite ? "取消收藏" : "收藏",
                    systemImage: item.isFavorite ? "heart.slash" : "heart") {
                 toggleFavorite(item)
             }
-            .disabled(actions.updatingIDs.contains(item.id))
+            .disabled(actions.writesDisabled || actions.updatingIDs.contains(item.id))
         }
     }
 }

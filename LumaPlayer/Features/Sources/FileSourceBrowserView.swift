@@ -185,6 +185,9 @@ struct FileSourceBrowserView: View {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
                             ForEach(viewModel.sortedItems) { item in
                                 card(for: item)
+                                    // 出现才问 TMDB(`FileSourceViewModel.startScrape`)
+                                    .onAppear { viewModel.itemAppeared(item) }
+                                    .onDisappear { viewModel.itemDisappeared(item) }
                             }
                         }
                     }

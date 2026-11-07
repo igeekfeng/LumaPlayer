@@ -35,8 +35,6 @@ struct LibraryView: View {
             }
             pageContent
         }
-        // 加载 / 刷新中整页不可点(顶栏下沿的加载线在走),避免对旧内容做操作
-        .allowsHitTesting(!viewModel.isLoading)
         .navigationTitle(title)
         .alert(
             "操作失败",
@@ -100,7 +98,8 @@ struct LibraryView: View {
                         play: { item, fromBeginning in play(item, fromBeginning: fromBeginning) },
                         togglePlayed: { viewModel.togglePlayed($0) },
                         toggleFavorite: { viewModel.toggleFavorite($0) },
-                        updatingIDs: viewModel.updatingItemIDs
+                        updatingIDs: viewModel.updatingItemIDs,
+                        writesDisabled: viewModel.isLoading
                     )
                 )
                 loadMoreFooter(list)

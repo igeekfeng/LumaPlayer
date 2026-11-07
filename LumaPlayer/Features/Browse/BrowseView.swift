@@ -41,9 +41,16 @@ struct BrowseView: View {
     /// 浮动顶栏的全屏 / 自动隐藏状态,以及页面登记的返回动作
     @State private var chrome = BrowseChromeController()
 
+    /// 首页状态挂在这里而不是 `HomeView` 上:切到别的来源时 `HomeView` 会销毁,切回来内容要还在
+    @State private var homeViewModel: HomeViewModel
+
     init(container: AppContainer) {
         self.container = container
+        self._homeViewModel = State(initialValue: HomeViewModel(container: container))
+        self._fileSourceViewModels = State(initialValue: FileSourceViewModelStore(container: container))
     }
+
+    @State private var fileSourceViewModels: FileSourceViewModelStore
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -111,7 +118,8 @@ struct BrowseView: View {
                 server: server,
                 onOpenItem: openItem,
                 onOpenLibrary: { path.append(.library($0)) },
-                refreshToken: refreshToken
+                refreshToken: refreshToken,
+                viewModel: homeViewModel
             )
             .navigationDestination(for: BrowseRoute.self) { route in
                 page(for: route, server: server)
@@ -122,19 +130,24 @@ struct BrowseView: View {
         case .some(.baiduPan(let source)):
             // ⛔ 百度来源没有库 / 搜索 / 详情,顶栏不给搜索框;刷新走 `refreshToken`,
             // 「上一层」由它经 `BrowseChromeController.pageBackAction` 登记到顶栏。
-            BaiduPanSourceView(container: container, source: source, refreshToken: refreshToken)
-                // ⚠️ 按来源 id 重建,别省:`FileSourceViewModel` 在 init 时收下 `source`
-                // (片库根 / 隐藏项 / 续播库 / 封面分区全按 `source.id`),而它是 `@State`,
-                // 只在视图身份变化时重新初始化。百度 → 百度切换时视图类型与 `refreshToken`
-                // 都没变,两个 `.task(id:)` 不重跑,会停在**上一个来源**的目录上。
+            BaiduPanSourceView(
+                container: container, source: source, refreshToken: refreshToken,
+                viewModel: fileSourceViewModels.viewModel(for: .baiduPan(source)))
+                // ⚠️ 按来源 id 重建,别省:VM 按来源 id 取(`FileSourceViewModelStore`),
+                // 百度 → 百度切换时视图类型与 `refreshToken` 都没变,不重建的话 `.task(id:)` 不重跑,
+                // 新来源的 VM 不会 `appear`。
                 .id(source.id)
         case .some(.pan115(let source)):
             // 与百度同一个浏览页,登录方式是扫码换 Cookie(不是填密钥);按来源 id 重建的理由同上。
-            Pan115SourceView(container: container, source: source, refreshToken: refreshToken)
+            Pan115SourceView(
+                container: container, source: source, refreshToken: refreshToken,
+                viewModel: fileSourceViewModels.viewModel(for: .pan115(source)))
                 .id(source.id)
         case .some(.localFolder(let source)):
             // 与百度同一个浏览页(`FileSourceBrowserView`),没有授权那两屏;按来源 id 重建的理由同上。
-            LocalFolderSourceView(container: container, source: source, refreshToken: refreshToken)
+            LocalFolderSourceView(
+                container: container, source: source, refreshToken: refreshToken,
+                viewModel: fileSourceViewModels.viewModel(for: .localFolder(source)))
                 .id(source.id)
         case .none:
             ContentUnavailableView(
@@ -253,7 +266,7 @@ struct BrowseView: View {
 
     private func refresh() {
         Task {
-            // Emby:刷新前先作废接口缓存,否则 TTL 内的命中会让刷新「没反应」
+            // Emby:刷新前先作废接口缓存,否则 fresh 窗口内的命中会让刷新「没反应」
             if case .emby(let server)? = container.state.currentSource {
                 await container.invalidateResponses(for: server)
             }
@@ -264,6 +277,7 @@ struct BrowseView: View {
 
     private func reloadSources() async {
         sources = await container.sources()
+        fileSourceViewModels.retain(sourceIDs: Set(sources.map(\.id)))
     }
 
     // MARK: - 辅助

@@ -234,6 +234,66 @@ final class FileSourcePagingTests: XCTestCase {
         XCTAssertFalse(entry?.isComplete ?? true, "老缓存没有这一格 → 当不完整")
     }
 
+    // MARK: - 请求克制
+
+    /// 盘上的目录缓存过了新鲜窗口也照样给(先显示旧的),只是要后台刷新。
+    func testDirectoryCacheKeepsStaleEntries() async throws {
+        let cache = BaiduPanDirectoryCache(fileURL: FileManager.default.temporaryDirectory
+            .appending(path: "dir-cache-\(UUID().uuidString).json", directoryHint: .notDirectory))
+        let sourceID = UUID()
+        let old = Date().addingTimeInterval(-3 * 24 * 3600)
+        await cache.store(
+            sourceID: sourceID, directory: "/apps/LumaPlayer",
+            files: [Self.file(name: "01.mkv", id: 1)], durations: [:], now: old)
+
+        let stored = await cache.content(sourceID: sourceID, directory: "/apps/LumaPlayer")
+        let entry = try XCTUnwrap(stored)
+
+        XCTAssertFalse(BaiduPanDirectoryCache.isFresh(entry))
+        XCTAssertTrue(FileSourceViewModel.needsBackgroundRefresh(entry, sourceID: sourceID))
+    }
+
+    /// 窗口内:没有封面图就不刷新;有封面图(地址会过期、不落盘)才刷新。
+    func testFreshDirectoryCacheRefreshesOnlyForCovers() {
+        let sourceID = UUID()
+        let plain = BaiduPanDirectoryCache.Entry(
+            files: [Self.file(name: "01.mkv", id: 1), Self.file(name: "02.mkv", id: 2)],
+            durations: [:], fetchedAt: Date(), isComplete: true)
+        let withCover = BaiduPanDirectoryCache.Entry(
+            files: [Self.file(name: "01.mkv", id: 1), Self.file(name: "poster.jpg", id: 3)],
+            durations: [:], fetchedAt: Date(), isComplete: true)
+
+        XCTAssertFalse(FileSourceViewModel.needsBackgroundRefresh(plain, sourceID: sourceID))
+        XCTAssertTrue(FileSourceViewModel.needsBackgroundRefresh(withCover, sourceID: sourceID))
+    }
+
+    /// 来源页再次出现(切回这个来源)不重列目录;⌘R 才重列。
+    @MainActor
+    func testAppearingAgainDoesNotRelistUntilRefresh() async throws {
+        let provider = StubBrowsingProvider(pages: [
+            StubBrowsingProvider.Page(
+                files: [Self.file(name: "01.mkv", id: 1)],
+                hasMore: false, nextOffset: 1, totalCount: 1)
+        ])
+        let viewModel = FileSourceViewModel(
+            container: try makeContainer(),
+            source: .localFolder(Self.localFolderSource()),
+            loadsDirectory: true)
+        viewModel.setBrowsingProviderOverride(provider)
+
+        await viewModel.appear(refreshToken: 0)
+        let afterFirst = await provider.pageCallCount
+        XCTAssertEqual(afterFirst, 1)
+
+        await viewModel.appear(refreshToken: 0)
+        let afterAgain = await provider.pageCallCount
+        XCTAssertEqual(afterAgain, 1, "切回来不该再列目录")
+
+        await viewModel.appear(refreshToken: 1)
+        let afterRefresh = await provider.pageCallCount
+        XCTAssertEqual(afterRefresh, 2, "⌘R 要重列")
+    }
+
     // MARK: - 回归:复核发现的问题
 
     /// 翻页后**已加载条目的时长不能丢**。

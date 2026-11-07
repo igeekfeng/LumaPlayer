@@ -1,9 +1,12 @@
 import CryptoKit
 import Foundation
 
-/// Emby 接口响应缓存:TTL 内零网络请求,过期 / 未命中走原网络路径。
+/// Emby 接口响应缓存:fresh 窗口内零网络请求;过期 / 作废的条目不删,留给「先显示旧数据」。
 ///
-/// 透明 TTL,⛔ 不做 SWR(先给旧数据后台刷新):会把错的 `UserData`(已看 / 收藏 / 进度)端给用户。
+/// 两种读法:
+/// - `freshData`:只给窗口内且没被作废的,常规请求路径用(命中就不发请求);
+/// - `staleData`:不论新旧都给,只用来先把界面填上,之后照常走 `freshData` / 网络,回来原地替换
+///   (首页的 SWR,`HomeViewModel`)。旧的 `UserData` 只会显示到新数据回来为止。
 ///
 /// 1. 存原始响应字节、不存解码值(DTO 只有 `Decodable`),命中后经 `EmbyAPIClient.decode` 重解。
 /// 2. key 不含 scheme/host(内外网切换 / http 回退复用),含 serverID(镜像库的两台不串台)。
@@ -17,19 +20,22 @@ import Foundation
 /// | 标记已看 / 收藏 / 移出继续观看 | 整台作废(写操作改了散布在多个列表里的 UserData) |
 /// | 播放上报 Playing / Stopped | 整台作废 |
 /// | 播放上报 Progress | **不失效**:每 10 秒一次,失效会让播放期间的浏览永远打不到缓存 |
-/// | 登录成功 / 登出 | 整台作废 |
-/// | 删除服务器 | 内存 + 磁盘一起清(`purgeDisk`) |
-/// | 手动刷新(⌘R) | 先作废再重载 |
+/// | 手动刷新(⌘R) | 整台作废再重载 |
+/// | 登录成功 / 登出 / 换成另一台 Emby | 整台清除(`purge`:换了用户,旧数据连「先显示」都不能给) |
+/// | 删除服务器 | 整台清除 |
+///
+/// 「作废」= 条目时间戳归零:之后 `freshData` 不给、`staleData` 照给。
 ///
 /// ⛔ 登录时的访问验证(`verifyAccessWithFreshViews`)必须绕过缓存,否则失效 token / 被禁用户会假装登录成功。
 /// 可缓存端点是 allowlist(`EmbyEndpoint.isResponseCacheable`),图片 / 播放上报 / PlaybackInfo / 认证类不在内。
-/// 上限:内存 200 条(FIFO)、磁盘 64 MB(按最旧写入淘汰到 80%);过期文件读到时顺手删(懒清扫)。
+/// 上限:内存 200 条(FIFO)、磁盘 64 MB(按最旧写入淘汰到 80%)。
 /// 图片缓存另见 `PosterImageStore`(内存 LRU 300 条,磁盘默认 256 MB 可调;无版本标识的图不进磁盘)。
 ///
 /// 尽力而为:磁盘 IO 失败静默降级为不缓存。这不是吞错 —— 命中与否不改变语义。
 actor EmbyResponseCache {
-    /// 服务端数据按小时级变化;resume / nextUp 的时效靠「播放上报后失效」,不靠 TTL。
-    static let freshWindow: TimeInterval = 3600
+    /// 服务端数据更新很慢,窗口给长:窗口内回到页面零请求,要更早看到新数据按 ⌘R。
+    /// resume / nextUp / UserData 的时效靠「写操作与播放上报后作废」,不靠窗口。
+    static let freshWindow: TimeInterval = 12 * 3600
 
     static let memoryEntryLimit = 200
 
@@ -73,27 +79,30 @@ actor EmbyResponseCache {
 
     // MARK: - 读
 
-    /// 未命中 / 过期 / 损坏返回 nil;过期文件顺手删。
+    /// 未命中 / 过期 / 已作废 / 损坏返回 nil。过期条目留着给 `staleData`。
     func freshData(serverID: UUID, endpoint: EmbyEndpoint) -> Data? {
+        guard let entry = entry(serverID: serverID, endpoint: endpoint),
+              now().timeIntervalSince(entry.storedAt) <= Self.freshWindow else { return nil }
+        return entry.data
+    }
+
+    /// 不论新旧,有就给。只用来先填界面,调用方之后必须照常取一次新的。
+    func staleData(serverID: UUID, endpoint: EmbyEndpoint) -> Data? {
+        entry(serverID: serverID, endpoint: endpoint)?.data
+    }
+
+    private func entry(serverID: UUID, endpoint: EmbyEndpoint) -> Entry? {
         let key = Self.key(serverID: serverID, endpoint: endpoint)
-        if let entry = memory[key] {
-            if now().timeIntervalSince(entry.storedAt) <= Self.freshWindow {
-                return entry.data
-            }
-            removeMemoryEntry(key)
-        }
+        if let entry = memory[key] { return entry }
         let fileURL = Self.fileURL(directory: directory, serverID: serverID, key: key)
         guard let raw = try? Data(contentsOf: fileURL), raw.count > 8 else {
             return nil
         }
         let storedSeconds = raw.prefix(8).reduce(into: Int64(0)) { $0 = ($0 << 8) | Int64($1) }
-        let storedAt = Date(timeIntervalSince1970: TimeInterval(storedSeconds))
-        guard now().timeIntervalSince(storedAt) <= Self.freshWindow else {
-            try? FileManager.default.removeItem(at: fileURL)
-            trackDiskBytes(-raw.count)
-            return nil
-        }
-        return Data(raw.suffix(from: 8))
+        return Entry(
+            data: Data(raw.suffix(from: 8)),
+            storedAt: Date(timeIntervalSince1970: TimeInterval(storedSeconds))
+        )
     }
 
     // MARK: - 写
@@ -131,8 +140,30 @@ actor EmbyResponseCache {
         trackDiskBytes(-removed)
     }
 
-    /// 整台作废,触发点见类型注释。
+    /// 整台作废:条目留着(`staleData` 照给),但不再算 fresh。触发点见类型注释。
     func invalidate(serverID: UUID) {
+        epochs[serverID, default: 0] += 1
+        let prefix = serverID.uuidString + "|"
+        for key in insertionOrder where key.hasPrefix(prefix) {
+            if let entry = memory[key] {
+                memory[key] = Entry(data: entry.data, storedAt: .distantPast)
+            }
+        }
+        let serverDir = directory.appendingPathComponent(serverID.uuidString, isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: serverDir, includingPropertiesForKeys: nil
+        ) else { return }
+        // 时间头归零 = 1970 年写入,必然过期;大小不变,不动簿记
+        let zeroHeader = Data(count: 8)
+        for file in files {
+            guard let handle = try? FileHandle(forWritingTo: file) else { continue }
+            try? handle.write(contentsOf: zeroHeader)
+            try? handle.close()
+        }
+    }
+
+    /// 整台清除(内存 + 磁盘),旧数据连「先显示」也不能再给。触发点见类型注释。
+    func purge(serverID: UUID) {
         epochs[serverID, default: 0] += 1
         let prefix = serverID.uuidString + "|"
         for key in insertionOrder where key.hasPrefix(prefix) {

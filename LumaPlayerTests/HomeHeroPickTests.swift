@@ -136,6 +136,17 @@ final class HomeHeroPickTests: XCTestCase {
         XCTAssertEqual(pick, .items([movie]))
     }
 
+    /// 没滚到、也没本地缓存的行(`.idle`)不等:「最新」滚到才请求,等它 hero 会一直是骨架。
+    func testFallbackSkipsRowsNotRequestedYet() throws {
+        let views = [try view("V1", "movies"), try view("V2", "tvshows")]
+        let show = try item("T1", backdrop: true)
+        let rows: [String: LoadState<[EmbyItem]>] = ["V1": .idle, "V2": .loaded([show])]
+        let pick = HomeViewModel.heroPick(
+            recommended: .loaded([]), views: .loaded(views), resume: .loaded([]),
+            latest: { rows[$0.id] ?? .idle })
+        XCTAssertEqual(pick, .items([show]))
+    }
+
     /// 失败的行自己会报错,hero 不跟着空。
     func testFallbackSkipsFailedRows() throws {
         let views = [try view("V1", "movies"), try view("V2", "tvshows")]

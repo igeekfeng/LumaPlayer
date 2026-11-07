@@ -101,6 +101,11 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 入口
 
+    /// 只贴落盘缓存,不发请求、不要 token。返回顺序与入参一致。
+    func enrichFromCache(_ items: [SourceItem]) async -> [SourceItem] {
+        await applyCached(items).0
+    }
+
     /// 不抛错(目录已列出后的第二趟)。返回顺序与入参一致。
     func enrich(_ items: [SourceItem]) async -> [SourceItem] {
         // 落盘缓存命中的条目不再发请求
@@ -128,7 +133,8 @@ actor BaiduPanMetadataScraper {
         let episodes = await enrichEpisodes(items: pending, token: token)
         let singles = await enrichSingles(items: episodes, token: token)
         let enriched = await enrichFolders(items: singles, token: token)
-        await storeCache(enriched)
+        // 这一轮有请求失败时,「没补到」分不清是没匹配上还是没问成,⛔ 不记成未命中
+        await storeCache(enriched, recordingMisses: lastFailureDescription == nil)
         // 按身份并回,保持入参顺序
         let byID = Dictionary(
             enriched.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -165,7 +171,7 @@ actor BaiduPanMetadataScraper {
         return (result, hits)
     }
 
-    private func storeCache(_ items: [SourceItem]) async {
+    private func storeCache(_ items: [SourceItem], recordingMisses: Bool) async {
         guard let cache else { return }
         var perSource: [UUID: [String: BaiduPanScrapeCache.Entry]] = [:]
         for item in items where Self.isCacheable(item) {
@@ -181,7 +187,7 @@ actor BaiduPanMetadataScraper {
                 tmdbID: item.tmdbID,
                 savedAt: Date()
             )
-            guard !entry.isEmpty else { continue }
+            guard !entry.isMiss || recordingMisses else { continue }
             perSource[item.ref.sourceID, default: [:]][item.ref.itemID] = entry
         }
         for (sourceID, entries) in perSource {

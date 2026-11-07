@@ -375,6 +375,8 @@ final class MediaDetailViewModel {
     private func loadSeasons(server: ServerProfile, generation: Int, requestedEpisode: EmbyItem? = nil) async {
         guard let seriesID else { return }
         if case .loaded = seasonsState {} else { seasonsState = .loading }
+        // 原地刷新时页面可操作:期间用户换了季,回来不再跳回自动定位的那一季
+        let seasonAtStart = selectedSeason?.id
         let seasons: [EmbyItem]
         do {
             seasons = try await container.connection(for: server).seasons(seriesID: seriesID)
@@ -406,7 +408,7 @@ final class MediaDetailViewModel {
                 focus = nil
             }
         }
-        guard generation == self.generation else { return }
+        guard generation == self.generation, selectedSeason?.id == seasonAtStart else { return }
         focusEpisodeID = focus?.id
 
         // 进该播那集所在的季,否则第一季

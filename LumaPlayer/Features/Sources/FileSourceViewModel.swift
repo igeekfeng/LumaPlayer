@@ -122,6 +122,8 @@ final class FileSourceViewModel {
 
     /// ⌘R 据此决定语义,见 `refreshFromToolbar()`
     private(set) var hasLoadedOnce = false
+    /// `appear` 上次见到的 ⌘R 计数
+    @ObservationIgnored private var lastRefreshToken: Int?
 
     /// 用户要改配置时预填给表单的现值
     private(set) var configurationDraft: BaiduPanConfigurationDraft?
@@ -267,6 +269,12 @@ final class FileSourceViewModel {
     /// TMDB 刮削是后台第二趟,回来时目录可能已换,靠它丢弃过期结果
     private var directoryGeneration = 0
     private var scrapeTask: Task<Void, Never>?
+    /// 网格里出现过的条目、这一轮已发过 TMDB 的条目(`startScrape`)
+    @ObservationIgnored private var visibleItemIDs: Set<String> = []
+    @ObservationIgnored private var scrapedItemIDs: Set<String> = []
+    @ObservationIgnored private var scrapeProvider: (any FileSourceBrowsing)?
+    @ObservationIgnored private var visibleScrapeDebounce: Task<Void, Never>?
+    @ObservationIgnored private var scrapeTasks: [Task<Void, Never>] = []
     /// nil = 没失败 / 没配 token。与 `notice` 分开,不盖掉目录本身的提示。
     private(set) var scrapeFailure: String?
 
@@ -340,6 +348,19 @@ final class FileSourceViewModel {
         let task = Task { [weak self] in _ = await self?.performReload() }
         loadTask = task
         await task.value
+    }
+
+    /// 来源页出现(含从别的来源切回来)。没加载过 → `reload()`;`refreshToken` 变了(⌘R)→ `refreshFromToolbar()`;
+    /// 其余什么都不做:切回来停在原处,零请求。
+    func appear(refreshToken: Int) async {
+        guard hasLoadedOnce else {
+            lastRefreshToken = refreshToken
+            await reload()
+            return
+        }
+        guard refreshToken != lastRefreshToken else { return }
+        lastRefreshToken = refreshToken
+        await refreshFromToolbar()
     }
 
     /// ⌘R:没加载过走 `reload()`(回片库根);之后只重读当前目录,不把人踢回起点。两条都绕过会话缓存。
@@ -712,8 +733,8 @@ final class FileSourceViewModel {
             } else if cachesDirectories, !forceRefresh,
                       let disk = await container.baiduDirectoryCache.content(
                           sourceID: source.id, directory: directory) {
-                // 冷启动首次进这一层:先端出盘上内容(无封面),封面由刮削缓存补,
-                // 真实目录交给后台刷新,不让人对着转圈等网络。
+                // 冷启动首次进这一层:先端出盘上内容(过期的也端),封面由刮削缓存补;
+                // 只在需要时后台刷新(`needsBackgroundRefresh`),不让人对着转圈等网络。
                 let restored = Self.content(from: disk, sourceID: source.id)
                 // 盘上那份可能是**不完整**的(翻页没列完就缓存了),标记出来让 UI 能提示
                 let state = FileSourceDirectoryState.restoring(
@@ -724,7 +745,9 @@ final class FileSourceViewModel {
                 commit(restored, directory: directory)
                 await applyDirectoryShape(directory: directory)
                 startScrape(items: restored.items, provider: provider)
-                startBackgroundRefresh(directory: directory)
+                if Self.needsBackgroundRefresh(disk, sourceID: source.id) {
+                    startBackgroundRefresh(directory: directory)
+                }
             } else {
                 // 这一层的内容只能现取(网盘一次 `list`,本地文件夹一次读盘)
                 let state = try await loadFirstPage(directory: directory, provider: provider)
@@ -976,6 +999,17 @@ final class FileSourceViewModel {
         )
     }
 
+    /// 盘上那份要不要再去网盘列一次:过了新鲜窗口要;窗口内只有一种情况要 ——
+    /// 目录里有封面图:封面地址是会过期的 `dlink`,不落盘,只能现取(`BaiduPanDirectoryCache`)。
+    /// 其余直接用,要更早看到新内容按 ⌘R(配额 §7 / 115 限速 §6)。
+    nonisolated static func needsBackgroundRefresh(
+        _ entry: BaiduPanDirectoryCache.Entry, sourceID: UUID, now: Date = Date()
+    ) -> Bool {
+        guard BaiduPanDirectoryCache.isFresh(entry, now: now) else { return true }
+        return BaiduPanMetadataSynthesizer.synthesize(files: entry.files, sourceID: sourceID)
+            .contains { $0.cover != nil }
+    }
+
     private enum BackgroundRefreshTarget {
         /// 当前目录的网格(`items`)
         case directory
@@ -1118,17 +1152,81 @@ final class FileSourceViewModel {
 
     /// 列表出来后再在后台问 TMDB 补封面(`docs/TMDB_API.md`),TMDB 连不上不能让片库打不开。
     /// 失败只挂到 `scrapeFailure`,卡片保持图标卡。
+    ///
+    /// 请求克制:整页先贴刮削落盘缓存(零请求);要发 TMDB 请求的只限网格里出现过的卡片
+    /// (`itemAppeared`),一页 100 条不一口气全问。剧形态的目录例外:详情页的分集清单 / 剧级信息
+    /// 靠整套条目,网格卡片也不会出现,照旧整页刮。
     private func startScrape(items directoryItems: [SourceItem], provider: any FileSourceBrowsing) {
         let myGeneration = directoryGeneration
         scrapeFailure = nil
+        scrapedItemIDs = []
+        scrapeProvider = provider
+        let scraper = container.metadataScraper()
+        let scrapesEverything = directoryShape.seriesStructure != nil
         scrapeTask = Task { [weak self] in
-            let enriched = await provider.scrape(items: directoryItems)
+            let cached = await scraper.enrichFromCache(directoryItems)
+            guard let self, myGeneration == self.directoryGeneration else { return }
+            self.mergeScraped(cached)
+            if scrapesEverything {
+                self.runScrape(directoryItems.map(\.ref.itemID), generation: myGeneration)
+            } else {
+                self.scheduleVisibleScrape()
+            }
+        }
+    }
+
+    /// 网格卡片出现(`LazyVGrid` 提前建的也算):攒一小会儿,一批去刮
+    func itemAppeared(_ item: SourceItem) {
+        visibleItemIDs.insert(item.ref.itemID)
+        scheduleVisibleScrape()
+    }
+
+    func itemDisappeared(_ item: SourceItem) {
+        visibleItemIDs.remove(item.ref.itemID)
+    }
+
+    /// 滚动时卡片一张张出现,攒 `scrapeDebounce` 再发,免得一张一批
+    private func scheduleVisibleScrape() {
+        visibleScrapeDebounce?.cancel()
+        let myGeneration = directoryGeneration
+        visibleScrapeDebounce = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.scrapeDebounce)
+            } catch {
+                return
+            }
+            guard let self, myGeneration == self.directoryGeneration else { return }
+            let pending = self.items.map(\.ref.itemID).filter {
+                self.visibleItemIDs.contains($0) && !self.scrapedItemIDs.contains($0)
+            }
+            self.runScrape(pending, generation: myGeneration)
+        }
+    }
+
+    private static let scrapeDebounce: Duration = .milliseconds(300)
+
+    /// ⚠️ 独立的 Task,不挂在防抖任务下:防抖被下一次出现取消时,不能连带取消在途的刮削
+    /// (取消的请求不进查询缓存,那几张卡就白问还没结果)。换目录由 `cancelScrape` 统一取消。
+    private func runScrape(_ itemIDs: [String], generation myGeneration: Int) {
+        guard !itemIDs.isEmpty, let provider = scrapeProvider else { return }
+        scrapedItemIDs.formUnion(itemIDs)
+        let wanted = Set(itemIDs)
+        let batch = items.filter { wanted.contains($0.ref.itemID) }
+        scrapeTasks.append(Task { [weak self] in
+            let enriched = await provider.scrape(items: batch)
             let failure = await provider.lastScrapeFailureDescription()
             guard let self, myGeneration == self.directoryGeneration else { return }
-            self.items = enriched
+            self.mergeScraped(enriched)
             self.scrapeFailure = failure
-            self.refreshFlatSeason(from: enriched)
-        }
+        })
+    }
+
+    /// 按身份并回:刮的只是一部分,⛔ 不整体替换 `items`
+    private func mergeScraped(_ enriched: [SourceItem]) {
+        let byID = Dictionary(
+            enriched.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { first, _ in first })
+        items = items.map { byID[$0.ref.itemID] ?? $0 }
+        refreshFlatSeason(from: items)
     }
 
     /// 轮次 +1,在途的刮削回来时自行丢弃
@@ -1136,6 +1234,11 @@ final class FileSourceViewModel {
         directoryGeneration += 1
         scrapeTask?.cancel()
         scrapeTask = nil
+        visibleScrapeDebounce?.cancel()
+        visibleScrapeDebounce = nil
+        scrapeTasks.forEach { $0.cancel() }
+        scrapeTasks.removeAll()
+        scrapedItemIDs = []
         scrapeFailure = nil
     }
 
@@ -1367,8 +1470,10 @@ final class FileSourceViewModel {
                     content, isComplete: disk.isComplete)
                 await applyEpisodeContent(
                     content, provider: provider, generation: myGeneration, directory: directory)
-                startBackgroundRefresh(
-                    directory: directory, target: .episodes(generation: myGeneration))
+                if Self.needsBackgroundRefresh(disk, sourceID: source.id) {
+                    startBackgroundRefresh(
+                        directory: directory, target: .episodes(generation: myGeneration))
+                }
                 return
             } else {
                 content = try await provider.content(directory: directory)
