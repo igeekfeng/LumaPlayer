@@ -72,4 +72,21 @@ final class PlayerWindowFullScreenTests: XCTestCase {
         XCTAssertTrue(window.collectionBehavior.contains(.fullScreenPrimary))
         XCTAssertFalse(window.collectionBehavior.contains(.fullScreenAuxiliary))
     }
+
+    /// 红绿灯关闭按钮改走 `WindowBox.close()`;非全屏时直接关(Q57)
+    func testCloseButtonRoutesThroughWindowBox() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: true
+        )
+        window.isReleasedWhenClosed = false
+        let box = WindowBox()
+        var dismissCount = 0
+        box.dismiss = { dismissCount += 1 }
+        box.window = window
+        window.standardWindowButton(.closeButton)?.performClick(nil)
+        XCTAssertEqual(dismissCount, 1)
+    }
 }

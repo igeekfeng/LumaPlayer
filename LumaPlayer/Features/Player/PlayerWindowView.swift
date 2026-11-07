@@ -103,6 +103,8 @@ struct PlayerWindowView: View {
         .onAppear {
             isFocused = true
             installTrackpadScrubbing()
+            let dismissWindow = dismissWindow
+            window.dismiss = { dismissWindow(id: PlayerSceneRoot.windowID) }
         }
         .task { viewModel.start() }
         .task { await loadNowPlayingArtwork() }
@@ -570,7 +572,7 @@ struct PlayerWindowView: View {
     // MARK: - 动作
 
     private func close() {
-        dismissWindow(id: PlayerSceneRoot.windowID)
+        window.close()
     }
 
     private func toggleFullScreen() {
@@ -877,10 +879,17 @@ struct PlayerStatisticsView: View {
 
 /// 播放窗口的弱引用。全屏要切播放窗口自己,⛔ 不用 `NSApp.keyWindow`(docs/PITFALLS.md Q19)。
 @MainActor
-final class WindowBox {
+final class WindowBox: NSObject {
     weak var window: NSWindow? {
-        didSet { allowFullScreen() }
+        didSet {
+            allowFullScreen()
+            routeCloseButton()
+        }
     }
+
+    /// 真正关窗的动作(`dismissWindow`),由播放页注入
+    var dismiss: (@MainActor () -> Void)?
+    private var isClosingFromFullScreen = false
 
     var isFullScreen: Bool {
         window?.styleMask.contains(.fullScreen) ?? false
@@ -889,6 +898,39 @@ final class WindowBox {
     func toggleFullScreen() {
         allowFullScreen()
         window?.toggleFullScreen(nil)
+    }
+
+    /// 全屏时先退出、等 `didExitFullScreen` 再关。⛔ 不能直接关:菜单栏滑下时标题栏借给了全屏伴随窗口,
+    /// 关窗后退出全屏的过渡把它还回来时 AppKit 断言崩溃(`_relinquishTitlebar`,docs/KNOWN_ISSUES.md Q57)。
+    func close() {
+        guard let window, isFullScreen else {
+            dismiss?()
+            return
+        }
+        guard !isClosingFromFullScreen else { return }
+        isClosingFromFullScreen = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(exitedFullScreenForClose),
+            name: NSWindow.didExitFullScreenNotification, object: window)
+        window.toggleFullScreen(nil)
+    }
+
+    @objc private func exitedFullScreenForClose(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(
+            self, name: NSWindow.didExitFullScreenNotification, object: notification.object)
+        isClosingFromFullScreen = false
+        dismiss?()
+    }
+
+    /// 红绿灯的关闭按钮也走 `close()`
+    private func routeCloseButton() {
+        guard let button = window?.standardWindowButton(.closeButton) else { return }
+        button.target = self
+        button.action = #selector(closeButtonClicked)
+    }
+
+    @objc private func closeButtonClicked(_ sender: Any?) {
+        close()
     }
 
     /// SwiftUI 给次级 `Window` 场景的 NSWindow 是 `.fullScreenAuxiliary`,自己调 `toggleFullScreen`

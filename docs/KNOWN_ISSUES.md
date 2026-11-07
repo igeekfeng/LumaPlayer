@@ -257,5 +257,8 @@ dylib 层已不依赖 Homebrew:固化产物含 libmpv 本体 + 49 个传递依�
   主线程卡顿超 200 ms 时的丢帧程度(displayLink 在主 runloop 上)都没有数据。
   第一帧刚出就暂停、再恢复,VO 丢 2–3 帧(不报 swap 时 ≤1;displayLink 常开也一样,不是唤醒问题),推测是 VO 按 vsync 出帧后追不上刚起步的音频时钟;
   先播几十毫秒再暂停则为 0。真实片源上是否可见未知。
+- **Q57 全屏下关播放窗口崩溃(`_NSFullScreenMenuBarCompanionController _relinquishTitlebar` 断言)。** 菜单栏滑下时标题栏借给了全屏伴随窗口,
+  直接关窗后,退出全屏的过渡把它还回来时断言失败。现在红绿灯关闭按钮与页内关闭入口走 `WindowBox.close()`:先退出全屏、等 `didExitFullScreen` 再关。
+  ⛔ 未覆盖:系统「文件 → 关闭」/ ⌘W 直接走 `performClose:`,全屏下从菜单栏点它是否同样崩溃没有验证;修复本身也只靠崩溃栈推断,没有在真机上复现过。
 - **Q44「内核未就绪」门禁靠 `phase`,留着毫秒级竞态。** `FILE_LOADED` 与 UI 那一帧之间松手的拖动会被 mpv 拒(降级为 OSD)。
   流本身不可 seek(见 PITFALLS §2)时门禁也看不出来。
