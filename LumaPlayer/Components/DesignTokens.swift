@@ -180,6 +180,24 @@ enum Metrics {
     static let homeHeroFallbackBlur: CGFloat = 80
     static let heroDotSize: CGFloat = 7
 
+    // MARK: 播放按钮
+
+    // 详情页操作按钮:同一高度,主按钮用系统液态玻璃,背景填充表示观看比例
+    static let detailActionHeight: CGFloat = 42
+    static let detailPlayButtonWidth: CGFloat = 224
+    static let detailPlayFontSize: CGFloat = 16
+    static let detailActionSymbolSize: CGFloat = 17
+    static let detailPlayProgressOpacity: Double = 0.08
+
+    // 卡片上的紧凑按钮:进度作为外圈圆弧,常显无悬停特效
+    static let progressPlayBadgeSize: CGFloat = 40
+    static let progressPlayRingWidth: CGFloat = 3
+    static let progressPlayRingTrackOpacity: Double = 0.28
+    static let progressPlayFillOpacity: Double = 0.55
+    static let progressPlayShadowOpacity: Double = 0.3
+    static let progressPlaySymbolRatio: CGFloat = 0.34
+    static let progressPlaySymbolOffsetRatio: CGFloat = 0.02
+
     // MARK: 批量标记分集
 
     static let playedPickerWidth: CGFloat = 520

@@ -25,6 +25,13 @@ enum MediaFormat {
         return rest == 0 ? "\(hours) 小时" : "\(hours) 小时 \(rest) 分钟"
     }
 
+    /// 播放按钮上的续播位置:`00:02:05`。定长时间码,与播放器时间轴的可变长度分开。
+    static func timecode(seconds: Double) -> String? {
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        let total = Int(seconds.rounded())
+        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    }
+
     /// 从现在播放 / 续播,预计几点结束。
     static func endsAt(for item: EmbyItem, now: Date = Date()) -> Date? {
         guard let runtime = item.runTimeTicks, runtime > 0 else { return nil }

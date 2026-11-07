@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// 媒体详情:电影详情 / 剧集的季与分集。
-/// 布局参照 Emby Web 的信息结构,呈现按 macOS 原生做:整幅背景图 hero、播放主按钮用带 tint 的玻璃
-/// (DesignTokens.swift「界面规则」)。
+/// 布局参照 Emby Web 的信息结构,呈现按 macOS 原生做:整幅背景图 hero;进度(背景比例填充 +
+/// 位置时间码)合进液态玻璃播放按钮,不再另画进度条(`ProgressPlayButton`)。
 ///
 /// 剧集是**单页**:季、分集与播放按钮都在这里,只有一个播放主按钮,它作用于
 /// `MediaDetailViewModel.focusedEpisode`;点分集行只换定位,不跳页。
@@ -153,15 +153,14 @@ struct MediaDetailView: View {
             actions(detail)
             if detail.kind == .series {
                 focusedEpisodeSummary
-            } else if detail.kind != .season {
-                progressLine(detail)
             }
             overview(detail)
         }
         .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
     }
 
-    /// 播放主按钮 + 从头播放 + ✓ + ♡。剧集作用于定位的那一集(✓ ♡ 作用于整部剧);季不可播,不给空按钮。
+    /// 播放主按钮(液态玻璃胶囊)+ 圆形玻璃图标按钮。剧集作用于定位的那一集
+    /// (✓ ♡ 作用于整部剧);季不可播,不给空按钮。
     @ViewBuilder
     private func actions(_ detail: EmbyItem) -> some View {
         let playable: EmbyItem? = detail.kind == .series
@@ -170,23 +169,17 @@ struct MediaDetailView: View {
         GlassEffectContainer(spacing: Metrics.spacingM) {
             HStack(spacing: Metrics.spacingM) {
                 if let playable {
-                    Button {
-                        play(playable)
-                    } label: {
-                        Label(playTitle(for: playable, in: detail), systemImage: "play.fill")
-                            .padding(.horizontal, Metrics.spacingS)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    .keyboardShortcut(.defaultAction)
+                    ProgressPlayButton(
+                        positionSeconds: playable.resumeSeconds,
+                        fraction: playable.progressFraction,
+                        action: { play(playable) }
+                    )
                     if playable.progressFraction != nil {
-                        Button {
-                            play(playable, fromBeginning: true)
-                        } label: {
-                            Label("从头播放", systemImage: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.glass)
-                        .controlSize(.large)
+                        GlassIconButton(
+                            systemImage: "arrow.counterclockwise",
+                            label: "从头播放",
+                            action: { play(playable, fromBeginning: true) }
+                        )
                     }
                 } else if detail.kind == .series {
                     SkeletonBlock(cornerRadius: Radius.card)
@@ -230,55 +223,22 @@ struct MediaDetailView: View {
     private func userDataButtons(for detail: EmbyItem) -> some View {
         let busy = viewModel.updatingItemIDs.contains(detail.id)
         return HStack(spacing: Metrics.spacingM) {
-            Button {
+            GlassIconButton(
+                systemImage: detail.isPlayed ? "checkmark.circle.fill" : "checkmark.circle",
+                label: detail.isPlayed ? "标记为未看" : "标记为已看",
+                tint: detail.isPlayed ? Color.accentColor : nil
+            ) {
                 viewModel.togglePlayed(detail, server: server)
-            } label: {
-                Label(detail.isPlayed ? "标记为未看" : "标记为已看",
-                      systemImage: detail.isPlayed ? "checkmark.circle.fill" : "checkmark.circle")
-                    .labelStyle(.iconOnly)
             }
-            .help(detail.isPlayed ? "标记为未看" : "标记为已看")
-            .foregroundStyle(detail.isPlayed ? Color.accentColor : Color.primary)
-            Button {
+            GlassIconButton(
+                systemImage: detail.isFavorite ? "heart.fill" : "heart",
+                label: detail.isFavorite ? "取消收藏" : "收藏",
+                tint: detail.isFavorite ? Color.red : nil
+            ) {
                 viewModel.toggleFavorite(detail, server: server)
-            } label: {
-                Label(detail.isFavorite ? "取消收藏" : "收藏",
-                      systemImage: detail.isFavorite ? "heart.fill" : "heart")
-                    .labelStyle(.iconOnly)
             }
-            .help(detail.isFavorite ? "取消收藏" : "收藏")
-            .foregroundStyle(detail.isFavorite ? Color.red : Color.primary)
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
         .disabled(busy)
-    }
-
-    private func playTitle(for playable: EmbyItem, in detail: EmbyItem) -> String {
-        let verb = playable.progressFraction == nil ? "播放" : "继续播放"
-        guard detail.kind == .series, let label = playable.episodeLabel else { return verb }
-        return "\(verb) \(label)"
-    }
-
-    @ViewBuilder
-    private func progressLine(_ item: EmbyItem) -> some View {
-        if let progress = item.progressFraction {
-            HStack(spacing: Metrics.spacingM) {
-                ProgressView(value: progress)
-                    .frame(maxWidth: Metrics.posterMinWidth * 1.5)
-                Text(progressCaption(item, progress: progress))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private func progressCaption(_ item: EmbyItem, progress: Double) -> String {
-        let percent = "已观看 \(Int(progress * 100))%"
-        guard let remaining = MediaFormat.remaining(for: item) else { return percent }
-        return "\(percent) · 剩余 \(remaining)"
     }
 
     @ViewBuilder
@@ -293,7 +253,6 @@ struct MediaDetailView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                progressLine(episode)
             }
         }
     }

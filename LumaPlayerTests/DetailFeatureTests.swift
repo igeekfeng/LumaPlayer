@@ -215,6 +215,17 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertNil(MediaFormat.remaining(for: fresh))
     }
 
+    func testPlayButtonTimecode() throws {
+        XCTAssertNil(MediaFormat.timecode(seconds: 0))
+        XCTAssertNil(MediaFormat.timecode(seconds: -1))
+        XCTAssertEqual(MediaFormat.timecode(seconds: 125), "00:02:05")
+        XCTAssertEqual(MediaFormat.timecode(seconds: 3725), "01:02:05")
+        let item = try decode(#"{"Id":"M","Name":"M","UserData":{"PlaybackPositionTicks":1250000000}}"#)
+        XCTAssertEqual(item.resumeSeconds, 125)
+        let fresh = try decode(#"{"Id":"M","Name":"M"}"#)
+        XCTAssertNil(fresh.resumeSeconds)
+    }
+
     func testPremiereDateTakesDayAndDropsPlaceholder() {
         XCTAssertEqual(MediaFormat.date("2021-06-18T00:00:00.0000000Z"), "2021-06-18")
         XCTAssertNil(MediaFormat.date("0001-01-01T00:00:00.0000000Z"))

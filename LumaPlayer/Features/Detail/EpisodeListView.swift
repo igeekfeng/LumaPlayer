@@ -3,7 +3,7 @@ import SwiftUI
 /// 某一季的分集横排卡片,整季不把详情页撑长。
 ///
 /// 点一集只换定位(播放按钮跟着换),所以定位集要有明确选中标记(高亮 + 描边 + `.isSelected`),
-/// 且打开 / 切季时滚到可见。直接播某集:悬停缩略图上的播放按钮或右键菜单。
+/// 且打开 / 切季时滚到可见。直接播某集:缩略图上常显的环形进度播放按钮或右键菜单。
 struct EpisodeListView: View {
     let episodes: [EmbyItem]
     /// nil = 还没定位
@@ -373,30 +373,15 @@ private struct EpisodeCard: View {
                 store: store,
                 placeholderSystemImage: "tv"
             )
-            if isHovering {
-                Button(action: onPlay) {
-                    Image(systemName: "play.fill")
-                        .font(.title3)
-                        .padding(Metrics.spacingM)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .help("播放这一集")
-                .transition(.opacity)
-            }
+            ProgressPlayBadge(
+                fraction: episode.progressFraction,
+                helpText: episode.progressFraction == nil ? "播放这一集" : "继续播放这一集",
+                action: onPlay
+            )
         }
         .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-        .overlay(alignment: .bottom) {
-            if let progress = episode.progressFraction {
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-                    .tint(.white)
-                    .padding(Metrics.spacingS)
-                    .accessibilityLabel("已观看 \(Int(progress * 100))%")
-            }
-        }
         .overlay(alignment: .topTrailing) {
             if episode.isPlayed {
                 Image(systemName: "checkmark.circle.fill")

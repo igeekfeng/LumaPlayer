@@ -492,6 +492,26 @@ final class WatchProgressStoreTests: XCTestCase {
         XCTAssertEqual(states, ["a": .inProgress(seconds: 100), "b": .watched])
     }
 
+    /// 播放按钮上的环形进度:只给进行中且知道时长的;没时长 / 已看完 / 占位都不猜比例。
+    func testProgressFractionsOnlyForInProgressWithDuration() async throws {
+        let store = makeStore()
+        try await store.record(fileID: "half", positionSeconds: 150, durationSeconds: 600)
+        try await store.record(fileID: "noduration", positionSeconds: 88, durationSeconds: nil)
+        try await store.record(fileID: "done", positionSeconds: 590, durationSeconds: 600)
+        try await store.setUpNext([
+            WatchProgressStore.PlayedMark(fileID: "next", display: nil)
+        ])
+
+        let fractions = await store.progressFractions(
+            forFileIDs: ["half", "noduration", "done", "next", "ghost"])
+
+        XCTAssertEqual(fractions["half"], 0.25)
+        XCTAssertNil(fractions["noduration"])
+        XCTAssertNil(fractions["done"], "已看完不画进度环")
+        XCTAssertNil(fractions["next"], "占位不画进度环")
+        XCTAssertNil(fractions["ghost"])
+    }
+
     /// 没有 `played` 字段的记录按比例现算。
     func testLegacyEntryWithoutPlayedDerivesStateFromThreshold() async throws {
         let legacy = #"""

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 「继续观看」「下一集」的横版卡片(用剧照,一眼认出停在哪一集)。非玻璃卡片;
-/// 悬停出现玻璃播放按钮直接续播,点其余位置打开详情。
+/// 常显的环形进度播放按钮直接续播,点其余位置打开详情。
 struct LandscapeCard: View {
     let item: EmbyItem
     let serverID: UUID
@@ -27,27 +27,21 @@ struct LandscapeCard: View {
                     )
                 }
                 .overlay {
-                if isHovering, let onPlay {
-                    Button(action: onPlay) {
-                        Image(systemName: "play.fill")
-                            .font(.title2)
-                            .padding(Metrics.spacingM)
+                    if let onPlay {
+                        ProgressPlayBadge(
+                            fraction: item.progressFraction,
+                            helpText: item.progressFraction == nil ? "播放" : "继续播放",
+                            action: onPlay
+                        )
                     }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .help(item.progressFraction == nil ? "播放" : "继续播放")
-                    .transition(.opacity)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-            .overlay(alignment: .bottom) {
-                if let progress = item.progressFraction {
-                    CardProgressBar(fraction: progress)
-                        .padding(Metrics.spacingS)
-                }
-            }
-            .scaleEffect(isHovering ? Self.hoverScale : 1)
-            .shadow(color: .black.opacity(isHovering ? 0.25 : 0), radius: Metrics.spacingS, y: Metrics.spacingXS)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                .scaleEffect(isHovering ? Self.hoverScale : 1)
+                .shadow(
+                    color: .black.opacity(isHovering ? 0.25 : 0),
+                    radius: Metrics.spacingS,
+                    y: Metrics.spacingXS
+                )
             VStack(alignment: .leading, spacing: Metrics.spacingXS) {
                 Text(primaryTitle)
                     .font(.body)

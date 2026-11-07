@@ -130,6 +130,10 @@ final class FileSourceViewModel {
     /// 以及本来源在库里的全部记录。未看的不在字典里。
     private(set) var watchStates: [String: WatchProgressStore.WatchState] = [:]
 
+    /// `fs_id` → 已观看比例。由播放时上报的时长算,与 `watchStates` 同一轮刷新;
+    /// 没有时长的记录不在字典里(卡片 / 详情页只画按钮,不画进度环)。
+    private(set) var progressFractions: [String: Double] = [:]
+
     /// 目录路径 → 其下(含子目录)已看集数。只统计本地有记录的:算总集数要列子目录,
     /// 网格上花不起配额,所以做不到 Emby 那种「还有 N 集未看」。
     private(set) var watchedEpisodeCounts: [String: Int] = [:]
@@ -1765,6 +1769,15 @@ final class FileSourceViewModel {
         return seconds
     }
 
+    /// 详情页与分集卡片的环形进度。优先用播放时上报的时长,没有再退回列目录拿到的
+    /// `filemetas` 时长;两样都没有就返回 nil,⛔ 不猜比例。
+    func progressFraction(for item: SourceItem) -> Double? {
+        guard let seconds = resumeSeconds(for: item), seconds > 0 else { return nil }
+        if let fraction = progressFractions[item.ref.itemID] { return fraction }
+        guard let duration = item.durationSeconds, duration > 0 else { return nil }
+        return min(max(seconds / duration, 0), 1)
+    }
+
     /// 目录卡片「已看 N 集」的 N(0 = 不显示),只数本地有记录的
     func watchedEpisodeCount(for item: SourceItem) -> Int {
         guard item.kind.isContainer, let path = file(for: item)?.path else { return 0 }
@@ -2076,8 +2089,10 @@ final class FileSourceViewModel {
         }
         let records = await container.watchProgress.storedRecords(sourceID: source.id)
         ids.formUnion(records.map(\.fileID))
-        let states = await container.watchProgress.watchStates(forFileIDs: Array(ids))
+        let fileIDs = Array(ids)
+        let states = await container.watchProgress.watchStates(forFileIDs: fileIDs)
         watchStates = states
+        progressFractions = await container.watchProgress.progressFractions(forFileIDs: fileIDs)
         watchedEpisodeCounts = Self.watchedEpisodeCounts(records: records, states: states)
     }
 

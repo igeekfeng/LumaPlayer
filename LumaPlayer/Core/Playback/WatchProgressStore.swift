@@ -123,6 +123,20 @@ actor WatchProgressStore {
         return result
     }
 
+    /// 进行中且知道时长的条目 → 已观看比例(0...1)。详情页 / 卡片的环形进度用它;
+    /// 没有时长就不给,⛔ 不拿集数或文件名猜。
+    func progressFractions(forFileIDs ids: [String]) -> [String: Double] {
+        let all = entries()
+        var result: [String: Double] = [:]
+        for id in ids {
+            guard let entry = all[id],
+                  case .inProgress(let seconds) = Self.state(of: entry),
+                  let duration = entry.durationSeconds, duration > 0 else { continue }
+            result[id] = min(max(seconds / duration, 0), 1)
+        }
+        return result
+    }
+
     /// 显式标记优先,否则按比例现算。`played == false` 时位置必为 0(`record` 写新位置会清掉标记)。
     /// 时长未知判不了看完,按看到一半处理(⛔ 不猜)。
     private static func state(of entry: Entry) -> WatchState {

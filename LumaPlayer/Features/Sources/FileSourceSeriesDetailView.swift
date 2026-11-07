@@ -221,57 +221,42 @@ struct FileSourceSeriesDetailView: View {
     // MARK: - 操作
 
     /// 播放主按钮:作用于定位的那一集(有进度的那集,否则第一集)。分集还没到手时整块不画,⛔ 不给空按钮。
-    /// 「图片」按钮只在认出 TMDB 身份后出现 —— 没身份就不给点了没反应的入口。
+    /// 进度(背景比例填充 + 位置时间码)合进玻璃按钮,不再另画进度条。「图片」按钮只在认出 TMDB 身份后出现 ——
+    /// 没身份就不给点了没反应的入口。
     @ViewBuilder
     private var actions: some View {
-        HStack(spacing: Metrics.spacingM) {
-            if let episode = viewModel.focusedEpisode {
-                GlassEffectContainer(spacing: Metrics.spacingM) {
-                    HStack(spacing: Metrics.spacingM) {
-                        Button {
-                            play(episode)
-                        } label: {
-                            Label(playTitle(for: episode), systemImage: "play.fill")
-                                .padding(.horizontal, Metrics.spacingS)
-                        }
-                        .buttonStyle(.glassProminent)
-                        .controlSize(.large)
-                        .keyboardShortcut(.defaultAction)
-                        if hasProgress(episode) {
-                            Button {
-                                play(episode, fromBeginning: true)
-                            } label: {
-                                Label("从头播放", systemImage: "arrow.counterclockwise")
-                            }
-                            .buttonStyle(.glass)
-                            .controlSize(.large)
-                        }
+        GlassEffectContainer(spacing: Metrics.spacingM) {
+            HStack(spacing: Metrics.spacingM) {
+                if let episode = viewModel.focusedEpisode {
+                    ProgressPlayButton(
+                        positionSeconds: viewModel.resumeSeconds(for: episode),
+                        fraction: viewModel.progressFraction(for: episode),
+                        action: { play(episode) }
+                    )
+                    if hasProgress(episode) {
+                        GlassIconButton(
+                            systemImage: "arrow.counterclockwise",
+                            label: "从头播放",
+                            action: { play(episode, fromBeginning: true) }
+                        )
+                    }
+                } else if viewModel.isLoadingEpisodes {
+                    Text("正在读取分集…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if viewModel.seriesImageIdentity != nil {
+                    GlassIconButton(
+                        systemImage: "photo.on.rectangle",
+                        label: "浏览 TMDB 的背景图 / 海报 / Logo"
+                    ) {
+                        imageRequest = FileSourceImageRequest(
+                            title: viewModel.seriesItem?.title ?? "剧集",
+                            season: nil, episode: nil)
                     }
                 }
-            } else if viewModel.isLoadingEpisodes {
-                Text("正在读取分集…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if viewModel.seriesImageIdentity != nil {
-                Button {
-                    imageRequest = FileSourceImageRequest(
-                        title: viewModel.seriesItem?.title ?? "剧集",
-                        season: nil, episode: nil)
-                } label: {
-                    Label("图片", systemImage: "photo.on.rectangle")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.large)
-                .help("浏览 TMDB 的背景图 / 海报 / Logo")
             }
         }
-    }
-
-    private func playTitle(for episode: SourceItem) -> String {
-        let verb = hasProgress(episode) ? "继续播放" : "播放"
-        guard let number = episode.episodeNumber else { return verb }
-        return "\(verb) 第 \(number) 集"
     }
 
     private func hasProgress(_ episode: SourceItem) -> Bool {
@@ -385,6 +370,7 @@ struct FileSourceSeriesDetailView: View {
                 canShowImages: viewModel.seriesImageIdentity != nil,
                 store: store,
                 resumeSeconds: { viewModel.resumeSeconds(for: $0) },
+                progressFraction: { viewModel.progressFraction(for: $0) },
                 isWatched: { viewModel.isWatched($0) },
                 onPlay: { play($0) },
                 // 观看状态只有本地这一份(百度无此类接口):⛔ 不发请求,标完直接重读本地库
@@ -573,7 +559,7 @@ private struct FileSourcePersonCard: View {
 // MARK: - 分集横排
 
 /// 一季的分集:横向可滚动的一排卡片(与 Emby 的 `EpisodeListView` 同形)。
-/// ⚠️ 百度不给时长,画不出进度条(⛔ 不猜比例),只显示「已看到 mm:ss」。
+/// 进度合在播放按钮的环上;本地库没有时长时只显示「已看到 mm:ss」,⛔ 不猜比例。
 private struct FileSourceEpisodeShelf: View {
     let episodes: [SourceItem]
     /// 多季时这一排只是「本季」,头部元信息行的「共 N 集」是 TMDB 全剧总数,别让两处看起来打架。
@@ -583,6 +569,7 @@ private struct FileSourceEpisodeShelf: View {
     let canShowImages: Bool
     let store: PosterImageStore
     let resumeSeconds: (SourceItem) -> Double?
+    let progressFraction: (SourceItem) -> Double?
     let isWatched: (SourceItem) -> Bool
     let onPlay: (SourceItem) -> Void
     /// 单集标记:参数是「标成已看(true)/ 未看(false)」
@@ -632,6 +619,7 @@ private struct FileSourceEpisodeShelf: View {
                             episode: episode,
                             store: store,
                             resumeSeconds: resumeSeconds(episode),
+                            progressFraction: progressFraction(episode),
                             isWatched: isWatched(episode),
                             canShowImages: canShowImages
                                 && seasonNumber != nil && episode.episodeNumber != nil,
@@ -673,6 +661,8 @@ private struct FileSourceEpisodeCard: View {
     let store: PosterImageStore
     /// 本地续播位置(秒);nil = 没看到一半(未看 / 已看完都是 nil)
     let resumeSeconds: Double?
+    /// nil = 没有时长,只画按钮不画进度环
+    let progressFraction: Double?
     let isWatched: Bool
     let canShowImages: Bool
     let onPlay: () -> Void
@@ -743,17 +733,11 @@ private struct FileSourceEpisodeCard: View {
                 store: store,
                 placeholderSystemImage: "tv"
             )
-            if isHovering {
-                Button(action: onPlay) {
-                    Image(systemName: "play.fill")
-                        .font(.title3)
-                        .padding(Metrics.spacingM)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .help("播放这一集")
-                .transition(.opacity)
-            }
+            ProgressPlayBadge(
+                fraction: progressFraction,
+                helpText: progressFraction == nil ? "播放这一集" : "继续播放这一集",
+                action: onPlay
+            )
         }
         .aspectRatio(Metrics.landscapeAspectRatio, contentMode: .fit)
         .frame(maxWidth: .infinity)

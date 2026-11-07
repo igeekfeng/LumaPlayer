@@ -232,6 +232,12 @@ extension EmbyItem {
         return value
     }
 
+    /// 续播位置(秒);没看过返回 nil。
+    var resumeSeconds: Double? {
+        guard let position = userData?.playbackPositionTicks, position > 0 else { return nil }
+        return TickConverter.seconds(fromTicks: position)
+    }
+
     /// 0–1;缺时长或没看过返回 nil。直接算比例,不引入 ticks 换算常量。
     var progressFraction: Double? {
         guard let runtime = runTimeTicks, runtime > 0,

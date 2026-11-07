@@ -609,8 +609,8 @@ private struct FileSourceCard: View {
     }
 }
 
-/// 续播区横版卡片,交互同 Emby 的 `LandscapeCard`:悬停出播放按钮直接续播,点其余位置进详情页。
-/// 有总时长时画进度条。
+/// 续播区横版卡片,交互同 Emby 的 `LandscapeCard`:常显的播放按钮直接续播,点其余位置进详情页。
+/// 进度合在按钮的环上,有总时长才有比例。
 private struct FileSourceResumeCardView: View {
     let card: FileSourceResumeCard
     let store: PosterImageStore
@@ -643,23 +643,13 @@ private struct FileSourceResumeCardView: View {
                     }
                 }
                 .overlay {
-                    // 卡上唯一「点了就播」的地方
-                    if isHovering, !isPreparing {
-                        Button(action: onPlay) {
-                            Image(systemName: "play.fill")
-                                .font(.title2)
-                                .padding(Metrics.spacingM)
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .help("继续播放")
-                        .transition(.opacity)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if let fraction = progressFraction {
-                        CardProgressBar(fraction: fraction)
-                            .padding(Metrics.spacingS)
+                    // 卡上唯一「点了就播」的地方;常显,进度环才看得见
+                    if !isPreparing {
+                        ProgressPlayBadge(
+                            fraction: progressFraction,
+                            helpText: "继续播放",
+                            action: onPlay
+                        )
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
