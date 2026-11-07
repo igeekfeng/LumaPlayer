@@ -57,7 +57,6 @@ struct PlayerWindowView: View {
     /// 正在显示的屏显,`Metrics.osdDuration` 后清空(见 `showOSD`)
     @State private var shownOSD: PlayerOSD?
     @FocusState private var isFocused: Bool
-    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(container: AppContainer, request: PlaybackRequest) {
@@ -103,8 +102,6 @@ struct PlayerWindowView: View {
         .onAppear {
             isFocused = true
             installTrackpadScrubbing()
-            let dismissWindow = dismissWindow
-            window.dismiss = { dismissWindow(id: PlayerSceneRoot.windowID) }
         }
         .task { viewModel.start() }
         .task { await loadNowPlayingArtwork() }
@@ -882,14 +879,21 @@ struct PlayerStatisticsView: View {
 final class WindowBox: NSObject {
     weak var window: NSWindow? {
         didSet {
+            if oldValue !== window { observeFullScreen(old: oldValue) }
             allowFullScreen()
             routeCloseButton()
         }
     }
 
-    /// 真正关窗的动作(`dismissWindow`),由播放页注入
-    var dismiss: (@MainActor () -> Void)?
-    private var isClosingFromFullScreen = false
+    /// 全屏进 / 出的动画期间。⛔ 别用 `styleMask` 判断:进入动画一开始就已带 `.fullScreen`
+    private enum Transition { case none, entering, exiting }
+    private var transition = Transition.none
+    /// 已排好关窗,等全屏退完再关
+    private var closeWhenSettled = false
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     var isFullScreen: Bool {
         window?.styleMask.contains(.fullScreen) ?? false
@@ -902,24 +906,57 @@ final class WindowBox: NSObject {
 
     /// 全屏时先退出、等 `didExitFullScreen` 再关。⛔ 不能直接关:菜单栏滑下时标题栏借给了全屏伴随窗口,
     /// 关窗后退出全屏的过渡把它还回来时 AppKit 断言崩溃(`_relinquishTitlebar`,docs/KNOWN_ISSUES.md Q57)。
+    /// 正在进入全屏时 `toggleFullScreen` 可能被忽略,所以等进入完成再退出。
+    ///
+    /// ⛔ 只能直接 `window.close()`:`dismissWindow` / `performClose:` 都会去点红绿灯关闭按钮,
+    /// 而按钮的 target 就是这里,回调它们会无限递归(docs/PITFALLS.md Q58)。
     func close() {
-        guard let window, isFullScreen else {
-            dismiss?()
+        guard let window, !closeWhenSettled else { return }
+        if transition == .none, !isFullScreen {
+            window.close()
             return
         }
-        guard !isClosingFromFullScreen else { return }
-        isClosingFromFullScreen = true
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(exitedFullScreenForClose),
-            name: NSWindow.didExitFullScreenNotification, object: window)
-        window.toggleFullScreen(nil)
+        closeWhenSettled = true
+        if transition == .none {
+            toggleFullScreen()
+        }
     }
 
-    @objc private func exitedFullScreenForClose(_ notification: Notification) {
-        NotificationCenter.default.removeObserver(
-            self, name: NSWindow.didExitFullScreenNotification, object: notification.object)
-        isClosingFromFullScreen = false
-        dismiss?()
+    private func observeFullScreen(old: NSWindow?) {
+        let center = NotificationCenter.default
+        let observed: [(NSNotification.Name, Selector)] = [
+            (NSWindow.willEnterFullScreenNotification, #selector(willEnterFullScreen)),
+            (NSWindow.didEnterFullScreenNotification, #selector(didEnterFullScreen)),
+            (NSWindow.willExitFullScreenNotification, #selector(willExitFullScreen)),
+            (NSWindow.didExitFullScreenNotification, #selector(didExitFullScreen)),
+        ]
+        if let old {
+            for (name, _) in observed { center.removeObserver(self, name: name, object: old) }
+        }
+        transition = .none
+        closeWhenSettled = false
+        guard let window else { return }
+        for (name, selector) in observed { center.addObserver(self, selector: selector, name: name, object: window) }
+    }
+
+    @objc private func willEnterFullScreen(_ notification: Notification) {
+        transition = .entering
+    }
+
+    @objc private func didEnterFullScreen(_ notification: Notification) {
+        transition = .none
+        if closeWhenSettled { toggleFullScreen() }
+    }
+
+    @objc private func willExitFullScreen(_ notification: Notification) {
+        transition = .exiting
+    }
+
+    @objc private func didExitFullScreen(_ notification: Notification) {
+        transition = .none
+        guard closeWhenSettled else { return }
+        closeWhenSettled = false
+        window?.close()
     }
 
     /// 红绿灯的关闭按钮也走 `close()`

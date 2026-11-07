@@ -73,8 +73,33 @@ final class PlayerWindowFullScreenTests: XCTestCase {
         XCTAssertFalse(window.collectionBehavior.contains(.fullScreenAuxiliary))
     }
 
-    /// 红绿灯关闭按钮改走 `WindowBox.close()`;非全屏时直接关(Q57)
-    func testCloseButtonRoutesThroughWindowBox() {
+    /// 红绿灯关闭按钮改走 `WindowBox.close()`;非全屏时直接 `window.close()`(Q57、Q58)
+    func testCloseButtonClosesWindowWithoutRecursion() throws {
+        let window = makeClosableWindow()
+        let box = WindowBox()
+        box.window = window
+        let button = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        XCTAssertTrue(button.target === box)
+        // 递归(Q58)会在这里爆栈;能返回就说明关窗没有再点到自己
+        button.performClick(nil)
+        XCTAssertFalse(window.isVisible)
+    }
+
+    /// 全屏退出动画期间点关闭:等 `didExitFullScreen` 才关,之前不动窗口
+    func testCloseDuringExitTransitionWaitsForDidExit() throws {
+        let window = makeClosableWindow()
+        let box = WindowBox()
+        box.window = window
+        let button = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        NotificationCenter.default.post(name: NSWindow.willExitFullScreenNotification, object: window)
+        button.performClick(nil)
+        button.performClick(nil)
+        XCTAssertTrue(window.isVisible)
+        NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: window)
+        XCTAssertFalse(window.isVisible)
+    }
+
+    private func makeClosableWindow() -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
             styleMask: [.titled, .closable, .resizable],
@@ -82,11 +107,8 @@ final class PlayerWindowFullScreenTests: XCTestCase {
             defer: true
         )
         window.isReleasedWhenClosed = false
-        let box = WindowBox()
-        var dismissCount = 0
-        box.dismiss = { dismissCount += 1 }
-        box.window = window
-        window.standardWindowButton(.closeButton)?.performClick(nil)
-        XCTAssertEqual(dismissCount, 1)
+        window.orderFront(nil)
+        XCTAssertTrue(window.isVisible)
+        return window
     }
 }

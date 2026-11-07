@@ -217,6 +217,9 @@ MediaPlayer 在别的队列调它 → `EXC_BREAKPOINT`。交给系统框架在�
 
 **全屏无效(Q19)。** `Window` 场景的 `collectionBehavior` 是 `.fullScreenAuxiliary`;`WindowBox` 每次切换前设为 `.fullScreenPrimary`。
 
+**关窗爆栈(Q58)。** SwiftUI `dismissWindow(id:)` 与 AppKit `performClose:` 都是去点红绿灯关闭按钮;按钮 target 改成自己后,
+处理里 ⛔ 不能再回调它们,只能直接 `window.close()`,否则无限递归。
+
 **首页 hero 轮播不会让首屏跳。** 高度按窗口宽度算定值,文字与按钮全是 overlay;代价只有图片请求,靠只轮几张 + 预取下一张按住。
 
 **缓存:登录验证必须绕过缓存**(否则失效 token 假装登录成功);写操作作废整台缓存时,之前发出的读请求回来仍会写旧数据 →
