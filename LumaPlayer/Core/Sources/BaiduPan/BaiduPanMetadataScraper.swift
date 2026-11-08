@@ -516,6 +516,13 @@ actor BaiduPanMetadataScraper {
         imageDescriptor(path: match.backdropPath, size: TMDBImage.backdropSize, sourceID: sourceID)
     }
 
+    /// 标题 Logo:剧级 `/images` 的 `logos.first`,取不到就 nil(标题保持文字)。
+    /// ⚠️ 按响应原序、⛔ 不按评分 / 尺寸重排(§12);档位与图片墙的 Logo 墙一致(`w300`)。
+    static func titleLogoDescriptor(from set: TMDBImageSet, sourceID: UUID) -> ImageDescriptor? {
+        guard let logo = set.logos.first else { return nil }
+        return imageDescriptor(path: logo.filePath, size: TMDBImage.logoSize, sourceID: sourceID)
+    }
+
     /// - Parameter fillTMDBID: 只有目录卡片要(详情页按它取 `seriesProfile`)。分集 / 单条视频填了
     ///   会让下次刮削改走按 id 直取,白多一次请求。
     private static func apply(
@@ -586,8 +593,9 @@ actor BaiduPanMetadataScraper {
 
     // MARK: - 图片集合(按需,§12)
 
-    /// 取某一层的多图候选,**只在用户点开图片时才调用**。
-    /// ⛔ 剧级 /images 不并进 `seriesProfile`(进详情页不该固定多一次请求);
+    /// 取某一层的多图候选,**只在用户点开图片、或详情页取标题 Logo 时调用**。
+    /// 剧级那趟是详情页标题 Logo 主动取(每次进剧只一次),与图片墙共用下面的缓存;
+    /// ⛔ 季 / 集 /images 不并进 `seriesProfile`(进详情页不该固定多一次请求);
     /// ⛔ 分集 /images 更不为整季批量拉 —— 一次一次按需发。
     ///
     /// 缓存 + 单飞:同一 key 重复查看零请求;换剧时 key 不同自然隔离。

@@ -28,6 +28,14 @@ struct FileSourceSeriesDetailView: View {
                     seasonSection
                     episodesSection
                     factsSection
+                    DetailSecondaryLinks(
+                        tmdbURL: viewModel.seriesProfile?.match.tmdbPageURL,
+                        onShowImages: viewModel.seriesImageIdentity == nil ? nil : {
+                            imageRequest = FileSourceImageRequest(
+                                title: viewModel.seriesItem?.title ?? "剧集",
+                                season: nil, episode: nil)
+                        }
+                    )
                     castSection
                 }
                 .padding(.horizontal, Metrics.spacingXL)
@@ -130,10 +138,7 @@ struct FileSourceSeriesDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingM) {
-            Text(viewModel.seriesItem?.title ?? "剧集")
-                .font(.largeTitle.bold())
-                .lineLimit(2)
-                .accessibilityAddTraits(.isHeader)
+            titleView
             metaLine
             genresLine
             actions
@@ -142,6 +147,18 @@ struct FileSourceSeriesDetailView: View {
             overview
         }
         .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
+    }
+
+    /// 剧级 `/images` 有 Logo 就用第一个替换文字标题;没有 / 取不到就保持文字。
+    /// 文字留给 VoiceOver,Logo 只换视觉(与 Emby 详情页 `DetailTitle` 同口径)。
+    /// `.id` 按 Logo 的 cacheKey 重建:换剧 / 换 Logo 时「取不到」的标记不会带到下一部。
+    private var titleView: some View {
+        FileSourceTitleView(
+            title: viewModel.seriesItem?.title ?? "剧集",
+            logo: viewModel.seriesLogo,
+            store: store
+        )
+        .id(viewModel.seriesLogo?.cacheKey ?? "text")
     }
 
     // MARK: - 元信息行
@@ -221,8 +238,8 @@ struct FileSourceSeriesDetailView: View {
     // MARK: - 操作
 
     /// 播放主按钮:作用于定位的那一集(有进度的那集,否则第一集)。分集还没到手时整块不画,⛔ 不给空按钮。
-    /// 进度(背景比例填充 + 位置时间码)合进玻璃按钮,不再另画进度条。「图片」按钮只在认出 TMDB 身份后出现 ——
-    /// 没身份就不给点了没反应的入口。
+    /// 进度(背景比例填充 + 位置时间码)合进玻璃按钮,不再另画进度条。
+    /// TMDB 标识与图片墙是低频出口,放在信息区末尾(`DetailSecondaryLinks`),⛔ 不占这一行。
     @ViewBuilder
     private var actions: some View {
         GlassEffectContainer(spacing: Metrics.spacingM) {
@@ -244,16 +261,6 @@ struct FileSourceSeriesDetailView: View {
                     Text("正在读取分集…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-                if viewModel.seriesImageIdentity != nil {
-                    GlassIconButton(
-                        systemImage: "photo.on.rectangle",
-                        label: "浏览 TMDB 的背景图 / 海报 / Logo"
-                    ) {
-                        imageRequest = FileSourceImageRequest(
-                            title: viewModel.seriesItem?.title ?? "剧集",
-                            season: nil, episode: nil)
-                    }
                 }
             }
         }
@@ -521,6 +528,44 @@ struct FileSourceSeriesDetailView: View {
     private func play(_ episode: SourceItem, fromBeginning: Bool = false) {
         viewModel.play(episode, fromBeginning: fromBeginning)
         openWindow(id: PlayerSceneRoot.windowID)
+    }
+}
+
+// MARK: - 标题
+
+/// 有 Logo 时替换文字标题;取不到图退回文字,⛔ 不留占位图。
+private struct FileSourceTitleView: View {
+    let title: String
+    let logo: ImageDescriptor?
+    let store: PosterImageStore
+
+    @State private var isLogoUnavailable = false
+
+    var body: some View {
+        if let logo, !isLogoUnavailable {
+            PosterImage(
+                descriptor: logo,
+                store: store,
+                placeholderSystemImage: "textformat",
+                showsPlaceholder: false
+            ) { loaded in
+                if !loaded { isLogoUnavailable = true }
+            }
+            .aspectRatio(contentMode: .fit)
+            .frame(
+                maxWidth: Metrics.detailTitleLogoMaxWidth,
+                maxHeight: Metrics.detailTitleLogoMaxHeight,
+                alignment: .leading
+            )
+            .accessibilityElement()
+            .accessibilityLabel(title)
+            .accessibilityAddTraits(.isHeader)
+        } else {
+            Text(title)
+                .font(.largeTitle.bold())
+                .lineLimit(2)
+                .accessibilityAddTraits(.isHeader)
+        }
     }
 }
 

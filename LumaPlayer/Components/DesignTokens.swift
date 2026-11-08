@@ -189,6 +189,13 @@ enum Metrics {
     static let detailActionSymbolSize: CGFloat = 17
     static let detailPlayProgressOpacity: Double = 0.08
 
+    // 详情页底部的次要出口(TMDB 标识 / 图片墙):不抢操作条,标识只按文字大小
+    static let detailSecondaryMarkHeight: CGFloat = 13
+
+    // 标题 Logo 替换文字标题时的显示上限(与 Emby 详情页 DetailTitle 同口径)
+    static let detailTitleLogoMaxWidth: CGFloat = contentMaxWidth / 2
+    static let detailTitleLogoMaxHeight: CGFloat = posterMinWidth / 2
+
     // 卡片上的紧凑按钮:进度作为外圈圆弧,常显无悬停特效
     static let progressPlayBadgeSize: CGFloat = 40
     static let progressPlayRingWidth: CGFloat = 3

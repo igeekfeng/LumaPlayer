@@ -344,6 +344,8 @@ to a TV show」,才与官网剧集页那份完整演员表一致。两者差的�
 
 ⚠️ **请求纪律(硬约束)**:分集 `/images` 是**每集一次**请求。⛔ 进详情页不为整季批量拉,
 只在用户点开某一集的图片时才发;季 `/images` 同理只在点开「季海报」时发。
+剧级 `/images` 在网盘 / 本地详情页进入时取一次(取 `logos.first` 替换文字标题),
+与「浏览图片」共用同一份结果与缓存,⛔ 不发第二遍。
 结果按端点缓存(进程内),重复查看零请求;换剧 / 换授权时清空。
 
 ⚠️ `backdrop_path` 仍由 §9 详情端点给(单张主图),零额外请求;§12 的多图集合是**补充**,不替代它。
@@ -358,3 +360,28 @@ https://image.tmdb.org/t/p/{file_size}/{profile_path}
 
 档位本项目用 **`w185`**(头像卡片约 75pt 宽,与 `w500` 海报 / `w300` 剧照同一量级取舍)。
 `profile_path` 与 `poster_path` 一样**自带版本语义**,可直接进 `ImageDescriptor.cacheKey`。
+
+## 13. 站点页面地址(不是接口)
+
+详情页上的 TMDB 标识只做一件事:**在浏览器里打开这一部在 TMDB 站点上的页面**。
+
+| 形态 | 地址 |
+|---|---|
+| 电影 | `https://www.themoviedb.org/movie/{id}?language=zh-CN` |
+| 剧集 | `https://www.themoviedb.org/tv/{id}?language=zh-CN` |
+
+⚠️ 域名是 **`www.themoviedb.org`**(站点页面),与 §1 的 `api.themoviedb.org`(接口)、
+§4 的 `image.tmdb.org`(图片 CDN)是三个不同的主机。这条地址**不发请求、不带 token**:
+token 只用于接口(`Authorization` 头,见 §1),⛔ 不进任何交给浏览器 / 剪贴板的 URL;
+页面本身的登录态归用户浏览器,与本项目的凭据无关。
+
+⚠️ 语言走**查询串** `?language=`,不是路径里的 `/zh-CN/` 段:后者实测 404(2026-11 在本机 curl 过
+`/zh-CN/movie/550`、`/zh-CN/tv/1399`,都是 Page Not Found;带 `?language=zh-CN` 返回中文页)。
+语言码与 `TMDBClient.defaultLanguage` 同口径,改一处要两边一起改。
+
+⚠️ **只到影 / 剧级**:拼地址要的是条目 id(§3 的 `results[].id`、§9 的 path 参数)。
+Emby 分集的 `ProviderIds.Tmdb` 是**单集** id,**不能**拼成上面的页面(单集页面是
+`/tv/{series_id}/season/{n}/episode/{e}`,而分集详情拿不到剧级 id)→
+分集不给入口,⛔ 不拿单集 id 硬拼剧级 URL(会打开一部不相干的作品,§9「id 不区分影 / 剧」同理)。
+
+⚠️ 拿不到 id(`ProviderIds` 里没有 `Tmdb`)时整块不画,⛔ 不给点了没反应的入口。

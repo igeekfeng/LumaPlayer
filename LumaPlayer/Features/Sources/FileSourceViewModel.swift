@@ -205,6 +205,10 @@ final class FileSourceViewModel {
     private(set) var seriesProfile: TMDBSeriesProfile?
     private(set) var isLoadingSeriesProfile = false
 
+    /// 标题 Logo:剧级 `/images` 的 `logos.first`。nil = 没有 / 没取到,标题保持文字。
+    /// 与图片墙共用 `imageSet` 的缓存与单飞,不额外发请求。
+    private(set) var seriesLogo: ImageDescriptor?
+
     // 这一趟没有单独的失败文案:刮削器的 `lastFailureDescription` 是共用槽位,可能是分集刮削留下的。
     // 拿不到就整块隐藏;TMDB 本身的问题由分集那趟的 `scrapeFailure` 报。
 
@@ -280,6 +284,8 @@ final class FileSourceViewModel {
 
     private static let seriesListingLogger = Logger(
         subsystem: NetworkDiagnostics.subsystem, category: "file-source-series-listing")
+    private static let seriesLogoLogger = Logger(
+        subsystem: NetworkDiagnostics.subsystem, category: "file-source-series-logo")
 
     init(container: AppContainer, source: FileSource, loadsDirectory: Bool = true) {
         self.container = container
@@ -1326,6 +1332,7 @@ final class FileSourceViewModel {
         }
         let myGeneration = seriesProfileGeneration
         seriesProfile = nil
+        seriesLogo = nil
         isLoadingSeriesProfile = true
         let scraper = container.metadataScraper()
         seriesProfileTask = Task { [weak self] in
@@ -1335,6 +1342,32 @@ final class FileSourceViewModel {
             self.seriesProfile = profile
             self.isLoadingSeriesProfile = false
             self.applySeriesPosterFromProfile()
+            await self.loadSeriesLogo(generation: myGeneration)
+        }
+    }
+
+    /// 标题 Logo:剧级 `/images` 的 `logos.first`。与图片墙共用 `imageSet` 的缓存与单飞,
+    /// 点开图片墙时零额外请求。没有 Logo 或取不到就保持文字标题。
+    private func loadSeriesLogo(generation: Int) async {
+        guard let sourceID = seriesSourceID, seriesImageIdentity != nil else {
+            seriesLogo = nil
+            return
+        }
+        do {
+            let set = try await loadImageSet(season: nil)
+            guard generation == seriesProfileGeneration else { return }
+            seriesLogo = BaiduPanMetadataScraper.titleLogoDescriptor(
+                from: set, sourceID: sourceID)
+        } catch is CancellationError {
+            return
+        } catch {
+            // 装饰性标题:取不到图片集合时保持文字标题,⛔ 不弹错、不塞占位图;失败照实记日志
+            let reason = (error as? TMDBError)?.userMessage
+                ?? SecretRedactor.redacted(String(describing: error))
+            Self.seriesLogoLogger.error(
+                "读取剧级 Logo 失败: \(reason, privacy: .public)")
+            guard generation == seriesProfileGeneration else { return }
+            seriesLogo = nil
         }
     }
 
@@ -1362,6 +1395,7 @@ final class FileSourceViewModel {
         seriesProfileTask?.cancel()
         seriesProfileTask = nil
         seriesProfile = nil
+        seriesLogo = nil
         isLoadingSeriesProfile = false
     }
 

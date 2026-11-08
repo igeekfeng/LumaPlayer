@@ -138,6 +138,7 @@ struct MediaDetailView: View {
                     DetailMediaInfo(streams: detail.mediaStreams ?? [])
                     DetailPeopleRow(people: detail.people ?? [], server: server, store: container.posters)
                     DetailFacts(detail: detail)
+                    DetailSecondaryLinks(tmdbURL: detail.tmdbPageURL)
                     similarSection
                 }
                 .padding(.horizontal, Metrics.spacingXL)

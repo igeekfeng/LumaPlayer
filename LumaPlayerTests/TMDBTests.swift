@@ -516,6 +516,41 @@ final class TMDBTests: XCTestCase {
         XCTAssertNil(TMDBImage.profileURL(path: ""))
     }
 
+    /// 标题 Logo 取 `logos.first`,按响应原序、⛔ 不重排;档位与 Logo 墙一致。
+    func testTitleLogoUsesFirstLogo() throws {
+        let sourceID = UUID(uuidString: "1E1F1A2B-0000-4000-8000-00000000ABCD")!
+        let set = TMDBImageSet(
+            logos: [
+                TMDBImageAsset(filePath: "/first.png", width: 800, height: 300),
+                TMDBImageAsset(filePath: "/second.png", width: 800, height: 300),
+            ])
+        let descriptor = try XCTUnwrap(
+            BaiduPanMetadataScraper.titleLogoDescriptor(from: set, sourceID: sourceID))
+        XCTAssertEqual(
+            ImageDescriptor.tmdbPosterKey(
+                sourceID: sourceID, posterPath: "/first.png", size: TMDBImage.logoSize),
+            descriptor.cacheKey)
+        switch descriptor.origin {
+        case .remote(let url, let headers):
+            XCTAssertEqual(
+                url.absoluteString,
+                "https://image.tmdb.org/t/p/\(TMDBImage.logoSize)/first.png")
+            XCTAssertTrue(headers.isEmpty)
+        default:
+            XCTFail("标题 Logo 应是公开 CDN 的 remote 图")
+        }
+    }
+
+    /// 没有 Logo / 路径为空就返回 nil,标题保持文字。
+    func testTitleLogoAbsentKeepsTextTitle() {
+        let sourceID = UUID(uuidString: "1E1F1A2B-0000-4000-8000-00000000ABCD")!
+        XCTAssertNil(BaiduPanMetadataScraper.titleLogoDescriptor(
+            from: TMDBImageSet(), sourceID: sourceID))
+        XCTAssertNil(BaiduPanMetadataScraper.titleLogoDescriptor(
+            from: TMDBImageSet(logos: [TMDBImageAsset(filePath: "", width: nil, height: nil)]),
+            sourceID: sourceID))
+    }
+
     /// 没有对应职务就是空数组,详情页整行不显示。
     func testCrewNamesFilterByJob() throws {
         let credits = TMDBCredits(
