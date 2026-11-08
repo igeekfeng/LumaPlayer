@@ -67,6 +67,17 @@ struct MediaDetailView: View {
             viewModel.refreshAfterPlayback(server: server)
         }
         .alert(
+            "无法播放",
+            isPresented: Binding(
+                get: { viewModel.playbackError != nil },
+                set: { if !$0 { viewModel.playbackError = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(viewModel.playbackError ?? "")
+        }
+        .alert(
             "操作失败",
             isPresented: Binding(
                 get: { viewModel.userDataError != nil },
@@ -159,6 +170,9 @@ struct MediaDetailView: View {
 
     /// 播放主按钮(液态玻璃胶囊)+ 圆形玻璃图标按钮。剧集作用于定位的那一集
     /// (✓ ♡ 作用于整部剧);季不可播,不给空按钮。
+    ///
+    /// 剧集的分集定位要串几趟请求,⛔ 不让按钮等它:按钮一进页面就在,点的时候才现取
+    /// (`MediaDetailViewModel.playSeries`)。定位好了只换按钮上的续播位置,不是加载态。
     @ViewBuilder
     private func actions(_ detail: EmbyItem) -> some View {
         let playable: EmbyItem? = detail.kind == .series
@@ -180,11 +194,13 @@ struct MediaDetailView: View {
                         )
                     }
                 } else if detail.kind == .series {
-                    SkeletonBlock(cornerRadius: Radius.card)
-                        .frame(width: Metrics.spacingXL, height: Metrics.spacingXL)
-                    Text("正在定位要播放的那一集…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ProgressPlayButton(
+                        positionSeconds: nil,
+                        fraction: nil,
+                        isResolving: viewModel.isResolvingPlayback
+                    ) {
+                        viewModel.playSeries(detail, server: server) { episode in play(episode) }
+                    }
                 }
                 if let sources = playable?.mediaSources, sources.count > 1 {
                     versionPicker(sources)

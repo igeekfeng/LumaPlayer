@@ -15,6 +15,10 @@ final class MediaDetailViewModel {
     private(set) var selectedSeason: EmbyItem?
     /// 只有剧集才有。nil = 还没定位到
     private(set) var focusedEpisode: EmbyItem?
+    /// 点主按钮时定位还没完成:按钮转圈、不重复发起
+    private(set) var isResolvingPlayback = false
+    /// 点了才定位,仍定位不到时照实提示(⛔ 不退回随便播一集)
+    var playbackError: String?
     /// 电影 / 剧集才查。失败或为空时页面不显示这一区块
     private(set) var similarState: LoadState<[EmbyItem]> = .idle
     /// 写操作失败必须让用户知道
@@ -43,6 +47,8 @@ final class MediaDetailViewModel {
     private var refreshTask: Task<Void, Never>?
     private var episodesRefreshTask: Task<Void, Never>?
     private var similarTask: Task<Void, Never>?
+    /// 剧集页点了主按钮才发起的定位(见 `playSeries`)
+    private var resolveTask: Task<Void, Never>?
     /// 批量标记的代次号,换条目时 +1,旧批次结果不再回写。与管加载任务的 `generation` 分开。
     private var batchToken = 0
 
@@ -60,11 +66,14 @@ final class MediaDetailViewModel {
         refreshTask?.cancel()
         episodesRefreshTask?.cancel()
         similarTask?.cancel()
+        resolveTask?.cancel()
         generation += 1
         // 上一页的批量进度与提示不再属于这里(见 runBatch)
         batchToken += 1
         batchProgress = nil
         batchMessage = nil
+        isResolvingPlayback = false
+        playbackError = nil
         let myGeneration = generation
 
         // 同一项且已有内容:原地刷新,失败保留旧内容
@@ -127,6 +136,54 @@ final class MediaDetailViewModel {
                 guard myGeneration == generation else { return }
                 if isRefresh { return }
                 detailState = .failed(LoadFailure(.transport(.unknown)))
+            }
+        }
+    }
+
+    /// 剧集页主按钮:按钮进来就在(`focusedEpisode` 回来只换续播位置),点下去才等 / 取该播哪一集。
+    /// ⛔ 按钮不等定位,页面因此没有「正在定位…」这一态。
+    ///
+    /// 页面自己那趟定位通常已在路上,先等它,⛔ 不再发一遍同样的请求;实在没拿到才现取,
+    /// 规则与首页 hero 相同(`ServerConnection.seriesPlaybackEpisode`)。失败照实提示,
+    /// ⛔ 不退回去随便播一集。
+    func playSeries(_ series: EmbyItem, server: ServerProfile, onResolved: @escaping @MainActor (EmbyItem) -> Void) {
+        guard !isResolvingPlayback else { return }
+        if let focusedEpisode {
+            onResolved(focusedEpisode)
+            return
+        }
+        isResolvingPlayback = true
+        let myGeneration = generation
+        let connection = container.connection(for: server)
+        resolveTask?.cancel()
+        resolveTask = Task {
+            defer {
+                if myGeneration == generation { isResolvingPlayback = false }
+            }
+            // 详情 → 季 → 定位 → 分集是一串:先等页面自己那趟,分集任务是途中才创建的,再单等它
+            await detailTask?.value
+            await episodesTask?.value
+            guard myGeneration == generation else { return }
+            if let focusedEpisode {
+                onResolved(focusedEpisode)
+                return
+            }
+            do {
+                guard let episode = try await connection.seriesPlaybackEpisode(seriesID: series.id) else {
+                    guard myGeneration == generation else { return }
+                    playbackError = "这部剧还没有可播放的分集。"
+                    return
+                }
+                guard myGeneration == generation else { return }
+                focusedEpisode = episode
+                onResolved(episode)
+            } catch let error as EmbyAPIError {
+                guard myGeneration == generation, error != .cancelled else { return }
+                if error == .unauthorized { container.state.serverNeedingLogin = server }
+                playbackError = "找不到要播放的分集:\(error.userMessage)"
+            } catch {
+                guard myGeneration == generation else { return }
+                playbackError = "找不到要播放的分集,请稍后重试。"
             }
         }
     }

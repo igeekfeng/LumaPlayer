@@ -3,11 +3,14 @@ import SwiftUI
 /// 详情页主按钮:液态玻璃胶囊,背景从左起的一段填充表示观看比例,文字给续播位置
 /// (「继续 00:40:05」)。玻璃与填充用同一个胶囊形状,填充贴满整个按钮、不留白边。
 /// ⛔ 不加悬停特效;与同排圆形玻璃按钮同高。`fraction == nil` 只画按钮,⛔ 不猜比例。
+/// `isResolving`:剧集还没定位到该播哪一集时点下去要现取,期间转圈、不可重复点。
 struct ProgressPlayButton: View {
     /// 续播位置(秒);nil / 0 = 从头播
     let positionSeconds: Double?
     /// 观看比例 0–1
     let fraction: Double?
+    /// 点击后要现取目标(剧集定位分集),期间转圈
+    var isResolving: Bool = false
     let action: () -> Void
 
     private var title: String {
@@ -30,9 +33,15 @@ struct ProgressPlayButton: View {
                         .fill(Color.primary.opacity(Metrics.detailPlayProgressOpacity))
                         .scaleEffect(x: progress, anchor: .leading)
                 }
-                Text(title)
-                    .font(.system(size: Metrics.detailPlayFontSize, weight: .semibold))
-                    .frame(maxWidth: .infinity)
+                HStack(spacing: Metrics.spacingS) {
+                    if isResolving {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(title)
+                }
+                .font(.system(size: Metrics.detailPlayFontSize, weight: .semibold))
+                .frame(maxWidth: .infinity)
             }
             .frame(width: Metrics.detailPlayButtonWidth, height: Metrics.detailActionHeight)
             .clipShape(Capsule())
@@ -40,6 +49,7 @@ struct ProgressPlayButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .disabled(isResolving)
         // 详情页的主按钮:回车直接播
         .keyboardShortcut(.defaultAction)
         .help(title)
