@@ -499,6 +499,7 @@ final class PlayerViewModel {
         // 重看一遍 = 全新的一次观看:片头可以再自动跳、下一集可以再提示
         didAutoSkipIntro = false
         isUpNextDismissed = false
+        didTriggerAutoPlayNext = false
         retry()
     }
 
@@ -1285,6 +1286,9 @@ final class PlayerViewModel {
 
     // MARK: - 跳过片头 / 下一集提示
 
+    /// 自动换集只触发一次:到切换点后 time-pos 可能再抖一下,别重复 `container.play`。
+    private var didTriggerAutoPlayNext = false
+
     /// 「跳过片头」按钮是否该出现
     var isSkipIntroAvailable: Bool {
         session != nil && !isEnded && failure == nil
@@ -1368,11 +1372,17 @@ final class PlayerViewModel {
         }
     }
 
+    /// 自动换集的切换点:有效的片尾标记,否则片尾(时长);时长未知时 nil。
+    private var upNextSwitchPoint: Double? {
+        markers.upNextSwitchPoint(duration: durationSeconds)
+    }
+
     /// 播放中的「下一集」提示是否该出现(播完之后由播完卡片接手,这里返回 false)。
+    /// 切换点前 `upNextLead` 秒就出现,倒数也在这段时间里跟着播放位置走完。
     var isUpNextPromptVisible: Bool {
         guard nextEpisode != nil, !isUpNextDismissed, !isEnded, failure == nil,
               let trigger = markers.upNextTrigger(
-                duration: durationSeconds, fallbackLead: Metrics.upNextFallbackLead)
+                duration: durationSeconds, fallbackLead: Metrics.upNextLead)
         else { return false }
         return positionSeconds >= trigger
     }
@@ -1383,7 +1393,17 @@ final class PlayerViewModel {
         stopUpNextCountdown()
     }
 
-    /// 每个可信的 time-pos 之后评估一次:自动跳片头、开始 / 撤销下一集倒计时。
+    /// 当前倒计时该显示几秒:从触发点到切换点按播放位置线性递减(ceil),到切换点归零。
+    /// 暂停时 time-pos 不动,倒数自然停表,不需要另起计时器。
+    private func upNextCountdownValue(at position: Double) -> Int? {
+        guard let trigger = markers.upNextTrigger(
+                duration: durationSeconds, fallbackLead: Metrics.upNextLead),
+              let point = upNextSwitchPoint,
+              position >= trigger else { return nil }
+        return max(1, Int(ceil(point - position)))
+    }
+
+    /// 每个可信的 time-pos 之后评估一次:自动跳片头、开始 / 刷新 / 撤销下一集倒计时。
     private func evaluatePlaybackPrompts() {
         guard isPositionSettled, scrubPreviewSeconds == nil else { return }
         if autoSkipIntro, !didAutoSkipIntro, !isPaused, isSkipIntroAvailable {
@@ -1391,30 +1411,37 @@ final class PlayerViewModel {
             skipIntro()
             return
         }
-        if isUpNextPromptVisible {
-            if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
+        // 到了切换点(片尾标记或片尾)立即换集:倒数已在播放中走完,⛔ 不在这之后另等 10 秒。
+        if autoPlayNext, !isUpNextDismissed, !didTriggerAutoPlayNext,
+           let point = upNextSwitchPoint, positionSeconds >= point {
+            didTriggerAutoPlayNext = true
+            playNextEpisode()
+            return
+        }
+        if isUpNextPromptVisible, autoPlayNext {
+            // 倒数按播放位置线性递减,不会因 time-pos 抖动往回跳。
+            let value = upNextCountdownValue(at: positionSeconds)
+            upNextCountdown = value.map { min(upNextCountdown ?? Int(Metrics.upNextLead), $0) }
         } else if upNextCountdown != nil, !isEnded {
             // 拖回到提示点之前:撤掉倒计时,之后再到提示点会重新开始
             stopUpNextCountdown()
         }
     }
 
-    /// 倒计时按秒走;暂停期间停表(播完之后没有「暂停」可言,照走)。
-    private func startUpNextCountdown() {
-        guard nextEpisode != nil, !isUpNextDismissed else { return }
-        upNextTask?.cancel()
-        upNextCountdown = Metrics.upNextCountdown
+    /// 没赶上结束前提示(时长晚到 / 拖到片尾)时,播完卡片上补一个短倒计时。
+    /// 正常路径在切换点前就换完集,不会走到这里。
+    private func startEndedFallbackCountdown() {
+        guard nextEpisode != nil, !isUpNextDismissed, autoPlayNext else { return }
+        upNextCountdown = Int(Metrics.upNextLead)
         upNextTask = Task { [weak self] in
-            while true {
+            var remaining = Int(Metrics.upNextLead)
+            while remaining > 0 {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                guard let self, let remaining = self.upNextCountdown else { return }
-                if self.isPaused, !self.isEnded { continue }
-                if remaining <= 1 {
-                    self.playNextEpisode()
-                    return
-                }
-                self.upNextCountdown = remaining - 1
+                guard let self, self.upNextCountdown != nil else { return }
+                remaining -= 1
+                self.upNextCountdown = remaining > 0 ? remaining : nil
             }
+            self?.playNextEpisode()
         }
     }
 
@@ -1957,8 +1984,18 @@ final class PlayerViewModel {
             // 文件树来源:落成「已看」+ 补「下一集」占位,否则续播区会停在上一集
             // (Emby 由服务端算 NextUp)。
             settleFileSourceEpisode(naturalEnd: true)
-            // 没有片尾标记也没赶上结束前提示时,播完卡片同样按设置倒计时播下一集。
-            if autoPlayNext, upNextCountdown == nil { startUpNextCountdown() }
+            // 倒数已在结束前那 10 秒里走完:播完即换集,⛔ 不重新计一遍 10 秒。
+            // 没赶上提示(时长晚到、没进过倒数窗口)才由播完卡片补一个短倒计时;
+            // 取消 / 关掉自动播放则把残留的倒数清掉,免得卡片上挂个不动的数字。
+            if autoPlayNext, nextEpisode != nil, !isUpNextDismissed {
+                if upNextCountdown != nil {
+                    playNextEpisode()
+                } else {
+                    startEndedFallbackCountdown()
+                }
+            } else {
+                stopUpNextCountdown()
+            }
 
         case .endFile(.error(let message)):
             // mpv 侧失败(拉流 401 / 解码 / 容器不支持)走这里,文案要与 PlaybackError 区分。

@@ -41,7 +41,7 @@ struct PlayerMarkersEditor: View {
                 }
                 section(
                     "片尾",
-                    detail: "播放到这里就提示「下一集」。"
+                    detail: "到这里自动换下一集;提前 10 秒出现「下一集」并开始倒计时。"
                 ) {
                     fieldRow("开始", text: $creditsStartText)
                 }

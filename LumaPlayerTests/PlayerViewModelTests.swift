@@ -402,6 +402,52 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isReadyToSeek, "播完之后拖必然失败")
     }
 
+    // MARK: - 下一集倒计时(提前 10 秒走完,不等播完)
+
+    /// 没有片尾标记:倒数从「结束前 10 秒」开始跟着播放位置走,不是播完再计 10 秒。
+    func testUpNextCountdownRunsDuringLastTenSeconds() throws {
+        let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
+        XCTAssertNotNil(viewModel.nextEpisode)
+        viewModel.handle(.duration(100), generation: 0)
+
+        // 还没进最后 10 秒:不提示、不倒数、不换集
+        viewModel.handle(.timePos(80), generation: 0)
+        XCTAssertFalse(viewModel.isUpNextPromptVisible)
+        XCTAssertNil(viewModel.upNextCountdown)
+        XCTAssertNil(baiduContainer?.state.nowPlaying, "还没到切换点,不该换集")
+
+        // 进最后 10 秒:出现提示,10 秒起倒
+        viewModel.handle(.timePos(90), generation: 0)
+        XCTAssertTrue(viewModel.isUpNextPromptVisible)
+        XCTAssertEqual(viewModel.upNextCountdown, 10)
+
+        // 倒数跟着位置递减
+        viewModel.handle(.timePos(95), generation: 0)
+        XCTAssertEqual(viewModel.upNextCountdown, 5)
+        viewModel.handle(.timePos(99.5), generation: 0)
+        XCTAssertEqual(viewModel.upNextCountdown, 1)
+
+        // 到片尾(切换点)立即换集,不在这之后另等 10 秒
+        viewModel.handle(.timePos(100), generation: 0)
+        let next = try XCTUnwrap(baiduContainer?.state.nowPlaying)
+        XCTAssertEqual(next.episodeQueue?.current?.id, "20", "切换点即换到下一集")
+    }
+
+    /// 取消后不再提示、也不再自动换集,直到重看才复位。
+    func testDismissUpNextStopsCountdownAndAutoSwitch() throws {
+        let viewModel = try makeBaiduViewModel(episodeCount: 3, playingIndex: 0)
+        viewModel.handle(.duration(100), generation: 0)
+        viewModel.handle(.timePos(90), generation: 0)
+        XCTAssertTrue(viewModel.isUpNextPromptVisible)
+
+        viewModel.dismissUpNext()
+        XCTAssertNil(viewModel.upNextCountdown)
+        XCTAssertFalse(viewModel.isUpNextPromptVisible)
+
+        viewModel.handle(.timePos(100), generation: 0)
+        XCTAssertNil(baiduContainer?.state.nowPlaying, "取消后到片尾也不换集")
+    }
+
     // MARK: - 辅助
 
     private func track(

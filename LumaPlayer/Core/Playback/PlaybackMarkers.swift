@@ -47,12 +47,19 @@ struct PlaybackMarkers: Sendable, Equatable {
         return seconds >= intro.lowerBound && seconds < intro.upperBound - tailTolerance
     }
 
-    /// 从哪起提示「下一集」:有效的 `creditsStart`,否则结束前 `fallbackLead` 秒;时长未知时 nil。
-    func upNextTrigger(duration: Double, fallbackLead: Double) -> Double? {
+    /// 自动换集的切换点:有效的 `creditsStart`,否则片尾(时长);时长未知时 nil。
+    func upNextSwitchPoint(duration: Double) -> Double? {
         guard duration > 0 else { return nil }
         if let creditsStart, creditsStart < duration {
             return creditsStart
         }
-        return max(0, duration - fallbackLead)
+        return duration
+    }
+
+    /// 从哪起提示「下一集」并开始倒计时:切换点前 `fallbackLead` 秒。
+    /// 倒数在这 10 秒里跟着播放位置走完,到切换点就换集;⛔ 不是播完了才另计 10 秒。
+    func upNextTrigger(duration: Double, fallbackLead: Double) -> Double? {
+        guard let point = upNextSwitchPoint(duration: duration) else { return nil }
+        return max(0, point - fallbackLead)
     }
 }

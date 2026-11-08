@@ -238,7 +238,7 @@ LumaPlayer 是纯 HTTP 客户端,不挂载网络存储,所以没有 Direct Play:
 
 `StartPositionTicks` ✅、`Name` ✅、`MarkerType` ✅ 字段 / 🔶 取值(`Chapter` / `IntroStart` / `IntroEnd` / `CreditsStart`,按自由字符串解)。
 取**源上的** `Chapters`。片头 = `IntroStart`→`IntroEnd`(都在且终点晚于起点);片尾起点 = `CreditsStart`。
-**没有标记是常态**:没有就不显示「跳过片头」,下一集提示退回「结束前 10 秒」(Q30)。
+**没有标记是常态**:没有就不显示「跳过片头」。下一集以片尾起点(或片尾)为切换点,提前 10 秒提示并走完倒计时,到切换点换集(不是播完再等 10 秒,Q30)。
 
 ### 4.4 决策算法(全 fixture 覆盖)
 

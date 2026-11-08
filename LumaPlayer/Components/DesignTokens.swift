@@ -124,8 +124,8 @@ enum Metrics {
     static let scrubberChapterTickOpacity: Double = 0.55
     static let resumeRewind: TimeInterval = 5
     static let skipIntroTailTolerance: TimeInterval = 1
-    static let upNextCountdown = 10
-    static let upNextFallbackLead: TimeInterval = 10
+    /// 自动换集的提前量(秒):切换点(片尾标记或片尾)前这么久开始提示并走完倒计时。
+    static let upNextLead: TimeInterval = 10
     static let playerMonitorInterval: TimeInterval = 1
     static let trackpadSeekSecondsPerPoint: Double = 0.2
     static let trackpadHorizontalDominance: Double = 1.5

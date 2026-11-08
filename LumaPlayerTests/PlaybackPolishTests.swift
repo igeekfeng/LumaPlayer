@@ -86,18 +86,23 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertFalse(PlaybackMarkers.none.isInIntro(60, tailTolerance: 1))
     }
 
-    func testUpNextTriggerPrefersCreditsThenFallsBack() {
+    func testUpNextTriggerIsTenSecondsBeforeSwitchPoint() {
         let withCredits = PlaybackMarkers(intro: nil, creditsStart: 1320)
-        XCTAssertEqual(withCredits.upNextTrigger(duration: 1440, fallbackLead: 10), 1320)
+        // 切换点 = 片尾标记,提示 / 提前 10 秒开始
+        XCTAssertEqual(withCredits.upNextSwitchPoint(duration: 1440), 1320)
+        XCTAssertEqual(withCredits.upNextTrigger(duration: 1440, fallbackLead: 10), 1310)
 
+        // 没有标记:切换点 = 片尾,提示 / 倒计时 = 结束前 10 秒
+        XCTAssertEqual(PlaybackMarkers.none.upNextSwitchPoint(duration: 1440), 1440)
         XCTAssertEqual(PlaybackMarkers.none.upNextTrigger(duration: 1440, fallbackLead: 10), 1430)
 
         // 片尾标记晚于时长(脏数据)→ 退回兜底
         let bogus = PlaybackMarkers(intro: nil, creditsStart: 2000)
+        XCTAssertEqual(bogus.upNextSwitchPoint(duration: 1440), 1440)
         XCTAssertEqual(bogus.upNextTrigger(duration: 1440, fallbackLead: 10), 1430)
 
         XCTAssertNil(withCredits.upNextTrigger(duration: 0, fallbackLead: 10))
-        // 比兜底提前量还短的片子:从 0 起就提示,不出现负数
+        // 比提前量还短的片子:从 0 起就提示,不出现负数
         XCTAssertEqual(PlaybackMarkers.none.upNextTrigger(duration: 5, fallbackLead: 10), 0)
     }
 
