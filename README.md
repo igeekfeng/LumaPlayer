@@ -71,7 +71,15 @@ xcodebuild -scheme LumaPlayer -destination 'platform=macOS,arch=arm64' \
 判定看**退出码**，不是输出结尾。日志里的
 `appintentsmetadataprocessor: ... no AppIntents.framework dependency found` 是信息性输出。
 
-也可以直接用 Xcode 打开 `LumaPlayer.xcodeproj` 跑。
+也可以直接用 Xcode 打开 `LumaPlayer.xcodeproj` 跑（⌘R）。不想开 Xcode 就用：
+
+```bash
+./Scripts/run-debug.sh              # 增量构建 Debug 并启动（加 --no-build 只启动）
+```
+
+功能验证走这条即可，**不需要**每轮跑 `deploy-to-applications.sh`：Debug 产物直接链接
+`Vendor/mpv/prefix/` 里的 libmpv，与 Release 的行为一致；deploy 那条验证的是「打包后脱离
+仓库也能跑」，属于发布前验收。
 
 ## 打包与安装
 
