@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// 手动选择弹幕库:上半是 `/match` 的模糊候选,下半是关键词搜索(`/search/episodes`)。
@@ -19,6 +18,7 @@ struct DanmakuPickerSheet: View {
     @State private var isSearching = false
     @State private var searchError: String?
     @State private var didSearch = false
+    @FocusState private var isKeywordFocused: Bool
 
     init(controller: DanmakuController, onClose: @escaping () -> Void) {
         self.controller = controller
@@ -41,47 +41,33 @@ struct DanmakuPickerSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(Metrics.spacingXL)
-            Divider()
-            searchBar.padding(Metrics.spacingXL)
-            Divider()
-            results
-                .frame(minHeight: 260, maxHeight: 420)
-            Divider()
-            footer.padding(Metrics.spacingXL)
+        PlayerModalCard(
+            title: "选择弹幕",
+            systemImage: "text.bubble",
+            subtitle: "弹幕来自「\(controller.source?.name ?? DanmakuSource.official.name)」。"
+                + "选定后会记住这一集;同一部剧的其他集按集号自动对上。",
+            width: 560,
+            onClose: onClose
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                searchBar.padding(Metrics.spacingXL)
+                Divider()
+                results
+                    .frame(minHeight: 260, maxHeight: 420)
+                Divider()
+                footer.padding(Metrics.spacingXL)
+            }
+            .onAppear { isKeywordFocused = true }
         }
-        .frame(width: 560)
-        .background(Self.background)
-        // 见 `PlayerMarkersEditor`
-        .preferredColorScheme(.dark)
     }
-
-    private static let background = Color(nsColor: NSColor(white: 0.12, alpha: 1))
 
     // MARK: - 版块
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: Metrics.spacingM) {
-            Image(systemName: "text.bubble")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                Text("选择弹幕")
-                    .font(.headline)
-                Text("弹幕来自「\(controller.source?.name ?? DanmakuSource.official.name)」。"
-                    + "选定后会记住这一集;同一部剧的其他集按集号自动对上。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
 
     private var searchBar: some View {
         HStack(spacing: Metrics.spacingM) {
             TextField("作品标题(至少 2 个字)", text: $keyword)
                 .textFieldStyle(.roundedBorder)
+                .focused($isKeywordFocused)
                 .onSubmit(search)
             LabeledContent("季") {
                 TextField("全部", text: $seasonText)

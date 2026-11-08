@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// 手动输入片头 / 片尾的表单。输入格式见 `PlayerTime.parse`;留空 = 不标这一格,
@@ -25,12 +24,14 @@ struct PlayerMarkersEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(Metrics.spacingXL)
-
-            Divider()
-
+        PlayerModalCard(
+            title: "片头与片尾",
+            systemImage: "flag.checkered",
+            subtitle: "同一部剧的每一集共用这份标记。输入 hh:mm:ss、mm:ss 或秒数,留空表示不标。",
+            width: 460,
+            onClose: onClose
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: Metrics.spacingL) {
                 section(
                     "片头",
@@ -61,35 +62,12 @@ struct PlayerMarkersEditor: View {
 
             footer
                 .padding(Metrics.spacingXL)
+            }
+            .preferredColorScheme(.dark)
         }
-        .frame(width: 460)
-        .background(Self.background)
-        // 播放页的 `.environment(\.colorScheme, .dark)` 不改 sheet 窗口底色(会白字浅底);
-        // 必须用 `preferredColorScheme` 把 sheet 窗口本身设成深色
-        .preferredColorScheme(.dark)
     }
-
-    /// 写死的不透明深色兜底:`preferredColorScheme` 没落到窗口上时也不会白字白底。
-    private static let background = Color(nsColor: NSColor(white: 0.12, alpha: 1))
-
 
     // MARK: - 版块
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: Metrics.spacingM) {
-            Image(systemName: "flag.checkered")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                Text("片头与片尾")
-                    .font(.headline)
-                Text("同一部剧的每一集共用这份标记。输入 hh:mm:ss、mm:ss 或秒数,留空表示不标。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
 
     private func section(
         _ title: String,

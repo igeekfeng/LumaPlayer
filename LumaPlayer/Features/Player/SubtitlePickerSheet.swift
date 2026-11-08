@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// 在线搜索字幕。骨架同 `DanmakuPickerSheet`。
@@ -18,6 +17,7 @@ struct SubtitlePickerSheet: View {
     @State private var needsToken = false
     /// 下载期间其它行禁用
     @State private var downloadingID: Int?
+    @FocusState private var isKeywordFocused: Bool
 
     @Environment(\.openSettings) private var openSettings
     @AppStorage(SettingsTab.storageKey) private var settingsTab = SettingsTab.general
@@ -29,47 +29,33 @@ struct SubtitlePickerSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(Metrics.spacingXL)
-            Divider()
-            searchBar.padding(Metrics.spacingXL)
-            Divider()
-            resultsList
-                .frame(minHeight: 280, maxHeight: 420)
-            Divider()
-            footer.padding(Metrics.spacingXL)
+        PlayerModalCard(
+            title: "搜索在线字幕",
+            systemImage: "captions.bubble",
+            subtitle: "从 assrt(伪射手)搜到的字幕会下载到本机,选中后立刻挂到当前视频。",
+            width: 600,
+            onClose: onClose
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                searchBar.padding(Metrics.spacingXL)
+                Divider()
+                resultsList
+                    .frame(minHeight: 280, maxHeight: 420)
+                Divider()
+                footer.padding(Metrics.spacingXL)
+            }
+            .onAppear { isKeywordFocused = true }
+            .task { searchIfPossible() }
         }
-        .frame(width: 600)
-        .background(Self.background)
-        // 见 `PlayerMarkersEditor`
-        .preferredColorScheme(.dark)
-        .task { searchIfPossible() }
     }
-
-    private static let background = Color(nsColor: NSColor(white: 0.12, alpha: 1))
 
     // MARK: - 版块
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: Metrics.spacingM) {
-            Image(systemName: "captions.bubble")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                Text("搜索在线字幕")
-                    .font(.headline)
-                Text("从 assrt(伪射手)搜到的字幕会下载到本机,选中后立刻挂到当前视频。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
 
     private var searchBar: some View {
         HStack(spacing: Metrics.spacingM) {
             TextField("作品名(至少 3 个字)", text: $keyword)
                 .textFieldStyle(.roundedBorder)
+                .focused($isKeywordFocused)
                 .onSubmit(searchIfPossible)
             Button("搜索", action: searchIfPossible)
                 .disabled(!canSearch)

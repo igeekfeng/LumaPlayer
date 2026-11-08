@@ -68,7 +68,10 @@ struct PlayerWindowView: View {
     }
 
     var body: some View {
+        // 外层只放模态浮层:与内层播放内容是兄弟节点,按键不会沿 `onKeyPress` 链往上串
+        // (系统 sheet 天然是独立视图树,改窗口内浮层后必须自己保证这层隔离)。
         ZStack {
+            ZStack {
             Color.black
             // 按实例认视图:`MPVView` 一次性绑定 player(§8),换实例必须重建 layer。
             // ⛔ 不能拆成两个 `if`:上一集挪到「定格」时会被重建成空 layer,定格画面就没了。
@@ -236,6 +239,19 @@ struct PlayerWindowView: View {
         }
         .onKeyPress("f") { toggleFullScreen(); return .handled }
         .onKeyPress(.escape) {
+            // 弹窗浮层与播放内容是兄弟视图,焦点可能仍落在这里:优先关弹窗,别让 Esc 穿透去退出全屏
+            if isDanmakuPickerPresented {
+                isDanmakuPickerPresented = false
+                return .handled
+            }
+            if isSubtitleSearchPresented {
+                isSubtitleSearchPresented = false
+                return .handled
+            }
+            if isMarkersEditorPresented {
+                isMarkersEditorPresented = false
+                return .handled
+            }
             // 先收控制栏面板与选集抽屉,再退出全屏
             if activePanel != nil {
                 activePanel = nil
@@ -268,14 +284,27 @@ struct PlayerWindowView: View {
                 viewModel.reportSubtitlePickerFailure(error)
             }
         }
-        .sheet(isPresented: $isDanmakuPickerPresented) {
-            DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
+
+        modalLayer
         }
-        .sheet(isPresented: $isSubtitleSearchPresented) {
-            SubtitlePickerSheet(viewModel: viewModel) { isSubtitleSearchPresented = false }
-        }
-        .sheet(isPresented: $isMarkersEditorPresented) {
-            PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
+    }
+
+    /// 播放页的模态弹窗:窗口内浮层(无遮罩、点旁边关闭)。
+    /// ⛔ 与播放内容是兄弟节点,不在 `onKeyPress` 链的子树里,否则在弹窗输入框打字会被播放快捷键吃掉。
+    @ViewBuilder
+    private var modalLayer: some View {
+        if isDanmakuPickerPresented {
+            PlayerModalOverlay { isDanmakuPickerPresented = false } content: {
+                DanmakuPickerSheet(controller: viewModel.danmaku) { isDanmakuPickerPresented = false }
+            }
+        } else if isSubtitleSearchPresented {
+            PlayerModalOverlay { isSubtitleSearchPresented = false } content: {
+                SubtitlePickerSheet(viewModel: viewModel) { isSubtitleSearchPresented = false }
+            }
+        } else if isMarkersEditorPresented {
+            PlayerModalOverlay { isMarkersEditorPresented = false } content: {
+                PlayerMarkersEditor(viewModel: viewModel) { isMarkersEditorPresented = false }
+            }
         }
     }
 
