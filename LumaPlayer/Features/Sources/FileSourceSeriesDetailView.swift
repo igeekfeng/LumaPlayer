@@ -813,8 +813,9 @@ private struct FileSourceEpisodeCard: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onPlay)
-        .onTapGesture(perform: onSelect)
+        // 两个识别器并行:单击不必等双击判定失败,定位即时;双击的第二下再叠播放
+        .gesture(TapGesture(count: 2).onEnded { onPlay() })
+        .simultaneousGesture(TapGesture().onEnded { onSelect() })
         .onHover { isHovering = $0 }
         .contextMenu {
             if isWatched {
