@@ -310,7 +310,7 @@ struct PlayerScrubber: View {
                     .frame(width: max(Metrics.scrubberMarkerMinWidth, width * (end - start)))
                     .offset(x: width * start)
             }
-            if let credits = viewModel.markers.creditsStart, credits < duration {
+            if let credits = viewModel.markers.creditsStart(duration: duration) {
                 Capsule()
                     .fill(.tint)
                     .opacity(Metrics.scrubberMarkerOpacity)
@@ -352,7 +352,7 @@ struct PlayerVolumeControl: View {
 // MARK: - 手动片头 / 片尾的文案
 
 extension ManualMarkers {
-    /// 例:`片头 00:30–02:00 · 片尾 22:00`;都没填时 nil。不会生效的组合明确写「未生效」。
+    /// 例:`片头 00:30–02:00 · 片尾 结尾前 2:00`;都没填时 nil。不会生效的组合明确写「未生效」。
     /// 片头按 `asPlaybackMarkers` 的口径显示(起点留空即 `00:00`),摘要与实跳区间始终一致。
     ///
     /// 放在 Features 层:要用 `PlayerTime.markerText`,⛔ Core 不依赖 Features。
@@ -365,8 +365,13 @@ extension ManualMarkers {
         } else if introStart != nil || introEnd != nil {
             parts.append("片头未生效")
         }
-        if let creditsStart {
-            parts.append(creditsStart > 0 ? "片尾 \(PlayerTime.markerText(creditsStart))" : "片尾未生效")
+        if let credits = creditsReference {
+            switch credits {
+            case .at(let start):
+                parts.append(start > 0 ? "片尾 \(PlayerTime.markerText(start))" : "片尾未生效")
+            case .beforeEnd(let lead):
+                parts.append(lead > 0 ? "片尾 结尾前 \(PlayerTime.markerText(lead))" : "片尾未生效")
+            }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

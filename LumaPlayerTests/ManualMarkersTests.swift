@@ -45,10 +45,23 @@ final class ManualMarkersTests: XCTestCase {
 
     func testManualInitValidatesCredits() {
         XCTAssertEqual(
-            PlaybackMarkers(introStart: nil, introEnd: nil, creditsStart: 1320).creditsStart, 1320)
+            PlaybackMarkers(introStart: nil, introEnd: nil, creditsStart: 1320).credits, .at(1320))
         XCTAssertNil(
-            PlaybackMarkers(introStart: nil, introEnd: nil, creditsStart: 0).creditsStart,
+            PlaybackMarkers(introStart: nil, introEnd: nil, creditsStart: 0).credits,
             "0 当作没标(与章节构造同口径)")
+    }
+
+    /// 手动片尾按「结尾前 N 秒」存,跨集复用。
+    func testManualCreditsBeforeEndIsStoredAsRelative() {
+        XCTAssertEqual(
+            ManualMarkers(creditsLead: 120).asPlaybackMarkers.credits, .beforeEnd(120))
+        XCTAssertEqual(
+            ManualMarkers(creditsLead: 120).creditsReference, .beforeEnd(120))
+        XCTAssertNil(
+            ManualMarkers(creditsLead: 0).asPlaybackMarkers.credits,
+            "0 当作没标")
+        XCTAssertTrue(ManualMarkers(creditsLead: 120).creditsTouched)
+        XCTAssertFalse(ManualMarkers().creditsTouched)
     }
 
     // MARK: - 生效的区间(手动起点留空 = 00:00)
@@ -71,35 +84,42 @@ final class ManualMarkersTests: XCTestCase {
     // MARK: - 合并:手动覆盖服务端,按标记组
 
     func testManualIntroOverridesServerIntroAndKeepsServerCredits() {
-        let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
+        let server = PlaybackMarkers(intro: 30..<120, credits: .at(1320))
         let merged = ManualMarkers(introStart: 5, introEnd: 15).applying(to: server)
         XCTAssertEqual(merged.intro, 5..<15, "动过片头 → 整组取手动")
-        XCTAssertEqual(merged.creditsStart, 1320, "没动过片尾 → 沿用服务端")
+        XCTAssertEqual(merged.credits, .at(1320), "没动过片尾 → 沿用服务端")
     }
 
     func testManualCreditsOnlyDoesNotWipeServerIntro() {
-        let server = PlaybackMarkers(intro: 30..<120, creditsStart: nil)
+        let server = PlaybackMarkers(intro: 30..<120, credits: nil)
         let merged = ManualMarkers(creditsStart: 1400).applying(to: server)
         XCTAssertEqual(merged.intro, 30..<120, "只标了片尾不该抹掉服务端片头")
-        XCTAssertEqual(merged.creditsStart, 1400)
+        XCTAssertEqual(merged.credits, .at(1400))
     }
 
     func testManualIntroEndOnlyOverridesServerIntro() {
-        let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
+        let server = PlaybackMarkers(intro: 30..<120, credits: .at(1320))
         let merged = ManualMarkers(introEnd: 45).applying(to: server)
         XCTAssertEqual(merged.intro, 0..<45, "只标终点也整组取手动,起点按 00:00 计")
-        XCTAssertEqual(merged.creditsStart, 1320)
+        XCTAssertEqual(merged.credits, .at(1320))
+    }
+
+    /// 手动片尾用「结尾前 N 秒」时,覆盖服务端给的绝对时刻(服务端是针对这一集的,手动要跨集复用)。
+    func testManualCreditsBeforeEndOverridesServerCredits() {
+        let server = PlaybackMarkers(intro: nil, credits: .at(1320))
+        let merged = ManualMarkers(creditsLead: 120).applying(to: server)
+        XCTAssertEqual(merged.credits, .beforeEnd(120))
     }
 
     func testIncompleteManualIntroYieldsNoIntro() {
-        let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
+        let server = PlaybackMarkers(intro: 30..<120, credits: .at(1320))
         let merged = ManualMarkers(introStart: 5).applying(to: server)
         XCTAssertNil(merged.intro, "只填起点就没有终点可跳,也不该再混进服务端那组")
-        XCTAssertEqual(merged.creditsStart, 1320)
+        XCTAssertEqual(merged.credits, .at(1320))
     }
 
     func testEmptyManualFallsBackToServer() {
-        let server = PlaybackMarkers(intro: 30..<120, creditsStart: 1320)
+        let server = PlaybackMarkers(intro: 30..<120, credits: .at(1320))
         XCTAssertEqual(ManualMarkers().applying(to: server), server)
         XCTAssertTrue(ManualMarkers().isEmpty)
     }
@@ -221,6 +241,21 @@ final class ManualMarkersTests: XCTestCase {
             ManualMarkers(introStart: 0, introEnd: 85, creditsStart: 1320).summary,
             "片头 00:00–01:25 · 片尾 22:00",
             "0 要显示成 00:00,不是 --:--")
+        XCTAssertEqual(
+            ManualMarkers(creditsLead: 120).summary, "片尾 结尾前 02:00",
+            "相对片尾按距结尾显示,不写成某集的具体时刻")
+    }
+
+    /// 老记录里没有 `creditsLead` 也要能读(可选属性走 `decodeIfPresent`)。
+    func testLegacyRecordWithoutCreditsLeadStillDecodes() throws {
+        let json = #"{"introStart":10,"introEnd":20,"creditsStart":600,"updatedAt":"2026-01-01T00:00:00Z"}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let markers = try decoder.decode(ManualMarkers.self, from: Data(json.utf8))
+        XCTAssertEqual(markers.introStart, 10)
+        XCTAssertEqual(markers.creditsStart, 600)
+        XCTAssertNil(markers.creditsLead)
+        XCTAssertEqual(markers.creditsReference, .at(600), "旧记录按固定时刻解释,不当成相对")
     }
 
     /// 只填起点 / 顺序反了 / 片尾为 0。
@@ -278,7 +313,7 @@ final class ManualMarkersTests: XCTestCase {
         }
 
         XCTAssertEqual(viewModel.markers.intro, 5..<15, "手动片头覆盖服务端")
-        XCTAssertEqual(viewModel.markers.creditsStart, 1320, "没动过片尾 → 沿用服务端")
+        XCTAssertEqual(viewModel.markers.credits, .at(1320), "没动过片尾 → 沿用服务端")
         XCTAssertTrue(viewModel.hasManualMarkers)
         viewModel.stop()
     }

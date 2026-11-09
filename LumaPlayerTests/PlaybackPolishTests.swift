@@ -61,7 +61,7 @@ final class PlaybackPolishTests: XCTestCase {
             from: try FixtureLoader.data("playback_chapter_markers_synthetic.json"))
         let markers = PlaybackMarkers(chapters: response.mediaSources?.first?.chapters)
         XCTAssertEqual(markers.intro, 30..<120)
-        XCTAssertEqual(markers.creditsStart, 1320)
+        XCTAssertEqual(markers.credits, .at(1320))
     }
 
     func testIntroNeedsBothEndsInOrder() {
@@ -76,7 +76,7 @@ final class PlaybackPolishTests: XCTestCase {
     }
 
     func testIsInIntroHonoursTailTolerance() {
-        let markers = PlaybackMarkers(intro: 30..<120, creditsStart: nil)
+        let markers = PlaybackMarkers(intro: 30..<120, credits: nil)
         XCTAssertFalse(markers.isInIntro(29.9, tailTolerance: 1))
         XCTAssertTrue(markers.isInIntro(30, tailTolerance: 1))
         XCTAssertTrue(markers.isInIntro(118.9, tailTolerance: 1))
@@ -87,7 +87,7 @@ final class PlaybackPolishTests: XCTestCase {
     }
 
     func testUpNextTriggerIsTenSecondsBeforeSwitchPoint() {
-        let withCredits = PlaybackMarkers(intro: nil, creditsStart: 1320)
+        let withCredits = PlaybackMarkers(intro: nil, credits: .at(1320))
         // 切换点 = 片尾标记,提示 / 提前 10 秒开始
         XCTAssertEqual(withCredits.upNextSwitchPoint(duration: 1440), 1320)
         XCTAssertEqual(withCredits.upNextTrigger(duration: 1440, fallbackLead: 10), 1310)
@@ -97,7 +97,7 @@ final class PlaybackPolishTests: XCTestCase {
         XCTAssertEqual(PlaybackMarkers.none.upNextTrigger(duration: 1440, fallbackLead: 10), 1430)
 
         // 片尾标记晚于时长(脏数据)→ 退回兜底
-        let bogus = PlaybackMarkers(intro: nil, creditsStart: 2000)
+        let bogus = PlaybackMarkers(intro: nil, credits: .at(2000))
         XCTAssertEqual(bogus.upNextSwitchPoint(duration: 1440), 1440)
         XCTAssertEqual(bogus.upNextTrigger(duration: 1440, fallbackLead: 10), 1430)
 
@@ -107,7 +107,25 @@ final class PlaybackPolishTests: XCTestCase {
     }
 
     func testCreditsAtZeroIsIgnored() {
-        XCTAssertNil(PlaybackMarkers(chapters: [chapter(0, "CreditsStart")]).creditsStart)
+        XCTAssertNil(PlaybackMarkers(chapters: [chapter(0, "CreditsStart")]).credits)
+    }
+
+    /// 手动片尾按「结尾前 N 秒」存,跨集随本集时长落地(每集长度不同也能切准)。
+    func testCreditsBeforeEndAdaptsToEpisodeDuration() {
+        let marker = PlaybackMarkers(intro: nil, credits: .beforeEnd(120))
+        XCTAssertEqual(marker.creditsStart(duration: 1440), 1320)
+        XCTAssertEqual(marker.upNextSwitchPoint(duration: 1440), 1320)
+        XCTAssertEqual(marker.upNextTrigger(duration: 1440, fallbackLead: 10), 1310)
+
+        XCTAssertEqual(marker.creditsStart(duration: 1500), 1380, "25 分钟的集 → 结尾前 2 分钟是 23:00")
+        XCTAssertEqual(marker.upNextSwitchPoint(duration: 1500), 1380)
+
+        // 比整集还长 → 无效(竖条不画),切换点退回片尾
+        XCTAssertNil(marker.creditsStart(duration: 100))
+        XCTAssertEqual(marker.upNextSwitchPoint(duration: 100), 100)
+        // 非正数 / 时长未知不产生负数切换点
+        XCTAssertEqual(PlaybackMarkers(intro: nil, credits: .beforeEnd(0)).upNextSwitchPoint(duration: 1440), 1440)
+        XCTAssertNil(marker.creditsStart(duration: 0))
     }
 
     // MARK: - 续播回退

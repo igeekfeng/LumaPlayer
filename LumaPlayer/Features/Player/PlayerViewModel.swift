@@ -1335,17 +1335,37 @@ final class PlayerViewModel {
     }
 
     /// 把当前位置设为片尾起点(同一部剧共用)。
+    /// 手动标注按剧共用、每集长度不同 → 存「结尾前多久」而不是固定时刻;
+    /// 时长未知(`API_CONTRACT.md` 8.1)时退回固定时刻,不假装算得出来。
     func setCreditsStartAtCurrentPosition() {
         var updated = manualMarkers ?? ManualMarkers()
-        updated.creditsStart = positionSeconds
+        let flashText: String
+        if durationSeconds > 0 {
+            let lead = max(0, durationSeconds - positionSeconds)
+            updated.creditsLead = lead
+            updated.creditsStart = nil
+            flashText = "片尾 结尾前 \(PlayerTime.markerText(lead))"
+        } else {
+            updated.creditsStart = positionSeconds
+            updated.creditsLead = nil
+            flashText = "片尾起点 \(PlayerTime.text(positionSeconds))"
+        }
         updated.updatedAt = Date()
-        commitManualMarkers(updated, flashText: "片尾起点 \(PlayerTime.text(positionSeconds))")
+        commitManualMarkers(updated, flashText: flashText)
     }
 
     /// 手动输入面板的「保存」:整组替换本剧的标注(空 = 不标那一格)。
-    func setManualMarkers(introStart: Double?, introEnd: Double?, creditsStart: Double?) {
+    /// 片尾由编辑面板给:`creditsLead`(结尾前)优先,没有则用 `creditsStart`(固定时刻)。
+    func setManualMarkers(
+        introStart: Double?,
+        introEnd: Double?,
+        creditsStart: Double? = nil,
+        creditsLead: Double? = nil
+    ) {
         commitManualMarkers(
-            ManualMarkers(introStart: introStart, introEnd: introEnd, creditsStart: creditsStart),
+            ManualMarkers(
+                introStart: introStart, introEnd: introEnd,
+                creditsStart: creditsStart, creditsLead: creditsLead),
             flashText: "片头片尾已保存")
     }
 

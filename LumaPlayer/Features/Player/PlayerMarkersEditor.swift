@@ -7,12 +7,20 @@ import SwiftUI
 ///
 /// ⛔ 表体不要读 `viewModel.positionSeconds`(每 0.2s 变一次);「用当前位置」只在点击时读。
 struct PlayerMarkersEditor: View {
+    /// 片尾的两种表达。默认「结尾前」:同一部剧共用一份标注,每集长度不同,
+    /// 固定时刻放到别的集就会切早 / 切晚。
+    enum CreditsMode: String, CaseIterable {
+        case fromEnd = "结尾前"
+        case fixed = "固定时刻"
+    }
+
     let viewModel: PlayerViewModel
     var onClose: () -> Void
 
     @State private var introStartText: String
     @State private var introEndText: String
-    @State private var creditsStartText: String
+    @State private var creditsMode: CreditsMode = .fromEnd
+    @State private var creditsText: String
 
     init(viewModel: PlayerViewModel, onClose: @escaping () -> Void) {
         self.viewModel = viewModel
@@ -20,7 +28,10 @@ struct PlayerMarkersEditor: View {
         let values = viewModel.manualMarkerValues
         _introStartText = State(initialValue: PlayerTime.markerText(values?.introStart))
         _introEndText = State(initialValue: PlayerTime.markerText(values?.introEnd))
-        _creditsStartText = State(initialValue: PlayerTime.markerText(values?.creditsStart))
+        let reference = values?.creditsReference
+        _creditsMode = State(
+            initialValue: reference?.isBeforeEnd == true ? .fromEnd : (reference == nil ? .fromEnd : .fixed))
+        _creditsText = State(initialValue: Self.creditsText(for: reference))
     }
 
     var body: some View {
@@ -44,7 +55,24 @@ struct PlayerMarkersEditor: View {
                     "片尾",
                     detail: "到这里自动换下一集;提前 10 秒出现「下一集」并开始倒计时。"
                 ) {
-                    fieldRow("开始", text: $creditsStartText)
+                    VStack(alignment: .leading, spacing: Metrics.spacingS) {
+                        Picker("片尾方式", selection: $creditsMode) {
+                            ForEach(CreditsMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        fieldRow(
+                            creditsMode == .fromEnd ? "距结尾" : "时刻",
+                            text: $creditsText,
+                            placeholder: "留空 = 不标",
+                            useCurrentPosition: creditsPosition
+                        )
+                        .onChange(of: creditsMode) { _, _ in
+                            // 单位变了,原来的数字不再代表同一含义,清掉避免误存
+                            creditsText = ""
+                        }
+                    }
                 }
             }
             .padding(Metrics.spacingXL)
@@ -91,7 +119,8 @@ struct PlayerMarkersEditor: View {
     private func fieldRow(
         _ title: String,
         text: Binding<String>,
-        placeholder: String = "留空 = 不标"
+        placeholder: String = "留空 = 不标",
+        useCurrentPosition: (() -> Double)? = nil
     ) -> some View {
         HStack(spacing: Metrics.spacingM) {
             Text(title)
@@ -103,7 +132,8 @@ struct PlayerMarkersEditor: View {
                 .monospacedDigit()
                 .frame(width: 120)
             Button("用当前位置") {
-                text.wrappedValue = PlayerTime.markerText(viewModel.positionSeconds)
+                let value = useCurrentPosition?() ?? viewModel.positionSeconds
+                text.wrappedValue = PlayerTime.markerText(value)
             }
             .controlSize(.small)
             .help("把当前播放位置填入这一格")
@@ -142,10 +172,10 @@ struct PlayerMarkersEditor: View {
 
     private var introStart: Field { Field(text: introStartText) }
     private var introEnd: Field { Field(text: introEndText) }
-    private var creditsStart: Field { Field(text: creditsStartText) }
+    private var credits: Field { Field(text: creditsText) }
 
     private var allFieldsValid: Bool {
-        introStart.isValid && introEnd.isValid && creditsStart.isValid
+        introStart.isValid && introEnd.isValid && credits.isValid
     }
 
     /// 格式错误优先;片头只填起点 / 顺序不对只提醒不拦保存。
@@ -159,6 +189,9 @@ struct PlayerMarkersEditor: View {
         if let end, end <= (start ?? 0) {
             return "片头终点要晚于起点(起点留空按 00:00 计),否则不会跳过片头。"
         }
+        if creditsMode == .fromEnd, viewModel.durationSeconds <= 0 {
+            return "时长未知,「结尾前」换算不出来;可改用「固定时刻」。"
+        }
         return nil
     }
 
@@ -167,7 +200,26 @@ struct PlayerMarkersEditor: View {
         viewModel.setManualMarkers(
             introStart: introStart.seconds,
             introEnd: introEnd.seconds,
-            creditsStart: creditsStart.seconds)
+            creditsStart: creditsMode == .fixed ? credits.seconds : nil,
+            creditsLead: creditsMode == .fromEnd ? credits.seconds : nil)
         onClose()
+    }
+
+    // MARK: - 片尾回显 / 取值
+
+    private static func creditsText(for reference: PlaybackMarkers.Credits?) -> String {
+        guard let reference else { return "" }
+        switch reference {
+        case .at(let start): return PlayerTime.markerText(start)
+        case .beforeEnd(let lead): return PlayerTime.markerText(lead)
+        }
+    }
+
+    /// 「用当前位置」取值:结尾前模式取距结尾时长,固定时刻模式取当前时刻。
+    private func creditsPosition() -> Double {
+        if creditsMode == .fromEnd, viewModel.durationSeconds > 0 {
+            return max(0, viewModel.durationSeconds - viewModel.positionSeconds)
+        }
+        return viewModel.positionSeconds
     }
 }
