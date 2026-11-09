@@ -22,6 +22,10 @@ struct FileSourceBrowserView: View {
 
     @State private var pendingDeletion: SourceItem?
 
+    /// 进详情页时网格 ScrollView 会被换掉、返回时重建。位置绑在这个一直存活的视图上:
+    /// SwiftUI 会随滚动更新它、重建网格时按它还原,不再弹回顶部。
+    @State private var gridScrollPosition = ScrollPosition()
+
     /// 重命名请求。目录与 ViewModel ⛔ 必须装在同一个载荷里交给 `.sheet(item:)`:分成两个 `@State`
     /// 时 sheet 内容闭包可能读到上一次的值(首次空白面板,之后显示上一部剧)。
     /// `id` 用 `UUID` 而非 `fsID`:同一目录连改两次时 `@State didStart` 不能被复用。
@@ -195,6 +199,7 @@ struct FileSourceBrowserView: View {
                 }
                 .padding(Metrics.spacingXL)
             }
+            .scrollPosition($gridScrollPosition)
         }
     }
 
