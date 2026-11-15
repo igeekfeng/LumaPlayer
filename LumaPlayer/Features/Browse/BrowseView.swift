@@ -198,13 +198,37 @@ struct BrowseView: View {
         HStack(spacing: Metrics.spacingM) {
             Spacer(minLength: 0)
             if case .emby? = container.state.currentSource {
-                ChromeSearchField(text: $searchText, chrome: chrome, onSubmit: submitSearch)
+                ChromeSearchField(
+                    text: $searchText, chrome: chrome,
+                    onSubmit: submitSearch)
+            } else if let binding = fileSourceSearchText {
+                // 同一处、同样式,但语义不同:文件树来源没有服务端搜索,这里行内实时过滤
+                // **已取回的这一层**(网盘配额 / 限速见 `FileSourceViewModel.searchQuery`),
+                // 不跳结果页。⛔ 别把它做成回车才生效 —— 那样看起来像在搜整个网盘。
+                ChromeSearchField(
+                    text: binding,
+                    chrome: chrome,
+                    prompt: "在这个目录里找",
+                    help: "只在已取回的这一层目录里找(不发请求)")
             }
             // 详情页不给来源切换器:切换会清空整个导航栈
             if !isShowingDetail {
                 sourceMenu
             }
         }
+    }
+
+    /// 文件树来源的搜索框绑定。nil = 这一屏没有可筛的网格(授权 / 剧集详情页),不给搜索框 ——
+    /// 顶栏上一个按了没反应的搜索框比没有更糟。
+    ///
+    /// 关键词存在各来源自己的 `FileSourceViewModel` 里:切来源再切回来还在,换目录由 VM 清空。
+    private var fileSourceSearchText: Binding<String>? {
+        guard let fileSource = container.state.currentSource?.fileSource else { return nil }
+        let viewModel = fileSourceViewModels.viewModel(for: fileSource)
+        guard viewModel.isSearchableDirectory else { return nil }
+        return Binding(
+            get: { viewModel.searchQuery },
+            set: { viewModel.searchQuery = $0 })
     }
 
     private var sourceMenu: some View {

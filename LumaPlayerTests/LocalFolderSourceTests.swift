@@ -155,6 +155,37 @@ final class LocalFolderSourceTests: XCTestCase {
         XCTAssertEqual(session.externalSubtitles.count, 1)
     }
 
+    /// 目录内搜索只筛已取回的条目:零请求、不碰 `sortedItems`(换集队列还要整套),
+    /// 进 / 退目录时收回关键词(否则新目录看起来是空的)。
+    func testDirectorySearchFiltersLoadedItemsWithoutTouchingTheQueue() async throws {
+        let container = try makeContainer()
+        let source = try await container.addLocalFolderSource(folderURL: root)
+        let viewModel = FileSourceViewModel(container: container, source: .localFolder(source))
+        await viewModel.reload()
+
+        XCTAssertEqual(viewModel.displayItems.count, 2)
+        XCTAssertFalse(viewModel.isSearchingDirectory)
+
+        viewModel.searchQuery = "电影"
+        XCTAssertTrue(viewModel.isSearchingDirectory)
+        XCTAssertEqual(viewModel.displayItems.map(\.title), ["电影"])
+        XCTAssertEqual(viewModel.sortedItems.count, 2, "搜索只影响显示,⛔ 不缩队列")
+
+        viewModel.searchQuery = "不存在的关键词"
+        XCTAssertTrue(viewModel.displayItems.isEmpty)
+        XCTAssertEqual(viewModel.items.count, 2, "搜不到不代表目录是空的")
+
+        // 真实文件名也认:卡片标题是解析出来的「电影」,`2019` 只出现在文件名里
+        let movie = try XCTUnwrap(viewModel.sortedItems.first { $0.kind.isPlayable })
+        XCTAssertFalse(movie.title.contains("2019"), "标题里的年份已被解析掉")
+        viewModel.searchQuery = "2019"
+        XCTAssertEqual(viewModel.displayItems.map(\.ref), [movie.ref], "按文件名命中")
+
+        let series = try XCTUnwrap(viewModel.sortedItems.first { $0.kind.isContainer })
+        await viewModel.enter(series)
+        XCTAssertFalse(viewModel.isSearchingDirectory, "换目录收回关键词")
+    }
+
     /// 本地读盘不缓存目录:刷新就能看到新拷进来的片子。
     func testNewFilesShowUpOnRefreshWithoutCaching() async throws {
         let container = try makeContainer()

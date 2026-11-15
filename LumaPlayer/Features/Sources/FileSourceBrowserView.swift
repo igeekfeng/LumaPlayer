@@ -160,9 +160,19 @@ struct FileSourceBrowserView: View {
                 structure: structure,
                 store: store
             )
-        } else if viewModel.sortedItems.isEmpty, viewModel.resumeCards.isEmpty {
-            // 判 `sortedItems` 而非 `items`:整层被隐藏时 `items` 非空,会既无网格也无空状态
-            if isFilterHidingEverything {
+        } else if viewModel.displayItems.isEmpty,
+                  viewModel.resumeCards.isEmpty || viewModel.isSearchingDirectory {
+            // 判 `displayItems` 而非 `items`:整层被隐藏时 `items` 非空,会既无网格也无空状态
+            // 搜索优先说「搜不到」:它比筛选更具体,别让用户以为被筛掉了
+            if viewModel.isSearchingDirectory, !viewModel.items.isEmpty {
+                ContentUnavailableView {
+                    Label("没有匹配「\(viewModel.searchQuery)」的条目", systemImage: "magnifyingglass")
+                } description: {
+                    Text("只在已取回的这一层里找。后面的页还没加载,可以清空搜索后继续往下翻。")
+                } actions: {
+                    Button("清空搜索") { viewModel.searchQuery = "" }
+                }
+            } else if isFilterHidingEverything {
                 ContentUnavailableView {
                     Label("当前筛选下没有条目", systemImage: "line.3.horizontal.decrease.circle")
                 } description: {
@@ -182,12 +192,13 @@ struct FileSourceBrowserView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Metrics.spacingXL) {
-                    if !viewModel.resumeCards.isEmpty {
+                    // 搜索时收起续播区:它跨目录,和「这一层里找到什么」不是一回事
+                    if !viewModel.resumeCards.isEmpty, !viewModel.isSearchingDirectory {
                         resumeShelf
                     }
-                    if !viewModel.sortedItems.isEmpty {
+                    if !viewModel.displayItems.isEmpty {
                         LazyVGrid(columns: columns, spacing: Metrics.gridSpacing) {
-                            ForEach(viewModel.sortedItems) { item in
+                            ForEach(viewModel.displayItems) { item in
                                 card(for: item)
                                     // 出现才问 TMDB(`FileSourceViewModel.startScrape`)
                                     .onAppear { viewModel.itemAppeared(item) }

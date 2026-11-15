@@ -171,24 +171,56 @@ struct ChromeBackButton: View {
     }
 }
 
-/// 搜索胶囊(⌘F 聚焦)。回车才搜,⛔ 不逐字请求(服务器低频纪律)。聚焦期间栏钉住。
+/// 搜索胶囊(⌘F 聚焦)。Emby 与文件树来源共用这一处、同一套样式:⌘F 永远落在当前来源的搜索上。
+///
+/// 两种语义按来源分:
+/// - Emby(`onSubmit` 非 nil):回车才搜,⛔ 不逐字请求(服务器低频纪律),结果进搜索页。
+/// - 文件树来源(`onSubmit` 为 nil):行内实时过滤**已取回的这一层**,零请求
+///   (网盘配额与限速不允许逐字请求,见 `FileSourceViewModel.searchQuery`)。
 struct ChromeSearchField: View {
     @Binding var text: String
     let chrome: BrowseChromeController
-    let onSubmit: () -> Void
+    /// nil = 实时过滤,不用回车
+    let onSubmit: (() -> Void)?
+    let prompt: String
+    let help: String
 
     @FocusState private var isFocused: Bool
+
+    init(
+        text: Binding<String>,
+        chrome: BrowseChromeController,
+        prompt: String = "搜索电影与剧集",
+        help: String = "搜索电影与剧集(⌘F,回车搜索)",
+        onSubmit: (() -> Void)? = nil
+    ) {
+        self._text = text
+        self.chrome = chrome
+        self.prompt = prompt
+        self.help = help
+        self.onSubmit = onSubmit
+    }
 
     var body: some View {
         HStack(spacing: Metrics.spacingXS) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("搜索电影与剧集", text: $text)
+            TextField("", text: $text, prompt: Text(prompt))
                 .textFieldStyle(.plain)
                 .focused($isFocused)
-                .onSubmit(onSubmit)
+                .onSubmit { onSubmit?() }
                 .onExitCommand { isFocused = false }
                 .frame(width: Metrics.chromeSearchWidth)
+            if onSubmit == nil, !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清空搜索")
+            }
         }
         .padding(.horizontal, Metrics.spacingM)
         .frame(height: Metrics.chromeSearchHeight)
@@ -205,9 +237,9 @@ struct ChromeSearchField: View {
         .onChange(of: isFocused) { _, focused in
             chrome.setSearchFocused(focused)
         }
-        .help("搜索电影与剧集(⌘F,回车搜索)")
+        .help(help)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("搜索电影与剧集")
+        .accessibilityLabel(prompt)
     }
 }
 

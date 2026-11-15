@@ -103,6 +103,37 @@ final class FileSourceViewModel {
         return visible(ordered).filter { matchesWatchFilter($0) }
     }
 
+    /// 目录内搜索关键词。只筛**已取回**的条目,零请求;换目录时清空(见 `commit`)。
+    ///
+    /// ⚠️ 不是真搜索:百度 `/xpan/file` 的逐字搜索一次一请求且配额极低
+    /// (`docs/BAIDU_PAN_API.md` §7),115 的搜索接口会再吃一层风控(§6),
+    /// 所以这一格只过滤手上已有的这一层,页面上不出现「搜索整个网盘」这种话。
+    var searchQuery = ""
+
+    var isSearchingDirectory: Bool { !searchQuery.isEmpty }
+
+    /// 这一屏有没有可筛的网格。授权 / 失败 / 剧集详情页都没有,顶栏据此不给搜索框 ——
+    /// 一个按了没反应的搜索框比没有更糟。
+    var isSearchableDirectory: Bool {
+        !items.isEmpty && directoryShape.seriesStructure == nil
+    }
+
+    /// 网格实际显示的条目:搜索命中 `sortedItems` 之后的结果。
+    /// ⛔ 别让 `play` 的换集队列跟着它走 —— 搜索只是显示过滤,不该把队列缩成几条。
+    var displayItems: [SourceItem] {
+        guard isSearchingDirectory else { return sortedItems }
+        return sortedItems.filter { matchesSearch($0) }
+    }
+
+    /// 标题与真实文件名都认:剧目录里 `title` 是剧名,`S02E07.mkv` 这种名字搜不到剧名
+    /// (与 `LibraryItemIdentity` 的判断同一回事,搜索给用户多一条路)。
+    private func matchesSearch(_ item: SourceItem) -> Bool {
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+        if item.title.range(of: searchQuery, options: options) != nil { return true }
+        guard let name = file(for: item)?.name else { return false }
+        return name.range(of: searchQuery, options: options) != nil
+    }
+
     /// 排序与筛选只作用于已取回的条目,零请求;控件放页头,不放主窗口工具栏。
     private(set) var sortOrder: BaiduPanSortOrder = .episode
     private(set) var sortAscending = true
@@ -949,6 +980,8 @@ final class FileSourceViewModel {
     /// 目录与条目一起提交。⛔ 别拆成两处写:中间那一帧目录已换、条目还是旧的,
     /// 按目录算的区块会先消失(见 `pendingDirectory`)。
     private func commit(_ content: FileSourceDirectoryContent, directory: String) {
+        // 换了目录就收回关键词:搜索只对上一个目录有意义,留着会让新目录看起来是空的
+        if currentDirectory != directory { searchQuery = "" }
         currentDirectory = directory
         pendingDirectory = nil
         // 内容到手,骨架让位(同一帧里换,不闪)
