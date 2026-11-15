@@ -947,7 +947,8 @@ final class FileSourceViewModel {
             // 第一页可能不足以判定 —— 前 1000 个是电影、后 200 个是集号型文件时,
             // 第一页判成「普通目录」,第二页到了就该改成「剧」。
             // 不重判就会出现「形态是普通目录、卡片却是剧集样式」的矛盾。
-            let newShape = BaiduPanSeriesLayout.shape(of: content.items)
+            let newShape = BaiduPanSeriesLayout.shape(
+                of: content.items, isLibraryRoot: isLibraryRoot(directory))
             if newShape != directoryShape {
                 directoryShape = newShape
                 await applyDirectoryShape(directory: directory)
@@ -1309,7 +1310,7 @@ final class FileSourceViewModel {
 
     /// 判定目录 / 剧集并备好详情页状态。判定零请求;唯一的请求是自动选中季时列季文件夹。
     private func applyDirectoryShape(directory: String) async {
-        let shape = BaiduPanSeriesLayout.shape(of: items)
+        let shape = BaiduPanSeriesLayout.shape(of: items, isLibraryRoot: isLibraryRoot(directory))
         directoryShape = shape
         // 一次性选季意图:这一层不是剧就丢掉
         let preferredSeasonNumber = self.preferredSeasonNumber
@@ -1496,7 +1497,8 @@ final class FileSourceViewModel {
             // ⚠️ 必须按**整套**重判形态:第一页可能不足以判定
             // (比如前 1000 个是电影、后 200 个是集号型文件),
             // 只按第一页判会把「剧」误判成「普通目录」,反过来也会让形态与条目对不上
-            directoryShape = BaiduPanSeriesLayout.shape(of: content.items)
+            directoryShape = BaiduPanSeriesLayout.shape(
+                of: content.items, isLibraryRoot: isLibraryRoot(directory))
             startScrape(items: content.items, provider: provider)
         } catch {
             // 列不全就列不全:分集清单少一截,但页面照常能用(⛔ 不把整页换成错误态)
@@ -1693,6 +1695,14 @@ final class FileSourceViewModel {
     /// 本页能退到的最外层:片库根,否则应用目录
     private var topmostDirectory: String? {
         libraryRoot?.path ?? rootDirectory
+    }
+
+    /// 这一层是不是源的最外层(片库根 / 应用目录 / 本地选的文件夹)。
+    ///
+    /// 根永远按片库处理:⛔ 不管它下面平铺着成串的集文件一样不当成一部剧 ——
+    /// 根被判成剧会直接变成详情页,根下的文件夹再也点不进去。
+    private func isLibraryRoot(_ directory: String) -> Bool {
+        directory == topmostDirectory
     }
 
     var canGoUp: Bool {

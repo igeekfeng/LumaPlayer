@@ -65,7 +65,14 @@ enum BaiduPanSeriesLayout {
     ///    排除了平铺的电影(`looksLikeEpisodeSequence`)。
     ///
     /// 都不满足 → `.directory`。⛔ 不能无条件当剧:「电影」「纪录片」这类分类目录下全是子目录,会整库误判。
-    static func shape(of items: [SourceItem]) -> BaiduPanDirectoryShape {
+    ///
+    /// - Parameter isLibraryRoot: 这一层是片库根(源选中的那一层)。**一律 `.directory`**:
+    ///   根就是片库,即使平铺着成串的集文件也是片库里的条目,⛔ 不当成一部剧 ——
+    ///   判成剧会让根直接变详情页,根下的文件夹再也点不进去。
+    static func shape(
+        of items: [SourceItem], isLibraryRoot: Bool = false
+    ) -> BaiduPanDirectoryShape {
+        guard !isLibraryRoot else { return .directory }
         let seasonFolders = items
             .compactMap { item -> (item: SourceItem, season: Int)? in
                 guard item.kind == .folder, let season = item.seasonNumber else { return nil }

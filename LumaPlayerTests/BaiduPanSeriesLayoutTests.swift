@@ -224,6 +224,26 @@ final class BaiduPanSeriesLayoutTests: XCTestCase {
         XCTAssertEqual(BaiduPanSeriesLayout.shape(of: items), .directory)
     }
 
+    // MARK: - 片库根:一律片库,⛔ 不当剧
+
+    /// 根就是片库。即使平铺着成串的集文件也一样 —— 判成剧会把根直接换成详情页,
+    /// 根下的文件夹再也点不进去。
+    func testLibraryRootWithFlatEpisodesStaysDirectory() {
+        let items = [
+            item("琅琊榜", kind: .episode, episode: 1),
+            item("琅琊榜", kind: .episode, episode: 2),
+        ]
+        XCTAssertEqual(BaiduPanSeriesLayout.shape(of: items, isLibraryRoot: true), .directory)
+    }
+
+    func testLibraryRootWithSeasonFoldersStaysDirectory() {
+        let items = [
+            item("第1季", kind: .folder, season: 1),
+            item("第2季", kind: .folder, season: 2),
+        ]
+        XCTAssertEqual(BaiduPanSeriesLayout.shape(of: items, isLibraryRoot: true), .directory)
+    }
+
     // MARK: - 剧级信息补齐(只补空位)
 
     /// 从续播 / 片库根直接进剧时没有目录卡片,`seriesProfile` 要补简介 / 年份;

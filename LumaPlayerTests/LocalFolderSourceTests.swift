@@ -218,6 +218,28 @@ final class LocalFolderSourceTests: XCTestCase {
         XCTAssertEqual(fromStart, 0)
     }
 
+    // MARK: - 片库根
+
+    /// 根就是片库:根上平铺着成串的集文件也不当剧 —— 判成剧会把根直接换成详情页,
+    /// 根下的文件夹再也点不进去。
+    func testFlatEpisodesAtLibraryRootStayAGridAndFoldersStillOpen() async throws {
+        try touch("01.mkv")
+        try touch("02.mkv")
+        let container = try makeContainer()
+        let source = try await container.addLocalFolderSource(folderURL: root)
+        let viewModel = FileSourceViewModel(container: container, source: .localFolder(source))
+        await viewModel.reload()
+
+        XCTAssertEqual(viewModel.currentDirectory, "/片库")
+        XCTAssertFalse(viewModel.directoryShape.isSeries, "片库根永远是片库,⛔ 不是一部剧")
+        XCTAssertTrue(viewModel.sortedItems.contains { $0.title == "琅琊榜" }, "根下的文件夹还在网格里")
+
+        let series = try XCTUnwrap(viewModel.sortedItems.first { $0.title == "琅琊榜" })
+        await viewModel.enter(series)
+        XCTAssertTrue(viewModel.directoryShape.isSeries, "往里一层照常判剧")
+        XCTAssertEqual(viewModel.episodes.count, 2)
+    }
+
     // MARK: - 只读
 
     func testDeletingFilesIsRefusedButHidingWorks() async throws {
