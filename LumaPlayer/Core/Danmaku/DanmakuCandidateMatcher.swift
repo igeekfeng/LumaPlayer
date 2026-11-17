@@ -42,6 +42,25 @@ enum DanmakuCandidateMatcher {
         return survivors.count == 1 ? survivors[0] : nil
     }
 
+    /// 关键词搜索(`/search/episodes`)结果的采用:服务端按匹配度排序,取**第一个**硬门槛全过的。
+    ///
+    /// 与 `/match` 的模糊候选不同,这里的顺序有匹配度语义:类型 / 季 / 集号 / 标题四道门槛已把
+    /// 错季、错集、"同名不同片"挡在外面,剩下的第一条就是服务端认为最像的那部作品 ——
+    /// 用户在弹窗里看到的也正是这一条。⛔ 门槛不能放宽成"只比标题"。
+    ///
+    /// 唯一候选且它没有集号信息(`episodeTitle` 认不出,如只有"剧场版"三条字)时也采用:
+    /// 没有第二集可选,拒绝它只会让自动加载永远搜不到。
+    static func rankedPick(in candidates: [DanmakuCandidate], target: Target) -> DanmakuCandidate? {
+        if let first = candidates.first(where: { isConsistent($0, with: target) }) { return first }
+        guard candidates.count == 1,
+              typeMatches(candidates[0], isMovie: target.isMovie),
+              seasonMatches(candidates[0], target: target),
+              titleMatches(candidates[0], target: target),
+              DanmakuEpisodeToken.parse(candidates[0].episodeTitle) == nil
+        else { return nil }
+        return candidates[0]
+    }
+
     static func isConsistent(_ candidate: DanmakuCandidate, with target: Target) -> Bool {
         guard typeMatches(candidate, isMovie: target.isMovie) else { return false }
         guard seasonMatches(candidate, target: target) else { return false }

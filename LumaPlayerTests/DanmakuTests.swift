@@ -387,6 +387,42 @@ final class DanmakuTests: XCTestCase {
         XCTAssertEqual(kept?.episodeID, 77)
     }
 
+    /// 用户在面板里为某一集换了来源 → 整部剧锁定到它,自动匹配的结论不写锁。
+    func testSelectingSourceLocksItForTheWholeSeries() async throws {
+        let (service, _) = try await makeService()
+        let custom = DanmakuCustomSource(id: customSource.id, name: "自建", baseURL: "http://127.0.0.1:9321/87654321")
+        try await service.saveSourceSettings(DanmakuSourceSettings(customSources: [custom], defaultSourceID: nil))
+
+        let initial = await service.lockedSourceID(for: query)
+        XCTAssertNil(initial)
+        try await service.lockSource(custom.source, for: query)
+        let locked = await service.lockedSourceID(for: query)
+        XCTAssertEqual(locked, custom.id)
+
+        // 同一个剧键的其它集也走这个来源
+        let nextEpisode = DanmakuMediaQuery(
+            itemKey: "item-6", seriesKey: query.seriesKey, episodeNumber: 6, seasonNumber: 1,
+            title: "某番", matchFileName: "某番 06", fileSize: nil)
+        let nextLocked = await service.lockedSourceID(for: nextEpisode)
+        XCTAssertEqual(nextLocked, custom.id)
+
+        try await service.clearLock(for: query)
+        let cleared = await service.lockedSourceID(for: query)
+        XCTAssertNil(cleared)
+    }
+
+    /// 删掉这个自建来源时,指向它的锁一起清(否则整部剧会锁在一个不存在的来源上)。
+    func testRemovingCustomSourceClearsItsLock() async throws {
+        let (service, _) = try await makeService()
+        let custom = DanmakuCustomSource(id: customSource.id, name: "自建", baseURL: "http://127.0.0.1:9321/87654321")
+        try await service.saveSourceSettings(DanmakuSourceSettings(customSources: [custom], defaultSourceID: custom.id))
+        try await service.lockSource(custom.source, for: query)
+
+        try await service.saveSourceSettings(DanmakuSourceSettings(customSources: [], defaultSourceID: custom.id))
+        let remaining = await service.lockedSourceID(for: query)
+        XCTAssertNil(remaining)
+    }
+
     /// 删除自建来源时连同它的绑定一起清,官方的不动;默认来源指向被删的回到官方。
     func testRemovingCustomSourcePurgesItsBindingsOnly() async throws {
         let (service, bindings) = try await makeService()

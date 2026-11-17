@@ -45,6 +45,12 @@ struct PlayerDanmakuPanel: View {
                         danmaku.selectSource(source)
                     }
                 }
+                if danmaku.isSourceLocked {
+                    PlayerPanelRow(title: "恢复默认来源", systemImage: "arrow.uturn.backward") {
+                        danmaku.unlockSource()
+                    }
+                    .help("这一部剧固定用当前来源;点这里改回「设置 › 弹幕」里的默认来源")
+                }
             }
             if let error = danmaku.sourceListError {
                 Text(error)

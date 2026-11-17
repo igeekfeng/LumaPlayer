@@ -43,6 +43,9 @@ actor DanmakuBindingStore {
         var series: [String: SeriesBinding] = [:]
         /// 自建来源,键 = `DanmakuSource.id`
         var sources: [String: Bindings] = [:]
+        /// 用户为某一部剧选定的来源(`DanmakuService.lockSource`)。键 = `seriesKey ?? itemKey`,
+        /// 值 = `DanmakuSource.id`;跨来源,所以不放进 `sources`。⛔ 自动匹配不写这里。
+        var locks: [String: String] = [:]
 
         init() {}
 
@@ -52,6 +55,7 @@ actor DanmakuBindingStore {
             episodes = try container.decode([String: EpisodeBinding].self, forKey: .episodes)
             series = try container.decode([String: SeriesBinding].self, forKey: .series)
             sources = try container.decodeIfPresent([String: Bindings].self, forKey: .sources) ?? [:]
+            locks = try container.decodeIfPresent([String: String].self, forKey: .locks) ?? [:]
         }
 
         subscript(source: String) -> Bindings {
@@ -102,7 +106,26 @@ actor DanmakuBindingStore {
 
     func series(for key: String, source: String) -> SeriesBinding? { contents()[source].series[key] }
 
+    /// 这一集(有剧键时看剧键)锁定的来源。
+    func lock(itemKey: String, seriesKey: String?) -> String? {
+        let contents = contents()
+        return seriesKey.flatMap { contents.locks[$0] } ?? contents.locks[itemKey]
+    }
+
     // MARK: - 写
+
+    /// 记住这一集 / 这一部剧锁定的来源。`seriesKey` 非 nil 时清掉集级锁(剧级优先)。
+    func setLock(_ source: String?, itemKey: String, seriesKey: String?) throws {
+        var current = contents()
+        let before = current.locks
+        current.locks.removeValue(forKey: itemKey)
+        if let seriesKey { current.locks.removeValue(forKey: seriesKey) }
+        if let source {
+            current.locks[seriesKey ?? itemKey] = source
+        }
+        guard current.locks != before else { return }
+        try persist(current)
+    }
 
     /// 记下这一集的弹幕库;`seriesKey` 非 nil 时同时记下整部剧对应的作品。
     func bind(_ binding: EpisodeBinding, itemKey: String, seriesKey: String?, source: String) throws {
@@ -138,17 +161,20 @@ actor DanmakuBindingStore {
             bindings.purge(keyPrefix: keyPrefix)
             current[id] = bindings
         }
+        current.locks = current.locks.filter { !$0.key.hasPrefix(keyPrefix) }
         let removed = before - current.count
         if removed > 0 { try persist(current) }
         return removed
     }
 
-    /// 删除自建弹幕来源时用。
+    /// 删除自建弹幕来源时用。指向它的来源锁一起清,否则整部剧会锁在一个已删掉的来源上。
     @discardableResult
     func purge(source: String) throws -> Int {
         var current = contents()
         let removed = current[source].count
-        guard removed > 0 else { return 0 }
+        let locksBefore = current.locks.count
+        current.locks = current.locks.filter { $0.value != source }
+        guard removed > 0 || current.locks.count != locksBefore else { return 0 }
         current[source] = Bindings()
         try persist(current)
         return removed

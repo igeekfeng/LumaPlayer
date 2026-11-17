@@ -313,19 +313,147 @@ final class DanmakuMatchTests: XCTestCase {
         XCTAssertEqual(types, ["1", "0"], "先按电影 ID 查,再试电视剧 ID")
     }
 
-    /// 不多打一次服务器。
+    /// 没 TMDB ID 时不打 TMDB 那一层。
     func testNoTMDBRequestWithoutID() async throws {
         let (service, _) = try await makeService()
         MockEmbyURLProtocol.stub(.json(#"{"success":true,"isMatched":false,"matches":[]}"#),
                                  host: host, path: "/api/v2/match")
+        MockEmbyURLProtocol.stub(.json(#"{"success":true,"hasMore":false,"animes":[]}"#),
+                                 host: host, path: "/api/v2/search/episodes")
 
         let query = DanmakuMediaQuery(
             itemKey: "item-5", seriesKey: nil, episodeNumber: 5, title: "某番",
             matchFileName: "某番 05", fileSize: nil)
-        _ = try await service.resolve(query, source: .official, durationSeconds: nil)
+        do {
+            _ = try await service.resolve(query, source: .official, durationSeconds: nil)
+        } catch {
+            let paths = MockEmbyURLProtocol.recordedRequests().map { "\($0.url.scheme ?? "")://\($0.url.host() ?? "")\($0.url.path)" }
+            return XCTFail("resolve 抛错:\(error) 请求:\(paths)")
+        }
 
-        XCTAssertTrue(
-            MockEmbyURLProtocol.recordedRequests()
-                .allSatisfy { $0.url.path != "/api/v2/search/episodes" })
+        // 第 6 层的关键词搜索会发(见 `testKeywordFallbackResolvesWhenMatchReturnsNothing`),
+        // 但那一次不带 tmdbId —— 没有 ID 就不该按 ID 查。
+        let searches = MockEmbyURLProtocol.recordedRequests()
+            .filter { $0.url.path == "/api/v2/search/episodes" }
+        XCTAssertTrue(searches.allSatisfy { request in
+            (URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+                .allSatisfy { $0.name != "tmdbId" }
+        })
+    }
+
+    // MARK: - ③ 关键词搜索降级层(自建源的 `/match` 常常什么都不回)
+
+    /// danmu_api 实测形状:`/match` 回空,弹窗里按 `query.searchKeyword` + 集号一搜就命中。
+    /// 自动加载必须搜到、并且只发一次关键词请求。
+    func testKeywordFallbackResolvesWhenMatchReturnsNothing() async throws {
+        let (service, bindings) = try await makeService()
+        MockEmbyURLProtocol.stub(.json(#"{"success":true,"isMatched":false,"matches":[]}"#),
+                                 scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/match")
+        MockEmbyURLProtocol.stub(
+            .json(#"""
+                {"success":true,"hasMore":false,"animes":[
+                  {"animeId":100,"animeTitle":"某番","type":"tvseries","episodes":[
+                    {"episodeId":105,"episodeTitle":"第5话"}]}]}
+                """#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/search/episodes")
+        MockEmbyURLProtocol.stub(
+            .json(#"{"count":1,"comments":[{"cid":9,"p":"1.00,1,16777215,u","m":"hi"}]}"#),
+            scheme: "http", host: "127.0.0.1", path: "/87654321/api/v2/comment/105")
+
+        let query = DanmakuMediaQuery(
+            itemKey: "item-5", seriesKey: "series-x", episodeNumber: 5, seasonNumber: 1,
+            title: "某番", matchFileName: "某番 05", fileSize: nil)
+        let baseURL = "http://127.0.0.1:9321/87654321"
+        let resolution: DanmakuResolution
+        do {
+            resolution = try await service.resolve(
+                query, source: DanmakuSource(id: "custom-1", name: "自建", kind: .custom(baseURL: baseURL)),
+                durationSeconds: nil)
+        } catch {
+            let paths = MockEmbyURLProtocol.recordedRequests().map { "\($0.url.scheme ?? "")://\($0.url.host() ?? "")\($0.url.path)" }
+            return XCTFail("resolve 抛错:\(String(describing: error)) 请求:\(paths)")
+        }
+        guard case .loaded(let loaded) = resolution else {
+            let paths = MockEmbyURLProtocol.recordedRequests().map { "\($0.url.scheme ?? "")://\($0.url.host() ?? "")\($0.url.path)" }
+            return XCTFail("关键词层应当命中:-\(resolution) 请求:\(paths)")
+        }
+        XCTAssertEqual(loaded.binding.episodeID, 105)
+        let binding = await bindings.episode(for: "item-5", source: "custom-1")
+        XCTAssertEqual(binding?.episodeID, 105, "采用后要写绑定,下一集不再搜")
+
+        let searches = MockEmbyURLProtocol.recordedRequests()
+            .filter { $0.url.path == "/87654321/api/v2/search/episodes" }
+        XCTAssertEqual(searches.count, 1)
+        let items = URLComponents(url: searches[0].url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first { $0.name == "anime" }?.value, query.searchKeyword,
+                       "要和弹窗预填的关键词一致")
+        XCTAssertEqual(items.first { $0.name == "episode" }?.value, "5")
+        XCTAssertNil(items.first { $0.name == "tmdbId" })
+    }
+
+    /// 搜索有结果但对不上这一集:如实交回用户,⛔ 不取第一个。
+    func testKeywordFallbackStillAsksUserWhenNothingFits() async throws {
+        let (service, _) = try await makeService()
+        MockEmbyURLProtocol.stub(.json(#"{"success":true,"isMatched":false,"matches":[]}"#),
+                                 host: host, path: "/api/v2/match")
+        MockEmbyURLProtocol.stub(
+            .json(#"""
+                {"success":true,"hasMore":false,"animes":[
+                  {"animeId":100,"animeTitle":"某番","type":"tvseries","episodes":[
+                    {"episodeId":101,"episodeTitle":"第1话"},
+                    {"episodeId":106,"episodeTitle":"第6话"}]}]}
+                """#),
+            host: host, path: "/api/v2/search/episodes")
+
+        let query = DanmakuMediaQuery(
+            itemKey: "item-5", seriesKey: nil, episodeNumber: 5, seasonNumber: 1,
+            title: "某番", matchFileName: "某番 05", fileSize: nil)
+        let resolution = try await service.resolve(query, source: .official, durationSeconds: nil)
+        guard case .needsSelection(let candidates) = resolution else {
+            return XCTFail("对不上时应该让用户挑:-\(resolution)")
+        }
+        XCTAssertEqual(candidates.map(\.episodeID), [101, 106], "候选要带上搜索结果,弹窗里才有东西可选")
+    }
+
+    // MARK: - ③ 关键词搜索结果的择优(按服务端排序取第一条门槛全过的)
+
+    /// 同一部剧在 3 个作品下都有第 5 话:取排在最前的那条,而不是「唯一候选」那样直接放弃。
+    func testRankedPickUsesServerOrderAmongConsistentCandidates() {
+        let candidates = [
+            candidate(1, animeID: 100, animeTitle: "某番", episodeTitle: "第5话"),
+            candidate(2, animeID: 200, animeTitle: "某番", episodeTitle: "第5话"),
+            candidate(3, animeID: 300, animeTitle: "某番", episodeTitle: "第5话"),
+        ]
+        let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5, seasonNumber: 1)
+        XCTAssertEqual(DanmakuCandidateMatcher.rankedPick(in: candidates, target: target)?.episodeID, 1)
+    }
+
+    /// 排序在前但门槛不过(错集 / 错季 / 同名不同片)的必须跳过。
+    func testRankedPickSkipsCandidatesThatFailHardGates() {
+        let candidates = [
+            candidate(1, animeID: 100, animeTitle: "完全无关的日剧", episodeTitle: "第5话"),
+            candidate(2, animeID: 200, animeTitle: "某番 第二季", episodeTitle: "第5话"),
+            candidate(3, animeID: 300, animeTitle: "某番", episodeTitle: "第1话"),
+            candidate(4, animeID: 400, animeTitle: "某番", episodeTitle: "第5话"),
+        ]
+        let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5, seasonNumber: 1)
+        XCTAssertEqual(DanmakuCandidateMatcher.rankedPick(in: candidates, target: target)?.episodeID, 4)
+    }
+
+    /// 一条都对不上时不猜。
+    func testRankedPickRefusesWhenNothingPassesGates() {
+        let candidates = [
+            candidate(1, animeID: 100, animeTitle: "某番", episodeTitle: "第1话"),
+            candidate(2, animeID: 200, animeTitle: "某番", episodeTitle: "第6话"),
+        ]
+        let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
+        XCTAssertNil(DanmakuCandidateMatcher.rankedPick(in: candidates, target: target))
+    }
+
+    /// 这一集没集号信息(`episodeTitle` 认不出)且只有这一条 → 它就是这一集。
+    func testRankedPickAcceptsSoleCandidateWithoutEpisodeInfo() {
+        let candidates = [candidate(9, animeID: 100, animeTitle: "某番", episodeTitle: "剧场版")]
+        let target = DanmakuCandidateMatcher.Target(title: "某番", episodeNumber: 5)
+        XCTAssertEqual(DanmakuCandidateMatcher.rankedPick(in: candidates, target: target)?.episodeID, 9)
     }
 }

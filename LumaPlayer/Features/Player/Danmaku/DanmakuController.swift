@@ -27,10 +27,12 @@ final class DanmakuController {
     var userOffset: Double = 0
     /// 全部可选来源(官方在前),每次加载时从设置重读
     private(set) var sources: [DanmakuSource] = []
-    /// 本集正在用的来源。初值跟随设置里的默认来源,面板里换了只影响本集
+    /// 本集正在用的来源。初值 = 本集手选 → 本剧锁定 → 设置里的默认来源
     private(set) var source: DanmakuSource?
-    /// 面板里手动换过的来源;nil = 跟随默认。被删掉了也回到默认
+    /// 面板里手动换过的来源;nil = 跟随默认 / 锁定。被删掉了也回到默认
     @ObservationIgnored private var chosenSourceID: String?
+    /// 这部剧锁定的来源(`DanmakuBindingStore` 的 locks);用户为某一集选过来源后写这里
+    @ObservationIgnored private var lockedSourceID: String?
 
     let query: DanmakuMediaQuery
     @ObservationIgnored private let service: DanmakuService
@@ -76,25 +78,49 @@ final class DanmakuController {
             let settings = try await service.sourceSettings()
             sources = settings.sources
             defaultSourceID = settings.defaultSource.id
+            lockedSourceID = await service.lockedSourceID(for: query)
             sourceListError = nil
         } catch {
             sourceListError = "读取弹幕来源失败:\(error.localizedDescription)"
         }
     }
 
-    /// 面板里标勾用:已经定下的来源,或还没加载时将要用的那个。
+    /// 面板里标勾用:已经定下的来源,或还没加载时将要用的那个(本集手选 → 本剧锁定 → 默认)。
     var displayedSourceID: String? {
-        source?.id ?? chosenSourceID ?? defaultSourceID
+        source?.id ?? chosenSourceID ?? lockedSourceID ?? defaultSourceID
+    }
+
+    /// 这一集是不是用户手动选过、锁定了一个来源(面板据此如实显示)。
+    var isSourceLocked: Bool {
+        guard let lockedSourceID else { return false }
+        return lockedSourceID != defaultSourceID
     }
 
     private var defaultSourceID: String?
 
-    /// 本集换一个弹幕来源,按新来源重新匹配(各来源的绑定互不影响)。
+    /// 本集换一个弹幕来源:锁定到这一集(剧集则整部剧),再按新来源重新匹配。
     func selectSource(_ source: DanmakuSource) {
         chosenSourceID = source.id
         isVisible = true
         clearLoaded()
         reload()
+    }
+
+    /// 解除这部剧固定的来源,回到设置里的默认来源。
+    func unlockSource() {
+        chosenSourceID = nil
+        lockedSourceID = nil
+        clearLoaded()
+        Task { [service] in
+            do {
+                try await service.clearLock(for: query)
+            } catch {
+                sourceListError = "解除来源固定失败:\(error.localizedDescription)"
+                return
+            }
+            // 清完再重匹配,否则 `refreshSource` 可能把还没删掉的锁读回来
+            reload()
+        }
     }
 
     /// 重新自动匹配。指纹在这里取(要等播放源就绪);取不到就退回文件名匹配,⛔ 指纹不是匹配前提。
@@ -185,14 +211,31 @@ final class DanmakuController {
 
     // MARK: - 内部
 
-    /// 重读来源列表,定下本集用哪个。
+    /// 重读来源列表,定下本集用哪个;顺手把选择写成锁定。
     private func refreshSource() async throws -> DanmakuSource {
         let settings = try await service.sourceSettings()
-        let resolved = chosenSourceID.flatMap(settings.source(id:)) ?? settings.defaultSource
+        if chosenSourceID == nil { lockedSourceID = await service.lockedSourceID(for: query) }
+        let resolved =
+            chosenSourceID.flatMap(settings.source(id:))
+            ?? lockedSourceID.flatMap(settings.source(id:))
+            ?? settings.defaultSource
         sources = settings.sources
         defaultSourceID = settings.defaultSource.id
         sourceListError = nil
         source = resolved
+        // 用户在本集面板里换过 → 锁住(剧集锁整部剧,其它锁这一集)。自动匹配的结论不进锁。
+        if let chosenSourceID, let chosen = settings.source(id: chosenSourceID) {
+            lockedSourceID = chosen.id
+            self.chosenSourceID = nil
+            do {
+                try await service.lockSource(chosen, for: query)
+            } catch {
+                sourceListError = "记录弹幕来源失败:\(error.localizedDescription)"
+            }
+        } else if chosenSourceID != nil {
+            // 选中的来源被删掉了:回到默认,不写锁
+            self.chosenSourceID = nil
+        }
         return resolved
     }
 

@@ -100,8 +100,9 @@ actor DanmakuService {
     /// 2. 这一部剧绑定过作品且知道集号 → 在作品剧集列表里按集号对上;
     /// 3. `/match`(有指纹 `hashAndFileName`,否则 `fileNameOnly` + 占位串),`isMatched` 直接采用;
     /// 4. 有 TMDB ID → `/search/episodes?tmdbId=`,唯一命中才采用;
-    /// 5. `/match` 模糊候选里唯一确定的(`DanmakuCandidateMatcher`);
-    /// 6. 交给用户挑(⛔ 不自作主张取第一个模糊结果)。
+    /// 5. `/match` 模糊候选里唯一确定的(`DanmakuCandidateMatcher.uniqueMatch`);
+    /// 6. `/match` 一条候选都没有 → 关键词搜索(与弹窗里手点搜索同一参数),取排序最前且门槛全过的;
+    /// 7. 交给用户挑(⛔ 不自作主张取第一个模糊结果)。
     ///
     /// 第 1、2 层记住的 ID 被服务端回 404(自建服务重启 / 换实例后丢了 ID 映射,danmu_api 就会这样)
     /// = 绑定失效:删掉那一层绑定,往下重新匹配。⛔ 不把 404 当「这集没弹幕」显示成空。
@@ -174,7 +175,31 @@ actor DanmakuService {
             return .loaded(try await select(unique, for: query, source: source))
         }
 
+        // 第 6 层:关键词搜索 —— 与弹窗里用户手点「搜索」是**同一个请求**(`query.searchKeyword` +
+        // `query.episodeNumber`)。自建源(如 danmu_api)的 `/match` 经常一条都不回,却能被关键词命中;
+        // ⛔ 不补这一层,自动加载就会「对话框里一搜就有,播放页却说没有匹配」。
+        // 只在 `/match` 一条候选都没有时发:有候选说明服务端按文件名认得这部作品,让用户挑更准。
+        if candidates.isEmpty, !query.searchKeyword.isEmpty {
+            let searched = try await searchQuery(
+                keyword: query.searchKeyword, episode: query.episodeNumber, server: server)
+            if let picked = DanmakuCandidateMatcher.rankedPick(
+                in: searched, target: matchContext.target(for: query))
+            {
+                return .loaded(try await select(picked, for: query, source: source))
+            }
+            return .needsSelection(candidates: searched)
+        }
+
         return .needsSelection(candidates: candidates)
+    }
+
+    /// 关键词搜索的候选(摊平成一个列表),给第 6 层的自动采用用。
+    private func searchQuery(
+        keyword: String, episode: Int?, server: DandanplayServer
+    ) async throws -> [DanmakuCandidate] {
+        let response = try await client.searchEpisodes(
+            anime: keyword, episode: episode.map(String.init), server: server)
+        return Self.candidates(from: response.animes ?? [])
     }
 
     /// 电视剧与电影是两套 ID 空间,先按目标类型查,不中再试另一套(库里类型标注未必准)。
@@ -248,6 +273,24 @@ actor DanmakuService {
 
     func unbind(_ query: DanmakuMediaQuery, source: DanmakuSource) async throws {
         try await bindings.unbind(itemKey: query.itemKey, seriesKey: query.seriesKey, source: source.id)
+    }
+
+    // MARK: - 来源锁定
+
+    /// 用户在面板里为这一集选了来源 → 整部剧跟着锁定(`DanmakuController.refreshSource` 优先用它)。
+    /// ⛔ 自动匹配不写这里:那只是这一次的结论,不该顶掉用户设的默认来源。
+    func lockSource(_ source: DanmakuSource, for query: DanmakuMediaQuery) async throws {
+        try await bindings.setLock(source.id, itemKey: query.itemKey, seriesKey: query.seriesKey)
+    }
+
+    /// 面板「恢复默认来源」:清掉这一集 / 这部剧的锁。
+    func clearLock(for query: DanmakuMediaQuery) async throws {
+        try await bindings.setLock(nil, itemKey: query.itemKey, seriesKey: query.seriesKey)
+    }
+
+    /// 面板用来显示「本集会用哪个来源」:剧级锁优先,其次是集级锁。
+    func lockedSourceID(for query: DanmakuMediaQuery) async -> String? {
+        await bindings.lock(itemKey: query.itemKey, seriesKey: query.seriesKey)
     }
 
     // MARK: - 维护
