@@ -128,7 +128,7 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 `/3/tv/{id}` / `/3/movie/{id}` 按显式 `{tmdbid-N}` 直取走通;中文片名 + 年份能命中,`overview` 是中文(`language=zh-CN`);
 `image.tmdb.org` 可达(本机曾 `Connection reset`,用户指示按可达处理;不通则只出文字、封面降级);429 阈值(官方约 40 次/秒,未实测);
 详情页 `/3/{tv|movie}/{id}`、剧 `/aggregate_credits` 与电影 `/credits` 的实际取值与排版、`w185` 头像;
-多发的 1–2 次请求可接受。全量演职员横排(含幕后)在人多时的观感未知。
+多发的 1–2 次请求可接受。演职员横排只展示前 30 位主要演员(与 Emby 详情页一致),幕后不单列。
 
 已知限制:
 

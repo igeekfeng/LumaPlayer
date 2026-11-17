@@ -464,48 +464,35 @@ struct FileSourceSeriesDetailView: View {
 
     // MARK: - 演职人员
 
-    /// 演员 + 剧组两排(头像 + 姓名 + 角色 / 职务),全量不截断;两个都空时整块不显示。
-    /// ⚠️ 剧集走 `aggregate_credits`(全剧汇总,§10),切季不改变这一排。
+    /// 演员横排(头像 + 姓名 + 角色),只展示前面主要人员;一个都没有时整块不显示。
+    /// ⚠️ TMDB 的演职员是整部作品的(`docs/TMDB_API.md` §10),切季不改变这一排。
     @ViewBuilder
     private var castSection: some View {
-        let cast = viewModel.seriesProfile?.cast ?? []
-        let crew = viewModel.seriesProfile?.crew ?? []
-        if !cast.isEmpty || !crew.isEmpty {
-            VStack(alignment: .leading, spacing: Metrics.spacingL) {
+        let cast = Array((viewModel.seriesProfile?.cast ?? []).prefix(Self.maxCastShown))
+        if !cast.isEmpty {
+            VStack(alignment: .leading, spacing: Metrics.spacingS) {
                 Text("演职人员")
                     .font(.title3.bold())
                     .accessibilityAddTraits(.isHeader)
-                if !cast.isEmpty {
-                    personShelf(title: "演员", people: cast)
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
+                        ForEach(cast) { person in
+                            FileSourcePersonCard(
+                                person: person,
+                                descriptor: profileDescriptor(for: person),
+                                store: store
+                            )
+                        }
+                    }
+                    .padding(.vertical, Metrics.spacingXS)
                 }
-                if !crew.isEmpty {
-                    personShelf(title: "幕后", people: crew)
-                }
+                .scrollIndicators(.hidden)
             }
         }
     }
 
-    @ViewBuilder
-    private func personShelf(title: String, people: [TMDBPerson]) -> some View {
-        VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-            Text("\(title) · \(people.count)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: Metrics.spacingL) {
-                    ForEach(people) { person in
-                        FileSourcePersonCard(
-                            person: person,
-                            descriptor: profileDescriptor(for: person),
-                            store: store
-                        )
-                    }
-                }
-                .padding(.vertical, Metrics.spacingXS)
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
+    /// 与 Emby 详情页 `DetailPeopleRow` 同一上限,只露主要人员,免得人多时长到几百张卡。
+    private static let maxCastShown = 30
 
     /// 一位演职员头像的图片描述符(TMDB 图床公开,不带认证头)。
     /// ⛔ 没有 `profile_path` 就返回 nil,卡片退成 `person.fill`,不拿占位图顶替;
@@ -571,7 +558,7 @@ private struct FileSourceTitleView: View {
 
 // MARK: - 一位演职员
 
-/// 一张演职员卡:圆形头像 + 姓名 + 角色 / 职务。
+/// 一张演职员卡:圆形头像 + 姓名 + 角色(与 Emby 的 `DetailPeopleRow` 同形)。
 private struct FileSourcePersonCard: View {
     let person: TMDBPerson
     let descriptor: ImageDescriptor?
