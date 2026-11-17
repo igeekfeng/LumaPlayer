@@ -110,11 +110,12 @@ final class PlayerViewModel {
         case .emby(let server, let item):
             return .emby(serverID: server.id, item: item)
         case .baiduPan(let file):
-            return .baiduPan(file: file, isEpisodeSeries: episodeQueue != nil)
+            return .baiduPan(file: file, isEpisodeSeries: request.isEpisodeSeries)
         case .pan115(let file):
-            return .pan115(file: file, isEpisodeSeries: episodeQueue != nil)
+            return .pan115(file: file, isEpisodeSeries: request.isEpisodeSeries)
         case .localFolder(let file, let source):
-            return .localFolder(sourceID: source.id, file: file, isEpisodeSeries: episodeQueue != nil)
+            return .localFolder(
+                sourceID: source.id, file: file, isEpisodeSeries: request.isEpisodeSeries)
         }
     }
 
@@ -1311,11 +1312,36 @@ final class PlayerViewModel {
     var hasManualMarkers: Bool { manualMarkers?.isEmpty == false }
 
     /// 手动标注的范围键:同一部剧的每一集共用一份(见 `ManualMarkersScope`)。
-    private var manualMarkersScopeKey: String { ManualMarkersScope.key(for: request.source) }
+    private var manualMarkersScopeKey: String {
+        ManualMarkersScope.key(for: request.source, isEpisode: request.isEpisodeSeries)
+    }
 
     /// 重算最终标记:手动标注按标记组覆盖服务端,未设的那组沿用服务端。
     private func refreshMarkers() {
         markers = manualMarkers?.applying(to: serverMarkers) ?? serverMarkers
+    }
+
+    /// 读回本剧的手动标注(重新起流时也会再读一次)。
+    ///
+    /// 旧版本按单个文件 / 单个季归组,剧范围键读不到时把旧记录搬过来并删掉旧条目,
+    /// 否则用户之前标的那一集之外仍然不生效。
+    private func loadManualMarkers() async -> ManualMarkers? {
+        let store = container.manualMarkers
+        let key = manualMarkersScopeKey
+        if let existing = await store.record(for: key) { return existing }
+        for legacyKey in ManualMarkersScope.legacyKeys(for: request.source)
+        where legacyKey != key {
+            guard let legacy = await store.record(for: legacyKey) else { continue }
+            do {
+                try await store.set(legacy, for: key)
+                try await store.remove(for: legacyKey)
+            } catch {
+                // 搬不动不影响这次播放(值照用),下次起播再试;失败原因要说出来
+                flash("片头片尾记录迁移失败", systemImage: "exclamationmark.triangle")
+            }
+            return legacy
+        }
+        return nil
     }
 
     /// 把当前位置设为片头起点(同一部剧共用)。
@@ -1665,7 +1691,7 @@ final class PlayerViewModel {
             markTimeline(.playbackInfo)
             serverMarkers = PlaybackMarkers(chapters: prepared.mediaSource.chapters)
             // 手动标注(同一部剧共用)读回来与服务端合并,手动优先(重新起流时会再读一次)。
-            manualMarkers = await container.manualMarkers.record(for: manualMarkersScopeKey)
+            manualMarkers = await loadManualMarkers()
             refreshMarkers()
 
             // 渲染后端策略见 MPVRenderBackendPolicy;新播放器 = 新字幕轨列表,重试 / 起流都要重挂字幕。

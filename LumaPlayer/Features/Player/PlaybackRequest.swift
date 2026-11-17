@@ -120,6 +120,11 @@ struct PlaybackRequest: Identifiable, Equatable {
     var embyServer: ServerProfile? { source.embyServer }
     var embyItem: EmbyItem? { source.embyItem }
     var baiduFile: BaiduPanFile? { source.baiduFile }
+
+    /// 已知这是一部剧的某一集(有换集队列,或片库条目已认定是分集)。
+    /// 文件树来源靠它把倍速 / 片头片尾按整部剧归组:文件名判不出集号时(`02-4K.mp4`),
+    /// 只看文件名只能当成单独一条(`ManualMarkersScope`)。
+    var isEpisodeSeries: Bool { episodeQueue != nil || libraryItem?.isEpisode == true }
 }
 
 /// 一次播放的收尾上报(最终 Progress + Stopped)已发完,经 `AppState` 广播。

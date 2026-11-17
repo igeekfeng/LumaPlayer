@@ -181,6 +181,58 @@ final class ManualMarkersTests: XCTestCase {
             "同一目录里的电影不共用")
     }
 
+    /// 文件名不带集号(`02-4K.mp4`,发布标记不是集号解析的强信号)时,只要播放页已知是剧集,
+    /// 仍按目录归组 —— 否则同一部剧的每一集各存一份,片头片尾不会跨集生效。
+    func testEpisodeFlagGroupsNumberedReleaseNamesByDirectory() {
+        let e2 = baiduFile(fsID: 21, path: "/Downloads/嫁金钗/02-4K.mp4")
+        let e3 = baiduFile(fsID: 22, path: "/Downloads/嫁金钗/03-4K.mp4")
+
+        XCTAssertNotEqual(
+            ManualMarkersScope.key(for: .baiduPan(file: e2)),
+            ManualMarkersScope.key(for: .baiduPan(file: e3)),
+            "只看文件名判不出集号,默认按单条文件")
+        XCTAssertEqual(
+            ManualMarkersScope.key(for: .baiduPan(file: e2), isEpisode: true),
+            ManualMarkersScope.key(for: .baiduPan(file: e3), isEpisode: true),
+            "已确认是剧集时,同目录的每一集共用")
+    }
+
+    /// 旧版本按单条文件 / 单个季归组,剧范围键读不到时要能接住那些记录(迁移)。
+    /// 父目录键与 `fsid:` 键都要查:前者接旧版本的季文件夹记录,后者接旧版本判不出集号的记录。
+    func testLegacyKeysPointAtThePerFileAndPerSeasonRecords() {
+        let file = baiduFile(fsID: 21, path: "/Downloads/嫁金钗/02-4K.mp4")
+        XCTAssertEqual(
+            ManualMarkersScope.legacyKeys(for: .baiduPan(file: file)),
+            ["baidu|/Downloads/嫁金钗", "baidu|fsid:21"])
+        XCTAssertTrue(
+            ManualMarkersScope.legacyKeys(for: .baiduPan(file: file))
+                .contains(ManualMarkersScope.key(for: .baiduPan(file: file))),
+            "旧版本正是按父目录存这一条,那个键就是它留下的")
+
+        // 季文件夹:旧版本的键是季目录,新键是剧目录,两者不同 → 迁移才有意义
+        let season = baiduFile(fsID: 33, path: "/apps/LumaPlayer/某剧/S01/01.mp4")
+        XCTAssertFalse(
+            ManualMarkersScope.legacyKeys(for: .baiduPan(file: season))
+                .contains(ManualMarkersScope.key(
+                    for: .baiduPan(file: season), isEpisode: true)),
+            "旧键(季目录)不能和新键(剧目录)重合")
+
+        XCTAssertTrue(
+            ManualMarkersScope.legacyKeys(for: .emby(server: makeServer(), item: try! embyItem(
+                #"{"Id":"E1","Name":"E1","Type":"Episode","SeriesId":"S"}"#))).isEmpty,
+            "Emby 一直是剧范围键,没有旧形状")
+    }
+
+    /// 季文件夹存法(`剧/S01/01.mp4`):按剧目录归组,换季仍沿用同一份。
+    func testEpisodeKeyUsesSeriesDirectorySoSeasonsShareMarkers() {
+        let s1 = baiduFile(fsID: 31, path: "/apps/LumaPlayer/某剧/S01/01.mp4")
+        let s2 = baiduFile(fsID: 32, path: "/apps/LumaPlayer/某剧/S02/01.mp4")
+        XCTAssertEqual(
+            ManualMarkersScope.key(for: .baiduPan(file: s1)),
+            ManualMarkersScope.key(for: .baiduPan(file: s2)),
+            "第 2 季与第 1 季共用同一份片头片尾")
+    }
+
     // MARK: - 持久化
 
     func testStoreRoundTripsAndSurvivesRestart() async throws {
