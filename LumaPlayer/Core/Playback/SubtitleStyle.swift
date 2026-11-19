@@ -27,6 +27,9 @@ struct SubtitleStyle: Codable, Equatable, Sendable {
     var boxOpacity: Double = 0.69
     /// `sub-pos`,屏幕高度百分比,100 = 底部。⛔ 不开放 > 100:libass 会裁掉文字字幕
     var position: Double = 100
+    /// 副字幕相对主字幕上移多少行(1 行 = 主字幕行高)。主字幕自身占掉第一行,所以 1.5 行 ≈ 半行空隙;
+    /// 下限定 0.5 是因为再小就贴在一起了。
+    var secondaryGapLines: Double = 1.5
     /// `sub-ass-override=force`。默认关:force 容易把特效字幕渲染坏
     var overridesASS = false
 
@@ -38,6 +41,8 @@ struct SubtitleStyle: Codable, Equatable, Sendable {
     static let outlineRange: ClosedRange<Double> = 0...5
     static let boxOpacityRange: ClosedRange<Double> = 0.2...1
     static let positionRange: ClosedRange<Double> = 50...100
+    /// 1 行 = 两路刚好相接(主字幕自身占掉一行),3 行 = 够主字幕折两行
+    static let secondaryGapRange: ClosedRange<Double> = 1...3
 
     /// scaled pixels
     static let shadowOffset = 2.0
@@ -95,6 +100,8 @@ struct SubtitleStyle: Codable, Equatable, Sendable {
         copy.outlineSize = Self.clamp(outlineSize, Self.outlineRange, fallback: Self.default.outlineSize)
         copy.boxOpacity = Self.clamp(boxOpacity, Self.boxOpacityRange, fallback: Self.default.boxOpacity)
         copy.position = Self.clamp(position, Self.positionRange, fallback: Self.default.position)
+        copy.secondaryGapLines = Self.clamp(
+            secondaryGapLines, Self.secondaryGapRange, fallback: Self.default.secondaryGapLines)
         copy.textColor = textColor.clamped
         return copy
     }
@@ -122,13 +129,16 @@ struct SubtitleStyle: Codable, Equatable, Sendable {
         edge = try c.decodeIfPresent(Edge.self, forKey: .edge) ?? d.edge
         boxOpacity = try c.decodeIfPresent(Double.self, forKey: .boxOpacity) ?? d.boxOpacity
         position = try c.decodeIfPresent(Double.self, forKey: .position) ?? d.position
+        secondaryGapLines = try c.decodeIfPresent(Double.self, forKey: .secondaryGapLines)
+            ?? d.secondaryGapLines
         overridesASS = try c.decodeIfPresent(Bool.self, forKey: .overridesASS) ?? d.overridesASS
     }
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case scale, textColor, isBold, outlineSize, edge, boxOpacity, position, overridesASS
+        case scale, textColor, isBold, outlineSize, edge, boxOpacity, position, secondaryGapLines,
+             overridesASS
     }
 }
 

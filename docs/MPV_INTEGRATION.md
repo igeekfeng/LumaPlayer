@@ -185,6 +185,7 @@ Emby 侧无核实过的对应字段,只认 mpv 读出的)。EL 这类 dependent 
 | 描边粗细 | `sub-outline-size` |
 | 效果:描边 / 描边+阴影 / 底框 | `sub-border-style`、`sub-back-color`、`sub-shadow-offset`(共用属性,所以三选一互斥) |
 | 垂直位置 | `sub-pos`(⛔ 不开放 > 100,libass 会裁掉文字) |
+| 副字幕间距 | `secondary-sub-pos`(见 7.5) |
 | 对 ASS 也套用 | `sub-ass-override=force`(默认关:手册原话会把特效字幕渲染坏) |
 
 默认值与 mpv 自身默认一致:没改过 = 什么都不改。起播默认轨见 `SubtitlePreference`(`slang` 挑不出简体中文)。
@@ -223,9 +224,10 @@ Emby 侧无核实过的对应字段,只认 mpv 读出的)。EL 这类 dependent 
 `secondary-sid`(默认 `no`)在主字幕之外再画一路。mpv **不会**把两路堆起来:`secondary-sub-pos`(0–150,默认 0 = 贴顶,
 正好压在弹幕区)只是把整块按画面高度百分比上移(`sd_ass.c`:`ass_set_line_position(100 - pos)`),主字幕多行时照样重叠。
 
-- 位置:`SecondarySubtitle.position`(纯函数)由主字幕 `sub-scale` / `sub-pos` 算一个**固定**值,预留主字幕两行
-  (`sub-font-size` 默认 38,按 720 高缩放;行高估 1.25 倍字号 → 一行约 6.6% 画面高)+ 1% 空隙;默认外观下约 85.8。
-  ⛔ 不按 `sub-lines` 逐句算位置:副字幕会随主字幕行数上下跳。主字幕三行或 ASS 自带大字号 / 大边距时会压到副字幕。
+- 位置:`SecondarySubtitle.position`(纯函数)由主字幕 `sub-scale` / `sub-pos` 与设置里的「副字幕间距」(`SubtitleStyle.secondaryGapLines`,
+  1–3 行,默认 1.5)算一个**固定**值(`sub-font-size` 默认 38,按 720 高缩放;行高估 1.25 倍字号 → 一行约 6.6% 画面高);
+  默认外观下约 90.1。⛔ 不按 `sub-lines` 逐句算位置:副字幕会随主字幕行数上下跳。间距小于主字幕实际行数、
+  ASS 自带大字号 / 大边距时仍会压到副字幕。
 - 字号:`secondary-sub-scale`(0.42 新增)= 主字幕 `sub-scale` × 0.8。副字幕是 `strip`(完全覆盖样式,套 `--sub-*` 的字体 / 颜色 / 描边),
   字号只看 `secondary-sub-scale`、不乘 `sub-scale`,所以给绝对值。
 - 只允许文本轨(`MPVTrack.isTextSubtitle`,反列 `sd_lavc.c` 接的图形 codec;codec 读不到不认):图形字幕不吃 `secondary-sub-pos`。

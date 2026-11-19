@@ -362,10 +362,14 @@ private struct SubtitleSettingsView: View {
                     range: SubtitleStyle.positionRange, step: 1,
                     text: store.style.position == SubtitleStyle.positionRange.upperBound
                         ? "底部" : "上移 \(Int((SubtitleStyle.positionRange.upperBound - store.style.position).rounded()))%")
+                SettingsValueSlider(
+                    title: "副字幕间距", value: $store.style.secondaryGapLines,
+                    range: SubtitleStyle.secondaryGapRange, step: 0.5,
+                    text: "\(store.style.secondaryGapLines.formatted(.number.precision(.fractionLength(1)))) 行")
             } header: {
                 Text("位置")
             } footer: {
-                Text("百分比是相对画面高度。")
+                Text("百分比是相对画面高度。「副字幕间距」是副字幕相对主字幕上移的行数(1 行 = 主字幕行高):1.5 行时中间约留半行空隙,主字幕常折两行就调到 2 行以上。")
             }
 
             Section {

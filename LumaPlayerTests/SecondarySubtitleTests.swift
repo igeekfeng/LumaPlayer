@@ -6,19 +6,29 @@ final class SecondarySubtitleTests: XCTestCase {
 
     // MARK: - 位置
 
-    /// 默认外观:主字幕在原位(100),副字幕上移两行(各 38 × 1.25 / 720 ≈ 6.6%)+ 1% 空隙
-    func testDefaultPositionReservesTwoPrimaryLines() {
+    /// 默认外观:主字幕在原位(100),副字幕上移「副字幕间距」1.5 行(每行 38 × 1.25 / 720 ≈ 6.6%)
+    func testDefaultPositionUsesConfiguredGap() {
         let line = 38.0 * 1.25 / 720 * 100
-        XCTAssertEqual(SecondarySubtitle.position(for: .default), 100 - 2 * line - 1, accuracy: 0.0001)
-        XCTAssertEqual(SecondarySubtitle.position(for: .default), 85.81, accuracy: 0.01)
+        XCTAssertEqual(SecondarySubtitle.position(for: .default), 100 - 1.5 * line, accuracy: 0.0001)
+        XCTAssertEqual(SecondarySubtitle.position(for: .default), 90.104, accuracy: 0.01)
     }
 
-    /// 主字幕放大,预留的高度按比例变大
+    /// 间距就是用户看到的那几行:调到 2 行正好够主字幕折两行
+    func testGapLinesMapDirectlyToOnePrimaryLineEach() {
+        let line = 38.0 * 1.25 / 720 * 100
+        var style = SubtitleStyle.default
+        style.secondaryGapLines = 2
+        XCTAssertEqual(SecondarySubtitle.position(for: style), 100 - 2 * line, accuracy: 0.0001)
+        style.secondaryGapLines = SubtitleStyle.secondaryGapRange.lowerBound
+        XCTAssertEqual(SecondarySubtitle.position(for: style), 100 - line, accuracy: 0.0001)
+    }
+
+    /// 主字幕放大,间距按比例变大
     func testLargerPrimaryScaleMovesSecondaryHigher() {
         var style = SubtitleStyle.default
         style.scale = 2
         let line = 38.0 * 1.25 / 720 * 100 * 2
-        XCTAssertEqual(SecondarySubtitle.position(for: style), 100 - 2 * line - 1, accuracy: 0.0001)
+        XCTAssertEqual(SecondarySubtitle.position(for: style), 100 - 1.5 * line, accuracy: 0.0001)
         XCTAssertLessThan(SecondarySubtitle.position(for: style), SecondarySubtitle.position(for: .default))
     }
 
@@ -30,13 +40,14 @@ final class SecondarySubtitleTests: XCTestCase {
                        SecondarySubtitle.position(for: .default) - 20, accuracy: 0.0001)
     }
 
-    /// 设置页允许的最极端组合(2.5 倍字号 + 位置 50)仍落在 mpv 的 0–150 内,不靠夹取
+    /// 设置页允许的最极端组合(3 行间距 + 2.5 倍字号 + 位置 50)仍落在 mpv 的 0–150 内
     func testMostExtremeAllowedStyleStaysInMPVRange() {
         var style = SubtitleStyle.default
         style.scale = SubtitleStyle.scaleRange.upperBound
         style.position = SubtitleStyle.positionRange.lowerBound
+        style.secondaryGapLines = SubtitleStyle.secondaryGapRange.upperBound
         let line = 38.0 * 1.25 / 720 * 100 * 2.5
-        XCTAssertEqual(SecondarySubtitle.position(for: style), 50 - 2 * line - 1, accuracy: 0.0001)
+        XCTAssertEqual(SecondarySubtitle.position(for: style), 50 - 3 * line, accuracy: 0.0001)
         XCTAssertTrue(SecondarySubtitle.positionRange.contains(SecondarySubtitle.position(for: style)))
     }
 
@@ -45,6 +56,7 @@ final class SecondarySubtitleTests: XCTestCase {
         var style = SubtitleStyle.default
         style.scale = .nan
         style.position = 500
+        style.secondaryGapLines = .nan
         XCTAssertEqual(SecondarySubtitle.position(for: style), SecondarySubtitle.position(for: .default), accuracy: 0.0001)
         XCTAssertEqual(SecondarySubtitle.scale(for: style), 0.8, accuracy: 0.0001)
     }
@@ -62,7 +74,7 @@ final class SecondarySubtitleTests: XCTestCase {
         let properties = SecondarySubtitle.mpvProperties(for: .default)
         XCTAssertEqual(properties.map(\.name),
                        ["secondary-sub-ass-override", "secondary-sub-scale", "secondary-sub-pos"])
-        XCTAssertEqual(properties.map(\.value), ["strip", "0.800", "85.806"])
+        XCTAssertEqual(properties.map(\.value), ["strip", "0.800", "90.104"])
     }
 
     // MARK: - 可选轨

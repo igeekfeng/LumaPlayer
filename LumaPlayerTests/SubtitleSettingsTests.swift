@@ -141,6 +141,7 @@ final class SubtitleSettingsTests: XCTestCase {
         XCTAssertEqual(style.edge, .shadow)
         XCTAssertEqual(style.textColor, .white)
         XCTAssertEqual(style.position, 100)
+        XCTAssertEqual(style.secondaryGapLines, SubtitleStyle.default.secondaryGapLines)
     }
 
     /// 存坏了(手改 plist、类型不对):按默认外观走,不挡播放。
