@@ -317,6 +317,10 @@ struct Pan115APIClient: Sendable {
             throw error
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as URLError {
+            // 同 `BaiduPanAPIClient.send`:`URLError.cancelled` 是取消,不是传输失败
+            guard error.code != .cancelled else { throw CancellationError() }
+            throw Pan115Error.transport(URLErrorDescription.userText(error))
         } catch {
             // ⛔ 不用 `String(describing: error)`:`URLError` 的 userInfo 带完整 URL
             let nsError = error as NSError

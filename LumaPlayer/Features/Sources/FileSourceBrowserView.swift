@@ -40,6 +40,32 @@ struct FileSourceBrowserView: View {
     /// 删除失败的原因,确认面板关掉后由 alert 报出
     @State private var actionErrorMessage: String?
     @State private var showsFolderPicker = false
+    /// 用户点掉过的刮削失败文案:同一条不再重复占位,换目录 / 换文案会重新出现
+    @State private var dismissedScrapeFailure: String?
+
+    /// 刮削失败压到页头一行:灰色小字 + 关闭按钮。封面没补上不影响浏览,⛔ 不用橙色警告条吓人。
+    private func scrapeNotice(_ text: String) -> some View {
+        HStack(spacing: Metrics.spacingS) {
+            Image(systemName: "photo.badge.exclamationmark")
+            Text(text)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button {
+                dismissedScrapeFailure = text
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .help("不再提示")
+            .accessibilityLabel("关闭提示")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, Metrics.spacingXL)
+        .padding(.bottom, Metrics.spacingM)
+    }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Metrics.posterMinWidth), spacing: Metrics.gridSpacing)]
@@ -62,12 +88,9 @@ struct FileSourceBrowserView: View {
                     .padding(.vertical, Metrics.spacingS)
                 Divider()
             }
-            if let scrapeFailure = viewModel.scrapeFailure {
-                // 刮削失败只影响封面,给提示而非错误页
-                OnboardingNotice(text: scrapeFailure, style: .warning)
-                    .padding(.horizontal, Metrics.spacingL)
-                    .padding(.vertical, Metrics.spacingS)
-                Divider()
+            if let scrapeFailure = viewModel.scrapeFailure, scrapeFailure != dismissedScrapeFailure {
+                // 刮削失败只影响封面,给一句可关的灰字提示,⛔ 不占一整条横幅
+                scrapeNotice(scrapeFailure)
             }
             content
         }

@@ -485,6 +485,9 @@ final class FileSourceViewModel {
                 authorization = nil
                 loadFailure = LoadFailure(message: error.userMessage)
             }
+        } catch is CancellationError {
+            // 被下一次 `reload()` 顶掉的授权检查:⛔ 不写失败页
+            return
         } catch {
             authorization = nil
             loadFailure = LoadFailure(message: "读取百度网盘授权状态失败:\(error)")
@@ -596,6 +599,8 @@ final class FileSourceViewModel {
         } catch let error as Pan115Error {
             pan115Authorization = nil
             loadFailure = LoadFailure(message: error.userMessage)
+        } catch is CancellationError {
+            return
         } catch {
             pan115Authorization = nil
             loadFailure = LoadFailure(message: "读取 115 网盘登录状态失败:\(error)")
@@ -999,6 +1004,9 @@ final class FileSourceViewModel {
                 isApplicationRootUnavailable: false,
                 needsFolderReselection: error.needsFolderReselection
             )
+        } catch is CancellationError {
+            // 被下一次导航 / 刷新挤掉:不是失败,⛔ 不写错误页
+            return
         } catch {
             guard loadID == directoryGeneration else { return }
             directoryFailure = FileSourceDirectoryFailure(
@@ -1107,6 +1115,9 @@ final class FileSourceViewModel {
             loadMoreFailure = error.userMessage
         } catch let error as LocalFolderError {
             loadMoreFailure = error.userMessage
+        } catch is CancellationError {
+            // 换目录把这一页作废:页脚保持原样,⛔ 不留一条假的「加载更多失败」
+            return
         } catch {
             loadMoreFailure = "加载更多失败:\(error)"
         }
@@ -1708,6 +1719,9 @@ final class FileSourceViewModel {
         } catch let error as LocalFolderError {
             episodes = []
             episodeFailure = error.userMessage
+        } catch is CancellationError {
+            // 换季 / 关页面:这一趟作废,⛔ 不留错误文案
+            return
         } catch {
             episodes = []
             episodeFailure = "读取这一季的分集失败:\(error)"

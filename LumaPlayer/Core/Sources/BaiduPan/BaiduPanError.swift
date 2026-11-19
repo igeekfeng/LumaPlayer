@@ -27,7 +27,6 @@ enum BaiduPanError: Error, Equatable {
     case decoding(endpoint: String, detail: String)
     /// 百度不给在线播(`BAIDU_PAN_API.md` §5),文案已带原因。
     case playbackUnsupported(String)
-    case cancelled
 
     var userMessage: String {
         switch self {
@@ -55,8 +54,6 @@ enum BaiduPanError: Error, Equatable {
             return "解析百度网盘的响应失败(\(endpoint)):\(detail)"
         case .playbackUnsupported(let detail):
             return detail
-        case .cancelled:
-            return "已取消。"
         }
     }
 

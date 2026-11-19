@@ -90,6 +90,9 @@ final class BaiduPanRenameSeriesViewModel {
             }
             candidates = matches
             stage = .choosingSeries
+        } catch is CancellationError {
+            // 关掉 sheet:⛔ 不把「已取消」当成改名失败
+            stage = .idle
         } catch {
             failure = Self.describe(error)
             stage = .idle
@@ -120,6 +123,8 @@ final class BaiduPanRenameSeriesViewModel {
         stage = .preparing("正在取分集信息…")
         do {
             try await apply(series: match)
+        } catch is CancellationError {
+            stage = .choosingSeries
         } catch {
             failure = Self.describe(error)
             stage = .choosingSeries
@@ -202,6 +207,8 @@ final class BaiduPanRenameSeriesViewModel {
             outcome = nil
             plan = nil
             stage = .idle
+        } catch is CancellationError {
+            // 取消:保留 `outcome` 让用户还能再点一次撤销
         } catch {
             failure = Self.describe(error)
         }

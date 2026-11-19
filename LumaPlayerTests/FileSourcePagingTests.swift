@@ -94,6 +94,47 @@ final class FileSourcePagingTests: XCTestCase {
         XCTAssertEqual(page.nextOffset, 3, "下一页起点按服务端口径算,⛔ 不能用本页条数 2")
     }
 
+    // MARK: - 取消不是失败
+
+    /// URLSession 取消抛 `URLError.cancelled`(-999),⛔ 不能折成 `.transport`:
+    /// 上层按 `CancellationError` 判「删掉 / 换目录」,折错就会弹一条「连接百度网盘失败」。
+    func testBaiduCancelledRequestMapsToCancellation() async {
+        let client = BaiduPanAPIClient(session: session)
+        MockEmbyURLProtocol.stub(
+            .failure(.cancelled), host: "pan.baidu.com", path: "/rest/2.0/xpan/file")
+
+        do {
+            _ = try await client.listPage(
+                directory: "/apps/LumaPlayer", accessToken: "AT", start: 0, limit: 3)
+            XCTFail("取消应当抛错")
+        } catch is CancellationError {
+            // 期望
+        } catch {
+            XCTFail("期望 CancellationError,实际 \(error)")
+        }
+    }
+
+    /// 真传输失败给的是一句话,⛔ 不把 `NSURLErrorDomain -1004` 端给用户。
+    func testBaiduTransportFailureReadsAsPlainChinese() async {
+        let client = BaiduPanAPIClient(session: session)
+        MockEmbyURLProtocol.stub(
+            .failure(.notConnectedToInternet), host: "pan.baidu.com", path: "/rest/2.0/xpan/file")
+
+        do {
+            _ = try await client.listPage(
+                directory: "/apps/LumaPlayer", accessToken: "AT", start: 0, limit: 3)
+            XCTFail("传输失败应当抛错")
+        } catch let error as BaiduPanError {
+            guard case .transport(let detail) = error else {
+                return XCTFail("期望 .transport,实际 \(error)")
+            }
+            XCTAssertFalse(detail.contains("NSURLErrorDomain"), "实际:\(detail)")
+            XCTAssertTrue(detail.contains("网络"), "实际:\(detail)")
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
     // MARK: - 跨页合成
 
     /// ⛔ 只合成一页会把 `01.mp4` 判成电影:「成串的集号」要拿**整套**文件才算得出。

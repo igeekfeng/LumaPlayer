@@ -283,6 +283,11 @@ struct BaiduPanAPIClient: Sendable {
             throw error
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as URLError {
+            // URLSession 取消抛的是 `URLError.cancelled`(-999),不是 `CancellationError`:
+            // 折成取消才能让上层「切目录 / 关页面」的取消不算失败
+            guard error.code != .cancelled else { throw CancellationError() }
+            throw BaiduPanError.transport(URLErrorDescription.userText(error))
         } catch {
             // ⛔ 不用 `String(describing: error)`:`URLError` 的 userInfo 带完整 URL(含 `access_token`)
             let nsError = error as NSError

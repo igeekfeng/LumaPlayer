@@ -100,6 +100,9 @@ struct FileSourceDeleteItemView: View {
         } catch let error as LocalFolderError {
             dismiss()
             onFailure(error.userMessage)
+        } catch is CancellationError {
+            // 面板关掉时在飞的请求被取消:⛔ 不弹「删除失败」
+            dismiss()
         } catch {
             dismiss()
             onFailure("删除失败:\(error)")

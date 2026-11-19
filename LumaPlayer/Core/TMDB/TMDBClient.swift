@@ -195,6 +195,11 @@ struct TMDBClient: Sendable {
             throw error
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as URLError {
+            // URLSession 取消抛的是 `URLError.cancelled`(NSURLErrorDomain -999),不是 `CancellationError`;
+            // 不折成取消就会当成传输失败,界面上弹一条「连接 TMDB 失败」
+            guard error.code != .cancelled else { throw CancellationError() }
+            throw TMDBError.transport(URLErrorDescription.userText(error))
         } catch {
             // ⛔ 不用 `String(describing: error)`:`URLError` 的 userInfo 带完整 URL
             let nsError = error as NSError

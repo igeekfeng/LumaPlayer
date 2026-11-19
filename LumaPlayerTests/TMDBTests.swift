@@ -241,9 +241,25 @@ final class TMDBTests: XCTestCase {
             _ = try await makeClient().searchMovie(title: "x", token: "T")
             XCTFail("传输失败应当抛错")
         } catch let error as TMDBError {
-            guard case .transport = error else {
+            guard case .transport(let detail) = error else {
                 return XCTFail("期望 .transport,实际 \(error)")
             }
+            // 给用户看的一句话,⛔ 不露 `NSURLErrorDomain -1004` 这种机器码
+            XCTAssertFalse(detail.contains("NSURLErrorDomain"), "实际:\(detail)")
+        }
+    }
+
+    /// URLSession 取消抛的是 `URLError.cancelled`(-999),⛔ 不能当成传输失败弹提示。
+    func testCancelledURLRequestMapsToCancellation() async throws {
+        MockEmbyURLProtocol.stub(.failure(.cancelled), host: host, path: "/3/search/movie")
+
+        do {
+            _ = try await makeClient().searchMovie(title: "x", token: "T")
+            XCTFail("取消应当抛错")
+        } catch is CancellationError {
+            // 期望:cancel 不产生用户可见的失败文案
+        } catch {
+            XCTFail("期望 CancellationError,实际 \(error)")
         }
     }
 

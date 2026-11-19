@@ -410,6 +410,40 @@ final class Pan115APIClientTests: XCTestCase {
         XCTAssertEqual(body, "account=TOKEN-UID&app=tv")
     }
 
+    // MARK: - 取消不是失败
+
+    /// 同百度那侧:`URLError.cancelled`(-999)是取消,⛔ 不能折成 `.transport`。
+    func testCancelledRequestMapsToCancellation() async {
+        MockEmbyURLProtocol.stub(.failure(.cancelled), host: "webapi.115.com", path: "/files")
+
+        do {
+            _ = try await client.list(cid: "0", credential: credential)
+            XCTFail("取消应当抛错")
+        } catch is CancellationError {
+            // 期望
+        } catch {
+            XCTFail("期望 CancellationError,实际 \(error)")
+        }
+    }
+
+    /// 真传输失败只给一句话,⛔ 不露机器码。
+    func testTransportFailureReadsAsPlainChinese() async {
+        MockEmbyURLProtocol.stub(
+            .failure(.timedOut), host: "webapi.115.com", path: "/files")
+
+        do {
+            _ = try await client.list(cid: "0", credential: credential)
+            XCTFail("传输失败应当抛错")
+        } catch let error as Pan115Error {
+            guard case .transport(let detail) = error else {
+                return XCTFail("期望 .transport,实际 \(error)")
+            }
+            XCTAssertFalse(detail.contains("NSURLErrorDomain"), "实际:\(detail)")
+        } catch {
+            XCTFail("错误的类型:\(error)")
+        }
+    }
+
     // MARK: - downloadURL
 
     /// 只测失败路径。成功路径的响应必须用客户端那一次的随机 key 加密,

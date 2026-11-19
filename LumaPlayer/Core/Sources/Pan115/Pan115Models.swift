@@ -287,7 +287,6 @@ enum Pan115Error: Error, Equatable {
     case decoding(endpoint: String, detail: String)
     /// m115 加解密失败(§5)
     case crypto(String)
-    case cancelled
 
     var userMessage: String {
         switch self {
@@ -328,8 +327,6 @@ enum Pan115Error: Error, Equatable {
             return "解析 115 网盘的响应失败(\(endpoint)):\(detail)"
         case .crypto(let detail):
             return "115 的加密数据处理失败:\(detail)"
-        case .cancelled:
-            return "已取消。"
         }
     }
 
