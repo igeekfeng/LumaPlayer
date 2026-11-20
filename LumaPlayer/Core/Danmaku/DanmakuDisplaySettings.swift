@@ -25,7 +25,8 @@ struct DanmakuDisplaySettings: Codable, Sendable, Equatable {
     static let opacityRange = 0.2...1.0
     static let fontSizeRange = 16.0...40.0
     static let scrollDurationRange = 4.0...14.0
-    static let displayAreaChoices = [0.25, 0.5, 0.75, 1.0]
+    static let displayAreaRange = 0.1...1.0
+    static let displayAreaStep = 0.05
 
     var clamped: DanmakuDisplaySettings {
         var copy = self
@@ -33,7 +34,8 @@ struct DanmakuDisplaySettings: Codable, Sendable, Equatable {
         copy.fontSize = Self.clamp(fontSize, Self.fontSizeRange, fallback: Self.default.fontSize)
         copy.scrollDuration = Self.clamp(
             scrollDuration, Self.scrollDurationRange, fallback: Self.default.scrollDuration)
-        copy.displayArea = Self.clamp(displayArea, 0.1...1, fallback: Self.default.displayArea)
+        copy.displayArea = Self.clamp(
+            displayArea, Self.displayAreaRange, fallback: Self.default.displayArea)
         return copy
     }
 

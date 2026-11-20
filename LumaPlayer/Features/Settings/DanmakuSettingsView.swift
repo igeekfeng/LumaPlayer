@@ -38,12 +38,13 @@ struct DanmakuSettingsView: View {
                     title: "滚动时长", value: $store.settings.scrollDuration,
                     range: DanmakuDisplaySettings.scrollDurationRange, step: 0.5,
                     text: "\(store.settings.scrollDuration.formatted(.number.precision(.fractionLength(0...1)))) 秒")
-                Picker("显示区域", selection: $store.settings.displayArea) {
-                    ForEach(DanmakuDisplaySettings.displayAreaChoices, id: \.self) { area in
-                        Text(area == 1 ? "全屏" : "\(Int(area * 100))%").tag(area)
-                    }
-                }
-                .pickerStyle(.segmented)
+                SettingsValueSlider(
+                    title: "显示区域", value: $store.settings.displayArea,
+                    range: DanmakuDisplaySettings.displayAreaRange,
+                    step: DanmakuDisplaySettings.displayAreaStep,
+                    text: store.settings.displayArea >= 1
+                        ? "全屏"
+                        : "\(Int((store.settings.displayArea * 100).rounded()))%")
             }
 
             Section {
