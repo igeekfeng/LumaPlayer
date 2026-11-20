@@ -42,6 +42,17 @@ extension PlaybackSpeedScope {
 
     static let pan115Isolation = "pan115"
 
+    /// 口径同百度:是剧集取剧目录,否则取 `fs_id`。隔离段单独一段。
+    static func quark(file: BaiduPanFile, isEpisodeSeries: Bool) -> PlaybackSpeedScope {
+        PlaybackSpeedScope(
+            isolation: quarkIsolation,
+            content: isEpisodeSeries
+                ? BaiduPanPath.seriesDirectory(ofFilePath: file.path)
+                : String(file.fsID))
+    }
+
+    static let quarkIsolation = "quark"
+
     /// 口径同百度,但按来源隔离(两个来源里同名剧目录不是同一部)。
     static func localFolder(
         sourceID: UUID, file: BaiduPanFile, isEpisodeSeries: Bool

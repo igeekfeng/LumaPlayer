@@ -48,6 +48,8 @@ struct ServerListView: View {
                 BaiduPanSourceSettingsView(container: container, source: baidu)
             case .pan115(let pan):
                 Pan115SourceSettingsView(container: container, source: pan)
+            case .quark(let quark):
+                QuarkSourceSettingsView(container: container, source: quark)
             case .localFolder(let local):
                 LocalFolderSourceSettingsView(container: container, source: local)
             }
@@ -164,6 +166,9 @@ struct ServerListView: View {
         case .pan115:
             return "将删除「\(source.displayName)」及它的片库根与观看记录,该操作不可撤销。"
                 + "网盘里的文件不会被删除;登录 Cookie 在删掉最后一个 115 来源时才清除。"
+        case .quark:
+            return "将删除「\(source.displayName)」及它的片库根与观看记录,该操作不可撤销。"
+                + "网盘里的文件不会被删除;登录凭据在删掉最后一个夸克来源时才清除。"
         case .localFolder:
             return "将删除「\(source.displayName)」及它在本机的观看记录,该操作不可撤销。"
                 + "文件夹里的文件不会被删除。"
@@ -240,6 +245,8 @@ private struct SourceRow: View {
         case .emby: return "server.rack"
         case .baiduPan: return nil
         case .pan115: return nil
+        // 夸克官方字标没有可用的矢量源,⛔ 不自己画一个假的,用通用图标
+        case .quark: return "qrcode"
         case .localFolder: return "folder.fill"
         }
     }
@@ -273,6 +280,8 @@ private struct SourceRow: View {
         case .pan115:
             // 115 能读全盘,这一行只能给「整盘」这个事实
             return "整个网盘"
+        case .quark:
+            return "整个网盘 · 只读"
         case .localFolder(let local):
             // 上一次解析书签得到的路径(展示用;访问走书签)
             return local.lastKnownPath

@@ -30,6 +30,8 @@ final class AppContainer {
     /// 115 的 `fsID → pick_code` 进程内缓存。放组合根:列目录的 provider 与起播的
     /// `Pan115SessionPreparer` 不是同一个实例,只有共用才能省掉起播前的重列目录。
     let pan115PickCodes = Pan115PickCodeCache()
+    /// 夸克网盘的连接:一个 App 一份登录态(token 四件套),多个夸克来源共用(各记各的片库根)。
+    private var quarkConnectionInstance: QuarkConnection?
     /// 本地文件夹的安全作用域访问权,按来源开一次、开到来源被删 / 换文件夹(见 `LocalFolderAccess`)。
     let localFolderAccess: LocalFolderAccess
     /// 本地视频时长的进程内记忆,免得每次进目录都读文件头。
@@ -158,6 +160,15 @@ final class AppContainer {
             credentials: credentials,
             client: Pan115APIClient(session: session))
         pan115ConnectionInstance = fresh
+        return fresh
+    }
+
+    func quarkConnection() -> QuarkConnection {
+        if let existing = quarkConnectionInstance { return existing }
+        let fresh = QuarkConnection(
+            credentials: credentials,
+            client: QuarkAPIClient(session: session))
+        quarkConnectionInstance = fresh
         return fresh
     }
 
@@ -327,6 +338,71 @@ final class AppContainer {
     /// 已存 Cookie 的渠道名,设置页展示用。只读凭据文件,不发请求。
     func pan115AuthorizationChannel() async -> String? {
         await pan115Connection().authorizationChannel()
+    }
+
+    // MARK: - 夸克网盘(docs/QUARK_API.md)
+
+    /// 扫码成功后的添加收尾。与 115 同形:凭据已经在凭据文件里,这里只落库 + 切过去。
+    /// 多个夸克来源共用同一份登录态,只各记各的片库根。
+    @discardableResult
+    func registerQuarkSource(displayName: String = "") async throws -> QuarkSource {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = QuarkSource(
+            displayName: trimmedName.isEmpty ? await uniqueQuarkDisplayName() : trimmedName)
+        try await registry.add(.quark(source))
+        state.serverListRevision += 1
+        // ⛔ 不要写 `state.currentServer = nil`:它是 currentSource 的派生访问器,会把来源一并抹掉
+        state.currentSource = .quark(source)
+        state.route = .browse
+        return source
+    }
+
+    /// 按添加顺序。
+    func quarkSources() async -> [QuarkSource] {
+        await registry.allSources().compactMap(\.quarkSource)
+    }
+
+    /// 已有同名时往后编号(「夸克网盘 2」…)。
+    private func uniqueQuarkDisplayName() async -> String {
+        let existing = Set(await quarkSources().map(\.displayName))
+        guard existing.contains("夸克网盘") else { return "夸克网盘" }
+        var index = 2
+        while existing.contains("夸克网盘 \(index)") { index += 1 }
+        return "夸克网盘 \(index)"
+    }
+
+    /// 已校验在网盘内,失效当没设。nil = 没设,进来落在网盘根。
+    func quarkLibraryRoot(for source: QuarkSource) async throws -> QuarkLibraryRoot? {
+        try await quarkConnection().libraryRoot(for: source.id)
+    }
+
+    /// nil = 清除。
+    func setQuarkLibraryRoot(_ root: QuarkLibraryRoot?, for source: QuarkSource) async throws {
+        try await quarkConnection().setLibraryRoot(root, for: source.id)
+        state.serverListRevision += 1
+    }
+
+    /// 留空则回到「夸克网盘」。
+    func renameQuarkSource(_ source: QuarkSource, displayName: String) async throws {
+        var updated = source
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.displayName = trimmed.isEmpty ? "夸克网盘" : trimmed
+        try await registry.update(.quark(updated))
+        state.serverListRevision += 1
+        if state.currentSource?.id == source.id {
+            state.currentSource = .quark(updated)
+        }
+    }
+
+    /// 清本机凭据。登录态共用,对所有夸克来源生效;片库根保留,重新扫码即恢复。
+    func signOutQuark() async throws {
+        try await quarkConnection().signOut()
+        state.serverListRevision += 1
+    }
+
+    /// 已登录账号的快照(昵称 / 会员),设置页展示用。只读内存,不发请求。
+    func quarkAccount() async -> QuarkAccount? {
+        (try? await quarkConnection().authorization())?.account
     }
 
     // MARK: - 本地文件夹
@@ -748,6 +824,15 @@ final class AppContainer {
                 pickCodes: pan115PickCodes,
                 scraper: metadataScraper()
             )
+        case .quark:
+            guard let sourceID = await watchProgress.display(forFileID: fileID)?.sourceID,
+                  let quark = await quarkSources().first(where: { $0.id == sourceID }) else { return nil }
+            return QuarkSourceProvider(
+                connection: quarkConnection(),
+                sourceID: quark.id,
+                displayName: quark.displayName,
+                scraper: metadataScraper()
+            )
         }
     }
 
@@ -790,6 +875,12 @@ final class AppContainer {
                 pickCodes: pan115PickCodes,
                 subtitleFiles: request.subtitleFiles
             )
+        case .quark(let file):
+            return QuarkSessionPreparer(
+                connection: quarkConnection(),
+                file: file,
+                subtitleFiles: request.subtitleFiles
+            )
         case .localFolder(let file, let source):
             return LocalFileSessionPreparer(
                 file: file,
@@ -809,7 +900,7 @@ final class AppContainer {
             return PlaybackProgressReporter { endpoint in
                 try await connection.reportPlayback(endpoint)
             }
-        case .baiduPan, .pan115, .localFolder:
+        case .baiduPan, .pan115, .quark, .localFolder:
             return LocalResumeReporting(store: watchProgress)
         }
     }
@@ -821,7 +912,7 @@ final class AppContainer {
         case .emby(_, let item):
             return item.userData?.playbackPositionTicks
                 .flatMap { TickConverter.seconds(fromTicks: $0) } ?? 0
-        case .baiduPan(let file), .localFolder(let file, _), .pan115(let file):
+        case .baiduPan(let file), .localFolder(let file, _), .pan115(let file), .quark(let file):
             return await watchProgress.resumeSeconds(forFileID: String(file.fsID)) ?? 0
         }
     }
@@ -903,6 +994,17 @@ final class AppContainer {
                 try? await credentials.deletePan115Credential()
                 pan115ConnectionInstance = nil
                 await pan115PickCodes.purge()
+            }
+        }
+        if let quark = target?.quarkSource {
+            try? await credentials.deleteQuarkLibraryRoot(for: quark.id)
+            await baiduScrapeCache.purge(sourceID: quark.id)
+            await baiduEpisodeCounts.purge(sourceID: quark.id)
+            // 登录态共用:删最后一个夸克来源才清
+            let remaining = await quarkSources().filter { $0.id != quark.id }
+            if remaining.isEmpty {
+                try? await credentials.deleteQuarkCredential()
+                quarkConnectionInstance = nil
             }
         }
         try await registry.remove(id: id)

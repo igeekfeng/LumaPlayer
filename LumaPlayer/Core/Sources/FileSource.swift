@@ -1,18 +1,21 @@
 import Foundation
 
-/// 文件树来源:只有目录树、没有服务端媒体结构(百度网盘 / 115 网盘 / 本地文件夹),共用 `FileSourceViewModel` 那套浏览页。
+/// 文件树来源:只有目录树、没有服务端媒体结构(百度网盘 / 115 网盘 / 夸克网盘 / 本地文件夹),
+/// 共用 `FileSourceViewModel` 那套浏览页。
 /// 差别只在下面几项能力上,浏览页按它分派,⛔ 不写 `if isBaidu`。
 ///
 /// 是 `SourceProfile` 的子集,独立成类型让编译器挡住把 Emby 传进浏览页。
 enum FileSource: Sendable, Equatable, Hashable {
     case baiduPan(BaiduPanSource)
     case pan115(Pan115Source)
+    case quark(QuarkSource)
     case localFolder(LocalFolderSource)
 
     var id: UUID {
         switch self {
         case .baiduPan(let source): return source.id
         case .pan115(let source): return source.id
+        case .quark(let source): return source.id
         case .localFolder(let source): return source.id
         }
     }
@@ -21,6 +24,7 @@ enum FileSource: Sendable, Equatable, Hashable {
         switch self {
         case .baiduPan(let source): return source.displayName
         case .pan115(let source): return source.displayName
+        case .quark(let source): return source.displayName
         case .localFolder(let source): return source.displayName
         }
     }
@@ -29,16 +33,20 @@ enum FileSource: Sendable, Equatable, Hashable {
         switch self {
         case .baiduPan: return .baiduPan(file: file)
         case .pan115: return .pan115(file: file)
+        case .quark: return .quark(file: file)
         case .localFolder(let source): return .localFolder(file: file, source: source)
         }
     }
 
     /// 能不能连源文件一起删。本地文件夹只读(entitlement `files.user-selected.read-only`),只有「隐藏」;
     /// 百度与 115 都能删(115 走 `POST /rb/delete`,进的是回收站,见 `docs/PAN115_API.md` §9)。
+    ///
+    /// 夸克 TV 端**只有读能力**(`docs/QUARK_API.md` §9:建 / 删 / 改名 / 移动全部 `NotImplement`),
+    /// 所以只给「隐藏」,与本地文件夹同一档。
     var supportsDeletingFiles: Bool {
         switch self {
         case .baiduPan, .pan115: return true
-        case .localFolder: return false
+        case .quark, .localFolder: return false
         }
     }
 
@@ -49,7 +57,7 @@ enum FileSource: Sendable, Equatable, Hashable {
     var remoteDeletionIsRecoverable: Bool {
         switch self {
         case .pan115: return true
-        case .baiduPan, .localFolder: return false
+        case .baiduPan, .quark, .localFolder: return false
         }
     }
 
@@ -57,8 +65,7 @@ enum FileSource: Sendable, Equatable, Hashable {
     var supportsRenamingSeries: Bool {
         switch self {
         case .baiduPan: return true
-        case .pan115: return false
-        case .localFolder: return false
+        case .pan115, .quark, .localFolder: return false
         }
     }
 
@@ -66,6 +73,7 @@ enum FileSource: Sendable, Equatable, Hashable {
         switch self {
         case .baiduPan: return "网盘"
         case .pan115: return "网盘"
+        case .quark: return "网盘"
         case .localFolder: return "文件夹"
         }
     }

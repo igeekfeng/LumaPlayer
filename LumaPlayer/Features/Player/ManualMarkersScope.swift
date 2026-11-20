@@ -22,6 +22,9 @@ enum ManualMarkersScope {
         case .pan115(let file):
             // 115 只有一份 Cookie(一个网盘),隔离段与百度分开即可
             return fileKey(file, isolation: "pan115", isEpisode: isEpisode)
+        case .quark(let file):
+            // 夸克同样只有一份登录态(一个网盘),隔离段与另外两家分开
+            return fileKey(file, isolation: "quark", isEpisode: isEpisode)
         case .localFolder(let file, let source):
             // 来源 id 进键:两个来源里同名目录不是同一部剧
             return fileKey(file, isolation: "local|\(source.id.uuidString)", isEpisode: isEpisode)
@@ -41,6 +44,8 @@ enum ManualMarkersScope {
             return legacyKeys(file, isolation: "baidu")
         case .pan115(let file):
             return legacyKeys(file, isolation: "pan115")
+        case .quark(let file):
+            return legacyKeys(file, isolation: "quark")
         case .localFolder(let file, let source):
             return legacyKeys(file, isolation: "local|\(source.id.uuidString)")
         }

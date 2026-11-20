@@ -92,6 +92,9 @@ struct DanmakuMediaQuery: Sendable, Equatable {
         case .pan115(let file):
             // 同百度:一份 Cookie 对应一个网盘,`fid` 在网盘内唯一,键里不带来源段
             return fileQuery(file, isolation: "pan115", libraryItem: libraryItem)
+        case .quark(let file):
+            // 同一份登录态对应一个网盘,隔离段与另外两家分开即可
+            return fileQuery(file, isolation: "quark", libraryItem: libraryItem)
         case .localFolder(let file, let source):
             // 本地 id 只在本来源内唯一:来源 id 进键,删来源时按前缀清
             return fileQuery(

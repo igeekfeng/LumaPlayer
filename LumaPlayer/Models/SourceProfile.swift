@@ -14,6 +14,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
     case emby(ServerProfile)
     case baiduPan(BaiduPanSource)
     case pan115(Pan115Source)
+    case quark(QuarkSource)
     case localFolder(LocalFolderSource)
 
     var id: UUID {
@@ -21,6 +22,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby(let profile): return profile.id
         case .baiduPan(let source): return source.id
         case .pan115(let source): return source.id
+        case .quark(let source): return source.id
         case .localFolder(let source): return source.id
         }
     }
@@ -30,6 +32,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby(let profile): return profile.displayName
         case .baiduPan(let source): return source.displayName
         case .pan115(let source): return source.displayName
+        case .quark(let source): return source.displayName
         case .localFolder(let source): return source.displayName
         }
     }
@@ -40,6 +43,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby(let profile): return profile.lastUsedAt
         case .baiduPan(let source): return source.lastUsedAt
         case .pan115(let source): return source.lastUsedAt
+        case .quark(let source): return source.lastUsedAt
         case .localFolder(let source): return source.lastUsedAt
         }
     }
@@ -56,6 +60,9 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .pan115(var source):
             source.lastUsedAt = date
             return .pan115(source)
+        case .quark(var source):
+            source.lastUsedAt = date
+            return .quark(source)
         case .localFolder(var source):
             source.lastUsedAt = date
             return .localFolder(source)
@@ -67,6 +74,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby: return "Emby 服务器"
         case .baiduPan: return "百度网盘"
         case .pan115: return "115 网盘"
+        case .quark: return "夸克网盘"
         case .localFolder: return "本地文件夹"
         }
     }
@@ -77,6 +85,8 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby, .localFolder: return nil
         case .baiduPan: return .baiduPan
         case .pan115: return .pan115
+        // 夸克用 SF Symbol:官方字标没有可用的矢量源,⛔ 不自己画一个假的
+        case .quark: return nil
         }
     }
 
@@ -97,6 +107,11 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         return nil
     }
 
+    var quarkSource: QuarkSource? {
+        if case .quark(let source) = self { return source }
+        return nil
+    }
+
     var localFolderSource: LocalFolderSource? {
         if case .localFolder(let source) = self { return source }
         return nil
@@ -108,6 +123,7 @@ enum SourceProfile: Codable, Sendable, Equatable, Hashable, Identifiable {
         case .emby: return nil
         case .baiduPan(let source): return .baiduPan(source)
         case .pan115(let source): return .pan115(source)
+        case .quark(let source): return .quark(source)
         case .localFolder(let source): return .localFolder(source)
         }
     }
@@ -147,6 +163,24 @@ struct Pan115Source: Codable, Sendable, Equatable, Hashable {
     var lastUsedAt: Date?
 
     init(id: UUID = UUID(), displayName: String = "115 网盘", lastUsedAt: Date? = nil) {
+        self.id = id
+        self.displayName = displayName
+        self.lastUsedAt = lastUsedAt
+    }
+}
+
+/// 夸克网盘来源(TV 端接口,`docs/QUARK_API.md`)。
+/// ⚠️ **不含任何凭据**:`access_token` / `refresh_token` / `device_id` 在凭据文件里,全 App 一份。
+/// 片库根(虚拟路径)也按 `id` 存在凭据文件里 —— 它不是秘密,但跟着来源走才不会串。
+///
+/// ⚠️ TV 端**只有读能力**(§9):没有上传 / 改名 / 删除 / 移动,所以这个来源不能删网盘文件、
+/// 也不能按 TMDB 重命名整部剧(见 `FileSource.supportsDeletingFiles` / `supportsRenamingSeries`)。
+struct QuarkSource: Codable, Sendable, Equatable, Hashable {
+    let id: UUID
+    var displayName: String
+    var lastUsedAt: Date?
+
+    init(id: UUID = UUID(), displayName: String = "夸克网盘", lastUsedAt: Date? = nil) {
         self.id = id
         self.displayName = displayName
         self.lastUsedAt = lastUsedAt

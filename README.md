@@ -100,7 +100,7 @@ App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 
 1. 首次启动进入引导，先选**来源类型**（Emby / 网盘 / 本地文件夹）
 2. **Emby**：填服务器地址与账号密码，登录后即可浏览
-3. **网盘**：按提示完成设备码授权或扫码登录，再指定一个目录作为**片库根**（就是浏览页能退到的最外层）
+3. **网盘**：按提示完成设备码授权或扫码登录，再指定一个目录作为**片库根**（就是浏览页能退到的最外层）。
 4. 首页 / 媒体库点开条目播放；播放是独立窗口，关窗触发最终进度上报
 
 设置窗口（⌘,）分七页：**通用**（含自定义 User-Agent）、**播放**、**字幕**、**弹幕**、**来源**（增 / 改 / 删 / 授权 / 设片库根）、**已隐藏**、**缓存**（图片占用与清空）。
@@ -115,7 +115,7 @@ App 是 **ad-hoc 签名、未公证**，只适合自己本机使用。
 LumaPlayer/
 ├── App/          入口、应用级状态、路由、错误类型
 ├── Core/         网络（EmbyAPIClient / 端点 / 认证）、服务器连接、安全存储、MPV 封装、
-│                 缓存、来源抽象（Emby / 百度网盘）、弹幕、TMDB
+│                 缓存、来源抽象、弹幕、TMDB
 ├── Features/     Browse / Home / Detail / Library / Player / Search / Servers /
 │                 Sources / Settings / Onboarding
 ├── Models/       Emby 响应模型
@@ -150,7 +150,7 @@ Scripts/          构建、打包、部署、隐私自检脚本
 
 ## 致谢
 
-- **mpv / libmpv** —— 播放内核。当前版本从 `gpu-next` render backend 的未合并 draft PR 自编
+- **mpv / libmpv** —— 播放内核
 - **弹弹play 开放平台** —— 弹幕数据来源
 - **TMDB** —— 剧集数据来源
 - **Emby**
@@ -158,5 +158,3 @@ Scripts/          构建、打包、部署、隐私自检脚本
 ## 许可证
 
 本项目以 [GPL-3.0](LICENSE) 发布。Copyright (C) 2026 LumaPlayer contributors。
-
-之所以不是 MIT 之类的宽松许可：播放内核 **libmpv** 以及随 App 打包进 `Contents/Frameworks/` 的 **FFmpeg 动态库**都是 GPL 构建（见 `Scripts/build-libmpv.sh` 的 `-Dgpl=true`），链接 GPL 库意味着整个作品跟着 GPL 走。

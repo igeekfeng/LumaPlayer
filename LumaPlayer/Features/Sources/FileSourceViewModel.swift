@@ -33,6 +33,11 @@ final class FileSourceViewModel {
     private(set) var pan115Authorization: Pan115Authorization?
     /// 115 的扫码会话,页面拿 `content` 渲染成二维码。nil = 还没拿到 / 已结束
     private(set) var pan115QRCode: Pan115QRCodeSession?
+    /// 夸克的授权状态。与另外两家并存而不合并:凭据形态与屏幕数量都不同
+    /// (百度「填密钥 → 扫码 → 浏览」,115 / 夸克「扫码 → 浏览」),合并只会让三方都别扭。
+    private(set) var quarkAuthorization: QuarkAuthorization?
+    /// 夸克的扫码会话,页面拿 `imageBase64` 直接显示成二维码图片。nil = 还没拿到 / 已结束
+    private(set) var quarkQRCode: QuarkQRCodeSession?
     /// 不打断当前流程的本地提示(二维码渲染失败、片库根存不进去等)
     private(set) var notice: String?
 
@@ -293,7 +298,7 @@ final class FileSourceViewModel {
     /// 都该零请求。本地每次重读,用户拷了新片子回来就能看到。
     private var cachesDirectories: Bool {
         switch source {
-        case .baiduPan, .pan115: return true
+        case .baiduPan, .pan115, .quark: return true
         case .localFolder: return false
         }
     }
@@ -332,10 +337,16 @@ final class FileSourceViewModel {
         self.init(container: container, source: .pan115(source), loadsDirectory: loadsDirectory)
     }
 
+    convenience init(container: AppContainer, source: QuarkSource, loadsDirectory: Bool = true) {
+        self.init(container: container, source: .quark(source), loadsDirectory: loadsDirectory)
+    }
+
     /// 只在百度 / 115 分支里用,本地文件夹来源不发请求
     private var connection: BaiduPanConnection { container.baiduConnection() }
     /// 115 的连接。Cookie 全 App 一份,多个 115 来源共用(各记各的片库根)。
     private var pan115Connection: Pan115Connection { container.pan115Connection() }
+    /// 夸克的连接。登录态全 App 一份,多个夸克来源共用(各记各的片库根)。
+    private var quarkConnection: QuarkConnection { container.quarkConnection() }
 
     /// provider 负责列目录 → 合成 → 封面 / 时长 → 刮削
     private func makeProvider() -> any FileSourceBrowsing {
@@ -355,6 +366,13 @@ final class FileSourceViewModel {
                 sourceID: pan.id,
                 displayName: pan.displayName,
                 pickCodes: container.pan115PickCodes,
+                scraper: container.metadataScraper()
+            )
+        case .quark(let quark):
+            return QuarkSourceProvider(
+                connection: quarkConnection,
+                sourceID: quark.id,
+                displayName: quark.displayName,
                 scraper: container.metadataScraper()
             )
         case .localFolder(let local):
@@ -438,6 +456,9 @@ final class FileSourceViewModel {
             return
         case .pan115:
             await performReloadPan115()
+            return
+        case .quark:
+            await performReloadQuark()
             return
         case .baiduPan:
             break
@@ -642,6 +663,96 @@ final class FileSourceViewModel {
         await startPan115Authorization()
     }
 
+    // MARK: - 动作:夸克扫码授权(docs/QUARK_API.md §4)
+
+    /// 夸克同样只有两屏:扫码 → 浏览。没有「填密钥」那一步。
+    private func performReloadQuark() async {
+        do {
+            quarkAuthorization = try await quarkConnection.authorization()
+            switch quarkAuthorization {
+            case .authorized:
+                guard loadsDirectory else { break }
+                currentDirectory = nil
+                await loadFiles()
+                hasLoadedOnce = true
+            case .needsAuthorization, nil:
+                break
+            }
+        } catch let error as QuarkError {
+            quarkAuthorization = nil
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            quarkAuthorization = nil
+            loadFailure = LoadFailure(message: "读取夸克网盘登录状态失败:\(error)")
+        }
+    }
+
+    /// 拿二维码图片(第 1 步)并立刻开始轮询。
+    ///
+    /// `deviceID` 必须持久化(§1):它参与 `req_id` 与 token 刷新,换了就要重新扫码 ——
+    /// 登录成功后它会随凭据一起落盘;扫码阶段先落一份等待值,换 token 时用它。
+    func startQuarkAuthorization() async {
+        guard !isWaitingForAuthorization else { return }
+        isWaitingForAuthorization = true
+        loadFailure = nil
+        notice = nil
+        quarkQRCode = nil
+        let deviceID: String
+        do {
+            deviceID = try await quarkConnection.deviceID()
+            quarkQRCode = try await quarkConnection.startAuthorization(deviceID: deviceID)
+        } catch let error as QuarkError {
+            loadFailure = LoadFailure(message: error.userMessage)
+            isWaitingForAuthorization = false
+            return
+        } catch {
+            loadFailure = LoadFailure(message: "获取夸克登录二维码失败:\(error)")
+            isWaitingForAuthorization = false
+            return
+        }
+        guard let session = quarkQRCode else { return }
+        authorizationTask?.cancel()
+        authorizationTask = Task { [weak self] in
+            await self?.pollQuark(session, deviceID: deviceID)
+        }
+    }
+
+    private func pollQuark(_ session: QuarkQRCodeSession, deviceID: String) async {
+        do {
+            let deadline = Date().addingTimeInterval(QuarkQRCodeSession.validitySeconds)
+            _ = try await quarkConnection.awaitAuthorization(
+                session, deviceID: deviceID, deadline: deadline)
+            isWaitingForAuthorization = false
+            quarkQRCode = nil
+            await reload()
+        } catch is CancellationError {
+            // 用户点了取消:回到扫码那一屏,不报错
+            isWaitingForAuthorization = false
+            quarkQRCode = nil
+        } catch let error as QuarkError {
+            isWaitingForAuthorization = false
+            quarkQRCode = nil
+            loadFailure = LoadFailure(message: error.userMessage)
+        } catch {
+            isWaitingForAuthorization = false
+            quarkQRCode = nil
+            loadFailure = LoadFailure(message: "夸克扫码登录失败:\(error)")
+        }
+    }
+
+    func cancelQuarkAuthorization() {
+        authorizationTask?.cancel()
+        authorizationTask = nil
+        isWaitingForAuthorization = false
+        quarkQRCode = nil
+    }
+
+    /// 二维码过期后手动重取
+    func restartQuarkAuthorization() async {
+        cancelQuarkAuthorization()
+        await startQuarkAuthorization()
+    }
+
     // MARK: - 动作:目录
 
     func loadFiles() async {
@@ -747,6 +858,14 @@ final class FileSourceViewModel {
                 } else {
                     libraryRoot = nil
                 }
+            case .quark(let quark):
+                // 夸克没有应用目录:TV 端能读整个网盘,根就是 "/"
+                root = QuarkLibraryRoot.root.path
+                if let stored = try await quarkConnection.libraryRoot(for: quark.id) {
+                    libraryRoot = BaiduPanLibraryRoot(path: stored.path)
+                } else {
+                    libraryRoot = nil
+                }
             case .localFolder(let local):
                 // 本地没有片库根,最外层就是选的文件夹
                 root = local.rootPath
@@ -827,6 +946,31 @@ final class FileSourceViewModel {
             // Cookie 失效 / 被踢下线 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
             if error.needsAuthorization {
                 pan115Authorization = .needsAuthorization
+                return
+            }
+            // 片库根被删 / 改名 → 静默清掉并回落网盘根
+            if allowFallback, error.isDirectoryUnavailable,
+               let library = libraryRoot?.path, directory == library,
+               library != rootDirectory {
+                await clearLibraryRoot()
+                currentDirectory = nil
+                pendingDirectory = nil
+                await loadFiles(
+                    directory: nil,
+                    allowingLibraryRootFallback: false,
+                    forceRefresh: forceRefresh)
+                return
+            }
+            directoryFailure = FileSourceDirectoryFailure(
+                message: error.userMessage,
+                isApplicationRootUnavailable: error.isDirectoryUnavailable
+                    && directory == rootDirectory
+            )
+        } catch let error as QuarkError {
+            guard loadID == directoryGeneration else { return }
+            // 登录态失效 → 回扫码屏,⛔ 不停在一条「没权限」的目录错误上
+            if error.needsAuthorization {
+                quarkAuthorization = .needsAuthorization
                 return
             }
             // 片库根被删 / 改名 → 静默清掉并回落网盘根
@@ -958,6 +1102,8 @@ final class FileSourceViewModel {
         } catch let error as BaiduPanError {
             loadMoreFailure = error.userMessage
         } catch let error as Pan115Error {
+            loadMoreFailure = error.userMessage
+        } catch let error as QuarkError {
             loadMoreFailure = error.userMessage
         } catch let error as LocalFolderError {
             loadMoreFailure = error.userMessage
@@ -1729,6 +1875,10 @@ final class FileSourceViewModel {
             // 两家的片库根类型不同(115 存的是 `Pan115LibraryRoot`),这里统一成 ViewModel 用的那个
             stored = (try? await pan115Connection.libraryRoot(for: pan.id))
                 .map { BaiduPanLibraryRoot(path: $0.path) }
+        case .quark(let quark):
+            // 夸克存的也是虚拟路径,同样统一成 ViewModel 用的那个
+            stored = (try? await quarkConnection.libraryRoot(for: quark.id))
+                .map { BaiduPanLibraryRoot(path: $0.path) }
         case .localFolder:
             // 本地:多半是换了文件夹 / 改了名。重读当前层让失败页消失,⛔ 不回到起点
             await refreshFiles()
@@ -1762,6 +1912,8 @@ final class FileSourceViewModel {
             try? await container.setLibraryRoot(nil, for: baidu)
         case .pan115(let pan):
             try? await container.setPan115LibraryRoot(nil, for: pan)
+        case .quark(let quark):
+            try? await container.setQuarkLibraryRoot(nil, for: quark)
         case .localFolder:
             return
         }
@@ -1773,6 +1925,7 @@ final class FileSourceViewModel {
         switch source {
         case .baiduPan: fallback = "百度网盘"
         case .pan115(let pan): fallback = pan.displayName
+        case .quark(let quark): fallback = quark.displayName
         case .localFolder(let local): fallback = local.displayName
         }
         guard let current = currentDirectory else { return fallback }
@@ -2108,9 +2261,17 @@ final class FileSourceViewModel {
             throw BaiduPanError.configuration(
                 "找不到「\(item.title)」在\(source.storageNoun)里的路径,没法删除。")
         }
-        // 本地文件夹只读,界面不给这个开关;走到这里是调用方 bug,如实抛
+        // 只读来源(本地文件夹 / 夸克)界面不给这个开关;走到这里是调用方 bug,如实抛。
+        // ⚠️ 按来源分派:夸克是网盘但 TV 端没有删除接口(`docs/QUARK_API.md` §9),
+        // 报「本地文件夹只读」会让人以为他的网盘文件在本地。
         if alsoDeleteRemotely, !source.supportsDeletingFiles {
-            throw LocalFolderError.readOnly
+            switch source {
+            case .quark:
+                throw QuarkError.invalidRequest(
+                    "夸克网盘这套接口只支持只读访问,不能删除网盘里的文件。")
+            case .baiduPan, .pan115, .localFolder:
+                throw LocalFolderError.readOnly
+            }
         }
         // ⛔ 不从 `item.kind` 反推是否目录(`.unknown` 也可能是文件)
         let isDirectory = file.isDirectory
@@ -2138,6 +2299,9 @@ final class FileSourceViewModel {
             // 115 按 id 删(文件 `fid` / 目录 `cid`,`docs/PAN115_API.md` §9),不用路径:
             // ⛔ 为删除再发一次 `files/getid` 是白花一次风控预算,而且删的还是同一个对象。
             try await pan115Connection.deleteFile(id: String(file.fsID))
+        case .quark:
+            // 夸克 TV 端**没有删除能力**(`docs/QUARK_API.md` §9),界面不给这个开关
+            throw QuarkError.invalidRequest("夸克网盘只支持只读访问,不能删除文件")
         case .localFolder:
             // 本地文件夹只读(`files.user-selected.read-only`),界面不给这个开关;走到这里是调用方 bug,如实抛
             throw LocalFolderError.readOnly

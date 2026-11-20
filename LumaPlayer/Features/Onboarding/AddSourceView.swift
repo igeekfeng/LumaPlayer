@@ -40,6 +40,12 @@ struct AddSourceView: View {
                     onBack: { selection = nil },
                     onDone: onFinish
                 )
+            case .some(.quark):
+                QuarkAddView(
+                    container: container,
+                    onBack: { selection = nil },
+                    onDone: onFinish
+                )
             case .some(.localFolder):
                 LocalFolderAddView(
                     container: container,
@@ -129,6 +135,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
     case emby
     case baiduPan
     case pan115
+    case quark
     case localFolder
 
     var id: String { rawValue }
@@ -138,6 +145,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         case .emby: return "Emby 服务器"
         case .baiduPan: return "百度网盘"
         case .pan115: return "115 网盘"
+        case .quark: return "夸克网盘"
         case .localFolder: return "本地文件夹"
         }
     }
@@ -147,6 +155,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         case .emby: return "连接到自建的 Emby / Jellyfin 兼容服务器。"
         case .baiduPan: return "播放开放平台应用目录下的网盘文件。"
         case .pan115: return "扫码登录后播放整个 115 网盘里的文件。"
+        case .quark: return "扫码登录后播放整个夸克网盘里的文件(只读)。"
         case .localFolder: return "播放本机、外接盘或已挂载网络卷上某个文件夹里的视频。"
         }
     }
@@ -157,6 +166,7 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         case .emby: return "server.rack"
         case .baiduPan: return nil
         case .pan115: return nil
+        case .quark: return "qrcode"
         case .localFolder: return "folder.fill"
         }
     }
@@ -167,6 +177,8 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         case .emby, .localFolder: return nil
         case .baiduPan: return .baiduPan
         case .pan115: return .pan115
+        // 夸克官方字标没有可用的矢量源,⛔ 不自己画一个假的,用 SF Symbol
+        case .quark: return nil
         }
     }
 }

@@ -223,6 +223,70 @@ actor CredentialStore {
         var root: Pan115LibraryRoot?
     }
 
+    // MARK: - 夸克网盘(docs/QUARK_API.md §4)
+
+    /// 全 App 一份:四件套(`access_token` / `refresh_token` / `device_id` / `query_token`)
+    /// 就是一个账号的登录态,多来源共用同一份。
+    private enum QuarkAccount {
+        static let credential = "quark-credential"
+        /// 设备指纹,扫码前就要有:它参与签名与 token 刷新(§1)。与 Emby 的 DeviceId 同性质。
+        static let deviceID = "quark-device-id"
+    }
+
+    /// get-or-set:首次调用生成并写入,之后恒返回同一值。
+    func quarkDeviceID(_ generate: @Sendable () -> String) async throws -> String {
+        let data = try await storage.value(forAccount: QuarkAccount.deviceID) {
+            Data(generate().utf8)
+        }
+        guard let id = String(data: data, encoding: .utf8), !id.isEmpty else {
+            throw CredentialStoreError.corruptedDeviceID
+        }
+        return id
+    }
+
+    /// 片库根:TV 端能读整个网盘,片库根只是某个目录的书签(按虚拟路径存,§5.1)。
+    private static func quarkLibraryRootAccount(for sourceID: UUID) -> String {
+        "quark-library-root:" + sourceID.uuidString
+    }
+
+    func quarkCredential() async throws -> QuarkCredential? {
+        guard let data = try await storage.value(forAccount: QuarkAccount.credential) else {
+            return nil
+        }
+        return try JSONDecoder().decode(QuarkCredential.self, from: data)
+    }
+
+    func saveQuarkCredential(_ credential: QuarkCredential) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(credential), forAccount: QuarkAccount.credential)
+    }
+
+    /// 解绑:删掉四件套就等于退出登录,夸克那边没有「撤销授权」接口(§4)。
+    func deleteQuarkCredential() async throws {
+        try await storage.removeValue(forAccount: QuarkAccount.credential)
+    }
+
+    func quarkLibraryRoot(for sourceID: UUID) async throws -> QuarkLibraryRoot? {
+        guard let data = try await storage.value(
+            forAccount: Self.quarkLibraryRootAccount(for: sourceID)) else { return nil }
+        return try JSONDecoder().decode(StoredQuarkLibraryRoot.self, from: data).root
+    }
+
+    /// nil = 明确清空:写一个「没有」而不是删键,与另外两家同语义。
+    func saveQuarkLibraryRoot(_ root: QuarkLibraryRoot?, for sourceID: UUID) async throws {
+        try await storage.setValue(
+            JSONEncoder().encode(StoredQuarkLibraryRoot(root: root)),
+            forAccount: Self.quarkLibraryRootAccount(for: sourceID))
+    }
+
+    func deleteQuarkLibraryRoot(for sourceID: UUID) async throws {
+        try await storage.removeValue(forAccount: Self.quarkLibraryRootAccount(for: sourceID))
+    }
+
+    private struct StoredQuarkLibraryRoot: Codable {
+        var root: QuarkLibraryRoot?
+    }
+
     // MARK: - TMDB 刮削(docs/TMDB_API.md §1)
 
     /// v4 Read Access Token,全 App 一份刮所有来源。

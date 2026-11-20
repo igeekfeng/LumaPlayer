@@ -93,7 +93,9 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 
 分页链路现在只有单测与第三方 SDK / 官方文档佐证。在一个**条目数 > 300 的真实目录**上,
 115 `count` 是否等于目录总数、`offset` 不回绕且 `isOffsetHonored` 不在正常目录上误停、百度 `start` 连续翻 3 页累计条目单调增无重复无缺项、
-百度 `list()` 全量路径 `limit=1000` 能取满(只在「剧 / 分集清单」触发,需 >1000 条的剧目录),都还是未知量。
+百度 `list()` 全量路径 `limit=1000` 能取满(只在「剧 / 分集清单」触发,需 >1000 条的剧目录),
+夸克 `total_count` 是否等于目录总数、`page_index` 越界时的真实行为(`QuarkAPIClient.hasMore` 现在按
+`(pageIndex + 1) * pageSize < totalCount` 判,并用「本页为空即停」兜底),都还是未知量。
 
 不在上面的未知量里:翻页期间目录增删会不会漏项(官方只保证静态目录下的 `start + limit`,接受风险,靠顶栏「刷新」重列兜底,`BAIDU_PAN_API.md` §7.4);
 `limit > 1000` 本项目⛔ 不越界,永不触发。
@@ -201,7 +203,50 @@ v0.42.0 起网络流走 libcurl(HTTP/2、连接复用)、`tls-verify` 默认开�
 - **不支持从指定位置起流**:`Pan115SessionPreparer.makeSession(startTimeTicks:)` 带值即抛错(没有对位的起流参数)。续播靠客户端 seek。
 - **`fs_id` 跨网盘不唯一**:`PlaybackSpeedStore.pan115Isolation` / 弹幕 / 手动标记都带 `pan115` 隔离段,⛔ 不要与百度的隔离段合并。
 
-**命名债**:被百度与本地共用的纯函数仍叫 `BaiduPan…`(合成器 / 剧集布局 / 排序 / 字幕配对 / 路径工具 / 刮削器 / 两个本地库),
+### 夸克网盘来源(本机无夸克账号)
+
+接口事实见 `docs/QUARK_API.md`(2026-11-20 补了一批**无凭据实测**:签名校验、错误码语义、
+扫码轮询的等待态、换 token 主机可走 https)。这条链路是**逆向的 TV 端接口**,夸克没有面向个人的开放 API。
+
+**已经实测过的(不需要账号)**:
+- 签名真的被校验:缺签名头回 `errno 10001 公参缺失…`,`x-pan-token` 填错回 `10001 签名验证失败`;
+- `10001` 是**签名 / 公参被拒**,`11001` 才是 token 失效 —— 这条纠正了 OpenList 注释里的推断(它把两个码都当 token 过期);
+- 扫码轮询的「继续等」是 `errno 11003 用户未确认授权`,`11002` 才是二维码过期;
+- 换 token 的第三方主机 `api.extscreen.com` **支持 https**,响应与明文 http 完全一致(本项目用 https);
+- `app_ver` / `channel` 不参与校验(`9.9.9` / `FOO` 与默认值结果一致)。
+
+**还没验过的(要真账号)**:
+- **列目录的字段形状**:`duration` 的单位(秒还是毫秒)、`created_at` / `updated_at` 是否确为毫秒。
+  解码按「毫秒」实现(`types.go:59-67` 的旁证),但真实响应没看过;`duration` 因此**不写进时长**
+  (`QuarkSourceProvider.enrich` 的 `durations` 恒为空),显示交给内核探。
+- **直链能否直接用**:`download_url` 不带任何请求头是否接受 `Range`(`QuarkDownloadLink.headers` 现在是**空的**);
+  401 / 403 时的真实响应、直链有效期。
+- **刷新是否轮换 `refresh_token`**:参考实现都按「轮换」处理并落盘,本项目照此实现(`QuarkConnection.refreshed`),
+  但轮换本身没验。
+- **fid 的形状**:`fid` 被当**字符串**处理(不转 `UInt64`),因为第三方资料显示夸克 id 是 32 位 hex。
+  若真实值其实是纯数字,现在这套照样工作(字符串比较),⛔ 不要为「好看」改成数字类型。
+- **频控阈值**:两份参考实现都没有退避逻辑,本项目按「串行 + ≥500ms」保守处理(§5),真实阈值未知。
+
+已知边界:
+
+- **只读**。TV 端没有建目录 / 改名 / 删除 / 移动(`docs/QUARK_API.md` §9),所以:
+  `FileSource.supportsDeletingFiles` = false(界面只给「隐藏」)、`supportsRenamingSeries` = false;
+  绕过界面直接真删会抛 `QuarkError.invalidRequest` 且**不发任何请求**。
+  要写操作只能再接一套网页 Cookie 接口 —— 那会重新引入限速,本阶段不做(§9 第 2 条)。
+- **没有路径,由客户端拼虚拟路径**。条目在来源内的 id = `SHA-256(来源 id + "quark|" + 虚拟路径)` 前 8 字节
+  (`QuarkPath.fileID`)。代价与本地文件夹那条一样:**网盘里改名 / 挪目录后 id 变**,
+  续播记录与刮削缓存跟不过去(见下文「本地文件夹来源」的同类说明)。
+- **路径 → fid 的索引只在内存里**(`QuarkConnection.pathIndex`,⛔ 不落盘:映射错一位就会播到别的文件)。
+  冷启动直接播某条续播记录时要从根按路径走一遍(每层一次请求,间隔 ≥ 500ms);
+  浏览过的目录都在索引里,所以正常浏览不额外花请求。
+- **不取封面、不取时长**:列表里的 `thumbnail_url` 是临时签名地址,只对图片条目有意义;
+  `duration` 单位未知。两者都留给 TMDB 刮削与内核。
+- **不支持从指定位置起流**:`QuarkSessionPreparer.makeSession(startTimeTicks:)` 带值即抛错。
+- **不实现转码直链**(`method=streaming`):它不是原画,还要兜「取不到 url 就回退」(§6.2)。
+- **`fs_id` 跨网盘不唯一**:倍速 / 弹幕 / 手动片头片尾都带 `quark` 隔离段,⛔ 不要与另外两家合并。
+- **换 token 经过第三方服务**:登录凭据要经过 `api.extscreen.com`(不是夸克官方域名),UI 必须写明(已在扫码屏)。
+
+**命名债**:被四家共用的纯函数仍叫 `BaiduPan…`(合成器 / 剧集布局 / 排序 / 字幕配对 / 路径工具 / 刮削器),
 文件条目仍用 `BaiduPanFile`;`SourceProfile.emby` 仍复用 `ServerProfile`。改名是纯机械活,按需再做。
 
 ### Q29 打包了 libmpv 的 App 在没有 Homebrew 的 Mac 上是否正常

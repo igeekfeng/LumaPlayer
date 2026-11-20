@@ -143,6 +143,12 @@ struct BrowseView: View {
                 container: container, source: source, refreshToken: refreshToken,
                 viewModel: fileSourceViewModels.viewModel(for: .pan115(source)))
                 .id(source.id)
+        case .some(.quark(let source)):
+            // 夸克与 115 同一条路径(扫码换 token),按来源 id 重建的理由同上。
+            QuarkSourceView(
+                container: container, source: source, refreshToken: refreshToken,
+                viewModel: fileSourceViewModels.viewModel(for: .quark(source)))
+                .id(source.id)
         case .some(.localFolder(let source)):
             // 与百度同一个浏览页(`FileSourceBrowserView`),没有授权那两屏;按来源 id 重建的理由同上。
             LocalFolderSourceView(
@@ -350,6 +356,7 @@ struct BrowseView: View {
         case .some(.emby): return "server.rack"
         case .some(.baiduPan): return nil
         case .some(.pan115): return nil
+        case .some(.quark): return "qrcode"
         case .some(.localFolder): return "folder.fill"
         case .none: return "rectangle.stack.badge.plus"
         }
