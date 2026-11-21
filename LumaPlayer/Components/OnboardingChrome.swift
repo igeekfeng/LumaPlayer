@@ -2,9 +2,10 @@ import SwiftUI
 
 // 表单外壳:添加服务器 / 重新登录 / 编辑服务器共用。
 
-/// 表单顶部:图标 + 标题 + 一行说明。
+/// 表单顶部:图标 + 标题。
 ///
-/// 图标有三种来源:SF Symbol(`systemImage:`),或带自家品牌配色的矢量标记
+/// ⚠️ `subtitle` **只收错误 / 阻塞原因**(例如「连不上」),⛔ 不收「这一页是干什么的」这类讲解 ——
+/// 表单自己的字段已经说明了。图标有三种来源:SF Symbol(`systemImage:`),或带自家品牌配色的矢量标记
 /// (`pan115Title:` / `baiduTitle:`)——后者⛔ 不能再套 tint 着色,否则官方配色会被强调色盖掉。
 struct OnboardingFormHeader: View {
     private enum Mark {
@@ -15,21 +16,22 @@ struct OnboardingFormHeader: View {
 
     private let mark: Mark
     let title: String
-    let subtitle: String
+    /// 只有一条时(错误 / 阻塞)才显示
+    let subtitle: String?
 
-    init(systemImage: String, title: String, subtitle: String) {
+    init(systemImage: String, title: String, subtitle: String? = nil) {
         self.mark = .symbol(systemImage)
         self.title = title
         self.subtitle = subtitle
     }
 
-    init(pan115Title title: String, subtitle: String) {
+    init(pan115Title title: String, subtitle: String? = nil) {
         self.mark = .pan115
         self.title = title
         self.subtitle = subtitle
     }
 
-    init(baiduTitle title: String, subtitle: String) {
+    init(baiduTitle title: String, subtitle: String? = nil) {
         self.mark = .baidu
         self.title = title
         self.subtitle = subtitle
@@ -41,10 +43,13 @@ struct OnboardingFormHeader: View {
                 .padding(.bottom, Metrics.spacingXS)
             Text(title)
                 .font(.title2.weight(.semibold))
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Metrics.spacingXL)

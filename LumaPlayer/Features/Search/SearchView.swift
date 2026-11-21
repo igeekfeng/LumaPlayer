@@ -87,11 +87,7 @@ struct SearchView: View {
                 }
             }
         } else {
-            ContentUnavailableView(
-                "搜索",
-                systemImage: "magnifyingglass",
-                description: Text("在窗口右上角的搜索框(⌘F)输入关键词后按回车,在「\(server.displayName)」上搜索。")
-            )
+            ContentUnavailableView("搜索", systemImage: "magnifyingglass")
         }
     }
 }

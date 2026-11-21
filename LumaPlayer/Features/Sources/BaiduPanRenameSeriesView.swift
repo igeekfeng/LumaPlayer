@@ -98,7 +98,7 @@ struct BaiduPanRenameSeriesView: View {
 
     private var candidatesPane: some View {
         VStack(alignment: .leading, spacing: Metrics.spacingM) {
-            Text("TMDB 上找到 \(viewModel.candidates.count) 个可能,选一个再继续。")
+            Text("TMDB · \(viewModel.candidates.count) 个结果")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             List(viewModel.candidates, id: \.tmdbID, selection: $selection) { match in
@@ -140,7 +140,7 @@ struct BaiduPanRenameSeriesView: View {
                     Text(summary(plan))
                         .font(.callout)
                     if plan.isFlat {
-                        Text("剧根下没有季文件夹 —— 这些集按第 1 季(S01)处理,不新建 Season 01 目录。")
+                        Text("按第 1 季处理")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -218,13 +218,14 @@ struct BaiduPanRenameSeriesView: View {
                     Text("改好了 \(outcome.succeeded.count) 项"
                          + (outcome.failures.isEmpty ? "" : ",失败 \(outcome.failures.count) 项"))
                         .font(.callout)
-                    Text("本次提交 \(outcome.submittedBatches) 次请求。")
+                    Text("提交 \(outcome.submittedBatches) 次请求")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if outcome.stoppedEarly {
-                        Text("中途停下:后面的批次没有再提交,已经改好的部分可以撤销。")
+                        Label("中途停下", systemImage: "pause.circle")
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .help("后面的批次没有再提交,已经改好的部分可以撤销。")
                     }
                     if !outcome.failures.isEmpty {
                         VStack(alignment: .leading, spacing: Metrics.spacingS) {

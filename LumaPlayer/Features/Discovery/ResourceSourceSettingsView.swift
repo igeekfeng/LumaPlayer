@@ -30,7 +30,7 @@ struct ResourceSourceSettingsView: View {
                         .foregroundStyle(.orange)
                 }
                 if sources.isEmpty {
-                    Text("还没有搜索源。加一个 Telegram 公开频道,或填一个自建的 PanSou 实例地址。")
+                    Text("没有搜索源")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(sources) { source in
@@ -40,12 +40,12 @@ struct ResourceSourceSettingsView: View {
             } header: {
                 HStack {
                     Text("搜索源")
+                    InfoHint(text: "本模块自己不带资源:它把关键词发给这些源,再把结果归一化后展示。"
+                        + "源的可信度、可用性由你自己判断 —— 转存前请确认链接来源。")
                     Spacer()
                     Button("添加…") { addSource() }
                         .controlSize(.small)
                 }
-            } footer: {
-                Text("本模块自己不带资源:它把关键词发给这些源,再把结果归一化后展示。源的可信度、可用性由你自己判断 —— 转存前请确认链接来源。")
             }
         }
         .formStyle(.grouped)

@@ -241,9 +241,7 @@ private struct HomeLibrariesRow: View {
                 VStack(alignment: .leading, spacing: Metrics.spacingS) {
                     Text(Self.title)
                         .font(.title3.bold())
-                    Text("这台服务器没有媒体库入口。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    InfoHint(text: "这台服务器没有媒体库入口。")
                 }
             } else {
                 MediaShelf(title: Self.title) {
@@ -360,11 +358,7 @@ private struct HomeEmptyState: View {
             resume: sections.resume.state,
             latest: sections.latest.values.map(\.state)
         ) {
-            ContentUnavailableView(
-                "这台服务器上还没有可看的内容",
-                systemImage: "film.stack",
-                description: Text("媒体库里添加了影片或剧集后,会出现在这里。")
-            )
+            ContentUnavailableView("这台服务器上还没有可看的内容", systemImage: "film.stack")
             .padding(.top, Metrics.spacingXL)
         }
     }

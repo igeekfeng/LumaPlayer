@@ -47,9 +47,7 @@ struct AddServerView: View {
 
             OnboardingFormHeader(
                 systemImage: "server.rack",
-                title: "添加 Emby 服务器",
-                subtitle: "连接成功后会记住登录信息,令牌失效时自动重新登录。"
-            )
+                title: "添加 Emby 服务器")
 
             Form {
                 Section {
@@ -76,9 +74,8 @@ struct AddServerView: View {
                             style: .warning
                         )
                     } else {
-                        Text("可省略 https:// 与端口;局域网地址连不上 HTTPS 时会自动尝试 HTTP。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        InfoHint(text: "可省略 https:// 与端口;"
+                            + "局域网地址连不上 HTTPS 时会自动尝试 HTTP。")
                     }
                 }
 

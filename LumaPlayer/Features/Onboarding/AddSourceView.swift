@@ -62,9 +62,7 @@ struct AddSourceView: View {
         VStack(spacing: 0) {
             OnboardingFormHeader(
                 systemImage: "rectangle.stack.badge.plus",
-                title: "添加播放来源",
-                subtitle: "选择要从哪里播放。Emby 服务器、百度网盘与本地文件夹可以同时存在,随时切换。"
-            )
+                title: "添加播放来源")
 
             VStack(spacing: Metrics.spacingM) {
                 ForEach(SourceKind.allCases) { kind in
@@ -73,14 +71,8 @@ struct AddSourceView: View {
                     } label: {
                         HStack(spacing: Metrics.spacingM) {
                             kindIcon(kind)
-                            VStack(alignment: .leading, spacing: Metrics.spacingXXS) {
-                                Text(kind.title)
-                                    .font(.headline)
-                                Text(kind.subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.leading)
-                            }
+                            Text(kind.title)
+                                .font(.headline)
                             Spacer(minLength: Metrics.spacingM)
                             Image(systemName: "chevron.right")
                                 .foregroundStyle(.tertiary)
@@ -147,16 +139,6 @@ enum SourceKind: String, CaseIterable, Identifiable, Hashable {
         case .pan115: return "115 网盘"
         case .quark: return "夸克网盘"
         case .localFolder: return "本地文件夹"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .emby: return "连接到自建的 Emby / Jellyfin 兼容服务器。"
-        case .baiduPan: return "播放开放平台应用目录下的网盘文件。"
-        case .pan115: return "扫码登录后播放整个 115 网盘里的文件。"
-        case .quark: return "扫码登录后播放整个夸克网盘里的文件(只读)。"
-        case .localFolder: return "播放本机、外接盘或已挂载网络卷上某个文件夹里的视频。"
         }
     }
 

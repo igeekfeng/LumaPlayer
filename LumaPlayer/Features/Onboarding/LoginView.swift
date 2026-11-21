@@ -17,7 +17,7 @@ struct LoginView: View {
             OnboardingFormHeader(
                 systemImage: "person.badge.key",
                 title: "重新登录",
-                subtitle: "\(viewModel.serverDisplayName) 的登录已失效,请重新输入密码。"
+                subtitle: "\(viewModel.serverDisplayName) 的登录已失效"
             )
 
             Form {

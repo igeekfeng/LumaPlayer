@@ -198,26 +198,23 @@ struct FileSourceBrowserView: View {
             if viewModel.isSearchingDirectory, !viewModel.items.isEmpty {
                 ContentUnavailableView {
                     Label("没有匹配「\(viewModel.searchQuery)」的条目", systemImage: "magnifyingglass")
-                } description: {
-                    Text("只在已取回的这一层里找。后面的页还没加载,可以清空搜索后继续往下翻。")
                 } actions: {
                     Button("清空搜索") { viewModel.searchQuery = "" }
                 }
             } else if isFilterHidingEverything {
                 ContentUnavailableView {
                     Label("当前筛选下没有条目", systemImage: "line.3.horizontal.decrease.circle")
-                } description: {
-                    Text("这个目录里有内容,只是都被「\(viewModel.watchFilter.title)」这一档筛掉了。")
                 } actions: {
                     Button("显示全部") { viewModel.setWatchFilter(.all) }
                 }
             } else {
                 ContentUnavailableView {
                     Label(emptyTitle, systemImage: emptySymbol)
-                } description: {
-                    Text(emptyHint)
                 } actions: {
-                    Button("刷新") { Task { await viewModel.refreshFiles() } }
+                    HStack(spacing: Metrics.spacingS) {
+                        Button("刷新") { Task { await viewModel.refreshFiles() } }
+                        InfoHint(text: emptyHint)
+                    }
                 }
             }
         } else {
@@ -349,7 +346,7 @@ struct FileSourceBrowserView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("排序(只重排已取回的条目,不重新请求目录)")
+        .help("排序")
         .accessibilityLabel("排序:\(viewModel.sortOrder.title)")
     }
 
@@ -370,7 +367,7 @@ struct FileSourceBrowserView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("按观看状态筛选(只筛已取回的条目,不重新请求目录)")
+        .help("按观看状态筛选")
         .accessibilityLabel("筛选:\(viewModel.watchFilter.title)")
     }
 
@@ -479,29 +476,25 @@ struct FileSourceBrowserView: View {
 
     private var emptyHint: String {
         guard viewModel.items.isEmpty else {
-            return "这些条目只是在本机被隐藏了,\(viewModel.source.storageNoun)里的文件都还在。"
-                + "设置 →「已隐藏」里可以逐条恢复。"
+            return "条目只是在本机被隐藏了,文件都还在;设置 →「已隐藏」里可以逐条恢复。"
         }
         guard case .baiduPan = viewModel.source else {
             // 115 / 本地文件夹:没有应用目录那层概念,只有「这层是空的」
-            return "这一层没有可播的文件。把视频放进这个文件夹,再回来刷新。"
+            return "这一层没有可播的文件。"
         }
         let name = viewModel.folderName ?? "应用目录"
         // 应用目录根是空的,多半是应用目录还没建出来
         guard viewModel.currentDirectory == viewModel.rootDirectory else {
-            return "这一层没有可播的文件。往上一级看看,或者把视频放进这个目录再回来刷新。"
+            return "这一层没有可播的文件。"
         }
-        return "第三方应用只能访问网盘里的「我的应用数据/\(name)」,访问不到其它地方。"
-            + "如果网盘里还看不到这个目录:打开百度网盘的「我的应用数据」,新建一个名为"
-            + " \(name) 的文件夹(名字要与开放平台控制台里的「应用名称」完全一致,"
-            + "包括大小写),再把视频放进去,然后回来刷新。"
-            + "也可能它还没生成 —— 网盘通常在应用第一次读取时自动建出这个目录。"
+        return "第三方应用只能访问网盘里的「我的应用数据/\(name)」。这个目录要由百度在首次读取时"
+            + "自动建出,或在「我的应用数据」里手动新建(名称与控制台「应用名称」完全一致,含大小写)。"
     }
 
     private var applicationRootHint: String {
         let name = viewModel.folderName ?? "应用目录"
-        return "百度没给出 /apps/\(name) 这个目录。请核对开放平台控制台里的「应用名称」"
-            + "与本 App 里填的完全一致,并确认网盘里的「我的应用数据/\(name)」确实存在。"
+        return "百度没给出 /apps/\(name)。核对控制台「应用名称」与这里填的完全一致,"
+            + "并确认网盘里存在「我的应用数据/\(name)」。"
     }
 }
 

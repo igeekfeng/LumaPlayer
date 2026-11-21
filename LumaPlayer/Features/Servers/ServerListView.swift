@@ -21,8 +21,6 @@ struct ServerListView: View {
             if sources.isEmpty {
                 ContentUnavailableView {
                     Label("没有播放来源", systemImage: "rectangle.stack.badge.plus")
-                } description: {
-                    Text("添加一个 Emby 服务器、百度网盘或本地文件夹开始使用。")
                 } actions: {
                     Button("添加来源…") { showsAddSheet = true }
                 }
@@ -102,10 +100,11 @@ struct ServerListView: View {
                         onDelete: { sourcePendingDeletion = source }
                     )
                 }
-            } footer: {
-                Text("单击切换当前来源,主窗口会跟着切到它。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            } header: {
+                HStack {
+                    Text("来源")
+                    InfoHint(text: "单击切换当前来源,主窗口会跟着切到它。")
+                }
             }
             Section {
                 Button {

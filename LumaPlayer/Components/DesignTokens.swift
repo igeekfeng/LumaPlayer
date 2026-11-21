@@ -49,6 +49,8 @@ enum Metrics {
     static let settingsWindowHeight: CGFloat = 420
     static let settingsValueWidth: CGFloat = 64
     static let colorSwatchSize: CGFloat = 22
+    /// ⓘ 说明气泡宽度:设置窗口内,长说明在这里完整换行,不挤成一条。
+    static let infoHintPopoverWidth: CGFloat = 300
 
     // MARK: 播放器控制栏
 

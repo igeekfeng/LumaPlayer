@@ -14,11 +14,7 @@ struct QuarkAuthorizationView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Metrics.spacingL) {
-                    OnboardingFormHeader(
-                        systemImage: "qrcode",
-                        title: "登录夸克网盘",
-                        subtitle: "用手机上的夸克 App 扫码。登录后 LumaPlayer 只读取网盘内容,不会修改文件。"
-                    )
+                    OnboardingFormHeader(systemImage: "qrcode", title: "登录夸克网盘")
 
                     qrPane
 

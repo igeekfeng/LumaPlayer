@@ -17,12 +17,17 @@ struct DanmakuSettingsView: View {
 
             Section {
                 Toggle("播放时自动加载弹幕", isOn: $store.settings.isEnabled)
-                Toggle("用文件指纹提高匹配准确度", isOn: $store.settings.usesFileFingerprint)
-            } footer: {
-                Text("关掉自动加载后,播放页默认不显示弹幕,可随时在播放页「弹幕」菜单或按 D 打开。\n"
-                    + "文件指纹 = 起播时对直连流多读 16 MB 算 MD5。它是「同一份文件」的硬证据,"
-                    + "准确度明显高于只按文件名猜;代价是多一次 16 MB 读取。"
-                    + "限速或按流量计费的服务器可以关掉,关掉后只按文件名匹配。")
+                HStack {
+                    Toggle("用文件指纹提高匹配准确度", isOn: $store.settings.usesFileFingerprint)
+                    InfoHint(text: "文件指纹 = 起播时对直连流多读 16 MB 算 MD5。它是「同一份文件」的"
+                        + "硬证据,准确度明显高于只按文件名猜;代价是多一次 16 MB 读取。"
+                        + "限速或按流量计费的服务器可以关掉,关掉后只按文件名匹配。")
+                }
+            } header: {
+                HStack {
+                    Text("弹幕")
+                    InfoHint(text: "关掉自动加载后,播放页默认不显示弹幕,可随时在播放页「弹幕」菜单或按 D 打开。")
+                }
             }
 
             Section("外观") {
@@ -52,9 +57,10 @@ struct DanmakuSettingsView: View {
                 Toggle("顶部弹幕", isOn: $store.settings.showsTop)
                 Toggle("底部弹幕", isOn: $store.settings.showsBottom)
             } header: {
-                Text("类型")
-            } footer: {
-                Text("字号以 1080p 画面为基准,随窗口大小等比缩放。弹幕太密时放不下的会直接略过,不会叠在一起。")
+                HStack {
+                    Text("类型")
+                    InfoHint(text: "字号以 1080p 画面为基准,随窗口大小等比缩放。弹幕太密时放不下的会直接略过,不会叠在一起。")
+                }
             }
 
             Section {
@@ -102,10 +108,11 @@ private struct DandanplayCredentialsSection: View {
                     .disabled(edited == saved || edited.appID.isEmpty != edited.appSecret.isEmpty)
             }
         } header: {
-            Text("弹弹play 官方")
-        } footer: {
-            Text("在 dev.dandanplay.com 注册开发者、创建应用并通过审核后获得。只用自建服务可以不填。"
-                + "只写在本机凭据文件里;AppSecret 只用于在本机计算请求签名,不会被发送出去。")
+            HStack {
+                Text("弹弹play 官方")
+                InfoHint(text: "在 dev.dandanplay.com 注册开发者、创建应用并通过审核后获得。只用自建服务可以不填。"
+                    + "只写在本机凭据文件里;AppSecret 只用于在本机计算请求签名,不会被发送出去。")
+            }
         }
         .task { await load() }
     }
@@ -200,10 +207,11 @@ private struct DanmakuSourcesSection: View {
                 Text(error).foregroundStyle(.red)
             }
         } header: {
-            Text("弹幕来源")
-        } footer: {
-            Text("播放时默认用这个来源匹配弹幕;播放页「弹幕」面板里可以临时为某一集换来源。"
-                + "各来源的匹配记录分开保存,互不影响。")
+            HStack {
+                Text("弹幕来源")
+                InfoHint(text: "播放时默认用这个来源匹配弹幕;播放页「弹幕」面板里可以临时为某一集换来源。"
+                    + "各来源的匹配记录分开保存,互不影响。")
+            }
         }
 
         Section {
@@ -229,17 +237,19 @@ private struct DanmakuSourcesSection: View {
                 .autocorrectionDisabled()
             HStack {
                 if !trimmedAddress.isEmpty, !addressIsValid {
-                    Text("地址要以 http:// 或 https:// 开头,不带 ? 与 #").foregroundStyle(.red)
+                    InfoHint(text: "地址要以 http:// 或 https:// 开头,不带 ? 与 #")
+                        .foregroundStyle(.red)
                 }
                 Spacer()
                 Button("添加") { Task { await add() } }
                     .disabled(!isLoaded || trimmedName.isEmpty || !addressIsValid)
             }
         } header: {
-            Text("自建弹幕服务")
-        } footer: {
-            Text("弹弹play 兼容服务(如 danmu_api)不需要 AppId / AppSecret。"
-                + "这类服务的令牌写在 URL 路径里,地址要带上,如 http://127.0.0.1:9321/87654321。")
+            HStack {
+                Text("自建弹幕服务")
+                InfoHint(text: "弹弹play 兼容服务(如 danmu_api)不需要 AppId / AppSecret。"
+                    + "这类服务的令牌写在 URL 路径里,地址要带上,如 http://127.0.0.1:9321/87654321。")
+            }
         }
         .task { await load() }
     }

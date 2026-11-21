@@ -140,10 +140,11 @@ Scripts/          构建、打包、部署、隐私自检脚本
 
 测试 fixture 全部为合成数据，不含任何真实服务器地址、用户名或 token；接口行为类结论以实测为准。
 
-提交前请确保构建零 warning、测试全绿，并跑一次隐私自检：
+提交前请确保构建 zero warning、测试全绿，并跑一次隐私与界面文案自检：
 
 ```bash
 ./Scripts/check-privacy.sh
+./Scripts/check-ui-text.sh
 ```
 
 ## 已知限制

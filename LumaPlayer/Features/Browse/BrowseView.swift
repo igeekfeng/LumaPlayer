@@ -164,11 +164,7 @@ struct BrowseView: View {
                 viewModel: fileSourceViewModels.viewModel(for: .localFolder(source)))
                 .id(source.id)
         case .none:
-            ContentUnavailableView(
-                "没有选中的来源",
-                systemImage: "rectangle.stack.badge.plus",
-                description: Text("先在设置里添加一个 Emby 服务器、网盘或本地文件夹。")
-            )
+            ContentUnavailableView("没有选中的来源", systemImage: "rectangle.stack.badge.plus")
         }
     }
 
@@ -239,20 +235,13 @@ struct BrowseView: View {
                     })
             } else {
                 // 榜单来源没了(配置变更):如实说,⛔ 不显示一个空网格
-                ContentUnavailableView(
-                    "这个榜单暂时不可用",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text("「\(board.title)」的来源(\(board.source.displayName))没有启用。"))
+                ContentUnavailableView("这个榜单暂时不可用", systemImage: "exclamationmark.triangle")
             }
         }
     }
 
     private var missingSourcePlaceholder: some View {
-        ContentUnavailableView(
-            "需要先选择一个 Emby 来源",
-            systemImage: "server.rack",
-            description: Text("这一页属于 Emby 服务器。在顶栏切回一个 Emby 来源再试。")
-        )
+        ContentUnavailableView("需要先选择一个 Emby 来源", systemImage: "server.rack")
     }
 
     // MARK: - 顶栏
@@ -312,7 +301,7 @@ struct BrowseView: View {
         .buttonBorderShape(.circle)
         .controlSize(.large)
         .fixedSize()
-        .help("看什么(热门与新片)/ 找资源(网盘分享搜索)")
+        .help("看什么 / 找资源")
         .accessibilityLabel("看什么与找资源")
     }
 
@@ -353,7 +342,7 @@ struct BrowseView: View {
         .buttonBorderShape(.circle)
         .controlSize(.large)
         .fixedSize()
-        .help("来源:\(currentSourceName)。切换来源(⌘1…⌘9);「管理来源…」在设置窗口(⌘,)")
+        .help("来源:\(currentSourceName)\n切换来源 ⌘1…⌘9")
         .accessibilityLabel("来源:\(currentSourceName)")
     }
 

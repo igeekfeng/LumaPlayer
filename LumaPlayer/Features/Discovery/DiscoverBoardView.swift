@@ -35,7 +35,7 @@ struct DiscoverBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: board.title, subtitle: "共 \(viewModel.titles.count) 条已加载")
+            PageHeader(title: board.title)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -49,11 +49,9 @@ struct DiscoverBoardView: View {
         switch viewModel.state {
         case .idle, .loading:
             SkeletonGrid()
-        case .failed(let failure):
+        case .failed:
             ContentUnavailableView {
                 Label("加载失败", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(failure.message)
             } actions: {
                 Button("重试") {
                     Task { await viewModel.reload() }
@@ -64,8 +62,6 @@ struct DiscoverBoardView: View {
             if titles.isEmpty {
                 ContentUnavailableView {
                     Label("这个榜单现在是空的", systemImage: "theatermasks")
-                } description: {
-                    Text("来源暂时没有返回条目。")
                 }
             } else {
                 grid

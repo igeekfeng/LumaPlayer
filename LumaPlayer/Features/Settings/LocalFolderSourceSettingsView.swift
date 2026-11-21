@@ -24,11 +24,7 @@ struct LocalFolderSourceSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            OnboardingFormHeader(
-                systemImage: "folder.fill",
-                title: "本地文件夹",
-                subtitle: "只读取这个文件夹里的视频,不会删除或改动你的文件。"
-            )
+            OnboardingFormHeader(systemImage: "folder.fill", title: "本地文件夹")
 
             Form {
                 if let errorMessage {
@@ -66,9 +62,10 @@ struct LocalFolderSourceSettingsView: View {
             TextField("名称", text: $displayName, prompt: Text(source.rootName))
                 .autocorrectionDisabled()
         } header: {
-            Text("名称")
-        } footer: {
-            Text("显示在来源列表、工具栏的来源菜单与浏览页最外层。留空则用文件夹名。")
+            HStack {
+                Text("名称")
+                InfoHint(text: "显示在来源列表、工具栏的来源菜单与浏览页最外层。留空则用文件夹名。")
+            }
         }
     }
 
@@ -85,10 +82,11 @@ struct LocalFolderSourceSettingsView: View {
                     .buttonStyle(.borderless)
             }
         } header: {
-            Text("文件夹")
-        } footer: {
-            Text("文件夹被移动、外接盘换了,或提示没有访问权限时,在这里重新选一次。"
-                + "换过去之后,路径相同的文件仍记得看到哪儿、看没看过。")
+            HStack {
+                Text("文件夹")
+                InfoHint(text: "文件夹被移动、外接盘换了,或提示没有访问权限时,在这里重新选一次。"
+                    + "换过去之后,路径相同的文件仍记得看到哪儿、看没看过。")
+            }
         }
     }
 

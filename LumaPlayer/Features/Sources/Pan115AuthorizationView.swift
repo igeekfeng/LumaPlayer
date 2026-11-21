@@ -14,11 +14,7 @@ struct Pan115AuthorizationView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Metrics.spacingL) {
-                    OnboardingFormHeader(
-                        systemImage: "qrcode",
-                        title: "登录 115 网盘",
-                        subtitle: "用手机上的 115 App 扫码。登录后 LumaPlayer 只读取网盘内容,不会修改文件。"
-                    )
+                    OnboardingFormHeader(systemImage: "qrcode", title: "登录 115 网盘")
 
                     qrPane
 

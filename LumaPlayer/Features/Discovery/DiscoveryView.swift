@@ -28,7 +28,7 @@ struct DiscoveryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "看什么", subtitle: "热门与新片,点一下去搜资源")
+            PageHeader(title: "看什么")
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -66,11 +66,9 @@ struct DiscoveryView: View {
     /// 一组榜单都出不来时的引导页。⛔ 不显示一堆永远空着的货架。
     @ViewBuilder
     private var emptyContent: some View {
-        if let needsToken = viewModel.unavailable.first(where: \.needsToken) {
+        if viewModel.unavailable.contains(where: \.needsToken) {
             ContentUnavailableView {
                 Label("需要 TMDB Token", systemImage: "theatermasks")
-            } description: {
-                Text(needsToken.message)
             } actions: {
                 // ⛔ 不用 `NSApp.sendAction("showSettingsWindow:")`:那个 selector 名随系统版本变过,
                 // 项目里已有的入口统一走 `SettingsLink` / `openSettings`
@@ -82,8 +80,6 @@ struct DiscoveryView: View {
         } else {
             ContentUnavailableView {
                 Label("暂时没有榜单", systemImage: "theatermasks")
-            } description: {
-                Text(viewModel.lastFailure ?? "榜单来源都连不上,过一会儿再试。")
             } actions: {
                 Button("重试") {
                     Task { await viewModel.reload() }

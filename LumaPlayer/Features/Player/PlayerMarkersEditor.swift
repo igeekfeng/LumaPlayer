@@ -38,23 +38,17 @@ struct PlayerMarkersEditor: View {
         PlayerModalCard(
             title: "片头与片尾",
             systemImage: "flag.checkered",
-            subtitle: "同一部剧的每一集共用这份标记。输入 hh:mm:ss、mm:ss 或秒数,留空表示不标。",
+            hint: "同一部剧的每一集共用这份标记。",
             width: 460,
             onClose: onClose
         ) {
             VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: Metrics.spacingL) {
-                section(
-                    "片头",
-                    detail: "播放到片头区间时出现「跳过片头」,跳过即跳到终点。起点留空按 00:00 计。"
-                ) {
+                section("片头") {
                     fieldRow("起点", text: $introStartText, placeholder: "留空 = 00:00")
                     fieldRow("终点", text: $introEndText)
                 }
-                section(
-                    "片尾",
-                    detail: "到这里自动换下一集;提前 10 秒出现「下一集」并开始倒计时。"
-                ) {
+                section("片尾") {
                     VStack(alignment: .leading, spacing: Metrics.spacingS) {
                         Picker("片尾方式", selection: $creditsMode) {
                             ForEach(CreditsMode.allCases, id: \.self) { mode in
@@ -99,19 +93,12 @@ struct PlayerMarkersEditor: View {
 
     private func section(
         _ title: String,
-        detail: String,
         @ViewBuilder content: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: Metrics.spacingS) {
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                Text(title)
-                    .font(.subheadline)
-                    .bold()
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(title)
+                .font(.subheadline)
+                .bold()
             content()
         }
     }

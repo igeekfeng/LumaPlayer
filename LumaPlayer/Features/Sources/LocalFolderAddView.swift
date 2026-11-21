@@ -17,12 +17,7 @@ struct LocalFolderAddView: View {
         VStack(spacing: 0) {
             backBar
             Divider()
-            OnboardingFormHeader(
-                systemImage: "folder.fill",
-                title: "添加本地文件夹",
-                subtitle: "选择放视频的文件夹(本机、外接盘或已挂载的网络卷都可以)。"
-                    + "LumaPlayer 只读取,不会删除或改动里面的文件。"
-            )
+            OnboardingFormHeader(systemImage: "folder.fill", title: "添加本地文件夹")
 
             Form {
                 if let errorMessage {
@@ -53,7 +48,7 @@ struct LocalFolderAddView: View {
                 } header: {
                     Text("名称")
                 } footer: {
-                    Text("显示在来源列表与工具栏的来源菜单里。留空则用文件夹名。")
+                    InfoHint(text: "显示在来源列表与工具栏的来源菜单里。留空则用文件夹名。")
                 }
             }
             .formStyle(.grouped)

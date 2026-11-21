@@ -32,7 +32,7 @@ struct SubtitlePickerSheet: View {
         PlayerModalCard(
             title: "搜索在线字幕",
             systemImage: "captions.bubble",
-            subtitle: "从 assrt(伪射手)搜到的字幕会下载到本机,选中后立刻挂到当前视频。",
+            hint: "字幕来自 assrt,选中后立刻挂到当前视频。",
             width: 600,
             onClose: onClose
         ) {
@@ -85,7 +85,7 @@ struct SubtitlePickerSheet: View {
                     }
                 }
             } else if didSearch, results.isEmpty {
-                Text("没有搜到。换个关键词(片名 / 剧名,中文或原名都行)再试。")
+                Text("没有搜到")
                     .foregroundStyle(.secondary)
             }
             ForEach(results) { result in

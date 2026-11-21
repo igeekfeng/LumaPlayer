@@ -37,11 +37,7 @@ struct Pan115SourceSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            OnboardingFormHeader(
-                pan115Title: "115 网盘",
-                subtitle: "片库根决定进来时先落在哪个目录。一个来源一个 ——"
-                    + "想再要一个起点,就在来源列表里再加一个 115 来源(共用同一份登录)。"
-            )
+            OnboardingFormHeader(pan115Title: "115 网盘")
 
             if isLoading {
                 ProgressView()
@@ -102,10 +98,11 @@ struct Pan115SourceSettingsView: View {
             TextField("名称", text: $displayName, prompt: Text("115 网盘"))
                 .autocorrectionDisabled()
         } header: {
-            Text("名称")
-        } footer: {
-            Text("显示在来源列表与工具栏的来源菜单里。有多个 115 来源时,"
-                + "起个能区分的名字(例如「115 网盘 · 电影」)。")
+            HStack {
+                Text("名称")
+                InfoHint(text: "显示在来源列表与工具栏的来源菜单里。有多个 115 来源时,"
+                    + "起个能区分的名字(例如「115 网盘 · 电影」)。")
+            }
         }
     }
 
@@ -130,20 +127,24 @@ struct Pan115SourceSettingsView: View {
                         .help("不再固定起点,进来时落在网盘根")
                 }
             } else {
-                Text("还没有片库根,进来时会落在网盘根。")
-                    .foregroundStyle(.secondary)
-                Button {
-                    showsDirectoryPicker = true
-                } label: {
-                    Label("从网盘选择…", systemImage: "plus")
+                HStack {
+                    Text("未设置,落在网盘根")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        showsDirectoryPicker = true
+                    } label: {
+                        Label("从网盘选择…", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.plain)
             }
         } header: {
-            Text("片库根")
-        } footer: {
-            Text("片库根是网盘里的一个起点目录(例如 /电影)。它只是「从哪开始」的书签,"
-                + "不影响能访问什么 —— 浏览页也不会退到它之上,它就是那一页的最外层。")
+            HStack {
+                Text("片库根")
+                InfoHint(text: "片库根是网盘里的一个起点目录(例如 /电影),只是「从哪开始」的书签,"
+                    + "不影响能访问什么;浏览页也不会退到它之上。")
+            }
         }
     }
 
@@ -157,11 +158,12 @@ struct Pan115SourceSettingsView: View {
                 showsSignOutConfirmation = true
             }
         } header: {
-            Text("登录")
-        } footer: {
-            Text("登录是**所有 115 来源共用**的:退出之后,每个 115 来源都会回到扫码那一屏。"
-                + "重新扫码会用「\(Pan115AuthorizationApp.default.displayName)」渠道,与网页端分属不同组、通常不再互顶;"
-                + "若上面仍显示「网页端(旧登录)」,退出登录再扫一次即可切换。")
+            HStack {
+                Text("登录")
+                InfoHint(text: "登录是所有 115 来源共用的:退出之后,每个 115 来源都会回到扫码那一屏。"
+                    + "重新扫码会用「\(Pan115AuthorizationApp.default.displayName)」渠道,与网页端分属不同组、"
+                    + "通常不再互顶;若上面仍显示「网页端(旧登录)」,退出登录再扫一次即可切换。")
+            }
         }
     }
 

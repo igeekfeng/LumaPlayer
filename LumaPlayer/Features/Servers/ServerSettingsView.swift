@@ -32,9 +32,7 @@ struct ServerSettingsView: View {
         VStack(spacing: 0) {
             OnboardingFormHeader(
                 systemImage: "server.rack",
-                title: "编辑服务器",
-                subtitle: "修改显示名称或服务器地址,已保存的登录令牌不受影响。"
-            )
+                title: "编辑服务器")
 
             Form {
                 Section {
@@ -85,9 +83,8 @@ struct ServerSettingsView: View {
         } else if showsInsecureWarning {
             OnboardingNotice(text: "该地址使用未加密的 HTTP,密码将以明文发送。", style: .warning)
         } else {
-            Text("修改地址会先重新连接探测;探测不通则不保存。若新地址不认已保存的令牌,需要重新登录。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            InfoHint(text: "修改地址会先重新连接探测;探测不通则不保存。"
+                + "若新地址不认已保存的令牌,需要重新登录。")
         }
     }
 

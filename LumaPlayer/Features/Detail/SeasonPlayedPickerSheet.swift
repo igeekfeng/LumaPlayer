@@ -54,14 +54,8 @@ struct SeasonPlayedPickerSheet: View {
             Image(systemName: "checkmark.circle")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: Metrics.spacingXS) {
-                Text("批量标记「\(seasonName)」")
-                    .font(.headline)
-                Text("勾选要改的分集,再统一提交。已经处于目标状态的集默认不勾 —— 不重复发请求。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("批量标记「\(seasonName)」")
+                .font(.headline)
         }
     }
 

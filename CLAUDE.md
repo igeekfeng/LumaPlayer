@@ -21,6 +21,20 @@ LumaPlayer:自用的 macOS 原生 Emby 播放器(SwiftUI + 自编 libmpv / gpu-n
 - token / 密码不进 `UserDefaults`、日志、诊断文件;日志与错误消息经 `SecretRedactor` 脱敏,且不含带认证参数的完整 URL。
 - ad-hoc 签名,凭据不进钥匙串;不要打开 hardened runtime(会让 `MPVPlayer()` 无声退出,Q18)。
 
+## 界面文案(硬规则)
+
+界面上**不写说明书**。功能靠图标、控件形状、摆放位置与分组表达,不靠一行灰字解释。
+
+- **页头只放标题**:`PageHeader` 没有副标题;`badge` 只收数据标签(「42 项」),不收句子。
+  表单 / 弹窗卡片(`OnboardingFormHeader` / `PlayerModalCard`)的 `subtitle` / `hint` 只收**错误与阻塞原因**。
+- **设置项不挂 `Section` footer 讲解**:取舍、副作用、生效时机一律挂 `InfoHint(text:)`(Section header 里的 ⓘ,
+  细节进悬停提示与旁白)。整句只是复述控件名 → 直接删。
+- **空态不给引导话术**:`ContentUnavailableView` 用「图标 + 一句标题 + 一个动作按钮」,不写 `description:` 讲怎么操作。
+- **错误说原因,命令说动作**:失败必须如实说并给下一步按钮(`docs/` 里那些取舍论证留在代码注释里,不搬到界面)。
+- 真的要写超过一句话时,问自己:这是不是该进 `.help(...)` / `InfoHint` / `docs/`。是的话就别放界面。
+
+判断标准:一句话超过 ~24 个汉字,基本就是说明书,该藏起来。`./Scripts/check-ui-text.sh` 会扫这三类位置。
+
 ## 容易踩的坑(细节见对应文档)
 
 - 播放只有 DirectStream / Transcode 两条路径,由服务端 `PlaybackInfo` 决定,没有 Direct Play;都不满足就抛错,别自己猜 URL(`API_CONTRACT.md` §4)。

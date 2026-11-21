@@ -69,16 +69,18 @@ private struct GeneralSettingsView: View {
     var body: some View {
         Form {
             Section {
-                TextField(
-                    "自定义 User-Agent",
-                    text: $customUserAgent,
-                    prompt: Text("留空使用默认 LumaPlayer/版本")
-                )
-                .autocorrectionDisabled()
+                HStack {
+                    TextField(
+                        "自定义 User-Agent",
+                        text: $customUserAgent,
+                        prompt: Text("默认 LumaPlayer/版本"))
+                        .autocorrectionDisabled()
+                    InfoHint(text: "部分服务器只放行白名单播放器,按 User-Agent 拒绝其余客户端拉流"
+                        + "(表现为能登录浏览、播放报无法识别的文件格式)。填写后对所有服务器的请求与播放"
+                        + "立即生效。请只在确有需要时使用,并自行承担服务器方的处置风险。")
+                }
             } header: {
                 Text("网络")
-            } footer: {
-                Text("部分服务器只放行白名单播放器,按 User-Agent 拒绝其余客户端拉流(表现为能登录浏览、播放报无法识别的文件格式)。填写后对所有服务器的请求与播放生效,改完立即生效。请只在确有需要时使用,并自行承担服务器方的处置风险。")
             }
 
             HomeAppearanceSection(preferences: homeAppearance)
@@ -98,9 +100,12 @@ private struct HomeAppearanceSection: View {
         Section {
             Toggle("显示首页推荐", isOn: $preferences.showsHeroRecommendations)
         } header: {
-            Text("首页")
-        } footer: {
-            Text("首页顶部轮播的随机推荐(每次给不同的一批没看过的内容)。关掉后首页顶部不显示这一块,也不再请求推荐数据;「我的媒体」「继续观看」和各媒体库的「最新」不受影响。对所有服务器生效,改完回到首页立即生效。")
+            HStack {
+                Text("首页")
+                InfoHint(text: "首页顶部轮播的随机推荐(每次给不同的一批没看过的内容)。关掉后首页顶部"
+                    + "不显示这一块,也不再请求推荐数据;「我的媒体」「继续观看」和各媒体库的「最新」"
+                    + "不受影响。对所有服务器生效,改完回到首页立即生效。")
+            }
         }
     }
 }
@@ -128,13 +133,15 @@ private struct MetadataScrapeSettingsView: View {
             SecureField(
                 "Read Access Token",
                 text: $token,
-                prompt: Text("粘贴 TMDB 的 API Read Access Token")
-            )
+                prompt: Text("TMDB API Read Access Token"))
             .autocorrectionDisabled()
 
             HStack {
                 statusLabel
                 Spacer()
+                InfoHint(text: "给百度网盘来源刮封面与简介。填 TMDB 账号 API 设置页里的 v4"
+                    + "「API Read Access Token」(一串 JWT),留空则不刮削。只写在本机凭据文件里,"
+                    + "不进偏好设置、不进备份。")
                 Button("清除") {
                     Task { await clear() }
                 }
@@ -146,8 +153,6 @@ private struct MetadataScrapeSettingsView: View {
             }
         } header: {
             Text("元数据刮削")
-        } footer: {
-            Text("给百度网盘来源刮封面与简介。填 TMDB 账号 API 设置页里的 v4「API Read Access Token」(一串 JWT),留空则不刮削。只写在本机凭据文件里,不进偏好设置、不进备份。")
         }
         .task { await load() }
     }
@@ -230,9 +235,12 @@ private struct PlaybackSettingsView: View {
                     range: Metrics.volumeRange, step: Metrics.volumeStep,
                     text: "\(Int(preferences.defaultVolume.rounded()))")
             } header: {
-                Text("起播")
-            } footer: {
-                Text("下一次开始播放时生效,不影响正在播放的视频。倍速还有一个更高的优先级:同一部剧本次运行里调过倍速,下一集沿用调过的那个值。跳转步长同时是方向键、控制栏前后跳按钮与菜单栏里的步长。")
+                HStack {
+                    Text("起播")
+                    InfoHint(text: "下一次开始播放时生效,不影响正在播放的视频。倍速还有一个更高的优先级:"
+                        + "同一部剧本次运行里调过倍速,下一集沿用调过的那个值。跳转步长同时是方向键、"
+                        + "控制栏前后跳按钮与菜单栏里的步长。")
+                }
             }
 
             Section {
@@ -242,9 +250,11 @@ private struct PlaybackSettingsView: View {
                     }
                 }
             } header: {
-                Text("字幕")
-            } footer: {
-                Text(preferences.subtitleMode.detail + "只决定起播时自动选哪条轨,播放中手动选过之后以手动的为准。字幕外观在「字幕」页。")
+                HStack {
+                    Text("字幕")
+                    InfoHint(text: preferences.subtitleMode.detail
+                        + "只决定起播时自动选哪条轨,播放中手动选过之后以手动的为准。字幕外观在「字幕」页。")
+                }
             }
 
             Section {
@@ -254,9 +264,10 @@ private struct PlaybackSettingsView: View {
                     }
                 }
             } header: {
-                Text("色彩")
-            } footer: {
-                Text(preferences.renderBackendPolicy.detail + "下一次开始播放时生效。")
+                HStack {
+                    Text("色彩")
+                    InfoHint(text: preferences.renderBackendPolicy.detail + "下一次开始播放时生效。")
+                }
             }
 
             Section {
@@ -264,15 +275,16 @@ private struct PlaybackSettingsView: View {
                 Toggle("自动播放下一集", isOn: $preferences.autoPlayNext)
                 Toggle("窗口置顶", isOn: $preferences.floatsOnTop)
             } header: {
-                Text("片头与连播")
-            } footer: {
-                Text("自动跳过片头默认关:片头标记不准时自动跳会直接吃掉正片开头,所以先给「跳过片头」按钮。这三项与播放窗口「播放选项」菜单里的是同一份状态。")
+                HStack {
+                    Text("片头与连播")
+                    InfoHint(text: "自动跳过片头默认关:片头标记不准时自动跳会直接吃掉正片开头,"
+                        + "所以先给「跳过片头」按钮。这三项与播放窗口「播放选项」菜单里的是同一份状态。")
+                }
             }
 
             Section {
                 HStack {
-                    Text("下次开始播放时生效。")
-                        .foregroundStyle(.secondary)
+                    InfoHint(text: "起播类偏好(倍速 / 步长 / 音量 / 字幕 / 渲染器)下次开始播放时生效。")
                     Spacer()
                     Button("恢复默认") { preferences.reset() }
                         .disabled(preferences.isDefault)
@@ -355,9 +367,10 @@ private struct SubtitleSettingsView: View {
                             ? "无" : store.style.outlineSize.formatted(.number.precision(.fractionLength(0...2))))
                 }
             } header: {
-                Text("边缘")
-            } footer: {
-                Text("亮画面上白字看不清时,换成「半透明底框」最稳。")
+                HStack {
+                    Text("边缘")
+                    InfoHint(text: "亮画面上白字看不清时,换成「半透明底框」最稳。")
+                }
             }
 
             Section {
@@ -371,17 +384,21 @@ private struct SubtitleSettingsView: View {
                     range: SubtitleStyle.secondaryGapRange, step: 0.5,
                     text: "\(store.style.secondaryGapLines.formatted(.number.precision(.fractionLength(1)))) 行")
             } header: {
-                Text("位置")
-            } footer: {
-                Text("百分比是相对画面高度。「副字幕间距」是副字幕相对主字幕上移的行数(1 行 = 主字幕行高):1.5 行时中间约留半行空隙,主字幕常折两行就调到 2 行以上。")
+                HStack {
+                    Text("位置")
+                    InfoHint(text: "百分比是相对画面高度。「副字幕间距」是副字幕相对主字幕上移的行数"
+                        + "(1 行 = 主字幕行高):1.5 行时中间约留半行空隙,主字幕常折两行就调到 2 行以上。")
+                }
             }
 
             Section {
                 Toggle("对 ASS 特效字幕也套用以上样式", isOn: $store.style.overridesASS)
             } header: {
-                Text("ASS 字幕")
-            } footer: {
-                Text("ASS 字幕自带颜色、字体与排版,默认只跟随这里的字号。打开后颜色、描边、位置也会强制覆盖,可能弄乱招牌、歌词这类特效排版;只建议在字幕组样式实在看不清时使用。")
+                HStack {
+                    Text("ASS 字幕")
+                    InfoHint(text: "ASS 字幕自带颜色、字体与排版,默认只跟随这里的字号。打开后颜色、描边、"
+                        + "位置也会强制覆盖,可能弄乱招牌、歌词这类特效排版;只建议在字幕组样式实在看不清时使用。")
+                }
             }
 
             Section {
@@ -392,6 +409,8 @@ private struct SubtitleSettingsView: View {
                 HStack {
                     tokenStatusLabel
                     Spacer()
+                    InfoHint(text: "播放页「字幕 › 搜索在线字幕…」用它搜索并下载字幕。到 assrt.net 注册后,"
+                        + "在用户面板复制 API 密钥;只写在本机凭据文件里。")
                     Button("清除") { Task { await saveAssrtToken("") } }
                         .disabled(savedAssrtToken.isEmpty && trimmedAssrtToken.isEmpty)
                     Button("保存") { Task { await saveAssrtToken(trimmedAssrtToken) } }
@@ -399,14 +418,11 @@ private struct SubtitleSettingsView: View {
                 }
             } header: {
                 Text("在线字幕(assrt)")
-            } footer: {
-                Text("播放页「字幕 › 搜索在线字幕…」用它搜索并下载字幕。到 assrt.net 注册后,在用户面板复制 API 密钥;只写在本机凭据文件里。")
             }
 
             Section {
                 HStack {
-                    Text("修改对正在播放的视频立即生效。")
-                        .foregroundStyle(.secondary)
+                    InfoHint(text: "修改对正在播放的视频立即生效。")
                     Spacer()
                     Button("恢复默认") { store.reset() }
                         .disabled(store.style == .default)
@@ -426,7 +442,7 @@ private struct SubtitleSettingsView: View {
     private var tokenStatusLabel: some View {
         switch tokenStatus {
         case .idle:
-            Text(savedAssrtToken.isEmpty ? "未配置,不能搜索在线字幕" : "已配置")
+            Text(savedAssrtToken.isEmpty ? "未配置" : "已配置")
                 .foregroundStyle(.secondary)
         case .saved:
             Text("已保存").foregroundStyle(.secondary)
@@ -536,16 +552,15 @@ private struct ImageCacheSettingsView: View {
                     }
                 }
                 HStack {
-                    Text("调小上限会立刻淘汰最久未用的图片。")
-                        .foregroundStyle(.secondary)
+                    InfoHint(text: "海报、背景图、分集剧照与网盘封面的本地副本,存在 App 的缓存目录里,"
+                        + "超出上限按最久未用淘汰;调小上限会立刻淘汰最久未用的图片。清空只删本机副本:"
+                        + "服务器上的图、观看记录与进度都不受影响,之后浏览时按需重新下载。")
                     Spacer()
                     Button("清空图片缓存") { confirmsClear = true }
                         .disabled(isBusy || (usage?.fileCount ?? 0) == 0)
                 }
             } header: {
                 Text("图片缓存")
-            } footer: {
-                Text("海报、背景图、分集剧照与网盘封面的本地副本,存在 App 的缓存目录里,超出上限按最久未用淘汰。清空只删本机副本:服务器上的图、观看记录与进度都不受影响,之后浏览时按需重新下载。")
             }
         }
         .formStyle(.grouped)
@@ -561,7 +576,7 @@ private struct ImageCacheSettingsView: View {
             Button("清空", role: .destructive) { Task { await clear() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("会删掉本机 \(usageText) 的图片副本。服务器上的图不受影响,之后浏览时重新下载;正在显示的图也不会突然消失。")
+            Text("会删掉本机 \(usageText) 的图片副本,之后浏览时重新下载。服务器上的图不受影响。")
         }
     }
 
@@ -602,10 +617,9 @@ private struct HiddenItemsSettingsView: View {
             if items.isEmpty {
                 ContentUnavailableView {
                     Label("没有隐藏的条目", systemImage: "eye.slash")
-                } description: {
-                    Text("在百度网盘片库里右键一张卡片选「删除…」、且不勾选"
-                        + "「同时删除网盘里的文件」时,条目会记在这里。"
-                        + "隐藏时本地观看记录会一并清掉,恢复后进度不会回来。")
+                } actions: {
+                    InfoHint(text: "在百度网盘片库里右键卡片选「删除…」、且不勾选"
+                        + "「同时删除网盘里的文件」时,条目记在这里。")
                 }
             } else {
                 List(items) { item in

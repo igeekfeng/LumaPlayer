@@ -30,7 +30,7 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: title, subtitle: countText) {
+            PageHeader(title: title, badge: countText) {
                 pageTools
             }
             pageContent
@@ -75,11 +75,7 @@ struct LibraryView: View {
     private var loadedContent: some View {
         if let list = viewModel.list, list.items.isEmpty {
             if viewModel.filter == .all {
-                ContentUnavailableView(
-                    "这个媒体库是空的",
-                    systemImage: "rectangle.stack",
-                    description: Text("服务器上没有可显示的项目。")
-                )
+                ContentUnavailableView("这个媒体库是空的", systemImage: "rectangle.stack")
             } else {
                 ContentUnavailableView {
                     Label("没有「\(viewModel.filter.title)」的内容", systemImage: "line.3.horizontal.decrease.circle")

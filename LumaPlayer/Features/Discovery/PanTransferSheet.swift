@@ -41,22 +41,21 @@ struct PanTransferSheet: View {
         if isLoading {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let share, !share.isTransferable {
-            // 认得出是分享、但本版本转存不了:把原因说清楚,⛔ 不提供转存按钮
-            Label {
-                Text(share.unsupportedReason ?? "这个链接本版本不能转存。")
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "info.circle")
+            // 认得出是分享、但本版本转存不了:⛔ 不提供转存按钮,原因只进悬停提示
+            ContentUnavailableView {
+                Label("不能转存", systemImage: "nosign")
+            } actions: {
+                InfoHint(text: share.unsupportedReason ?? "这个链接本版本不能转存。")
             }
-            .foregroundStyle(.secondary)
         } else if candidates.isEmpty {
-            Label {
-                Text("还没有添加能接这个分享的来源。先在设置里加一个对应的网盘。")
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle")
+            ContentUnavailableView {
+                Label("没有能接这个分享的来源", systemImage: "exclamationmark.triangle")
+            } actions: {
+                SettingsLink {
+                    Text("添加来源…")
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .foregroundStyle(.secondary)
         } else {
             form
         }
@@ -70,16 +69,12 @@ struct PanTransferSheet: View {
                         .tag(Optional(source.id))
                 }
             }
-            TextField("目标目录(留空 = 该来源的片库根)", text: $targetPath)
-                .textFieldStyle(.roundedBorder)
-            Text("目录必须已经在网盘里存在 —— 本应用不会替你建目录。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if case .baidu = share {
-                Text(PanResourceTransferService.baiduTransferUnsupportedReason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Metrics.spacingS) {
+                TextField("目标目录", text: $targetPath, prompt: Text("留空 = 片库根"))
+                    .textFieldStyle(.roundedBorder)
+                if case .baidu = share {
+                    InfoHint(text: PanResourceTransferService.baiduTransferUnsupportedReason)
+                }
             }
             if let errorMessage {
                 Text(errorMessage)

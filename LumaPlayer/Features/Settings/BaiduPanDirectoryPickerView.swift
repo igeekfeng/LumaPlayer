@@ -73,8 +73,6 @@ struct BaiduPanDirectoryPickerView: View {
         } else if folders.isEmpty {
             ContentUnavailableView {
                 Label("这一层没有子目录", systemImage: "folder")
-            } description: {
-                Text("可以直接把当前目录设为片库根,或者退回去换一层。")
             }
         } else {
             List(folders) { folder in

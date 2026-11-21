@@ -35,11 +35,7 @@ struct BaiduPanSourceSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            OnboardingFormHeader(
-                baiduTitle: "百度网盘",
-                subtitle: "片库根决定进来时先落在哪个目录。一个来源一个 ——"
-                    + "想再要一个起点,就在来源列表里再加一个百度来源。"
-            )
+            OnboardingFormHeader(baiduTitle: "百度网盘")
 
             if isLoading {
                 ProgressView()
@@ -100,10 +96,11 @@ struct BaiduPanSourceSettingsView: View {
             TextField("名称", text: $displayName, prompt: Text("百度网盘"))
                 .autocorrectionDisabled()
         } header: {
-            Text("名称")
-        } footer: {
-            Text("显示在来源列表与工具栏的来源菜单里。有多个百度来源时,"
-                + "起个能区分的名字(例如「百度网盘 · 电影」)。")
+            HStack {
+                Text("名称")
+                InfoHint(text: "显示在来源列表与工具栏的来源菜单里。有多个百度来源时,"
+                    + "起个能区分的名字(例如「百度网盘 · 电影」)。")
+            }
         }
     }
 
@@ -128,21 +125,24 @@ struct BaiduPanSourceSettingsView: View {
                         .help("不再固定起点,进来时落在应用目录")
                 }
             } else {
-                Text("还没有片库根,进来时会落在应用目录 /apps/\(source.folderName)。")
-                    .foregroundStyle(.secondary)
-                Button {
-                    showsDirectoryPicker = true
-                } label: {
-                    Label("从网盘选择…", systemImage: "plus")
+                HStack {
+                    Text("未设置")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        showsDirectoryPicker = true
+                    } label: {
+                        Label("从网盘选择…", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.plain)
             }
         } header: {
-            Text("片库根")
-        } footer: {
-            Text("片库根是应用目录**内部**的一个起点目录(例如 apps/LumaPlayer/Videos)。"
-                + "它只是「从哪开始」的书签,不影响授权范围;"
-                + "浏览页也不会退到它之上 —— 它就是那一页的最外层。")
+            HStack {
+                Text("片库根")
+                InfoHint(text: "片库根是应用目录**内部**的一个起点目录(例如 apps/LumaPlayer/Videos),"
+                    + "只是一个「从哪开始」的书签,不影响授权范围;浏览页也不会退到它之上。")
+            }
         }
     }
 
@@ -151,10 +151,10 @@ struct BaiduPanSourceSettingsView: View {
             Button("解除授权", role: .destructive) {
                 showsSignOutConfirmation = true
             }
+            .help("授权是所有百度来源共用的:解除之后,每个百度来源都会回到扫码那一屏,"
+                + "AppKey / 密钥与片库根都保留。")
         } header: {
             Text("授权")
-        } footer: {
-            Text("授权是**所有百度来源共用**的:解除之后,每个百度来源都会回到扫码那一屏。")
         }
     }
 

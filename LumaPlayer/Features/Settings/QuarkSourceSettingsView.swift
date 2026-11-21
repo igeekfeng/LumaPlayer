@@ -34,12 +34,7 @@ struct QuarkSourceSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            OnboardingFormHeader(
-                systemImage: "qrcode",
-                title: "夸克网盘",
-                subtitle: "片库根决定进来时先落在哪个目录。这个来源只读:"
-                    + "可以浏览与播放,不能修改网盘里的文件。"
-            )
+            OnboardingFormHeader(systemImage: "qrcode", title: "夸克网盘")
 
             if isLoading {
                 ProgressView()
@@ -100,10 +95,11 @@ struct QuarkSourceSettingsView: View {
             TextField("名称", text: $displayName, prompt: Text("夸克网盘"))
                 .autocorrectionDisabled()
         } header: {
-            Text("名称")
-        } footer: {
-            Text("显示在来源列表与工具栏的来源菜单里。有多个夸克来源时,"
-                + "起个能区分的名字(例如「夸克网盘 · 电影」)。")
+            HStack {
+                Text("名称")
+                InfoHint(text: "显示在来源列表与工具栏的来源菜单里。有多个夸克来源时,"
+                    + "起个能区分的名字(例如「夸克网盘 · 电影」)。")
+            }
         }
     }
 
@@ -128,20 +124,24 @@ struct QuarkSourceSettingsView: View {
                         .help("不再固定起点,进来时落在网盘根")
                 }
             } else {
-                Text("还没有片库根,进来时会落在网盘根。")
-                    .foregroundStyle(.secondary)
-                Button {
-                    showsDirectoryPicker = true
-                } label: {
-                    Label("从网盘选择…", systemImage: "plus")
+                HStack {
+                    Text("未设置,落在网盘根")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        showsDirectoryPicker = true
+                    } label: {
+                        Label("从网盘选择…", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.plain)
             }
         } header: {
-            Text("片库根")
-        } footer: {
-            Text("片库根是网盘里的一个起点目录(例如 /电影)。它只是「从哪开始」的书签,"
-                + "不影响能访问什么 —— 浏览页也不会退到它之上,它就是那一页的最外层。")
+            HStack {
+                Text("片库根")
+                InfoHint(text: "片库根是网盘里的一个起点目录(例如 /电影),只是「从哪开始」的书签,"
+                    + "不影响能访问什么;浏览页也不会退到它之上。")
+            }
         }
     }
 
@@ -155,10 +155,11 @@ struct QuarkSourceSettingsView: View {
                 showsSignOutConfirmation = true
             }
         } header: {
-            Text("登录")
-        } footer: {
-            Text("登录是**所有夸克来源共用**的:退出之后,每个夸克来源都会回到扫码那一屏。"
-                + "重新扫码会用同一套设备指纹换新凭据。")
+            HStack {
+                Text("登录")
+                InfoHint(text: "登录是所有夸克来源共用的:退出之后,每个夸克来源都会回到扫码那一屏。"
+                    + "重新扫码会用同一套设备指纹换新凭据。")
+            }
         }
     }
 

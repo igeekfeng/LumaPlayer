@@ -7,7 +7,8 @@ import SwiftUI
 struct PlayerModalCard<Content: View>: View {
     let title: String
     let systemImage: String
-    let subtitle: String
+    /// ⛔ 不收讲解句子:卡片里只留标题 + 图标 + 内容(见 `CLAUDE.md`「界面文案」)
+    var hint: String?
     /// 整张卡片的宽度:⛔ 必须约束在最外层,放在内容里会被 `maxWidth: .infinity` 的标题撑成整窗宽
     let width: CGFloat
     var onClose: () -> Void
@@ -21,13 +22,6 @@ struct PlayerModalCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             titleBar
                 .frame(maxWidth: .infinity)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Metrics.spacingXL)
-                .padding(.bottom, Metrics.spacingXL)
             Divider()
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -50,6 +44,9 @@ struct PlayerModalCard<Content: View>: View {
                     .foregroundStyle(.secondary)
                 Text(title)
                     .font(.headline)
+                if let hint {
+                    InfoHint(text: hint)
+                }
             }
             HStack {
                 closeButton

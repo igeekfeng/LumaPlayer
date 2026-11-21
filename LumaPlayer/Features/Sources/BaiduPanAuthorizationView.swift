@@ -28,43 +28,37 @@ struct BaiduPanAuthorizationView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Metrics.spacingL) {
-                    OnboardingFormHeader(
-                        baiduTitle: "接入百度网盘",
-                        subtitle: "在开放平台建一个应用,把它的 API Key、Secret Key 与应用目录名填进来。"
-                    )
+                    OnboardingFormHeader(baiduTitle: "接入百度网盘")
 
                     VStack(alignment: .leading, spacing: Metrics.spacingM) {
-                        Text("应用目录名")
-                            .font(.headline)
+                        HStack(spacing: Metrics.spacingS) {
+                            Text("应用目录名")
+                                .font(.headline)
+                            InfoHint(text: "第三方应用只能访问网盘里的 /我的应用数据/{这个目录}。"
+                                + "它必须与开放平台建应用时填的「应用名称」完全一致,包括大小写。"
+                                + "这一层不是普通文件夹:apps 是百度的保留关键字,自己在网盘里建不出来。"
+                                + "目录由百度在应用首次读取时自动建出;若还没出现,"
+                                + "就到网盘的「我的应用数据」里新建一个同名文件夹。")
+                        }
                         TextField("例如 LumaPlayer", text: $folderName)
                             .textFieldStyle(.roundedBorder)
-                        Text("第三方应用只能访问网盘里的 **/我的应用数据/{这个目录}**。"
-                             + "它必须与开放平台建应用时填的「应用名称」**完全一致,包括大小写**。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("⚠️ 这一层**不是普通文件夹**:`apps` 是百度的保留关键字,"
-                             + "自己在网盘里建不出来。目录由百度在应用首次读取时自动建出;"
-                             + "若还没出现,就到网盘的「我的应用数据」里新建一个同名文件夹。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: Metrics.spacingM) {
-                        Text("API Key 与 Secret Key")
-                            .font(.headline)
+                        HStack(spacing: Metrics.spacingS) {
+                            Text("API Key 与 Secret Key")
+                                .font(.headline)
+                            InfoHint(text: "控制台 → 我的应用 → 应用详情里能看到。"
+                                + "两串密钥只存在本机凭据文件里,不会上传给任何第三方。")
+                        }
                         TextField("API Key(AppKey)", text: $appKey)
                             .textFieldStyle(.roundedBorder)
                         SecureField("Secret Key", text: $secretKey)
                             .textFieldStyle(.roundedBorder)
-                        Text("控制台 → 我的应用 → 应用详情里能看到。两串密钥只存在本机凭据文件里,"
-                             + "不会上传给任何第三方。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
 
                     OnboardingNotice(
-                        text: "百度网盘的第三方应用权限很窄:只有这个目录下的文件能播。"
-                            + "要全盘访问得走 IoT 设备入驻(需商务对接)。",
+                        text: "第三方应用权限很窄:只有该目录下的文件能播。",
                         style: .warning
                     )
                 }
@@ -112,11 +106,7 @@ struct BaiduPanAuthorizationView: View {
 
     private var deviceCodePane: some View {
         VStack(spacing: Metrics.spacingL) {
-            OnboardingFormHeader(
-                systemImage: "qrcode",
-                title: "用手机扫码授权",
-                subtitle: "用百度网盘 App 扫一下,或者打开下面的地址输入用户码。"
-            )
+            OnboardingFormHeader(systemImage: "qrcode", title: "扫码授权")
 
             Group {
                 if let code = viewModel.deviceCode {
@@ -173,10 +163,8 @@ struct BaiduPanAuthorizationView: View {
                 .textSelection(.enabled)
 
             if let url = code.verificationURL {
-                Text("或打开 \(url.absoluteString) 输入上面的用户码")
+                Link("在浏览器打开授权页", destination: url)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
 
             if viewModel.isWaitingForAuthorization {

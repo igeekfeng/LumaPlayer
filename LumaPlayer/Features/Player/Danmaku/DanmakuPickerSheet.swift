@@ -44,7 +44,7 @@ struct DanmakuPickerSheet: View {
         PlayerModalCard(
             title: "选择弹幕",
             systemImage: "text.bubble",
-            subtitle: "弹幕来自「\(controller.source?.name ?? DanmakuSource.official.name)」。"
+            hint: "弹幕来自「\(controller.source?.name ?? DanmakuSource.official.name)」。"
                 + "选定后会记住这一集;同一部剧的其他集按集号自动对上。",
             width: 560,
             onClose: onClose
@@ -104,16 +104,16 @@ struct DanmakuPickerSheet: View {
                 Label(searchError, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.secondary)
             } else if didSearch, searchedGroups.isEmpty {
-                Text("没有搜到。换个标题(中文、日文、罗马音、英文都行)再试。")
+                Text("没有搜到")
                     .foregroundStyle(.secondary)
             }
             if let season, !isSearching, groups.count < searchedGroups.count {
-                Text("按第 \(season) 季筛掉了 \(searchedGroups.count - groups.count) 部作品;清空「季」可看全部。")
+                Text("第 \(season) 季 · 筛掉 \(searchedGroups.count - groups.count) 部")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if hasMore {
-                Text("结果太多,只显示了一部分。写得更具体一些可以缩小范围。")
+                Text("只显示了一部分")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

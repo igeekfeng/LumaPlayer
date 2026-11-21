@@ -31,7 +31,7 @@ struct ResourceSearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "找资源", subtitle: "在网盘分享里搜,搜到直接转存")
+            PageHeader(title: "找资源")
             searchBar
             Divider()
             content
@@ -75,7 +75,7 @@ struct ResourceSearchView: View {
         HStack(spacing: Metrics.spacingS) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("片名 / 剧名,回车搜索", text: $keyword)
+            TextField("片名 / 剧名", text: $keyword, prompt: Text("片名 / 剧名"))
                 .textFieldStyle(.plain)
                 .onSubmit { viewModel.search(keyword) }
             if viewModel.isLoading {
@@ -102,18 +102,15 @@ struct ResourceSearchView: View {
                 login: nil)
         } else if viewModel.hasNoSources {
             ContentUnavailableView {
-                Label("还没有搜索源", systemImage: "antenna.radiowaves.left.and.right")
-            } description: {
-                Text("这个模块自己不带资源,它去问「搜索源」。默认是几个 Telegram 公开频道,也可以在设置里加你自己的 PanSou 实例。")
+                Label("没有搜索源", systemImage: "antenna.radiowaves.left.and.right")
             } actions: {
                 Button("配置搜索源…") { onOpenSettings() }
                     .buttonStyle(.borderedProminent)
             }
         } else if viewModel.submittedKeyword.isEmpty {
             ContentUnavailableView(
-                "搜网盘上的资源",
-                systemImage: "shippingbox",
-                description: Text("输入片名后回车。结果来自 \(viewModel.sources.filter(\.isEnabled).count) 个搜索源,搜到后可以直接转存进你的网盘。"))
+                "搜网盘资源",
+                systemImage: "shippingbox")
         } else {
             results
         }
@@ -140,10 +137,7 @@ struct ResourceSearchView: View {
         VStack(spacing: 0) {
             filterBar
             if resources.isEmpty {
-                ContentUnavailableView(
-                    "没有找到匹配的资源",
-                    systemImage: "magnifyingglass",
-                    description: Text(failureHint))
+                ContentUnavailableView("没有匹配的资源", systemImage: "magnifyingglass")
                     .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -207,13 +201,6 @@ struct ResourceSearchView: View {
         .padding(.horizontal, Metrics.spacingXL)
         .padding(.vertical, Metrics.spacingS)
         .background(.background.secondary)
-    }
-
-    private var failureHint: String {
-        if viewModel.failures.isEmpty {
-            return "换个关键词试试,或者在设置里加更多搜索源。"
-        }
-        return "这次有 \(viewModel.failures.count) 个源没返回结果,换个关键词或稍后重试。"
     }
 
     private func sourceName(for id: String) -> String {
