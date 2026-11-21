@@ -507,3 +507,80 @@ enum TMDBImage {
         return components.url
     }
 }
+// MARK: - 发现(`docs/DISCOVERY.md` §3)
+
+/// `/3/trending/*` 与 `/3/discover/*` 的分页响应。
+///
+/// ⚠️ 与 `TMDBSearchResponse` 分开:搜索那边**只解 `results`** 是有意的(不翻页),
+/// 这里要 `page` / `total_pages` 才能翻。两个形状不同就不要硬塞进一个类型。
+struct TMDBDiscoverResponse: Decodable, Sendable {
+    let page: Int
+    let totalPages: Int
+    let totalResults: Int
+    /// `trending` 的条目带 `media_type`(movie / tv / person);`discover` 不带(端点已限定)。
+    let results: [TMDBDiscoverResult]
+
+    enum CodingKeys: String, CodingKey {
+        case page
+        case totalPages = "total_pages"
+        case totalResults = "total_results"
+        case results
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        page = try container.decodeIfPresent(Int.self, forKey: .page) ?? 1
+        totalPages = try container.decodeIfPresent(Int.self, forKey: .totalPages) ?? 1
+        totalResults = try container.decodeIfPresent(Int.self, forKey: .totalResults) ?? 0
+        results = try container.decodeIfPresent([TMDBDiscoverResult].self, forKey: .results) ?? []
+    }
+}
+
+/// 发现结果的一条。形状与 `TMDBResult` 一致,额外带 `media_type`。
+///
+/// ⚠️ `trending/all` 会把**人物**也混进来,`media_type: "person"` 的条目要丢掉
+/// (它不是可播放内容,`title` / `name` 字段语义也不同)。⛔ 不猜:认不出的 `media_type` 一律当人物处理。
+struct TMDBDiscoverResult: Decodable, Sendable, Equatable {
+    let mediaType: String?
+    let result: TMDBResult
+
+    init(from decoder: any Decoder) throws {
+        // 两套字段名(电影 `title` / 剧 `name`)都在同一个对象里,直接复用 `TMDBResult` 的解码
+        result = try TMDBResult(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mediaType = "media_type"
+    }
+
+    /// 归一到「电影 / 剧」。`person` 与认不出的都返回 nil,由调用方过滤。
+    func match(fallbackKind: TMDBMatch.Kind?) -> TMDBMatch? {
+        let kind: TMDBMatch.Kind
+        switch mediaType?.lowercased() {
+        case "movie": kind = .movie
+        case "tv": kind = .tv
+        case "person": return nil
+        case .some: return nil
+        case .none:
+            // discover 的响应不带 media_type:端点已经限定了类型
+            guard let fallbackKind else { return nil }
+            kind = fallbackKind
+        }
+        return TMDBMatch(result: result, kind: kind)
+    }
+}
+
+/// 发现的一页。
+///
+/// ⚠️ `items` 与 `totalResults` 可能对不上:人物条目在解码时被丢掉,
+/// 所以 `items.count <= 20` 而 `totalResults` 是 TMDB 侧的原始总数。⛔ 不要拿它们互相校验。
+struct TMDBDiscoverPage: Sendable, Equatable {
+    let items: [TMDBMatch]
+    let page: Int
+    let totalPages: Int
+    let totalResults: Int
+
+    var hasMore: Bool { page < totalPages }
+}

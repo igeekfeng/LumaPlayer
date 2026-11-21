@@ -4,6 +4,9 @@
 > `BAIDU_PAN_API.md`(百度网盘)平行。
 > ⛔ 只用本文件列出的端点 / 参数 / 字段,不自行发明接口。
 >
+> 「看什么」用到的发现端点(`/3/trending/*`、`/3/discover/*`)记在 `docs/DISCOVERY.md` §3,
+> 本文件只覆盖刮削用到的那些。
+>
 > 字段与端点**逐条对着 TMDB 官方 OpenAPI 规格核实**:
 > 文档站 `developer.themoviedb.org` 的响应字段在页面上是 JS 渲染的,抓不到,
 > 所以取它同一站点公开的规格文件

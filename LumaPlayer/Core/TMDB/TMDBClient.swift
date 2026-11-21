@@ -168,6 +168,74 @@ struct TMDBClient: Sendable {
         return response.asImageSet
     }
 
+    // MARK: - 发现(「看什么」,`docs/DISCOVERY.md` §3)
+
+    /// 热门榜。`mediaType: .all` 时人物条目会被丢掉(见 `TMDBDiscoverResult.match`)。
+    func trending(
+        mediaType: TMDBTrendingMediaType = .all,
+        window: TMDBTrendingWindow = .week,
+        page: Int = 1,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBDiscoverPage {
+        let endpoint = TMDBEndpoint.trending(
+            mediaType: mediaType, window: window, page: page, language: language)
+        return try await discoverPage(endpoint: endpoint, token: token, fallbackKind: nil)
+    }
+
+    /// 发现(电影)。`sortBy == .rating` 且没给评分人数下限时**自动补一个**:
+    /// TMDB 的 `vote_average.desc` 会给出「1 人打 10 分」的冷门片,不补这一条等于结果不可用。
+    func discoverMovie(
+        query: TMDBDiscoverQuery,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBDiscoverPage {
+        var query = query
+        if query.sortBy.requiresVoteCount, query.minimumVoteCount == nil {
+            query.minimumVoteCount = Self.defaultVoteCountFloor
+        }
+        let endpoint = TMDBEndpoint.discoverMovie(query, language: language)
+        return try await discoverPage(endpoint: endpoint, token: token, fallbackKind: .movie)
+    }
+
+    /// 发现(剧集)。⚠️ 剧集侧的日期参数是 `first_air_date.*`,而 `TMDBDiscoverQuery` 只带
+    /// `primary_release_date.*` —— 所以剧集**不传日期区间**,见下。
+    func discoverTV(
+        query: TMDBDiscoverQuery,
+        token: String,
+        language: String = TMDBClient.defaultLanguage
+    ) async throws -> TMDBDiscoverPage {
+        var query = query
+        if query.sortBy.requiresVoteCount, query.minimumVoteCount == nil {
+            query.minimumVoteCount = Self.defaultVoteCountFloor
+        }
+        // ⛔ 剧集没有 primary_release_date 这个参数,传了会被忽略而不是报错 ——
+        // 静默失效比报错更糟,所以这里明确清掉,由调用方按 `TMDBDiscoverSort.newest` 的另一条路走。
+        query.releasedAfter = nil
+        query.releasedBefore = nil
+        let endpoint = TMDBEndpoint.discoverTV(query, language: language)
+        return try await discoverPage(endpoint: endpoint, token: token, fallbackKind: .tv)
+    }
+
+    /// `vote_average.desc` 配的最小评分人数。取 200:足以滤掉个位数投票的冷门条目,
+    /// 又不至于把新剧全滤掉(新剧前几周通常几百票)。
+    static let defaultVoteCountFloor = 200
+
+    private func discoverPage(
+        endpoint: TMDBEndpoint,
+        token: String,
+        fallbackKind: TMDBMatch.Kind?
+    ) async throws -> TMDBDiscoverPage {
+        let data = try await send(endpoint, token: token)
+        let response: TMDBDiscoverResponse = try decode(data, endpoint: endpoint)
+        let items = response.results.compactMap { $0.match(fallbackKind: fallbackKind) }
+        return TMDBDiscoverPage(
+            items: items,
+            page: response.page,
+            totalPages: response.totalPages,
+            totalResults: response.totalResults)
+    }
+
     // MARK: - 传输与解码
 
     /// 只做传输层校验。
