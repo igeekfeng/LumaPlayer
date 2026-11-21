@@ -7,12 +7,14 @@ import SwiftUI
 /// 顶栏的来源切换器在这一页隐藏。
 struct DiscoveryView: View {
     let container: AppContainer
-    /// 点卡片上的「找资源」
+    /// 点卡片或搜索框上的「找资源」
     var onSearchResource: (String) -> Void
     /// 点「查看全部」:push 那一组的网格页
     var onSeeAll: (DiscoverBoard) -> Void
 
     @State private var viewModel: DiscoveryViewModel
+    /// 页头搜索框里的关键词
+    @State private var keyword = ""
 
     @MainActor
     init(
@@ -28,7 +30,9 @@ struct DiscoveryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "看什么")
+            PageHeader(title: "看什么") {
+                searchEntry
+            }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -36,6 +40,39 @@ struct DiscoveryView: View {
         .navigationTitle("看什么")
         .task { await viewModel.appear() }
         .reportsPageLoading(viewModel.isLoading, page: .home, to: container.state)
+    }
+
+    /// 页头搜索入口:回车把关键词带去「找资源」页(与点榜单卡片同一去处)。
+    private var searchEntry: some View {
+        HStack(spacing: Metrics.spacingXS) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("", text: $keyword, prompt: Text("搜网盘资源"))
+                .textFieldStyle(.plain)
+                .onSubmit(submitSearch)
+                .frame(width: Metrics.chromeSearchWidth)
+            if !keyword.isEmpty {
+                Button {
+                    keyword = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清空搜索")
+            }
+        }
+        .padding(.horizontal, Metrics.spacingM)
+        .frame(height: Metrics.chromeSearchHeight)
+        .glassEffect(.regular, in: .capsule)
+        .help("输入片名,回车搜网盘资源")
+        .accessibilityLabel("搜网盘资源")
+    }
+
+    private func submitSearch() {
+        let term = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return }
+        onSearchResource(term)
     }
 
     @ViewBuilder

@@ -266,7 +266,7 @@ struct BrowseView: View {
                     prompt: "在这个目录里找",
                     help: "只在已取回的这一层目录里找(不发请求)")
             }
-            discoveryMenu
+            resourceSearchButton
             // 详情页不给来源切换器:切换会清空整个导航栈
             if !isShowingDetail {
                 sourceMenu
@@ -274,35 +274,25 @@ struct BrowseView: View {
         }
     }
 
-    /// 「看什么 / 找资源」入口。
+    /// 「热门 / 看什么」入口:点击直达榜单页,不再经下拉菜单。
     ///
-    /// 为什么不放进来源菜单:这两个页面**不属于任何一个来源**(TMDB 榜单与网盘分享与当前来源无关),
+    /// 为什么不放进来源菜单:这一页**不属于任何一个来源**(榜单与当前来源无关),
     /// 混进「切换来源」里会让人以为换来源才能用。
-    private var discoveryMenu: some View {
-        Menu {
-            Button {
-                path.append(.discovery)
-            } label: {
-                Label("看什么(热门与新片)", systemImage: "theatermasks")
-            }
-            Button {
-                path.append(.resourceSearch(keyword: nil))
-            } label: {
-                Label("找资源(网盘分享)", systemImage: "shippingbox")
-            }
+    private var resourceSearchButton: some View {
+        Button {
+            path.append(.discovery)
         } label: {
-            Image(systemName: "sparkle.magnifyingglass")
-                .frame(
-                    width: Metrics.chromeSourceMarkSize,
-                    height: Metrics.chromeSourceMarkSize)
+            Label("热门", systemImage: "sparkle.magnifyingglass")
+                .labelStyle(.iconOnly)
         }
-        .menuIndicator(.hidden)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
-        .fixedSize()
-        .help("看什么 / 找资源")
-        .accessibilityLabel("看什么与找资源")
+        // 高度对齐搜索框、玻璃材质同款;不用 .glass 圆按钮 / .fixedSize()(前者带灰底,
+        // 后者按内容理想宽度布局把胶囊拉成横条)
+        .buttonStyle(.plain)
+        .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
+        .glassEffect(.regular, in: .capsule)
+        .contentShape(Capsule())
+        .help("看什么(热门与新片)")
+        .accessibilityLabel("看什么")
     }
 
     /// 文件树来源的搜索框绑定。nil = 这一屏没有可筛的网格(授权 / 剧集详情页),不给搜索框 ——
@@ -338,10 +328,10 @@ struct BrowseView: View {
             sourceMenuLabel
         }
         .menuIndicator(.hidden)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
+        .glassEffect(.regular, in: .capsule)
+        .contentShape(Capsule())
         .help("来源:\(currentSourceName)\n切换来源 ⌘1…⌘9")
         .accessibilityLabel("来源:\(currentSourceName)")
     }
