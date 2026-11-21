@@ -150,6 +150,9 @@ enum Metrics {
     static let gridSpacing: CGFloat = spacingL
     static let shelfHeaderMinHeight: CGFloat = 24
     static let posterCardTextHeight: CGFloat = 50
+    /// 「看什么」卡片:标题两行 + 副标题 + `card_subtitle` + 更新进度,四行都有的自然高度。
+    /// 用 `minHeight` 而不是钉死:`episodes_info` 的截断后仍可能换行,钉死会把字切掉。
+    static let discoverCardTextHeight: CGFloat = 102
     static let landscapeCardTextHeight: CGFloat = 33
     static let libraryTileTextHeight: CGFloat = 16
 

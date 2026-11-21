@@ -9,6 +9,10 @@ private enum BrowseRoute: Hashable {
     case detail(DetailItem)
     /// 「找资源」:搜网盘分享。`keyword` 非空时自动提交一次(从「看什么」点进来)
     case resourceSearch(keyword: String?)
+    /// 「看什么」:豆瓣 / TMDB 榜单
+    case discovery
+    /// 「看什么」里某一组的全部条目(分页网格)
+    case discoverBoard(DiscoverBoard)
 }
 
 /// 详情页的路由值。`EmbyItem` 只有 `Equatable`,按 id 判等就够了:同一项不会在栈上出现两次。
@@ -214,6 +218,32 @@ struct BrowseView: View {
             ResourceSearchView(container: container, initialKeyword: keyword) {
                 openSettings()
             }
+        case .discovery:
+            DiscoveryView(
+                container: container,
+                onSearchResource: { keyword in
+                    // 从「看什么」点卡片 → 直接进「找资源」并提交这个词
+                    path.append(.resourceSearch(keyword: keyword))
+                },
+                onSeeAll: { board in
+                    path.append(.discoverBoard(board))
+                })
+        case .discoverBoard(let board):
+            if let provider = container.discoverProviders.first(where: { $0.kind == board.source }) {
+                DiscoverBoardView(
+                    container: container,
+                    board: board,
+                    provider: provider,
+                    onSearchResource: { keyword in
+                        path.append(.resourceSearch(keyword: keyword))
+                    })
+            } else {
+                // 榜单来源没了(配置变更):如实说,⛔ 不显示一个空网格
+                ContentUnavailableView(
+                    "这个榜单暂时不可用",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("「\(board.title)」的来源(\(board.source.displayName))没有启用。"))
+            }
         }
     }
 
@@ -261,6 +291,11 @@ struct BrowseView: View {
     /// 混进「切换来源」里会让人以为换来源才能用。
     private var discoveryMenu: some View {
         Menu {
+            Button {
+                path.append(.discovery)
+            } label: {
+                Label("看什么(热门与新片)", systemImage: "theatermasks")
+            }
             Button {
                 path.append(.resourceSearch(keyword: nil))
             } label: {
