@@ -7,4 +7,10 @@ extension URL {
         FileManager.default.temporaryDirectory
             .appending(path: "LumaPlayerTests-credentials-\(UUID().uuidString).json", directoryHint: .notDirectory)
     }
+
+    /// 每个用例一个独立的榜单缓存文件路径,不碰真实沙盒容器里的那份。
+    static func temporaryDiscoverCacheFile() -> URL {
+        FileManager.default.temporaryDirectory
+            .appending(path: "LumaPlayerTests-discover-cache-\(UUID().uuidString).json", directoryHint: .notDirectory)
+    }
 }

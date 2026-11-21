@@ -382,6 +382,18 @@ from p115cipher.util import rsa_gen_key, xor, rsa_decrypt_with_pubkey
 - ❗ **删除**(`POST /rb/delete`,§9):请求形状、`state:1`、目录用 `cid` 当 `fid`、
   「进回收站」都只有源码侧证据。见 `KNOWN_ISSUES.md` 的 115 小节。
 
+## 7.1 分享转存(`webapi.115.com/share/*`)
+
+见 `docs/DISCOVERY.md` §4.1。端点与字段名逐字取自 `p115client` 的 `share_snap` / `share_receive`:
+
+| 用途 | 端点 |
+|---|---|
+| 列分享内容 | `GET /share/snap?share_code=&receive_code=&cid=&limit=&offset=` |
+| 收进自己网盘 | `POST /share/receive`(表单:`share_code` / `receive_code` / `file_id` / `cid`) |
+
+⚠️ `/share/receive` 只认 `file_id`,**不建目录**;`share/snap` 有 IP 级频控。
+⚠️ 本项目**未带账号实测**(`KNOWN_ISSUES.md` Q60)。
+
 ## 8. 合规(必须在 UI 里告知用户)
 
 `https://115.com/agreement.html`(条款由 `115driver` / `p115client` 作者转述,页面本身多个路径 404,**未直接读到原页**):

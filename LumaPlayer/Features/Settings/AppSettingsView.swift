@@ -8,6 +8,7 @@ enum SettingsTab: String {
     case subtitles
     case danmaku
     case servers
+    case discovery
     case hidden
     case cache
 
@@ -41,6 +42,9 @@ struct AppSettingsView: View {
             ServerListView(container: container)
                 .tabItem { Label("来源", systemImage: "rectangle.stack.badge.plus") }
                 .tag(SettingsTab.servers)
+            ResourceSourceSettingsView(container: container)
+                .tabItem { Label("找资源", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(SettingsTab.discovery)
             HiddenItemsSettingsView(store: container.hiddenItems)
                 .tabItem { Label("已隐藏", systemImage: "eye.slash") }
                 .tag(SettingsTab.hidden)

@@ -300,6 +300,48 @@ actor Pan115Connection {
         return try await task.value
     }
 
+    // MARK: - 分享转存(`docs/DISCOVERY.md` §4)
+
+    /// 列一个 115 分享里的内容,供转存前选择。
+    ///
+    /// ⚠️ 目标目录必须先在**自己的**网盘里存在:115 的 `/share/receive` 只收 `cid`,
+    /// 不建目录。所以这里先按路径换 cid,换不到就抛 —— ⛔ 不自动建目录
+    /// (建目录是写操作,要用户明确同意,见 `Pan115ShareTransferView`)。
+    func shareSnapshot(
+        shareCode: String,
+        receiveCode: String,
+        cid: String = "0"
+    ) async throws -> Pan115ShareSnapshot {
+        guard !shareCode.isEmpty else {
+            throw Pan115Error.invalidRequest("分享码为空")
+        }
+        let credential = try await credential()
+        return try await client.shareSnap(
+            shareCode: shareCode, receiveCode: receiveCode, cid: cid, credential: credential)
+    }
+
+    /// 把分享里的若干条收进 `targetPath`(必须在自己的网盘里已存在)。
+    ///
+    /// ⛔ 不重试、不并发:转存是写操作,而且 `share/receive` 与 `share/snap` 共享 115 的
+    /// 频控面(§6)。调用方一次只提交一个选择。
+    func transfer(
+        shareCode: String,
+        receiveCode: String,
+        fileIDs: [String],
+        toPath targetPath: String
+    ) async throws {
+        guard !fileIDs.isEmpty else {
+            throw Pan115Error.invalidRequest("没有选中要转存的文件")
+        }
+        let cid = try await directoryID(path: targetPath)
+        let credential = try await credential()
+        try await client.shareReceive(
+            shareCode: shareCode, receiveCode: receiveCode, fileIDs: fileIDs,
+            toCID: cid, credential: credential)
+        // 目标目录的内容变了,让浏览页下一次重新列(索引本身是路径 → cid,不受影响)
+        directoryIndex[Self.normalizedPath(targetPath)] = cid
+    }
+
     /// 正在取链的 `pickCode`。值只在请求进行中存在,请求一结束就摘掉。
     private var inFlightLinks: [String: Task<Pan115DownloadLink, any Error>] = [:]
 

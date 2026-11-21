@@ -333,6 +333,44 @@ TV 端的 `GetPath()` 恒为空串,而续播 / 隐藏 / 刮削缓存 / 弹幕键
 丢掉整个状态会让 `hasMoreItems` 变 false → 页脚消失 → 用户以为目录就这些,
 而这一层其余几百条还在屏幕上、却再也翻不出后面的页。游标不动(删一条不改变服务端的位置)。
 
+## 5.1 资源搜索与转存
+
+**搜索源清单是用户的数据,⛔ 不要预置一堆「大概能用」的公共实例。** PanSou 生态里的公共实例
+随时间大面积失效(实测过 `sousou` / `sdso` / `bixin` 那批),预置死链会让用户以为功能坏了。
+默认空清单 + 设置页引导,比十个 404 诚实。见 `docs/DISCOVERY.md` §5.3。
+
+**`200 OK` 不等于「搜到了」。** 反爬页、登录页、Cloudflare 拦截页都是 200 + HTML。
+⇒ 解码失败要明确说「不是合法 JSON(可能是反爬页)」,⛔ 不能折成空结果
+(那样用户会以为「这个关键词真没有资源」)。
+
+**去重键用归一化后的分享地址,不用标题。** 同一部剧在百度 / 夸克里是两条不同资源(不该合并),
+而同一个分享被两个源收录时地址完全一致(该合并)。归一化要**去掉查询串**
+—— `?pwd=xxxx` 与 `?share_type=xxx` 是同一份分享的不同写法。
+
+**115 的 `share/receive` 只认 `file_id`,不认路径**,而且**不建目录**。
+⇒ 转存必须两步(先 `share/snap` 拿 id,再 `receive`),目标目录要预先存在。
+⛔ 不要「顺手」建目录:那是写操作,而且会多烧一次风控面。
+
+**百度的分享转存是付费的企业能力,不是没实现。** 个人开发者 OAuth 拿不到
+`/apaas/1.0/share/transfer` 的权限。⇒ UI 如实说「用现在这套凭据做不到」并给手动路径,
+⛔ 不给一个必然失败的重试按钮。
+
+**`/3/discover/tv` 没有 `primary_release_date` 参数。** 剧集侧是 `first_air_date.*`;
+传错的名字会被服务端**静默忽略**(不报错),表现是「筛选看起来生效了但结果没变」。
+⇒ 该清掉的参数在客户端清掉(`TMDBClient.discoverTV`),⛔ 不留「看起来传了」的假象。
+
+**`sort_by=vote_average.desc` 必须配 `vote_count.gte`。** 否则结果里全是「1 人打 10 分」的冷门条目。
+默认补 200(`TMDBClient.defaultVoteCountFloor`)。
+
+**`trending/all` 混着人物。** 按 `media_type` 过滤,认不出的一律丢,⛔ 不猜。
+
+**Q65 LazyVGrid 里「触底占位 cell + `.task` 自动翻页」会卡死在 loading。** 豆瓣「查看全部」页的
+表现:前 40 条之后一直转圈,再也翻不动,而同一接口直接请求是好的。原因是页脚 cell 被
+`LazyVGrid` 回收 / 复用时 `.task` 被反复取消重启,加上翻页失败或取消后那个 cell 不会再出现,
+触发条件就永久消失。
+⇒ 页脚放到网格**外面**,触发改成「滚动位置离底一屏内」(`onScrollGeometryChange`) +
+显式「加载更多」按钮两条路;`.task` 不用来翻页。
+
 ## 6. 工具与环境
 
 **沙盒 App 写不了 `~/Library/Logs`。** 诊断日志在 App 容器里 (`~/Library/Containers/com.local.LumaPlayer/Data/Library/Logs/LumaPlayer/network.log`);系统日志

@@ -6,6 +6,8 @@ enum ContentPage: String, Sendable {
     case library
     case search
     case detail
+    /// 「找资源」页(网盘分享搜索)。与 `.search`(搜当前来源)分开:两页可以同时在栈上。
+    case resourceSearch
 }
 
 /// 内容页把加载 / 刷新状态上报给 `AppState`,顶栏据此显示加载线、⌘R 据此禁用。

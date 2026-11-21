@@ -7,6 +7,8 @@ private enum BrowseRoute: Hashable {
     /// 搜索结果。`submission` 每次回车 +1:同一关键词再按一次回车也要重新搜
     case search(term: String, submission: Int)
     case detail(DetailItem)
+    /// 「找资源」:搜网盘分享。`keyword` 非空时自动提交一次(从「看什么」点进来)
+    case resourceSearch(keyword: String?)
 }
 
 /// 详情页的路由值。`EmbyItem` 只有 `Equatable`,按 id 判等就够了:同一项不会在栈上出现两次。
@@ -55,6 +57,14 @@ struct BrowseView: View {
     var body: some View {
         NavigationStack(path: $path) {
             rootPage
+                // 目的地挂在栈上而不是某个来源的根页上:「看什么 / 找资源」不依赖当前来源,
+                // 挂在 Emby 根页里的话,网盘来源下点进去就没有目的地了。
+                .navigationDestination(for: BrowseRoute.self) { route in
+                    page(for: route)
+                        // ⛔ 系统返回按钮会让 SwiftUI 建出 NSToolbar:红绿灯被挤进工具栏带、
+                        // 全屏冒出实色栏(Q37)。返回放浮动顶栏。
+                        .navigationBarBackButtonHidden(true)
+                }
         }
         // 顶栏挂在**导航栈外**共用一条;hero 页栏底用轻压暗,不盖窗口底色(DesignTokens.swift「界面规则」)。
         .browseChrome(
@@ -121,12 +131,6 @@ struct BrowseView: View {
                 refreshToken: refreshToken,
                 viewModel: homeViewModel
             )
-            .navigationDestination(for: BrowseRoute.self) { route in
-                page(for: route, server: server)
-                    // ⛔ 系统返回按钮会让 SwiftUI 建出 NSToolbar:红绿灯被挤进工具栏带、
-                    // 全屏冒出实色栏(Q37)。返回放浮动顶栏。
-                    .navigationBarBackButtonHidden(true)
-            }
         case .some(.baiduPan(let source)):
             // ⛔ 百度来源没有库 / 搜索 / 详情,顶栏不给搜索框;刷新走 `refreshToken`,
             // 「上一层」由它经 `BrowseChromeController.pageBackAction` 登记到顶栏。
@@ -164,35 +168,61 @@ struct BrowseView: View {
         }
     }
 
+    /// 栈上的目的地。Emby 专属的几页从 `currentSource` 取服务器 ——
+    /// 它们只会在 Emby 来源下被 push(换来源会清栈),所以取不到就是 bug,给空态而不是崩。
     @ViewBuilder
-    private func page(for route: BrowseRoute, server: ServerProfile) -> some View {
+    private func page(for route: BrowseRoute) -> some View {
         switch route {
         case .library(let view):
-            LibraryView(
-                container: container,
-                server: server,
-                view: view,
-                onOpenItem: openItem,
-                refreshToken: refreshToken
-            )
+            if let server = container.state.currentSource?.embyServer {
+                LibraryView(
+                    container: container,
+                    server: server,
+                    view: view,
+                    onOpenItem: openItem,
+                    refreshToken: refreshToken
+                )
+            } else {
+                missingSourcePlaceholder
+            }
         case .search(let term, let submission):
-            SearchView(
-                container: container,
-                server: server,
-                term: term,
-                submission: submission,
-                onOpenItem: openItem
-            )
+            if let server = container.state.currentSource?.embyServer {
+                SearchView(
+                    container: container,
+                    server: server,
+                    term: term,
+                    submission: submission,
+                    onOpenItem: openItem
+                )
+            } else {
+                missingSourcePlaceholder
+            }
         case .detail(let detail):
-            // 点相似推荐再 push 一页,返回栈逐级退
-            MediaDetailView(
-                container: container,
-                server: server,
-                item: detail.item,
-                onOpenItem: openItem,
-                refreshToken: refreshToken
-            )
+            if let server = container.state.currentSource?.embyServer {
+                // 点相似推荐再 push 一页,返回栈逐级退
+                MediaDetailView(
+                    container: container,
+                    server: server,
+                    item: detail.item,
+                    onOpenItem: openItem,
+                    refreshToken: refreshToken
+                )
+            } else {
+                missingSourcePlaceholder
+            }
+        case .resourceSearch(let keyword):
+            ResourceSearchView(container: container, initialKeyword: keyword) {
+                openSettings()
+            }
         }
+    }
+
+    private var missingSourcePlaceholder: some View {
+        ContentUnavailableView(
+            "需要先选择一个 Emby 来源",
+            systemImage: "server.rack",
+            description: Text("这一页属于 Emby 服务器。在顶栏切回一个 Emby 来源再试。")
+        )
     }
 
     // MARK: - 顶栏
@@ -217,11 +247,38 @@ struct BrowseView: View {
                     prompt: "在这个目录里找",
                     help: "只在已取回的这一层目录里找(不发请求)")
             }
+            discoveryMenu
             // 详情页不给来源切换器:切换会清空整个导航栈
             if !isShowingDetail {
                 sourceMenu
             }
         }
+    }
+
+    /// 「看什么 / 找资源」入口。
+    ///
+    /// 为什么不放进来源菜单:这两个页面**不属于任何一个来源**(TMDB 榜单与网盘分享与当前来源无关),
+    /// 混进「切换来源」里会让人以为换来源才能用。
+    private var discoveryMenu: some View {
+        Menu {
+            Button {
+                path.append(.resourceSearch(keyword: nil))
+            } label: {
+                Label("找资源(网盘分享)", systemImage: "shippingbox")
+            }
+        } label: {
+            Image(systemName: "sparkle.magnifyingglass")
+                .frame(
+                    width: Metrics.chromeSourceMarkSize,
+                    height: Metrics.chromeSourceMarkSize)
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .fixedSize()
+        .help("看什么(热门与新片)/ 找资源(网盘分享搜索)")
+        .accessibilityLabel("看什么与找资源")
     }
 
     /// 文件树来源的搜索框绑定。nil = 这一屏没有可筛的网格(授权 / 剧集详情页),不给搜索框 ——

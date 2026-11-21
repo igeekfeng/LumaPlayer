@@ -44,6 +44,21 @@ enum Pan115Endpoint: Sendable, Equatable {
     /// body 是 `data=<m115 加密后的 {"pickcode": …}>`。加密在 `Pan115Crypto`,这里只收已加密的串。
     case downloadURL(timestamp: Int, encryptedPayload: String)
 
+    // MARK: - 转存(`docs/DISCOVERY.md` §4)
+
+    /// `GET https://webapi.115.com/share/snap?share_code=&receive_code=&cid=&limit=&offset=`
+    ///
+    /// 列**分享里**的目录。转存前必须先用它拿到 `file_id` —— `/share/receive` 只认 id,不认路径。
+    /// 出处:`p115client client.py` 的 `share_snap`。
+    case shareSnap(shareCode: String, receiveCode: String, cid: String, limit: Int, offset: Int)
+
+    /// `POST https://webapi.115.com/share/receive`
+    ///
+    /// 把分享里的文件收进自己的网盘。`cid` 是**自己的**目标目录 id。
+    /// 出处:`p115client client.py` 的 `share_receive`(字段名逐字对齐)。
+    case shareReceive(
+        shareCode: String, receiveCode: String, fileIDs: [String], cid: String)
+
     // MARK: - 形状
 
     var scheme: String { "https" }
@@ -56,7 +71,7 @@ enum Pan115Endpoint: Sendable, Equatable {
             return "passportapi.115.com"
         case .userInfo:
             return "my.115.com"
-        case .fileList, .directoryID, .deleteFiles:
+        case .fileList, .directoryID, .deleteFiles, .shareSnap, .shareReceive:
             return "webapi.115.com"
         case .downloadURL:
             return "proapi.115.com"
@@ -73,13 +88,15 @@ enum Pan115Endpoint: Sendable, Equatable {
         case .directoryID: return "/files/getid"
         case .deleteFiles: return "/rb/delete"
         case .downloadURL: return "/app/chrome/downurl"
+        case .shareSnap: return "/share/snap"
+        case .shareReceive: return "/share/receive"
         }
     }
 
     var method: String {
         switch self {
-        case .qrCodeLogin, .downloadURL, .deleteFiles: return "POST"
-        case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID:
+        case .qrCodeLogin, .downloadURL, .deleteFiles, .shareReceive: return "POST"
+        case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID, .shareSnap:
             return "GET"
         }
     }
@@ -95,6 +112,8 @@ enum Pan115Endpoint: Sendable, Equatable {
         case .directoryID: return "webapi/files/getid"
         case .deleteFiles: return "webapi/rb/delete"
         case .downloadURL: return "proapi/app/chrome/downurl"
+        case .shareSnap: return "webapi/share/snap"
+        case .shareReceive: return "webapi/share/receive"
         }
     }
 
@@ -136,6 +155,16 @@ enum Pan115Endpoint: Sendable, Equatable {
             return []
         case .downloadURL(let timestamp, _):
             return [("t", String(timestamp))]
+        case .shareSnap(let shareCode, let receiveCode, let cid, let limit, let offset):
+            return [
+                ("share_code", shareCode),
+                ("receive_code", receiveCode),
+                ("cid", cid),
+                ("limit", String(limit)),
+                ("offset", String(offset)),
+            ]
+        case .shareReceive:
+            return []
         }
     }
 
@@ -149,7 +178,15 @@ enum Pan115Endpoint: Sendable, Equatable {
         case .deleteFiles(let ids):
             // ⚠️ 字段名带下标:`fid[0]` / `fid[1]`…;`fid=a,b` 这种写法 p115client 也支持,本项目只发前一种。
             return ids.enumerated().map { ("fid[\($0.offset)]", $0.element) }
-        case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID:
+        case .shareReceive(let shareCode, let receiveCode, let fileIDs, let cid):
+            // 字段名与 `p115client` 的 `share_receive` 一致:`file_id` 多个时用逗号分隔。
+            return [
+                ("share_code", shareCode),
+                ("receive_code", receiveCode),
+                ("file_id", fileIDs.joined(separator: ",")),
+                ("cid", cid),
+            ]
+        case .qrCodeToken, .qrCodeStatus, .userInfo, .fileList, .directoryID, .shareSnap:
             return nil
         }
     }

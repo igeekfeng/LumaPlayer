@@ -58,6 +58,24 @@ final class AppContainer {
     /// 测试里才不会真发出去。
     let session: URLSession
 
+    // MARK: - 资源发现(`docs/DISCOVERY.md`)
+
+    /// TMDB 客户端(发现页 / 刮削共用)。走 `session` 才能在测试里被 `MockEmbyURLProtocol` 拦住。
+    let tmdbClient: TMDBClient
+    /// 「看什么」的榜单来源。豆瓣在前(不需要凭据),TMDB 在后(配了 token 才有内容)。
+    /// 顺序即展示顺序,见 `docs/DISCOVERY.md` §3。
+    let discoverProviders: [any DiscoverProvider]
+    /// 搜索源清单。用户可维护的数据,落 Application Support 的 JSON。
+    let resourceSources: ResourceSourceStore
+    /// 聚合搜索编排。与 `resourceSources` 共用同一个实例,
+    /// 设置页刚改完的清单能立即生效(不等下次启动)。
+    let resourceSearch: PanResourceSearchService
+    /// 转存动作的入口(按网盘分派到已登录的来源)。
+    ///
+    /// ⚠️ 声明成 `!` 并在 `init` **末尾**赋值:它的依赖闭包要调本类的方法,
+    /// `let` 会在初始化期就捕获未完成的 `self`。
+    private(set) var transfer: PanResourceTransferService!
+
     init(
         registry: ServerRegistry,
         credentials: CredentialStore,
@@ -73,7 +91,10 @@ final class AppContainer {
         baiduDirectoryCache: BaiduPanDirectoryCache? = nil,
         baiduScrapeCache: BaiduPanScrapeCache? = nil,
         baiduEpisodeCounts: BaiduPanEpisodeCountStore? = nil,
-        localFolderAccess: LocalFolderAccess? = nil
+        localFolderAccess: LocalFolderAccess? = nil,
+        resourceSources: ResourceSourceStore? = nil,
+        resourceAdapters: [any ResourceSourceAdapter]? = nil,
+        discoverProviders: [any DiscoverProvider]? = nil
     ) {
         self.registry = registry
         self.credentials = credentials
@@ -102,11 +123,37 @@ final class AppContainer {
         self.baiduEpisodeCounts = baiduEpisodeCounts
             ?? BaiduPanEpisodeCountStore(fileURL: BaiduPanEpisodeCountStore.defaultFileURL)
         self.localFolderAccess = localFolderAccess ?? LocalFolderAccess()
+        self.tmdbClient = TMDBClient(session: session)
+        self.discoverProviders = discoverProviders ?? [
+            DoubanDiscoverProvider(
+                session: session,
+                cache: DoubanDiscoverCache(fileURL: DoubanDiscoverCache.defaultFileURL)),
+            TMDBDiscoverProvider(client: TMDBClient(session: session), credentials: credentials),
+        ]
+        let sourcesStore = resourceSources
+            ?? ResourceSourceStore(fileURL: ResourceSourceStore.defaultFileURL)
+        self.resourceSources = sourcesStore
+        self.resourceSearch = PanResourceSearchService(
+            registry: ResourceSourceAdapterRegistry(
+                adapters: resourceAdapters ?? [
+                    TelegramChannelAdapter(session: session),
+                    PanSouAdapter(session: session),
+                ]),
+            sourcesStore: sourcesStore)
         self.danmakuSettings = DanmakuSettingsStore(defaults: preferences)
         self.danmaku = danmaku ?? DanmakuService(
             credentials: credentials,
             bindings: DanmakuBindingStore(fileURL: DanmakuBindingStore.defaultFileURL),
             cache: DanmakuCommentCache(directory: DanmakuCommentCache.defaultDirectory))
+        self.transfer = PanResourceTransferService(dependencies: .init(
+            availableSources: { [registry] in await registry.allSources() },
+            pan115: { [unowned self] in pan115Connection() },
+            pan115LibraryRoot: { [unowned self] sourceID in
+                guard let source = await self.pan115Sources().first(where: { $0.id == sourceID }) else {
+                    return nil
+                }
+                return try await self.pan115LibraryRoot(for: source)
+            }))
     }
 
     /// 生产组装。服务器列表损坏时按空列表启动,并挂 `AppError.serverListCorrupted` 由 RootView 提示。
