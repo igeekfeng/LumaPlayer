@@ -21,7 +21,7 @@ enum DiscoverSourceKind: String, Sendable, CaseIterable {
 /// 一组榜单的**配置**,不是 `enum` case:豆瓣有十几个 collection,写成 case 就得为每个发一次版。
 /// 加一组榜单 = 加一条 `DiscoverBoard`。
 struct DiscoverBoard: Sendable, Hashable, Identifiable {
-    /// 全局唯一,同时当视图里的状态 key。`"douban.tv_hot"`
+    /// 全局唯一,同时当视图里的状态 key(来源前缀 + 引用,如豆瓣的热门剧集)。
     let id: String
     /// 货架标题
     let title: String
