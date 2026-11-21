@@ -250,25 +250,27 @@ struct BrowseView: View {
     /// ⛔ 不放刷新按钮:刷新走菜单栏「Reload」(⌘R),加载状态看栏下沿的加载线。
     @ViewBuilder
     private var chromeBar: some View {
-        HStack(spacing: Metrics.spacingM) {
-            Spacer(minLength: 0)
-            if case .emby? = container.state.currentSource {
-                ChromeSearchField(
-                    text: $searchText, chrome: chrome,
-                    onSubmit: submitSearch)
-            } else if let binding = fileSourceSearchText {
-                // 同一处、同样式,但语义不同:文件树来源没有服务端搜索,这里行内实时过滤
-                // **已取回的这一层**(网盘配额 / 限速见 `FileSourceViewModel.searchQuery`),
-                // 不跳结果页。⛔ 别把它做成回车才生效 —— 那样看起来像在搜整个网盘。
-                ChromeSearchField(
-                    text: binding,
-                    chrome: chrome,
-                    prompt: "在这个目录里找",
-                    help: "只在已取回的这一层目录里找(不发请求)")
-            }
-            resourceSearchButton
-            // 详情页不给来源切换器:切换会清空整个导航栈
-            if !isShowingDetail {
+        // 搜索 / 热门 / 来源只在栈根(首页)出现:push 到子页后顶栏只留返回。
+        // ⚠️ 用 path.isEmpty 判断,不用 isShowingDetail:后者只在详情页为真,媒体库 / 搜索结果等
+        // 其它子页仍会露出这三个元素。
+        if path.isEmpty {
+            HStack(spacing: Metrics.spacingM) {
+                Spacer(minLength: 0)
+                if case .emby? = container.state.currentSource {
+                    ChromeSearchField(
+                        text: $searchText, chrome: chrome,
+                        onSubmit: submitSearch)
+                } else if let binding = fileSourceSearchText {
+                    // 同一处、同样式,但语义不同:文件树来源没有服务端搜索,这里行内实时过滤
+                    // **已取回的这一层**(网盘配额 / 限速见 `FileSourceViewModel.searchQuery`),
+                    // 不跳结果页。⛔ 别把它做成回车才生效 —— 那样看起来像在搜整个网盘。
+                    ChromeSearchField(
+                        text: binding,
+                        chrome: chrome,
+                        prompt: "在这个目录里找",
+                        help: "只在已取回的这一层目录里找(不发请求)")
+                }
+                resourceSearchButton
                 sourceMenu
             }
         }
