@@ -2349,6 +2349,82 @@ final class FileSourceViewModel {
         await loadResumeCards()
     }
 
+    // MARK: - 动作:重命名
+
+    /// 只改最后一段名字(`docs/BAIDU_PAN_API.md` §2.5),⛔ 不挪位置、不递归、不改子项。
+    ///
+    /// 网盘改完只做两件本地事:续播卡片按路径起播,要跟着改 `Display.locator`;被改那层的落盘缓存
+    /// 里还躺着旧名字,作废后重列一次(与「按 TMDB 重命名」收尾同一口径,1 次 `list`)。
+    /// 进度 / 已看 / 刮削缓存都按 `fs_id` 存,改名不动它们。
+    ///
+    /// 找不到路径、只读来源、网盘逐条失败都直接抛,⛔ 不悄悄当成功。
+    func rename(_ item: SourceItem, to newName: String) async throws {
+        guard let file = file(for: item) else {
+            throw BaiduPanError.configuration(
+                "找不到「\(item.title)」在\(source.storageNoun)里的路径,没法重命名。")
+        }
+        // 界面按 `supportsRenamingItems` 不给入口;走到这里是调用方 bug,按来源如实抛
+        switch source {
+        case .baiduPan:
+            break
+        case .pan115:
+            throw Pan115Error.invalidRequest("115 的改名接口还没接,改不了这个名字。")
+        case .quark:
+            throw QuarkError.invalidRequest("夸克网盘这套接口只支持只读访问,不能改名。")
+        case .localFolder:
+            throw LocalFolderError.readOnly
+        }
+
+        let name = BaiduPanSimpleRename.cleaned(newName)
+        if let issue = BaiduPanSimpleRename.issue(name: newName, original: file.name) {
+            throw BaiduPanError.configuration(issue.message)
+        }
+
+        let info = try await connection.rename(
+            [BaiduPanRenameOperation(path: file.path, newName: name)])
+        // 顶层 `errno` 只表示受理,改没改成看逐条结果(§2.4 / §2.5)
+        guard let entry = info.first else {
+            throw BaiduPanError.decoding(
+                endpoint: "xpan/file?method=filemanager&opera=rename",
+                detail: "响应里没有逐条改名结果")
+        }
+        guard entry.errno == 0 else {
+            throw BaiduPanError.server(errno: entry.errno, message: nil)
+        }
+
+        let renamedPath = BaiduPanRenameOperation(path: file.path, newName: name).renamedPath
+        // ⛔ 不改 `items` 里的那一格:名字是合成器从文件名解析出来的,就地拼一个出来会与下次列目录不一致
+        await container.watchProgress.relocate(
+            fileID: String(file.fsID), path: renamedPath, fileName: name)
+        // 改的正好是片库根时跟着改,否则下次进来源会当成失效而回落应用目录
+        if libraryRoot?.path == file.path {
+            do {
+                try await container.setLibraryRoot(renamedPath, for: baiduSource)
+                libraryRoot = BaiduPanLibraryRoot(path: renamedPath)
+            } catch {
+                notice = "名字已改成「\(name)」,但片库根没能跟着更新:\(error)"
+            }
+        }
+        // 改的是目录:它自己与下层的子路径全失效;改的是文件:作废它所在那一层(里面还躺着旧名字)
+        if file.isDirectory {
+            await evictCachedDirectory(file.path)
+        }
+        await evictCachedDirectory(
+            BaiduPanPath.directory(ofFilePath: file.path), includeDescendants: false)
+        await refreshFiles()
+    }
+
+    private var baiduSource: BaiduPanSource {
+        guard case .baiduPan(let baidu) = source else { return BaiduPanSource(folderName: "") }
+        return baidu
+    }
+
+    /// 网盘上现在的完整名字(目录名 / 带扩展名的文件名)。nil = 这一条没有原始文件信息。
+    /// ⛔ 不拿 `item.title` 顶替:那是剥掉扩展名与发布组之后的展示名,改用它会把 `.mkv` 一起改掉。
+    func renameOriginalName(for item: SourceItem) -> String? {
+        file(for: item)?.name
+    }
+
     /// 读 `storedRecords`(含已看完 / 位置 0 的),否则会漏下死记录。
     /// 另并入条目自己的 `fs_id`:没有快照(无 `locator`)的老记录按路径圈不到。
     private func affectedRecordIDs(

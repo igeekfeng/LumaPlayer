@@ -69,6 +69,12 @@ enum FileSource: Sendable, Equatable, Hashable {
         }
     }
 
+    /// 能不能对单个文件 / 文件夹只改名字(右键「重命名…」)。与 `supportsRenamingSeries` 同一个接口
+    /// (`opera=rename`),只是不碰 TMDB、不改子项。
+    var supportsRenamingItems: Bool {
+        supportsRenamingSeries
+    }
+
     var storageNoun: String {
         switch self {
         case .baiduPan: return "网盘"

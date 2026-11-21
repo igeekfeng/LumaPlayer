@@ -49,6 +49,20 @@ struct BaiduPanFile: Sendable, Equatable, Identifiable, Codable {
         guard let dot = last.lastIndex(of: "."), dot != last.startIndex else { return "" }
         return String(last[last.index(after: dot)...]).lowercased()
     }
+
+    /// 改名后的这一条:`path` 换最后一段,`name` 跟着换,其余(`fs_id` / 大小 / 类型)不变。
+    /// ⚠️ 这是本地推算,不是服务端回的(服务端一般只回 `errno` 与 `path`)。
+    func renamed(to newPath: String, name newName: String) -> BaiduPanFile {
+        BaiduPanFile(
+            fsID: fsID,
+            path: newPath,
+            name: newName,
+            sizeBytes: sizeBytes,
+            isDirectory: isDirectory,
+            category: category,
+            modifiedAt: modifiedAt,
+            thumbnailURL: thumbnailURL)
+    }
 }
 
 /// 条目归类。只服务 UI 分支与「能不能播」,不是对 `category` 的全集枚举。

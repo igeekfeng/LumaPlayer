@@ -37,6 +37,9 @@ struct FileSourceBrowserView: View {
     }
 
     @State private var renameRequest: RenameRequest?
+    /// 单个条目的「重命名…」:`SourceItem` 自带 `id`(`SourceItemRef`),直接当 `.sheet(item:)` 的键。
+    /// ViewModel 从 `FileSourceBrowserView.viewModel` 取,⛔ 不装进载荷 —— 它是同一个对象。
+    @State private var renamingItem: SourceItem?
     /// 删除失败的原因,确认面板关掉后由 alert 报出
     @State private var actionErrorMessage: String?
     @State private var showsFolderPicker = false
@@ -124,6 +127,11 @@ struct FileSourceBrowserView: View {
             ) {
                 // 改名后缓存里的旧目录已失效
                 Task { await viewModel.refreshFiles() }
+            }
+        }
+        .sheet(item: $renamingItem) { item in
+            FileSourceRenameItemView(item: item, viewModel: viewModel) { message in
+                actionErrorMessage = message
             }
         }
         .fileImporter(
@@ -292,6 +300,12 @@ struct FileSourceBrowserView: View {
                     Button("标记为已看", systemImage: "checkmark.circle") {
                         Task { await viewModel.markPlayed([item], played: true) }
                     }
+                }
+            }
+            // 只对能写名字的来源给(百度);只读来源这一条不出现
+            if viewModel.source.supportsRenamingItems, viewModel.file(for: item) != nil {
+                Button("重命名…", systemImage: "pencil") {
+                    renamingItem = item
                 }
             }
             // 只对剧集目录给(单集文件没有剧 / 季上下文);只读来源不给
