@@ -110,6 +110,58 @@ final class PlayerExperienceTests: XCTestCase {
         viewModel.stop()
     }
 
+    // MARK: - 断流恢复
+
+    func testPrematureEOFJudgement() {
+        XCTAssertTrue(PlayerViewModel.isPrematureEOF(position: 600, duration: 2700))
+        // 容差:max(10 秒, 2%)
+        XCTAssertFalse(PlayerViewModel.isPrematureEOF(position: 2650, duration: 2700))
+        XCTAssertFalse(PlayerViewModel.isPrematureEOF(position: 295, duration: 300))
+        XCTAssertTrue(PlayerViewModel.isPrematureEOF(position: 280, duration: 300))
+        // 时长未知无从判断,按播完
+        XCTAssertFalse(PlayerViewModel.isPrematureEOF(position: 100, duration: 0))
+        XCTAssertFalse(PlayerViewModel.isPrematureEOF(position: 100, duration: .nan))
+    }
+
+    /// 断网后 mpv 报的 EOF:不弹播完卡片,转入重连。
+    func testPrematureEOFReconnectsInsteadOfEnding() async throws {
+        let viewModel = PlayerViewModel(
+            container: try makeContainer(),
+            request: PlaybackRequest(server: makeProfile(), item: try item("ITEM-1", type: "Movie")),
+            preparer: StubPreparer(),
+            displaySleep: RecordingDisplaySleepInhibitor())
+        viewModel.start()
+        for _ in 0..<500 where viewModel.session == nil { await Task.yield() }
+        XCTAssertNotNil(viewModel.session)
+
+        viewModel.handle(.duration(2700), generation: 0)
+        viewModel.handle(.timePos(600), generation: 0)
+        viewModel.handle(.endFile(.eof), generation: 0)
+
+        XCTAssertFalse(viewModel.isEnded)
+        XCTAssertTrue(viewModel.isReconnecting)
+        viewModel.stop()
+    }
+
+    /// 播到结尾附近的 EOF 仍是播完。
+    func testEOFNearEndStillEnds() async throws {
+        let viewModel = PlayerViewModel(
+            container: try makeContainer(),
+            request: PlaybackRequest(server: makeProfile(), item: try item("ITEM-1", type: "Movie")),
+            preparer: StubPreparer(),
+            displaySleep: RecordingDisplaySleepInhibitor())
+        viewModel.start()
+        for _ in 0..<500 where viewModel.session == nil { await Task.yield() }
+
+        viewModel.handle(.duration(2700), generation: 0)
+        viewModel.handle(.timePos(2695), generation: 0)
+        viewModel.handle(.endFile(.eof), generation: 0)
+
+        XCTAssertTrue(viewModel.isEnded)
+        XCTAssertFalse(viewModel.isReconnecting)
+        viewModel.stop()
+    }
+
     // MARK: - 音量图标
 
     func testVolumeSymbolReflectsLevelAndMute() {
@@ -303,6 +355,20 @@ final class PlayerExperienceTests: XCTestCase {
             item: try item("ITEM-1", type: "Movie"),
             reporter: reporter
         )
+    }
+
+    private struct StubPreparer: PlaybackSessionPreparing {
+        func makeSession(startTimeTicks: Int64?) async throws -> PlaybackSession {
+            PlaybackSession(
+                plan: .directStream(
+                    url: testURL("https://emby.test/videos/ITEM-1"),
+                    headers: [:], playSessionID: "SESSION-1", mediaSourceID: "SOURCE-1"),
+                mediaSource: EmbyMediaSource(
+                    id: "SOURCE-1", container: "mkv",
+                    supportsDirectStream: true, supportsTranscoding: false,
+                    transcodingUrl: nil, mediaStreams: nil, chapters: nil),
+                seekStrategy: .clientSeek)
+        }
     }
 
     /// 用 actor 而不是 `@unchecked Sendable` 的盒子(测试代码也守「并发分层」)。

@@ -66,6 +66,8 @@ final class PlayerViewModel {
     private var isSecondarySubtitleRestorePending = false
     /// 转码 seek 正在重新起流(4.5):与首次取播放信息区分开,便于 UI 给准话
     private(set) var isRestarting = false
+    /// 断流后正在退避 / 重建流(`recoverFromStreamLoss`),到重新进 `.playing` 为止
+    private(set) var isReconnecting = false
 
     // MARK: - 字幕延迟(MPV_INTEGRATION.md 7.1)
 
@@ -264,6 +266,17 @@ final class PlayerViewModel {
     private var seekRestartTask: Task<Void, Never>?
     /// 每次「重新起流 / 收尾」自增。合并任务用它判断自己是否已被作废。
     private var restartEpoch = 0
+
+    /// 断流恢复已用掉的次数(上限 = `reconnectDelays.count`);在恢复点之后稳定播出一段才清零。
+    private var reconnectAttempts = 0
+    /// 最近一次断流恢复的起播点;播过它 `reconnectStableSeconds` 秒即认定连接已恢复。
+    private var reconnectAnchorSeconds: Double?
+    /// 断流后等退避间隔再起流的任务
+    private var reconnectTask: Task<Void, Never>?
+    /// 系统进入睡眠的时刻;唤醒时据此判断连接是否已失效
+    private var sleepStartedAt: Date?
+    /// 暂停中经历了长睡眠:恢复播放时直接重建流,⛔ 不去读那条已失效的连接
+    private var isStreamStale = false
 
     /// 播放会话代次,每次 `stop()` +1,用来丢弃上一轮播放器的迟到事件。
     /// ⛔ `MPVEventBridge` 经 `Task { @MainActor }` 投递,旧实例事件必然晚于 `retry()` 到达,
@@ -489,6 +502,9 @@ final class PlayerViewModel {
         phase = .idle
         isPaused = false
         isRestarting = false
+        isReconnecting = false
+        reconnectAttempts = 0
+        reconnectAnchorSeconds = nil
         isEnded = false
         // 新播放器 = 新上报会话:不复位的话重试后不会补 seek 到起播位置,也不发 Playing。
         didApplyStartOffset = false
@@ -537,8 +553,11 @@ final class PlayerViewModel {
         // 待起流的合并 seek 作废:代次 +1 给「已过 sleep、cancel 无效」的任务兜底(`restartStream` 内部也调 stop())。
         seekRestartTask?.cancel()
         seekRestartTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         restartEpoch &+= 1
         isRestarting = false
+        isStreamStale = false
         stopUpNextCountdown()
         scrubPreviewSeconds = nil
         // 出过画面就留最后一帧(`frozenPlayer`),没出过就沿用更早那一帧。
@@ -556,6 +575,10 @@ final class PlayerViewModel {
 
     func togglePlayPause() {
         guard let player else { return }
+        if isPaused, isStreamStale {
+            restartStream(at: positionSeconds)
+            return
+        }
         do {
             if isPaused {
                 try player.resume()
@@ -1800,6 +1823,77 @@ final class PlayerViewModel {
         start()
     }
 
+    // MARK: - 断流恢复
+
+    /// 断流恢复的退避间隔(秒);用完仍断就如实报错,交给「重试」。
+    private static let reconnectDelays: [Double] = [1, 3, 8]
+    /// 恢复点之后连续播出这么久,才算连接真的恢复(重连次数清零)
+    private static let reconnectStableSeconds: Double = 30
+    /// 睡眠超过这么久,唤醒后认定连接已失效;短睡交给断流 EOF 兜底(网盘重取会话有配额 / 风控)
+    static let staleAfterSleepSeconds: TimeInterval = 60
+
+    /// EOF 是断流而非播完:离结尾超过 max(10 秒, 2%)。
+    /// 容差盖住容器标称时长与实际流尾的出入;时长未知时无从判断,按播完处理。
+    static func isPrematureEOF(position: Double, duration: Double) -> Bool {
+        guard duration > 0, position.isFinite, duration.isFinite else { return false }
+        return duration - position > max(10, duration * 0.02)
+    }
+
+    /// 能从当前位置重建流:有会话、能定位到起播点。
+    /// 本地文件提前 EOF 是文件截断,重开也一样;拖不动的源重建只会回到 0:00。
+    private var canRecoverStream: Bool {
+        guard let session, session.seekStrategy.allowsSeeking else { return false }
+        if case .localFolder = request.source { return false }
+        return true
+    }
+
+    /// 断流:按退避间隔从断点重建流;次数用完则停下报错,`retry()` 从断点续播。
+    private func recoverFromStreamLoss() {
+        let resumeAt = positionSeconds
+        guard reconnectAttempts < Self.reconnectDelays.count else {
+            Self.logger.error(
+                "断流重连 \(self.reconnectAttempts, privacy: .public) 次仍失败,停在 \(resumeAt, privacy: .public)s")
+            stop()
+            startSeconds = resumeAt
+            isReconnecting = false
+            isPreparing = false
+            failure = LoadFailure(message: "播放中断:连接已断开")
+            return
+        }
+        let delay = Self.reconnectDelays[reconnectAttempts]
+        reconnectAttempts += 1
+        reconnectAnchorSeconds = resumeAt
+        isReconnecting = true
+        Self.logger.notice(
+            "断流 EOF @\(resumeAt, privacy: .public)s / 时长 \(self.durationSeconds, privacy: .public)s,第 \(self.reconnectAttempts, privacy: .public) 次重连")
+        reconnectTask?.cancel()
+        restartEpoch &+= 1
+        let epoch = restartEpoch
+        reconnectTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard let self, !Task.isCancelled, self.restartEpoch == epoch else { return }
+            self.restartStream(at: resumeAt)
+        }
+    }
+
+    func systemWillSleep(at date: Date = .now) {
+        sleepStartedAt = date
+    }
+
+    /// 长睡唤醒:播放中立即从当前位置重建流;暂停中等用户按播放再建(`isStreamStale`)。
+    func systemDidWake(at date: Date = .now) {
+        guard let started = sleepStartedAt else { return }
+        sleepStartedAt = nil
+        guard date.timeIntervalSince(started) >= Self.staleAfterSleepSeconds,
+              player != nil, failure == nil, !isReconnecting, isReadyToSeek, canRecoverStream
+        else { return }
+        if isPaused {
+            isStreamStale = true
+        } else {
+            restartStream(at: positionSeconds)
+        }
+    }
+
     // MARK: - 显示器休眠断言(播放期不息屏)
 
     /// 播放期是否该阻止显示器休眠:对齐 mpv `stop-screensaver=yes`(⛔ 不是 `=2` 始终抑制),只有正在播放才抑制。
@@ -1930,6 +2024,7 @@ final class PlayerViewModel {
             phase = newPhase
             updateDisplaySleepAssertion()
             if newPhase == .playing {
+                isReconnecting = false
                 markTimeline(.playing)
                 // `sub-add` 要文件加载完:`.playing` 是第一个保证这点的时点,且字幕轨与起播位置无关。
                 addExternalSubtitlesIfNeeded()
@@ -1993,6 +2088,10 @@ final class PlayerViewModel {
             markTimeline(.firstFrame)
             positionSeconds = value
             pushState()
+            if let anchor = reconnectAnchorSeconds, value - anchor >= Self.reconnectStableSeconds {
+                reconnectAttempts = 0
+                reconnectAnchorSeconds = nil
+            }
             if !isPositionSettled {
                 isPositionSettled = Self.isSettledPosition(
                     value, startSeconds: startSeconds, method: session?.plan.method)
@@ -2026,6 +2125,12 @@ final class PlayerViewModel {
             pushState()
 
         case .endFile(.eof):
+            // 断网 / 睡眠后 ffmpeg 读到连接关闭也报 EOF:离结尾还远就是断流,⛔ 不能当播完
+            if canRecoverStream,
+               Self.isPrematureEOF(position: positionSeconds, duration: durationSeconds) {
+                recoverFromStreamLoss()
+                return
+            }
             // 6.6:自然播完 → 直接 Stopped,位置用最终位置
             isEnded = true
             // 播完即释放显示器休眠断言(phase 停在 .playing,只能靠 isEnded 判)

@@ -82,7 +82,8 @@ render.h 要求 render 系函数互斥且 GL context current,但它的实现只�
 ## 3. 选项(`mpv_initialize()` 之前,`MPVPlayer.startupOptions` + `MPVCacheBudget`)
 
 `config=no`、`load-scripts=no`、`terminal=no`(libmpv 默认即如此,防御性显式设置)、`msg-level`、`vo=libmpv`、
-`hwdec=auto`、`cache=yes`、`video-timing-offset=0`(见 §2)。
+`hwdec=auto`、`cache=yes`、`video-timing-offset=0`(见 §2)、`network-timeout=20`、
+`stream-lavf-o=reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5`(断流恢复见 `PITFALLS.md` Q66)。
 缓冲预算 `demuxer-max-bytes`(前向)/ `demuxer-max-back-bytes`(身后)由 `MPVCacheBudget` 按 `MediaSource.Bitrate`
 标定:前向 ≥15 秒、身后 ≥30 秒,下限 128 / 50 MiB(码率缺失的合成源走下限),上限各 512 MiB。
 回退只有命中身后缓冲保留的数据才不用重新拉流,超出范围 = 重新请求(坑见 `PITFALLS.md` M2)。

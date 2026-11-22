@@ -244,6 +244,11 @@ final class MPVPlayer: @unchecked Sendable {
         ("vo", "libmpv"),
         ("hwdec", "auto"),
         ("cache", "yes"),
+        // 死连接(断网 / 睡眠唤醒)最多挂 20 秒就报出来,交给播放页的断流恢复;默认 60 秒
+        ("network-timeout", "20"),
+        // 短暂掉线先让 ffmpeg 就地重连(只对可 Range 的流生效)。⛔ 不开 reconnect_streamed:
+        // 转码流不可 Range,重连会从流头重新拿,画面错乱。
+        ("stream-lavf-o", "reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5"),
         // 默认 0.05 时 render 要阻塞到上屏时刻:render 队列被卡住,改尺寸时主线程的同步 draw 也跟着等
         // (render.h `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`;PITFALLS「渲染阻塞主线程」)
         ("video-timing-offset", "0"),

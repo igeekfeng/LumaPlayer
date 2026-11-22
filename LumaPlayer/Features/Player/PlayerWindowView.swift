@@ -111,6 +111,10 @@ struct PlayerWindowView: View {
         .onDisappear(perform: tearDown)
         // 同一播放页里换了集(`pageID` 不变、`id` 变了)
         .onChange(of: request.id) { switchSession() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(
+            for: NSWorkspace.willSleepNotification)) { _ in viewModel.systemWillSleep() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(
+            for: NSWorkspace.didWakeNotification)) { _ in viewModel.systemDidWake() }
         .onContinuousHover { phase in
             // 移动 → 显示并重新计时;静止或移出 → 到点隐藏(移出延迟更短)。
             // ⛔ 不要只在移出时隐藏:指针停在窗口里不动就永远不收起
@@ -535,10 +539,11 @@ struct PlayerWindowView: View {
     }
 
     private var isBusy: Bool {
-        viewModel.isPreparing || viewModel.phase == .loading
+        viewModel.isPreparing || viewModel.phase == .loading || viewModel.isReconnecting
     }
 
     private var statusText: String {
+        if viewModel.isReconnecting { return "连接中断,正在重连…" }
         if viewModel.isRestarting { return "正在从新位置起流…" }
         if viewModel.isPreparing { return "正在获取播放信息…" }
         let detail = [

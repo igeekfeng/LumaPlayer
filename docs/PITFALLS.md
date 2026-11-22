@@ -101,6 +101,11 @@ displayLink 停了没叫醒、或只在部分时候报,症状是画面一卡一�
 **播完不回到 `idle`(Q7)。** 一个 `MPVPlayer` 只播一个 URL,换台 = 销毁重建(复用会沿用上一轮的 `http-header-fields`,跨服务器串台)。
 播完是事件不是状态,phase 可能停在 `.playing`,要看 `isEnded`。
 
+**断流也报 `END_FILE reason=EOF`(Q66)。** 断网 / 睡眠唤醒后 ffmpeg 读到连接关闭就当文件尾,不报 error;
+照单全收会弹播完卡片、标成已看、自动换集,「重播」还从 0:00 开始。离结尾超过 max(10 秒, 2%) 的 EOF 按断流处理
+(`PlayerViewModel.isPrematureEOF`):1 / 3 / 8 秒退避从断点重建流,用完报「连接中断」,「重试」续播断点。
+本地文件与拖不动的源不重建。长睡(≥60 秒)唤醒主动重建;`network-timeout=20` 防死连接无限挂着。
+
 **显示器休眠必须宿主自己持(Q34)。** `--stop-screensaver` 在 `vo=libmpv` 下不生效。`DisplaySleepAssertion` +
 `PlayerViewModel.shouldPreventDisplaySleep`;`isolated deinit` 兜底,但持有者有引用环时 deinit 不跑,别绕开 `stop()`。
 
