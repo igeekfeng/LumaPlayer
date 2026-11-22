@@ -63,6 +63,15 @@ final class BaiduPanMetadataSynthesizerTests: XCTestCase {
         XCTAssertNil(parsed.year)
     }
 
+    /// 文件大小随合成进入详情模型,供详情页「信息」区展示。
+    func testMediaItemCarriesFileSize() {
+        let synthesized = BaiduPanMetadataSynthesizer.synthesize(
+            files: [makeFile("Some.Movie.2019.1080p.mkv", fsID: 1)],
+            sourceID: sourceID)
+
+        XCTAssertEqual(synthesized.first?.item.sizeBytes, 1024)
+    }
+
     // MARK: - 目录合成
 
     func testFoldersBecomeFolderCards() {

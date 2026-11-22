@@ -435,8 +435,12 @@ struct FileSourceSeriesDetailView: View {
     }
 
     private var facts: [(String, String)] {
-        guard let profile = viewModel.seriesProfile else { return [] }
         var facts: [(String, String)] = []
+        // 文件大小取自当前定位集(网盘 list / 本地文件自带),没定位到就整行不显示。
+        if let size = MediaFormat.fileSize(viewModel.focusedEpisode?.sizeBytes) {
+            facts.append(("文件大小", size))
+        }
+        guard let profile = viewModel.seriesProfile else { return facts }
         let match = profile.match
         if let date = MediaFormat.date(match.firstAirDate) {
             facts.append((match.kind == .tv ? "首播" : "首映", date))

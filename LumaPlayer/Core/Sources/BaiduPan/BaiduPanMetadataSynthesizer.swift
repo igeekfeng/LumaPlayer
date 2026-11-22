@@ -134,6 +134,8 @@ enum BaiduPanMetadataSynthesizer {
             episodeVoteAverage: nil,
             // 时长要另发 `filemetas`;播放时由 `authoritativeDurationSeconds` 补
             durationSeconds: nil,
+            // 文件大小列表接口就给了,带过去供详情页显示
+            sizeBytes: file.sizeBytes,
             poster: nil,
             metadataOrigin: folder != nil || parsed.isMeaningful ? .filename : .none
         )

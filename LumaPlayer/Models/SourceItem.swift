@@ -82,6 +82,9 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
     /// 单集社区评分,来自 TMDB 季详情(§7)。
     let episodeVoteAverage: Double?
     let durationSeconds: Double?
+    /// 文件大小(字节)。网盘 `list` / 本地文件自带,⛔ 缺就是缺,不填 0。
+    /// 详情页「信息」区展示;合成器与详情页都不猜这个值,只是把它带过来。
+    var sizeBytes: UInt64? = nil
     /// 封面。nil = 这个条目没找到任何可用的图 → UI 降级成图标卡
     let poster: ImageDescriptor?
     let metadataOrigin: MetadataOrigin
@@ -108,6 +111,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeRuntime: episodeRuntime,
             episodeVoteAverage: episodeVoteAverage,
             durationSeconds: durationSeconds,
+            sizeBytes: sizeBytes,
             poster: poster,
             metadataOrigin: metadataOrigin
         )
@@ -132,6 +136,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeRuntime: episodeRuntime,
             episodeVoteAverage: episodeVoteAverage,
             durationSeconds: seconds,
+            sizeBytes: sizeBytes,
             poster: poster,
             metadataOrigin: metadataOrigin
         )
@@ -154,6 +159,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeRuntime: episodeRuntime,
             episodeVoteAverage: episodeVoteAverage,
             durationSeconds: durationSeconds,
+            sizeBytes: sizeBytes,
             poster: poster,
             metadataOrigin: metadataOrigin
         )
@@ -187,6 +193,7 @@ struct SourceItem: Sendable, Equatable, Hashable, Identifiable {
             episodeRuntime: self.episodeRuntime ?? episodeRuntime,
             episodeVoteAverage: self.episodeVoteAverage ?? episodeVoteAverage,
             durationSeconds: durationSeconds,
+            sizeBytes: sizeBytes,
             poster: self.poster ?? poster,
             metadataOrigin: metadataOrigin
         )

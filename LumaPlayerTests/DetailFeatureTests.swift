@@ -238,6 +238,15 @@ final class DetailFeatureTests: XCTestCase {
         XCTAssertNil(MediaFormat.rating(0))
     }
 
+    func testFileSizeText() {
+        XCTAssertNil(MediaFormat.fileSize(Int64?(nil)))
+        XCTAssertNil(MediaFormat.fileSize(Int64(0)))
+        XCTAssertNil(MediaFormat.fileSize(Int64(-1)))
+        XCTAssertEqual(MediaFormat.fileSize(Int64(8_200_000_000)), "8.2 GB")
+        XCTAssertEqual(MediaFormat.fileSize(UInt64(1_500_000_000)), "1.5 GB")
+        XCTAssertNil(MediaFormat.fileSize(UInt64.max), "转不进 Int64 当没有")
+    }
+
     func testItemDecodesMediaSourcesAndLabelsThem() throws {
         let item = try decode("""
         {"Id":"1","Name":"M","MediaSources":[

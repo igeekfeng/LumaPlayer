@@ -199,6 +199,9 @@ struct DetailMetaLine: View {
 /// 视频 / 音频 / 字幕概况。文案直接用服务端的 `DisplayTitle`(`720p H264`),不在客户端拼编码名。
 struct DetailMediaInfo: View {
     let streams: [EmbyMediaStream]
+    /// 详情页的版本表。多版本时取当前选中的那条,否则取默认那条;缺 Size 就整行不显示。
+    var mediaSources: [EmbyMediaSource] = []
+    var selectedSourceID: String? = nil
 
     var body: some View {
         let rows = self.rows
@@ -241,7 +244,18 @@ struct DetailMediaInfo: View {
         if let subtitle = summary(of: "Subtitle") {
             rows.append(Row(label: "字幕", symbol: "captions.bubble", value: subtitle))
         }
+        if let size = MediaFormat.fileSize(currentSource?.size) {
+            rows.append(Row(label: "文件大小", symbol: "doc.badge.ellipsis", value: size))
+        }
         return rows
+    }
+
+    /// 选中的版本,没选就用默认项(与版本菜单 `defaultID` 同规则)。
+    private var currentSource: EmbyMediaSource? {
+        guard !mediaSources.isEmpty else { return nil }
+        return mediaSources.first { $0.id == selectedSourceID }
+            ?? mediaSources.first { $0.supportsDirectStream == true }
+            ?? mediaSources.first
     }
 
     private func summary(of type: String) -> String? {

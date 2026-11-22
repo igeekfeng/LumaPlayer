@@ -94,6 +94,46 @@ final class DetailPlaybackResolveTests: XCTestCase {
         try await waitUntil("转圈结束") { !viewModel.isResolvingPlayback }
     }
 
+    /// 剧集「媒体信息」的文件大小取自定位集的单项详情:
+    /// 分集列表端点不带 MediaSources/Size,必须再取单项接口(API_CONTRACT.md 3.4)。
+    @MainActor
+    func testFocusedEpisodeDetailCarriesFileSize() async throws {
+        let episodeID = "00000000-0000-0000-0000-000000000202"
+        MockEmbyURLProtocol.stub(
+            .json(#"{"Id":"\#(Self.seriesID)","Name":"测试剧集","Type":"Series"}"#),
+            path: "/emby/Users/\(Self.userID)/Items/\(Self.seriesID)"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("items_resumable_episode_synthetic.json")),
+            path: "/emby/Shows/NextUp"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_seasons_synthetic.json")),
+            path: "/emby/Shows/\(Self.seriesID)/Seasons"
+        )
+        MockEmbyURLProtocol.stub(
+            .json(try FixtureLoader.json("shows_episodes_synthetic.json")),
+            path: "/emby/Shows/\(Self.seriesID)/Episodes"
+        )
+        let detailJSON = """
+        {"Id":"\(episodeID)","Name":"E2","Type":"Episode",
+         "MediaSources":[{"Id":"src-1","Size":8589934592,
+           "MediaStreams":[{"Type":"Video","DisplayTitle":"1080p H264"}]}]}
+        """
+        MockEmbyURLProtocol.stub(.json(detailJSON), path: "/emby/Users/\(Self.userID)/Items/\(episodeID)")
+        let (viewModel, server) = try await makeViewModel()
+
+        viewModel.load(item: try series(), server: server)
+        try await waitUntil("定位集详情拿到") { viewModel.focusedEpisodeDetail != nil }
+
+        XCTAssertEqual(viewModel.focusedEpisode?.id, episodeID)
+        XCTAssertEqual(viewModel.focusedEpisodeDetail?.id, episodeID)
+        XCTAssertEqual(viewModel.focusedEpisodeDetail?.mediaSources?.first?.size, 8_589_934_592)
+        XCTAssertEqual(
+            viewModel.focusedEpisodeDetail?.mediaSources?.first?.mediaStreams?.first?.displayTitle,
+            "1080p H264")
+    }
+
     /// 换条目(或点「重试」)时上一页的定位态不能留在新页面上。
     @MainActor
     func testLoadResetsPlaybackState() async throws {

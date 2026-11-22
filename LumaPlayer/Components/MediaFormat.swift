@@ -48,6 +48,19 @@ enum MediaFormat {
         return day.hasPrefix("0001") ? nil : day
     }
 
+    /// 文件大小文案:「8.2 GB」。单位与版本菜单一致(`.file`,十进制)。
+    /// ⛔ 缺失或 0 返回 nil,不填「0 B」这类假值。
+    static func fileSize(_ bytes: Int64?) -> String? {
+        guard let bytes, bytes > 0 else { return nil }
+        return bytes.formatted(.byteCount(style: .file))
+    }
+
+    /// 网盘 / 本地的 size 是 `UInt64`,转不进 `Int64` 就当没有。
+    static func fileSize(_ bytes: UInt64?) -> String? {
+        guard let bytes, let value = Int64(exactly: bytes) else { return nil }
+        return fileSize(value)
+    }
+
     /// 社区评分,保留一位小数。
     static func rating(_ value: Double?) -> String? {
         guard let value, value > 0 else { return nil }

@@ -15,6 +15,9 @@ final class MediaDetailViewModel {
     private(set) var selectedSeason: EmbyItem?
     /// 只有剧集才有。nil = 还没定位到
     private(set) var focusedEpisode: EmbyItem?
+    /// 定位集的单项详情。分集列表端点不带 `MediaSources` / `MediaStreams`(API_CONTRACT.md 3.4),
+    /// 「媒体信息」(含文件大小)只能从单项接口补。按集 Id 失效,换集重取。
+    private(set) var focusedEpisodeDetail: EmbyItem?
     /// 点主按钮时定位还没完成:按钮转圈、不重复发起
     private(set) var isResolvingPlayback = false
     /// 点了才定位,仍定位不到时照实提示(⛔ 不退回随便播一集)
@@ -49,6 +52,8 @@ final class MediaDetailViewModel {
     private var similarTask: Task<Void, Never>?
     /// 剧集页点了主按钮才发起的定位(见 `playSeries`)
     private var resolveTask: Task<Void, Never>?
+    /// 定位集的单项详情任务,换集取消
+    private var episodeDetailTask: Task<Void, Never>?
     /// 批量标记的代次号,换条目时 +1,旧批次结果不再回写。与管加载任务的 `generation` 分开。
     private var batchToken = 0
 
@@ -92,6 +97,7 @@ final class MediaDetailViewModel {
             selectedSeason = nil
             seriesID = nil
             focusedEpisode = nil
+            focusedEpisodeDetail = nil
             focusEpisodeID = nil
             didPickEpisodeManually = false
         } else {
@@ -344,6 +350,29 @@ final class MediaDetailViewModel {
         focusedEpisode = episode
     }
 
+    /// 分集列表端点不带 `MediaSources` / `MediaStreams`(API_CONTRACT.md 3.4),
+    /// 「媒体信息」(文件大小、视频/音频轨)只能从单项接口补。按集 Id 失效,换集重取。
+    func loadFocusedEpisodeDetail(server: ServerProfile) {
+        guard let episode = focusedEpisode else {
+            focusedEpisodeDetail = nil
+            return
+        }
+        if focusedEpisodeDetail?.id == episode.id { return }
+        focusedEpisodeDetail = nil
+        episodeDetailTask?.cancel()
+        let episodeID = episode.id
+        let myGeneration = generation
+        episodeDetailTask = Task {
+            do {
+                let full = try await container.connection(for: server).item(id: episodeID)
+                guard myGeneration == generation, focusedEpisode?.id == episodeID else { return }
+                focusedEpisodeDetail = full
+            } catch {
+                // 附加信息取不到不影响页面主体,失败就保持没有(⛔ 不填假值)
+            }
+        }
+    }
+
     /// 播放结束后按服务端重读详情(PITFALLS.md Q22):续播与已看规则(MinResumePct 等)⛔ 不在客户端复刻。
     /// 后台校正:不切加载态、不重拉季与分集,失败保留现有内容(401 等由下一次正常操作暴露)。
     func refreshDetail(server: ServerProfile) {
@@ -375,7 +404,10 @@ final class MediaDetailViewModel {
         let isSameSeason = selectedSeason?.id == season.id
         selectedSeason = season
         if case .loaded = episodesState, isSameSeason {} else { episodesState = .loading }
-        if !isSameSeason { didPickEpisodeManually = false }
+        if !isSameSeason {
+            didPickEpisodeManually = false
+            focusedEpisodeDetail = nil
+        }
         let myGeneration = generation
         let series = seriesID
         episodesTask = Task {
@@ -387,6 +419,8 @@ final class MediaDetailViewModel {
                 guard myGeneration == generation else { return }
                 episodesState = .loaded(episodes)
                 resolveFocus(episodes: episodes)
+                // 定位集可能就在这一趟里第一次确定,补取其单项详情(列表端点不带 Size)
+                loadFocusedEpisodeDetail(server: server)
             } catch let error as EmbyAPIError {
                 guard myGeneration == generation else { return }
                 if error == .cancelled { return }

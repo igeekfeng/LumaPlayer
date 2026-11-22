@@ -66,6 +66,10 @@ struct MediaDetailView: View {
             guard let finished, finished.serverID == server.id else { return }
             viewModel.refreshAfterPlayback(server: server)
         }
+        // 定位集变了就补取其单项详情(列表端点不带 MediaSources/MediaStreams)
+        .onChange(of: viewModel.focusedEpisode?.id) { _, _ in
+            viewModel.loadFocusedEpisodeDetail(server: server)
+        }
         .alert(
             "无法播放",
             isPresented: Binding(
@@ -125,6 +129,20 @@ struct MediaDetailView: View {
 
     // MARK: - 内容
 
+    /// 剧集的「媒体信息」取定位集(单项详情有 Size),电影 / 季 / 其他取详情项本身。
+    /// ⚠️ 分集单项详情的 `MediaStreams` 嵌在 `MediaSources` 里,顶层不一定有,取不到就用第一条源里的。
+    private func mediaInfo(for detail: EmbyItem) -> (streams: [EmbyMediaStream], sources: [EmbyMediaSource]) {
+        let item: EmbyItem
+        if detail.kind == .series, let episode = viewModel.focusedEpisodeDetail {
+            item = episode
+        } else {
+            item = detail
+        }
+        let sources = item.mediaSources ?? []
+        let streams = item.mediaStreams ?? sources.first?.mediaStreams ?? []
+        return (streams, sources)
+    }
+
     private func detailContent(_ detail: EmbyItem) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacingXL) {
@@ -135,7 +153,11 @@ struct MediaDetailView: View {
                     if detail.kind == .series {
                         seriesSections
                     }
-                    DetailMediaInfo(streams: detail.mediaStreams ?? [])
+                    DetailMediaInfo(
+                        streams: mediaInfo(for: detail).streams,
+                        mediaSources: mediaInfo(for: detail).sources,
+                        selectedSourceID: selectedSourceID
+                    )
                     DetailPeopleRow(people: detail.people ?? [], server: server, store: container.posters)
                     DetailFacts(detail: detail)
                     DetailSecondaryLinks(tmdbURL: detail.tmdbPageURL)
