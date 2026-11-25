@@ -286,13 +286,15 @@ struct BrowseView: View {
         } label: {
             Label("热门", systemImage: "sparkle.magnifyingglass")
                 .labelStyle(.iconOnly)
+                // frame / contentShape 画在 label 里:套在 Button 外面只扩布局,不扩命中区,
+                // 实际能点的只有中间那个图标
+                .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
+                .contentShape(Capsule())
         }
         // 高度对齐搜索框、玻璃材质同款;不用 .glass 圆按钮 / .fixedSize()(前者带灰底,
         // 后者按内容理想宽度布局把胶囊拉成横条)
         .buttonStyle(.plain)
-        .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
         .glassEffect(.regular, in: .capsule)
-        .contentShape(Capsule())
         .help("看什么(热门与新片)")
         .accessibilityLabel("看什么")
     }
@@ -328,12 +330,13 @@ struct BrowseView: View {
             }
         } label: {
             sourceMenuLabel
+                // 同 `resourceSearchButton`:命中区要在 label 上,套在 Menu 外面只剩布局
+                .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
+                .contentShape(Capsule())
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .frame(width: Metrics.chromeSearchHeight, height: Metrics.chromeSearchHeight)
         .glassEffect(.regular, in: .capsule)
-        .contentShape(Capsule())
         .help("来源:\(currentSourceName)\n切换来源 ⌘1…⌘9")
         .accessibilityLabel("来源:\(currentSourceName)")
     }
